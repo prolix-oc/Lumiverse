@@ -388,12 +388,23 @@ export function validateThemePack(data: any): data is ThemePack {
   return normalizeThemePack(data) !== null
 }
 
+/** Encode a theme pack with Lumiverse's canonical .lumitheme archive codec. */
+export function encodeThemePackArchive(pack: ThemePack): Uint8Array {
+  const { files } = toArchiveManifest(pack)
+  return Uint8Array.from(zipSync(files, { level: 6 }))
+}
+
+/** Decode .lumitheme bytes (or the supported legacy JSON form) without UI. */
+export function decodeThemePackArchive(bytes: Uint8Array): ThemePackImportResult {
+  return isZipBytes(bytes) ? fromArchiveBytes(bytes) : importLegacyThemePack(bytes)
+}
+
 /** Download a theme pack as a .lumitheme zip bundle. */
 export function exportThemePack(pack: ThemePack): void {
-  const { files } = toArchiveManifest(pack)
-  const archive = zipSync(files, { level: 6 })
-  const archiveCopy = Uint8Array.from(archive)
-  const blob = new Blob([archiveCopy], { type: MIME })
+  const archiveCopy = encodeThemePackArchive(pack)
+  const blobBytes = new Uint8Array(archiveCopy.byteLength)
+  blobBytes.set(archiveCopy)
+  const blob = new Blob([blobBytes.buffer], { type: MIME })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -426,11 +437,7 @@ export function importThemePack(): Promise<ThemePackImportResult | null> {
       if (!file) return resolve(null)
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
-        if (isZipBytes(bytes) || file.name.toLowerCase().endsWith(EXTENSION) || file.type === 'application/zip') {
-          resolve(fromArchiveBytes(bytes))
-          return
-        }
-        resolve(importLegacyThemePack(bytes))
+        resolve(decodeThemePackArchive(bytes))
       } catch {
         resolve(importError('unsupported-legacy-file', 'Selected file is not a supported Lumiverse theme bundle.'))
       }

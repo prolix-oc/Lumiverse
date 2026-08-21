@@ -11,7 +11,7 @@ import { bindImportedRegexesToPreset } from '@/lib/loom/preset-regex-import'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { getMacroCatalog } from '@/api/macros'
-import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
+import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableDef, PromptVariableValues } from '@/lib/loom/types'
 import {
   DEFAULT_SAMPLER_OVERRIDES,
   DEFAULT_PROMPT_BEHAVIOR,
@@ -29,6 +29,7 @@ import {
   sanitizeLumiHubSealedBlocksForExport,
   normalizeCategoryBlockState,
   toggleBlockWithCategoryRules,
+  toggleCategoryWithChildren,
   coerceImportedLoomPreset,
   detectImportedPresetKind,
   reconcilePromptVariableValues,
@@ -584,6 +585,86 @@ export function useLoomBuilder() {
     saveBlocks(blocks)
   }, [saveBlocks])
 
+  // Blanket category toggle: disable captures each child's enabled state on
+  // the category block; enable restores that exact snapshot.
+  const toggleCategoryChildren = useCallback((categoryId: string) => {
+    const current = effectiveActivePresetRef.current
+    if (!current) return
+    const blocks = toggleCategoryWithChildren(current.blocks, categoryId)
+    saveBlocks(blocks)
+  }, [saveBlocks])
+
+  /**
+   * Move a variable definition from one block to another, carrying its saved
+   * value bucket along. Def and value travel together in a single
+   * saveLoomValue so the backend's orphan pruning never sees the value
+   * stranded under the old block. A placement binding on the source block
+   * that pointed at the moved selector is dropped (the same cleanup
+   * cleanPlacementBinding performs on save). Returns false -- without
+   * saving -- when the move would create a duplicate name in the target.
+   */
+  const movePromptVariable = useCallback((
+    sourceBlockId: string,
+    variable: PromptVariableDef,
+    targetBlockId: string,
+  ): boolean => {
+    const current = effectiveActivePresetRef.current
+    if (!current || sourceBlockId === targetBlockId) return false
+    const sourceBlock = current.blocks.find((b) => b.id === sourceBlockId)
+    const targetBlock = current.blocks.find((b) => b.id === targetBlockId)
+    if (!sourceBlock || !targetBlock) return false
+
+    const name = variable.name?.trim()
+    if (!name) return false
+    if ((targetBlock.variables ?? []).some((v) => v.name?.trim() === name)) return false
+
+    const blocks = current.blocks.map((b) => {
+      if (b.id === sourceBlockId) {
+        const next: Partial<PromptBlock> = {
+          variables: (b.variables ?? []).filter((v) => v.id !== variable.id),
+        }
+        if (b.placementBinding?.variableId === variable.id) next.placementBinding = undefined
+        return { ...b, ...next }
+      }
+      if (b.id === targetBlockId) {
+        return { ...b, variables: [...(b.variables ?? []), variable] }
+      }
+      return b
+    })
+
+    const values = current.promptVariables ?? {}
+    const sourceBucket = values[sourceBlockId]
+    const savedName = (sourceBlock.variables ?? []).find((v) => v.id === variable.id)?.name?.trim()
+    let nextValues = values
+    if (sourceBucket) {
+      const valueKey = savedName && savedName in sourceBucket
+        ? savedName
+        : name in sourceBucket
+          ? name
+          : null
+      if (valueKey !== null) {
+        const nextSource = { ...sourceBucket }
+        const moved = nextSource[valueKey]
+        delete nextSource[valueKey]
+        nextValues = {
+          ...values,
+          [sourceBlockId]: nextSource,
+          [targetBlockId]: { ...(values[targetBlockId] ?? {}), [name]: moved },
+        }
+      }
+    }
+
+    let normalizedBlocks: PromptBlock[]
+    try {
+      normalizedBlocks = normalizeCategoryBlockState(blocks)
+      validatePromptVariableSchema(normalizedBlocks, { legacyBaseline: current.blocks })
+    } catch {
+      return false
+    }
+    void saveLoomValue(normalizedBlocks, nextValues).catch(() => {})
+    return true
+  }, [saveLoomValue])
+
   const reorderBlocks = useCallback((fromIndex: number, toIndex: number) => {
     const current = effectiveActivePresetRef.current
     if (!current) return
@@ -826,7 +907,9 @@ export function useLoomBuilder() {
     removeBlock,
     updateBlock,
     toggleBlock,
+    toggleCategoryChildren,
     reorderBlocks,
+    movePromptVariable,
 
     // Sampler settings
     saveSamplerOverrides,

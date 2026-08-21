@@ -13,6 +13,7 @@ import {
   type ChatChunkVectorizationBatchResult,
   type ChatChunkVectorizationTask,
 } from "./chat-chunk-vectorization-runner";
+import { isLanceDbMaintenanceRunning } from "./lancedb-maintenance-supervisor";
 import type { WorldBookEntry, WorldBookVectorIndexStatus } from "../types/world-book";
 import {
   desiredWorldBookVectorIndexStatus,
@@ -35,6 +36,10 @@ interface VectorizationJob {
 const WORLD_BOOK_SWEEP_INTERVAL_MS = 60_000;
 const WORLD_BOOK_SWEEP_LIMIT_PER_USER = 100;
 const CHAT_CHUNK_REQUEUE_LIMIT = 500;
+/** Coalesce lorebook-edit reindexes so typing does not native-write LanceDB each save. */
+const WORLD_BOOK_VECTOR_SETTLE_MS = 2_500;
+const WORLD_BOOK_VECTOR_MAX_WAIT_MS = 15_000;
+const WORLD_BOOK_MAINTENANCE_POLL_MS = 250;
 
 function normalizeWorldBookVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
   if (
@@ -51,10 +56,32 @@ function normalizeWorldBookVectorIndexStatus(row: any): WorldBookVectorIndexStat
     content: typeof row.content === "string" ? row.content : "",
   });
 }
-
 function mergeVectorizationJobs(existing: VectorizationJob, incoming: VectorizationJob): void {
   existing.priority = Math.max(existing.priority, incoming.priority);
   existing.supersedesIndexed = !!(existing.supersedesIndexed || incoming.supersedesIndexed);
+}
+
+function remainingWorldBookSettleMs(queuedAt: number, now: number): number {
+  const age = now - queuedAt;
+  if (age >= WORLD_BOOK_VECTOR_MAX_WAIT_MS) return 0;
+  return Math.max(0, WORLD_BOOK_VECTOR_SETTLE_MS - age);
+}
+
+function worldBookJobsHaveSettled(jobs: Array<Pick<VectorizationJob, "type" | "queuedAt">>, now: number): boolean {
+  const worldBookJobs = jobs.filter((job) => job.type === "world_book_entry");
+  if (worldBookJobs.length === 0) return true;
+  const oldest = Math.min(...worldBookJobs.map((job) => job.queuedAt));
+  if (now - oldest >= WORLD_BOOK_VECTOR_MAX_WAIT_MS) return true;
+  return worldBookJobs.every((job) => remainingWorldBookSettleMs(job.queuedAt, now) === 0);
+}
+
+function nextProcessDelayMs(jobs: Array<Pick<VectorizationJob, "type" | "queuedAt">>, now: number): number {
+  let delay = 100;
+  for (const job of jobs) {
+    if (job.type !== "world_book_entry") continue;
+    delay = Math.max(delay, remainingWorldBookSettleMs(job.queuedAt, now));
+  }
+  return delay;
 }
 
 function shouldProcessWorldBookVectorizationJob(row: any, job: VectorizationJob | undefined): boolean {
@@ -114,11 +141,13 @@ class VectorizationQueue {
         j.userId === job.userId &&
         j.chatId === job.chatId &&
         j.chunkId === job.chunkId &&
-        j.worldBookEntryId === job.worldBookEntryId
+        j.worldBookEntryId === job.worldBookEntryId,
     );
 
     if (existing >= 0) {
       mergeVectorizationJobs(this.queue[existing], job);
+      this.queue[existing].queuedAt = job.queuedAt;
+      this.scheduleProcessing();
       return;
     }
 
@@ -128,11 +157,23 @@ class VectorizationQueue {
   }
 
   private scheduleProcessing() {
-    if (this.processingTimer) return;
+    if (this.processingTimer) {
+      clearTimeout(this.processingTimer);
+      this.processingTimer = null;
+    }
+    const delayMs = nextProcessDelayMs(this.queue, Date.now());
     this.processingTimer = setTimeout(() => {
       this.processingTimer = null;
       this.processQueue();
-    }, 100);
+    }, delayMs);
+  }
+
+  private async awaitLanceMaintenanceIdle(): Promise<void> {
+    while (isLanceDbMaintenanceRunning()) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, WORLD_BOOK_MAINTENANCE_POLL_MS);
+      await promise;
+    }
   }
 
   private async processQueue() {
@@ -141,6 +182,18 @@ class VectorizationQueue {
 
     try {
       while (this.queue.length > 0) {
+        if (this.queue[0].type === "world_book_entry") {
+          if (!worldBookJobsHaveSettled(this.queue, Date.now())) {
+            this.scheduleProcessing();
+            return;
+          }
+          await this.awaitLanceMaintenanceIdle();
+          if (this.queue.length === 0 || this.queue[0].type !== "world_book_entry") continue;
+          if (!worldBookJobsHaveSettled(this.queue, Date.now())) {
+            this.scheduleProcessing();
+            return;
+          }
+        }
         const userId = this.queue[0].userId;
         let maxBatch = 10;
         try {
@@ -155,7 +208,9 @@ class VectorizationQueue {
           await this.processWorldBookEntryBatch(batch);
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 100);
+        await promise;
       }
     } finally {
       this.processing = false;
@@ -423,6 +478,11 @@ export function getQueueStatus() {
 export const __test__ = {
   mergeVectorizationJobs,
   shouldProcessWorldBookVectorizationJob,
+  WORLD_BOOK_VECTOR_SETTLE_MS,
+  WORLD_BOOK_VECTOR_MAX_WAIT_MS,
+  worldBookJobsHaveSettled,
+  remainingWorldBookSettleMs,
+  nextProcessDelayMs,
 };
 
 /**

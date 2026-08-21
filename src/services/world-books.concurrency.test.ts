@@ -84,12 +84,6 @@ async function applyBaseline(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
-  db.run(await Bun.file(join(import.meta.dir, "..", "db", "migrations", "099_character_library_scope.sql")).text());
-
-  // The migration is deliberately not applied by this test fixture: Lane C
-  // must remain test-only, while the production migration is owned by the
-  // adjacent P5 migration lane. The fixture mirrors its authoritative schema.
-  db.run("ALTER TABLE world_book_entries ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
 }
 
 function createFixtureEntries(): FixtureEntries {

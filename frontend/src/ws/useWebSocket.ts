@@ -1,5 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
+import {
+  wsClient,
+  WS_OPEN,
+  WS_CLOSE,
+  WS_PONG,
+  WS_AUTH_ERROR,
+  WS_RESUME_RECOVERY_START,
+  WS_RESUME_RECOVERY_COMPLETE,
+  WS_RESUME_RECOVERY_FAILED,
+} from './client'
 import { sendRoomAction, relayClient } from './relayClient'
 import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/personaSnapshot'
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
@@ -644,6 +653,18 @@ export function useWebSocket() {
           void checkForBundleUpdate()
         }
       }),
+      // A backgrounded PWA cannot use its frozen JS timers as evidence that
+      // the server died. Keep the failure overlay suppressed until a fresh,
+      // correlated foreground ping succeeds or the recovery window expires.
+      wsClient.on(WS_RESUME_RECOVERY_START, () => {
+        store.getState().setWsResumeRecovering(true)
+      }),
+      wsClient.on(WS_RESUME_RECOVERY_COMPLETE, () => {
+        store.getState().setWsResumeRecovering(false)
+      }),
+      wsClient.on(WS_RESUME_RECOVERY_FAILED, () => {
+        store.getState().setWsResumeRecovering(false)
+      }),
       wsClient.on(WS_AUTH_ERROR, () => {
         // Server has explicitly rejected our session — the cookie is invalid
         // (e.g. logged out elsewhere, server restart with cleared sessions).
@@ -947,7 +968,7 @@ export function useWebSocket() {
                 const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
                 if (s.activeChatId === payload.chatId) {
-                  s.setMessages(messages, res.total)
+                  s.reconcileMessagesTail({ ...res, data: messages })
                 }
               }).catch(() => { /* ignore */ })
             }
@@ -1068,9 +1089,9 @@ export function useWebSocket() {
                         )
                       : message)
                   : res.data
-                s.setMessages(messages, res.total)
-                // Deferred metrics may have arrived (and been wiped by the
-                // setMessages above) before this re-fetch could read them —
+                s.reconcileMessagesTail({ ...res, data: messages })
+                // Deferred metrics may have arrived (and been replaced in the
+                // reconciled tail above) before this re-fetch could read them —
                 // re-apply from the buffer so the pill/hover survive the race.
                 if (completedMessageId) {
                   const buffered = pendingGenerationMetrics.get(completedMessageId)
@@ -1289,7 +1310,7 @@ export function useWebSocket() {
             const s = store.getState()
             if (s.activeChatId === chatId) {
               s.stopStreaming()
-              s.setMessages(messages, res.total)
+              s.reconcileMessagesTail({ ...res, data: messages })
             } else {
               s.stopStreaming()
             }
@@ -1413,6 +1434,13 @@ export function useWebSocket() {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
         }
+      }),
+
+      wsClient.on(EventType.CHARACTER_LIBRARY_CHANGED, () => {
+        // Bulk imports intentionally omit thousands of full-character events.
+        // Mark the full-object cache stale; paginated surfaces independently
+        // refresh their lightweight summaries once.
+        store.getState().setCharactersLoaded(false)
       }),
 
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
@@ -1887,6 +1915,11 @@ export function useWebSocket() {
           store.getState().setOperatorProgressMessage(inProgress ? (payload.message ?? null) : null)
         }
       }),
+      wsClient.on(EventType.IMAGE_THUMBNAIL_QUEUE, (payload: { processed: number; remaining: number; total: number; active: number; queued: number }) => {
+        if (payload && typeof payload.processed === 'number') {
+          store.getState().setThumbnailQueue(payload)
+        }
+      }),
 
       // MCP Server events
       wsClient.on(EventType.MCP_SERVER_CONNECTED, (payload: { id: string; name: string; toolCount: number; tools: any[] }) => {
@@ -2148,7 +2181,7 @@ export function useWebSocket() {
           const fresh = await fetchLatestMessages(activeChatId)
           const after = store.getState()
           if (after.activeChatId === activeChatId && !after.isStreaming) {
-            after.setMessages(fresh.data, fresh.total)
+            after.reconcileMessagesTail(fresh)
           }
         } catch {
           /* best-effort */
@@ -2234,6 +2267,7 @@ export function useWebSocket() {
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
       unsubPersonaRelay()
+      store.getState().setWsResumeRecovering(false)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }

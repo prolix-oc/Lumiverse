@@ -528,6 +528,7 @@ export type WeaverVisualProvider =
   | "novelai"
   | "nanogpt"
   | "google_gemini"
+  | "openrouter"
   | "sdapi"
   | "swarmui";
 

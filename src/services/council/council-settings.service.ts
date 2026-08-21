@@ -18,7 +18,7 @@ async function isToolGateEnabled(userId: string, tool: RuntimeCouncilToolDefinit
   switch (tool.gatedBy) {
     case "webSearch": {
       const cfg = await getWebSearchSettings(userId);
-      return cfg.enabled && !!cfg.apiUrl;
+      return cfg.enabled && !!cfg.apiUrl && (cfg.provider === "searxng" || cfg.hasApiKey);
     }
     case "imageGeneration": {
       const imageSettings = settingsSvc.getSetting(userId, "imageGeneration")?.value as { enabled?: boolean } | undefined;

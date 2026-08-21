@@ -19,6 +19,12 @@ export interface ResolvedRegexActionPayload {
 export interface RegexActionActivation extends ResolvedRegexActionPayload {
   chatId: string
   messageId?: string
+  /**
+   * Queue intent: the activation came from a ctrl/cmd-click or right-click
+   * and the content should land in the composer as an editable draft
+   * instead of being claimed and sent.
+   */
+  queue?: boolean
 }
 
 export interface PendingRegexSelection extends RegexActionActivation {

@@ -1,13 +1,24 @@
 import {
   existsSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
 } from 'fs'
+import { rename } from 'fs/promises'
 import { basename, join, resolve } from 'path'
 
 const REQUIRED_BUILD_FILES = ['index.html', 'sw.js'] as const
+
+/**
+ * Keep the Windows-only retry helper out of non-Windows frontend builds. In
+ * particular, Docker copies only `frontend/` into its Linux build stage.
+ */
+async function retryWindowsRename<T>(operation: () => Promise<T> | T): Promise<T> {
+  if (process.platform !== 'win32') return operation()
+
+  const { retryWindowsRename: retry } = await import('../../scripts/windows-fs-retry')
+  return retry(operation)
+}
 
 export function resolveViteRuntime(
   env: Record<string, string | undefined> = process.env,
@@ -37,7 +48,7 @@ function assertUsableBuild(buildDir: string): void {
   }
 }
 
-export function recoverInterruptedBuild(frontendDir: string, distDir: string): void {
+export async function recoverInterruptedBuild(frontendDir: string, distDir: string): Promise<void> {
   const entries = readdirSync(frontendDir)
   const stagedDirs = entries
     .filter((name) => name.startsWith('.dist-build-'))
@@ -50,7 +61,8 @@ export function recoverInterruptedBuild(frontendDir: string, distDir: string): v
   // A process can be killed between moving dist aside and promoting the new
   // output. Restore the newest prior bundle before cleaning stale work dirs.
   if (!existsSync(distDir) && backupDirs.length > 0) {
-    renameSync(backupDirs.shift()!, distDir)
+    const backupToRestore = backupDirs.shift()!
+    await retryWindowsRename(() => rename(backupToRestore, distDir))
   }
 
   for (const dir of [...stagedDirs, ...backupDirs]) {
@@ -62,21 +74,21 @@ export function recoverInterruptedBuild(frontendDir: string, distDir: string): v
  * Promote a validated Vite output directory without exposing a partial bundle.
  * The prior dist is restored if either rename fails.
  */
-export function promoteFrontendBuild(stagedDir: string, distDir: string, backupDir: string): void {
+export async function promoteFrontendBuild(stagedDir: string, distDir: string, backupDir: string): Promise<void> {
   let movedPreviousBuild = false
   try {
     assertUsableBuild(stagedDir)
 
     if (existsSync(distDir)) {
       rmSync(backupDir, { recursive: true, force: true })
-      renameSync(distDir, backupDir)
+      await retryWindowsRename(() => rename(distDir, backupDir))
       movedPreviousBuild = true
     }
 
-    renameSync(stagedDir, distDir)
+    await retryWindowsRename(() => rename(stagedDir, distDir))
   } catch (error) {
     if (!existsSync(distDir) && movedPreviousBuild && existsSync(backupDir)) {
-      renameSync(backupDir, distDir)
+      await retryWindowsRename(() => rename(backupDir, distDir))
       movedPreviousBuild = false
     }
     throw error
@@ -96,7 +108,7 @@ async function buildFrontend(): Promise<void> {
   const distDir = join(frontendDir, 'dist')
   const viteCli = join(frontendDir, 'node_modules', 'vite', 'bin', 'vite.js')
 
-  recoverInterruptedBuild(frontendDir, distDir)
+  await recoverInterruptedBuild(frontendDir, distDir)
   rmSync(stagedDir, { recursive: true, force: true })
   rmSync(backupDir, { recursive: true, force: true })
 
@@ -118,7 +130,7 @@ async function buildFrontend(): Promise<void> {
     throw new Error(`Vite build failed with exit code ${exitCode}`)
   }
 
-  promoteFrontendBuild(stagedDir, distDir, backupDir)
+  await promoteFrontendBuild(stagedDir, distDir, backupDir)
   console.log('Frontend bundle validated and installed atomically.')
 }
 

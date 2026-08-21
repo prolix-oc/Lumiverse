@@ -37,6 +37,7 @@ type UnknownRecord = Record<string, unknown>
 export const HOST_ONLY_BLOCK_FIELDS = [
   'stashId',
   'placementBinding',
+  'savedChildEnabled',
   'sealed',
   'sealedKey',
   'sealedSource',

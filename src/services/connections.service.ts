@@ -16,6 +16,9 @@ const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000;
 const ZAI_GENERAL_API_URL = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_API_URL = "https://api.z.ai/api/coding/paas/v4";
 export const MODEL_ROULETTE_PROVIDER = "model_roulette";
+/** Legacy settings key retained solely for one-way encrypted migration. */
+export const LEGACY_POLLINATIONS_APP_KEY_SETTING = "pollinations_app_key";
+export const POLLINATIONS_APP_KEY_SECRET = "pollinations_app_key";
 
 export interface ConnectionRouletteConfig {
   connection_ids: string[];
@@ -179,16 +182,62 @@ export function resolveNanoGptSubscriptionUsageUrl(profile: { api_url?: string |
   }
 }
 
-export function resolvePollinationsAppKey(userId: string): string {
+/**
+ * Resolve the Pollinations application key and migrate the legacy plaintext
+ * settings value before it can be used. The environment override preserves
+ * its existing precedence, but does not prevent a legacy user value from
+ * being moved into the encrypted store.
+ */
+export async function resolvePollinationsAppKey(userId: string): Promise<string> {
   const envKey = env.pollinationsAppKey.trim();
-  if (envKey) return envKey;
+  const stored = await secretsSvc.getSecretForStatus(userId, POLLINATIONS_APP_KEY_SECRET);
+  const setting = settingsSvc.getSetting(userId, LEGACY_POLLINATIONS_APP_KEY_SETTING);
+  const legacy = typeof setting?.value === "string" ? setting.value.trim() : "";
 
-  const setting = settingsSvc.getSetting(userId, "pollinations_app_key");
-  const settingValue = typeof setting?.value === "string" ? setting.value.trim() : "";
-  return settingValue;
+  if (setting) {
+    // Do not overwrite an already configured encrypted value. A successful
+    // write precedes deletion so a storage failure cannot discard the key.
+    if (legacy && !stored) {
+      await secretsSvc.putSecret(userId, POLLINATIONS_APP_KEY_SECRET, legacy);
+    }
+    settingsSvc.deleteSetting(userId, LEGACY_POLLINATIONS_APP_KEY_SETTING);
+  }
+
+  return envKey || stored || legacy;
 }
 
-export function buildPollinationsAuthorizeUrl(
+/**
+ * One-time, startup-safe migration for plaintext Pollinations keys written by
+ * older builds. The encrypted write always finishes before the old setting is
+ * removed, so a failed write leaves the legacy value recoverable for retry.
+ */
+export async function migrateLegacyPollinationsAppKeys(): Promise<number> {
+  const rows = getDb()
+    .query("SELECT user_id, value FROM settings WHERE key = ?")
+    .all(LEGACY_POLLINATIONS_APP_KEY_SETTING) as Array<{ user_id: string; value: string }>;
+  let migrated = 0;
+
+  for (const row of rows) {
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(row.value);
+    } catch {
+      // Invalid settings JSON cannot contain a usable legacy key, but should
+      // still be removed so it does not remain a misleading plaintext entry.
+    }
+    const legacy = typeof raw === "string" ? raw.trim() : "";
+    const stored = await secretsSvc.getSecretForStatus(row.user_id, POLLINATIONS_APP_KEY_SECRET);
+    if (legacy && !stored) {
+      await secretsSvc.putSecret(row.user_id, POLLINATIONS_APP_KEY_SECRET, legacy);
+      migrated++;
+    }
+    settingsSvc.deleteSetting(row.user_id, LEGACY_POLLINATIONS_APP_KEY_SETTING);
+  }
+
+  return migrated;
+}
+
+export async function buildPollinationsAuthorizeUrl(
   userId: string,
   input: {
     redirect_url: string;
@@ -197,11 +246,11 @@ export function buildPollinationsAuthorizeUrl(
     expiry?: number;
     permissions?: string;
   }
-): string {
+): Promise<string> {
   const params = new URLSearchParams();
   params.set("redirect_url", input.redirect_url);
 
-  const appKey = resolvePollinationsAppKey(userId);
+  const appKey = await resolvePollinationsAppKey(userId);
   if (appKey) params.set("app_key", appKey);
   if (input.models) params.set("models", input.models);
   if (typeof input.budget === "number" && Number.isFinite(input.budget) && input.budget > 0) {

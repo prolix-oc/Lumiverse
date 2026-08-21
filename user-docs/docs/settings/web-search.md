@@ -4,7 +4,7 @@ title: Web Search
 
 # Web Search
 
-Lumiverse can plug a self-hosted **SearXNG** meta-search instance into the [Council](../council/index.md) so members can look up current, factual, or source-backed information mid-deliberation. Results are scraped, condensed into a context block, and handed back to the calling tool.
+Lumiverse can connect **SearXNG**, **Exa**, or **Tavily** to the [Council](../council/index.md) so members can look up current, factual, or source-backed information mid-deliberation. Results are condensed into a context block and handed back to the calling tool.
 
 This is a host-level feature — once configured, any council member you assign the **Web Search** tool to can use it.
 
@@ -13,12 +13,12 @@ This is a host-level feature — once configured, any council member you assign 
 ## How It Works
 
 1. A council member calls the **Web Search** tool with a search-engine-style query.
-2. Lumiverse forwards the query to your configured SearXNG instance.
-3. The top results (up to your configured limit) are fetched and converted to clean text using the same scraper that powers [Databanks](../chatting/memory-cortex.md).
+2. Lumiverse forwards the query to your configured provider.
+3. SearXNG results are fetched and converted to clean text using the same scraper that powers [Databanks](../chatting/memory-cortex.md). Exa and Tavily return extracted content directly, so no follow-up page fetch is needed.
 4. The combined snippets and page content are packaged into a single context block.
 5. That context block is stored under the variable `web_search_context` and exposed to the rest of the deliberation.
 
-The whole flow stays on infrastructure you control — the only outbound call is to your SearXNG host. No third-party search API is contacted by Lumiverse directly.
+With SearXNG, the search request goes only to your own instance. Exa and Tavily are hosted APIs and receive the search query plus their provider-specific request options.
 
 ---
 
@@ -42,6 +42,12 @@ Web Search needs a reachable SearXNG instance that returns JSON.
 
 ---
 
+## Setting Up Exa or Tavily
+
+Both hosted providers need an API key, available from their respective dashboards. In **Settings → Web Search**, select **Exa** or **Tavily** and paste the key. Lumiverse uses their fixed HTTPS endpoints automatically and stores each provider's key separately.
+
+Tavily searches use its documented `POST https://api.tavily.com/search` endpoint with `Authorization: Bearer <key>`. Lumiverse requests Tavily's basic search depth and native plain-text extraction when page content is needed.
+
 ## Configuring Lumiverse
 
 Open **Settings → Web Search**.
@@ -51,9 +57,9 @@ Open **Settings → Web Search**.
 | Field | What it does |
 |-------|--------------|
 | **Enable web search** | Master switch. While off, the Council `web_search` tool is hidden and the test button is the only thing that runs. |
-| **Provider** | `SearXNG` is currently the only supported provider. |
-| **API URL** | Your SearXNG base URL. Lumiverse automatically appends `/search` if you only give a host. |
-| **API Key** | Optional. Sent as `Authorization: Bearer <key>` if set — useful when your instance sits behind an auth proxy. The label shows **(configured)** once a key is saved. |
+| **Provider** | Choose `SearXNG`, `Exa`, or `Tavily`. |
+| **API URL** | For SearXNG, your instance base URL; Lumiverse appends `/search` if you only give a host. Exa and Tavily use their fixed API URLs. |
+| **API Key** | Optional for SearXNG and sent as `Authorization: Bearer <key>` if set. Required for Exa and Tavily. The label shows **(configured)** once a key is saved. |
 
 ### Search Tuning
 
@@ -65,8 +71,8 @@ Open **Settings → Web Search**.
 | **Timeout (ms)** | 15,000 | 5,000 – 120,000 | How long Lumiverse waits for both the search request and each page fetch before giving up. |
 | **Default Results** | 3 | 1 – 10 | Result count used when the council member doesn't specify one. |
 | **Max Results** | 5 | 1 – 20 | Hard cap on results, even if a tool asks for more. Must be ≥ Default Results. |
-| **Pages to Scrape** | 3 | 1 – 10 | Of the search results, how many to actually fetch and extract text from. Smaller is faster; larger gives the model more material to work with. |
-| **Chars per Page** | 3,000 | 500 – 20,000 | Per-page text cap applied after scraping. Keeps the context block from blowing past the chat context. |
+| **Pages to Scrape** | 3 | 1 – 10 | Of the search results, how many to extract text from. SearXNG fetches those pages; Exa and Tavily use their native extraction. Smaller is faster; larger gives the model more material to work with. |
+| **Chars per Page** | 3,000 | 500 – 20,000 | Per-page text cap applied after extraction. Keeps the context block from blowing past the chat context. |
 
 ### Saving & Testing
 
@@ -80,7 +86,7 @@ The test uses **whatever is currently in the form**, including any unsaved API k
 
 ## Using Web Search in the Council
 
-Once Web Search is **enabled** and an **API URL** is configured, a new **Web Search** tool appears under the Context category in the [Council Tools](../council/council-tools.md) picker.
+Once Web Search is **enabled** and the provider is configured (including an API key for Exa or Tavily), a new **Web Search** tool appears under the Context category in the [Council Tools](../council/council-tools.md) picker.
 
 To use it:
 
@@ -106,7 +112,7 @@ The tool stores its output in the deliberation under the variable `web_search_co
 
 OpenRouter connections have their own **Web Search** plugin that runs on the provider side — it asks OpenRouter to augment the LLM response with web results before returning. You'll find it under **Connections → (OpenRouter connection) → Plugins → Web Search**.
 
-This plugin is independent of Lumiverse's SearXNG Web Search:
+This plugin is independent of Lumiverse's configured Web Search provider:
 
 - **Lumiverse Web Search** runs on _your_ infrastructure and is used by Council members as a tool.
 - **OpenRouter Web** is a provider-side feature that affects responses from that OpenRouter connection regardless of whether you've configured SearXNG.
@@ -121,6 +127,7 @@ You can use neither, either, or both.
 |---------|--------------|
 | "SearXNG returned HTTP 403" on test | Your instance has JSON output disabled, or a fronting proxy is blocking unauthenticated requests. Set an **API Key** or relax the proxy rule. |
 | "SearXNG returned HTTP 429" | Rate-limited. If you're testing against a public instance, switch to a self-hosted one. |
+| "Tavily returned HTTP 401" | The API key is missing, invalid, or was entered under another provider. Select Tavily and save the correct key. |
 | Tool never gets called by the Council | The member needs the tool explicitly checked. The model also won't call it for questions it can answer from the current chat — that's by design. |
 | Empty results despite a working query in your browser | Your engine allowlist is too narrow, or your SearXNG instance has those engines disabled. Clear the **Engines** field and retest. |
 | Pages return as `Fetch note: …` instead of content | The page blocks scraping (bot protection, login walls, JS-only rendering). The snippet from SearXNG is still included. |

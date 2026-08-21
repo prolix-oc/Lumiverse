@@ -12,6 +12,12 @@ interface AnthropicPromptCachingConfig {
   };
 }
 
+// Anthropic permits at most four explicit cache breakpoints in one request.
+// Keep that policy here (rather than relying on every request producer to
+// remember it) because prompt assembly can emit an arbitrary number of system
+// blocks and runtime tools.
+const MAX_CACHE_BREAKPOINTS = 4;
+
 const DISABLED: AnthropicPromptCachingConfig = {
   enabled: false,
   automatic: false,
@@ -39,28 +45,27 @@ function resolveConfig(
     },
     breakpoints: {
       tools: breakpoints.tools === true,
-      // Default ON when caching is enabled: the leading system block (character
-      // card, world info, instructions) is the largest stable prefix and is
-      // identical across every turn AND swipe, so caching it is the
-      // highest-leverage win. Without an inline breakpoint the Anthropic API
-      // ignores the top-level cache_control flag, so a `prompt_caching: true`
-      // connection would otherwise get no real caching. Opt out with
-      // `breakpoints.system === false`.
-      system: breakpoints.system !== false,
+      // Automatic mode creates tiered checkpoints across the leading system
+      // run. This preserves an earlier reusable prefix when a later block
+      // contains retrieved memory, world info, or another volatile value.
+      // With automatic mode off, system caching is an explicit opt-in.
+      system:
+        breakpoints.system !== false &&
+        (record.automatic !== false || breakpoints.system === true),
       // Incremental conversation caching stays opt-in (marks the volatile tail).
       messages: breakpoints.messages === true,
     },
   };
 }
 
-/** Index of the last message in the leading run of system messages, or -1. */
-function lastLeadingSystemIndex(messages: LlmMessage[]): number {
-  let idx = -1;
+/** Indices in the leading run of system messages. */
+function leadingSystemIndices(messages: LlmMessage[]): number[] {
+  const indices: number[] = [];
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role !== "system") break;
-    idx = i;
+    indices.push(i);
   }
-  return idx;
+  return indices;
 }
 
 /** Index of the last non-system message, or -1. */
@@ -71,25 +76,46 @@ function lastNonSystemIndex(messages: LlmMessage[]): number {
   return -1;
 }
 
+/**
+ * Spread the available checkpoints across a prefix instead of placing just
+ * one at its volatile tail. Cache prefixes are cumulative: if a retrieved
+ * block changes, Anthropic can still reuse the longest earlier checkpoint
+ * whose preceding content is unchanged.
+ */
+function evenlySpacedIndices(indices: number[], limit: number): number[] {
+  if (limit <= 0 || indices.length === 0) return [];
+  if (indices.length <= limit) return indices;
+
+  const selected: number[] = [];
+  for (let ordinal = 1; ordinal <= limit; ordinal++) {
+    const position = Math.ceil((ordinal * indices.length) / limit) - 1;
+    const index = indices[position]!;
+    if (selected[selected.length - 1] !== index) selected.push(index);
+  }
+  return selected;
+}
+
 function applyMessageBreakpoints(
   messages: LlmMessage[],
   config: AnthropicPromptCachingConfig,
+  systemCheckpointLimit: number,
 ): LlmMessage[] {
   if (!config.enabled) return messages;
-  // A cache checkpoint covers everything up to and including the marked block,
-  // so a single marker at the end of the leading system run caches the whole
-  // system prefix without spending extra breakpoints (Anthropic allows 4).
-  const systemIdx = config.breakpoints.system
-    ? lastLeadingSystemIndex(messages)
-    : -1;
+  const systemIndices = config.breakpoints.system
+    ? config.automatic
+      ? evenlySpacedIndices(leadingSystemIndices(messages), systemCheckpointLimit)
+      : leadingSystemIndices(messages).slice(-1)
+    : [];
   const lastConversationIdx = config.breakpoints.messages
     ? lastNonSystemIndex(messages)
     : -1;
   // Nothing to mark — preserve the original array reference (and avoid GC churn
   // on rapid swipe bursts).
-  if (systemIdx === -1 && lastConversationIdx === -1) return messages;
+  if (systemIndices.length === 0 && lastConversationIdx === -1) return messages;
+  const checkpointIndices = new Set(systemIndices);
+  if (lastConversationIdx !== -1) checkpointIndices.add(lastConversationIdx);
   return messages.map((message, index) => {
-    if (index !== systemIdx && index !== lastConversationIdx) return message;
+    if (!checkpointIndices.has(index)) return message;
     return { ...message, cache_control: config.cacheControl };
   });
 }
@@ -99,7 +125,14 @@ function applyToolBreakpoints(
   config: AnthropicPromptCachingConfig,
 ): ToolDefinition[] | undefined {
   if (!tools || !config.enabled || !config.breakpoints.tools) return tools;
-  return tools.map((tool) => ({ ...tool, cache_control: config.cacheControl }));
+  // Tool definitions are themselves a prefix. Marking only the last one
+  // caches the complete definition list while consuming one breakpoint rather
+  // than one per tool (which can exceed Anthropic's request limit).
+  return tools.map((tool, index) =>
+    index === tools.length - 1
+      ? { ...tool, cache_control: config.cacheControl }
+      : tool,
+  );
 }
 
 /**
@@ -109,11 +142,11 @@ function applyToolBreakpoints(
  *   1. Copy `metadata.prompt_caching` (truthy) onto `params.prompt_caching`
  *      so the Anthropic provider's `buildBody` can normalize it into the
  *      top-level body `cache_control` field.
- *   2. Attach inline `cache_control` markers: at the end of the leading system
- *      block (on by default when caching is enabled), and — when opted in —
- *      on the last conversation message and the last tool definition. The
- *      inline system marker is what actually enables caching on the Anthropic
- *      API; the top-level flag in (1) alone is ignored by the API.
+ *   2. Attach inline `cache_control` markers. Automatic mode tiers them across
+ *      the leading system prefix, so a changing retrieved block cannot evict
+ *      every earlier static block. When opted in, the planner also reserves a
+ *      marker for the conversation tail and the final tool definition. The
+ *      request never exceeds Anthropic's four-breakpoint limit.
  */
 export function applyAnthropicCaching(
   ctx: CachingContext,
@@ -127,11 +160,30 @@ export function applyAnthropicCaching(
       : input.params;
 
   const config = resolveConfig(ctx.metadata);
+  // Reserve a checkpoint for each independently cacheable request section
+  // before assigning the remainder to the leading system prefix.
+  const reservedBreakpoints =
+    (config.breakpoints.tools && input.tools?.length ? 1 : 0) +
+    (config.breakpoints.messages && lastNonSystemIndex(input.messages) !== -1 ? 1 : 0);
+  const systemCheckpointLimit = Math.max(
+    0,
+    MAX_CACHE_BREAKPOINTS - reservedBreakpoints,
+  );
   return {
     params,
-    messages: applyMessageBreakpoints(input.messages, config),
+    messages: applyMessageBreakpoints(
+      input.messages,
+      config,
+      systemCheckpointLimit,
+    ),
     tools: applyToolBreakpoints(input.tools, config),
   };
 }
 
-export const __test__ = { resolveConfig, applyMessageBreakpoints, applyToolBreakpoints };
+export const __test__ = {
+  resolveConfig,
+  leadingSystemIndices,
+  evenlySpacedIndices,
+  applyMessageBreakpoints,
+  applyToolBreakpoints,
+};

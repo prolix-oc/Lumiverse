@@ -501,6 +501,10 @@
   opacity: 0.6;
 }
 
+.toolbarBtnPrimary {
+  margin-left: auto;
+}
+
 .toolbarBtn:hover {
   opacity: 1;
   color: var(--lumiverse-text);
@@ -513,6 +517,19 @@
   color: var(--lumiverse-primary);
   background: var(--lumiverse-primary-010);
   border-color: var(--lumiverse-primary);
+}
+
+.toolbarBtn:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.toolbarSpinner {
+  animation: chatToolbarSpin 0.8s linear infinite;
+}
+
+@keyframes chatToolbarSpin {
+  to { transform: rotate(360deg); }
 }
 
 /* GPU optimization: disable backdrop-filter on the card receiving tokens. */

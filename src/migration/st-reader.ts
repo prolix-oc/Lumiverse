@@ -70,6 +70,7 @@ export interface STProxy {
 export type STSecrets = Record<string, Array<{ id?: string; value?: string; active?: boolean }>>;
 
 export interface WorldBookPayload {
+  filename: string;
   name: string;
   description: string;
   entries: any;
@@ -504,14 +505,17 @@ export async function scanCharacterPNGs(charsDir: string, logger?: MigrationLogg
     const filePath = fs.join(charsDir, entry.name);
     logger?.progress("Scanning character files", i + 1, pngFiles.length);
     try {
-      const info = await readPNGCharaName(filePath, fs);
+      const [info, fileStat] = await Promise.all([
+        readPNGCharaName(filePath, fs),
+        fs.stat(filePath).catch(() => null),
+      ]);
       results.push({
         filename: entry.name,
         stem: fs.basename(entry.name, ".png"),
         embeddedName: info.embeddedName,
         hasData: info.hasCharaData,
         parseError: info.parseError,
-        sizeBytes: entry.size,
+        sizeBytes: fileStat?.size ?? entry.size,
       });
     } catch {
       results.push({
@@ -544,6 +548,7 @@ export async function readWorldBooksFromDisk(stDataDir: string, logger?: Migrati
     try {
       const data = JSON.parse(await fs.readText(filePath));
       results.push({
+        filename: jsonFiles[i].name,
         name: data.name || data.originalName || fs.basename(jsonFiles[i].name, ".json"),
         description: data.description || "",
         entries: data.entries || [],

@@ -207,13 +207,14 @@ replacement. Blocks and variable keys absent from the profile inherit the
 current values in `metadata.promptVariables`; bindings created before profile
 variable snapshots therefore continue to use the preset configuration.
 
-Declared prompt-variable reads are resolved by the host before a registered
-whole-template macro interceptor sees the block. This applies to
-`{{var::name}}`, `{{getvar::name}}`, `{{.name}}`, and the prompt-variable
-read helpers. The surrounding template is left unchanged, so an extension can
-still consume the resolved value inside its own conditionals and loops without
-shadowing the preset value with extension or chat state. Undeclared variables
-and templates that mutate the same key remain on the normal ordered macro path.
+Lumiverse evaluates preset blocks and prompt settings itself; macro
+interceptors do not receive the complete preset template. If a block references
+a character field such as `{{description}}` or `{{system}}`, that field is
+offered to interceptors separately. `ctx.sourceHint` identifies which field was
+provided. This keeps preset variables and system macros stable while still
+allowing extensions to process character content. Regex scripts attached to a
+preset follow the same rule. Character fields receive the same local, chat, and
+global variables available at their original position in the preset.
 
 ---
 

@@ -21,6 +21,8 @@ import {
   importChats,
   importGroupChats,
 } from "./st-importer";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -31,7 +33,7 @@ interface DockerSTMigrationStatus {
   migration_target: number;
   results: {
     characters?: { imported: number; skipped: number; failed: number };
-    world_books?: { imported: number; failed: number; total_entries: number };
+    world_books?: { imported: number; skipped: number; failed: number; total_entries: number };
     personas?: { imported: number; failed: number; avatars_uploaded: number };
     chats?: { imported: number; failed: number; total_messages: number };
     group_chats?: { imported: number; failed: number; skipped: number; total_messages: number };
@@ -175,10 +177,11 @@ export async function runDockerSTMigration(): Promise<void> {
       worldBookNameToId = wbResult.nameToId;
       results.world_books = {
         imported: wbResult.imported,
+        skipped: wbResult.skipped,
         failed: wbResult.failed,
         total_entries: wbResult.totalEntries,
       };
-      logger.info(`World books: ${wbResult.imported} imported (${wbResult.totalEntries} entries), ${wbResult.failed} failed`);
+      logger.info(`World books: ${wbResult.imported} imported, ${wbResult.skipped} skipped (${wbResult.totalEntries} entries), ${wbResult.failed} failed`);
     }
 
     // Personas (needs worldBookNameToId for lorebook attachment)
@@ -235,6 +238,12 @@ export async function runDockerSTMigration(): Promise<void> {
     };
 
     putSetting(userId, "docker_st_migration_status", status);
+    if ((results.characters?.imported ?? 0) > 0) {
+      eventBus.emit(EventType.CHARACTER_LIBRARY_CHANGED, {
+        reason: "sillytavern_migration",
+        imported: results.characters!.imported,
+      }, userId);
+    }
     logger.info(`Migration complete in ${(durationMs / 1000).toFixed(1)}s`);
   } catch (err: any) {
     logger.error(`Migration failed: ${err.message || err}`);

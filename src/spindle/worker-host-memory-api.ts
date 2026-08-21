@@ -10,6 +10,8 @@ import * as cortexConsolidationSvc from "../services/memory-cortex/consolidation
 import * as cortexVaultSvc from "../services/memory-cortex/vault";
 import * as chatMemoryCacheSvc from "../services/chat-memory-cache.service";
 import * as vectorizationQueueSvc from "../services/vectorization-queue.service";
+import * as connectionsSvc from "../services/connections.service";
+import { getProvider } from "../llm/registry";
 import { getDb } from "../db/connection";
 
 type MemoryPermission = "chats" | "memories";
@@ -582,13 +584,43 @@ export class WorkerHostMemoryApi {
         if (!cortexConfig.consolidation?.enabled) {
           throw new Error("Consolidation is disabled in cortex config");
         }
-        // Fire-and-forget — never block the worker on background consolidation.
-        // Heuristic / extractive mode runs without a sidecar generate fn;
-        // sidecar mode requires route-layer plumbing to resolve a connection,
-        // which we don't replicate here on purpose (keeps the worker surface
-        // simple and predictable).
+        if (!cortexConfig.consolidation.useSidecar) {
+          throw new Error("AI-written consolidation summaries are disabled in cortex config");
+        }
+        const connectionId = cortexConfig.sidecar.connectionProfileId;
+        const connection = connectionId
+          ? connectionsSvc.resolveConnection(resolvedUserId, connectionId)
+          : null;
+        const provider = connection ? getProvider(connection.provider) : null;
+        const apiKeyRequired = provider?.capabilities.apiKeyRequired ?? true;
+        if (!connection || !provider || (apiKeyRequired && !connection.has_api_key)) {
+          throw new Error("The configured Cortex sidecar connection is unavailable");
+        }
+        const generateRawFn = memoryCortexSvc.createCortexSidecarGenerateRawAdapter({
+          userId: resolvedUserId,
+          sidecarProvider: connection.provider,
+          cortexConfig,
+        });
+        const samplingParameters: Record<string, unknown> = {
+          temperature: cortexConfig.sidecar.temperature,
+        };
+        if (cortexConfig.sidecar.topP > 0 && cortexConfig.sidecar.topP < 1) {
+          samplingParameters.top_p = cortexConfig.sidecar.topP;
+        }
+
+        // Fire-and-forget — never block the extension worker while the real
+        // Cortex sidecar drains every currently eligible scene batch.
         void cortexConsolidationSvc
-          .maybeConsolidate(resolvedUserId, chatId, cortexConfig.consolidation)
+          .consolidateBacklog(
+            resolvedUserId,
+            chatId,
+            cortexConfig.consolidation,
+            generateRawFn,
+            connection.id,
+            cortexConfig.sidecarTimeoutMs,
+            samplingParameters,
+            cortexConfig.nonProseScaffoldTags,
+          )
           .catch((err) => console.warn("[Spindle:memories] consolidations.run() failed:", err));
         this.postToWorker({ type: "response", requestId, result: undefined });
       } catch (err: any) {

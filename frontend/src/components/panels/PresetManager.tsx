@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Brain } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
+import { connectionsApi } from '@/api/connections'
 import { useStore } from '@/store'
 import {
   areReasoningSettingsEqual,
+  captureReasoningBindings,
   getEffortOptions,
   getReasoningBindingSummary,
+  isToggleOnlyProvider,
   normalizeReasoningSettingsForProvider,
-  TOGGLE_ONLY_PROVIDERS,
 } from '@/lib/reasoning-binding'
+import { toast } from '@/lib/toast'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
+import { Button } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
 import { Toggle } from '@/components/shared/Toggle'
 import { useTranslation } from 'react-i18next'
@@ -28,6 +32,7 @@ export default function PresetManager() {
   const reasoningSettings = useStore((s) => s.reasoningSettings)
   const promptBias = useStore((s) => s.promptBias)
   const setSetting = useStore((s) => s.setSetting)
+  const updateProfile = useStore((s) => s.updateProfile)
 
   // Derive provider from active connection profile
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -44,16 +49,19 @@ export default function PresetManager() {
     ? normalizeReasoningSettingsForProvider(activeBinding, activeProvider, activeModel)
     : null
 
-  const isToggleOnly = activeProvider ? TOGGLE_ONLY_PROVIDERS.has(activeProvider) : false
+  const isToggleOnly = isToggleOnlyProvider(activeProvider, activeModel)
   const isApiReasoningDisabled = !reasoningSettings.apiReasoning
   const effortOptions = getEffortOptions(activeProvider, activeModel)
   const isAnthropic = activeProvider === 'anthropic'
+  const isZai = activeProvider === 'zai'
+  const isGoogle = activeProvider === 'google' || activeProvider === 'google_vertex'
   const customBody = useMemo(
     () => reasoningSettings.customBody ?? { enabled: false, rawJson: '{}' },
     [reasoningSettings.customBody],
   )
   const [localCustomBodyJson, setLocalCustomBodyJson] = useState(customBody.rawJson)
   const [customBodyError, setCustomBodyError] = useState<string | null>(null)
+  const [rebinding, setRebinding] = useState(false)
   const activeBindingMatchesPanel = normalizedActiveBinding
     ? areReasoningSettingsEqual(normalizedActiveBinding, reasoningSettings)
       && (typeof activeBindingPromptBias !== 'string' || activeBindingPromptBias === promptBias)
@@ -70,6 +78,31 @@ export default function PresetManager() {
     },
     [activeModel, activeProvider, reasoningSettings, setSetting]
   )
+
+  const rebindCurrentReasoning = useCallback(async () => {
+    if (!activeProfile) return
+
+    setRebinding(true)
+    try {
+      const updated = await connectionsApi.update(activeProfile.id, {
+        metadata: {
+          ...activeProfile.metadata,
+          reasoningBindings: captureReasoningBindings(
+            reasoningSettings,
+            promptBias,
+            activeProvider,
+            activeModel,
+          ),
+        },
+      })
+      updateProfile(activeProfile.id, updated)
+    } catch (error: any) {
+      console.error('[PresetManager] Failed to re-bind reasoning settings:', error)
+      toast.error(error?.body?.error || error?.message || t('presetManager.rebindFailed'))
+    } finally {
+      setRebinding(false)
+    }
+  }, [activeModel, activeProfile, activeProvider, promptBias, reasoningSettings, t, updateProfile])
 
   useEffect(() => {
     setLocalCustomBodyJson(customBody.rawJson)
@@ -106,8 +139,18 @@ export default function PresetManager() {
                 {getReasoningBindingSummary(normalizedActiveBinding, activeBindingPromptBias)}
               </div>
               {!activeBindingMatchesPanel && (
-                <div className={styles.bindingBannerHint}>
-                  {t('presetManager.bindingChangedHint')}
+                <div className={styles.bindingBannerChanged}>
+                  <div className={styles.bindingBannerHint}>
+                    {t('presetManager.bindingChangedHint')}
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={rebinding}
+                    onClick={rebindCurrentReasoning}
+                  >
+                    {t('presetManager.rebindCurrent')}
+                  </Button>
                 </div>
               )}
             </div>
@@ -178,6 +221,46 @@ export default function PresetManager() {
               onChange={(v) => updateReasoning({ apiReasoning: v })}
             />
           </div>
+
+          {/* Z.AI-only: preserve reasoning across native tool-call continuations. */}
+          {isZai && (
+            <div className={clsx(styles.toggleRow, isApiReasoningDisabled && styles.fieldGroupDisabled)}>
+              <div>
+                <div className={styles.toggleLabel}>{t('presetManager.clearThinking')}</div>
+                <div className={styles.toggleDesc}>
+                  {isApiReasoningDisabled
+                    ? t('presetManager.clearThinkingDisabledHint')
+                    : t('presetManager.clearThinkingHint')}
+                </div>
+              </div>
+              <Toggle.Switch
+                checked={reasoningSettings.clearThinking ?? true}
+                onChange={(clearThinking) => updateReasoning({ clearThinking })}
+                disabled={isApiReasoningDisabled}
+                aria-label={t('presetManager.clearThinking')}
+              />
+            </div>
+          )}
+
+          {/* Gemini/Vertex: preserve optional signatures on non-tool thought parts. */}
+          {isGoogle && (
+            <div className={clsx(styles.toggleRow, isApiReasoningDisabled && styles.fieldGroupDisabled)}>
+              <div>
+                <div className={styles.toggleLabel}>{t('presetManager.replayThoughtSignatures')}</div>
+                <div className={styles.toggleDesc}>
+                  {isApiReasoningDisabled
+                    ? t('presetManager.replayThoughtSignaturesDisabledHint')
+                    : t('presetManager.replayThoughtSignaturesHint')}
+                </div>
+              </div>
+              <Toggle.Switch
+                checked={reasoningSettings.replayThoughtSignatures === true}
+                onChange={(replayThoughtSignatures) => updateReasoning({ replayThoughtSignatures })}
+                disabled={isApiReasoningDisabled}
+                aria-label={t('presetManager.replayThoughtSignatures')}
+              />
+            </div>
+          )}
 
           {/* Reasoning effort */}
           <div className={clsx(styles.fieldGroup, (isToggleOnly || isApiReasoningDisabled) && styles.fieldGroupDisabled)}>

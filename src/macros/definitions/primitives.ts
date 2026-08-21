@@ -135,11 +135,13 @@ export function registerCoreMacros(): void {
   registry.registerMacro({
     builtIn: true,
     name: "wi_marker",
+    aliases: ["wiMarker"],
     category: "Core",
     description:
       "Resolve all activated world-info entries set to 'At Marker' position, joined by double newlines",
     returnType: "string",
     handler: (ctx) => {
+      ctx.env.extra._worldInfoAtMarkerMacroUsed = true;
       const pool = ctx.env.extra?.worldInfoAtMarker as string | undefined;
       return typeof pool === "string" ? pool : "";
     },

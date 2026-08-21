@@ -363,7 +363,13 @@ export default function LoreIndicator({ open: controlledOpen, onOpenChange }: Lo
           <div
             ref={paletteRef}
             className={styles.paletteDialog}
-            style={{ ...commonStyle, ...paletteRect }}
+            style={{
+              ...commonStyle,
+              left: paletteRect.x,
+              top: paletteRect.y,
+              width: paletteRect.width,
+              height: paletteRect.height,
+            }}
           >
             <div
               className={styles.paletteDragBar}

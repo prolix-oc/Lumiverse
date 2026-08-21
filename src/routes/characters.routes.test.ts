@@ -30,6 +30,7 @@ function initCharactersTestDb(): void {
     tags TEXT NOT NULL DEFAULT '[]',
     alternate_greetings TEXT NOT NULL DEFAULT '[]',
     extensions TEXT NOT NULL DEFAULT '{}',
+    library_scope TEXT NOT NULL DEFAULT 'mine',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleting INTEGER NOT NULL DEFAULT 0
@@ -113,6 +114,7 @@ describe("POST /:id/replace-card", () => {
       alternate_greetings: ["new alternate"],
     });
     expect(character.extensions).toEqual({
+      _lumiverse_library_scope: "mine",
       importedExtension: "kept",
       ttsVoice: { connectionId: "voice-connection", voice: "Original voice" },
       avatar_crop_image_id: "avatar-crop",

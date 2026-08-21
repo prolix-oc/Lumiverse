@@ -57,6 +57,7 @@ afterAll(() => {
 const {
   applyWorldBookEntryViewPreference,
   getWorldBookEntriesSectionBookResetState,
+  shouldLoadFullWorldBookEntryCorpus,
   sortWorldBookEntriesForView,
 } = await import('./WorldBookEntriesSection')
 type WorldBookEntriesSectionViewState = import('./WorldBookEntriesSection').WorldBookEntriesSectionViewState
@@ -83,6 +84,13 @@ function editorState(): WorldBookEntriesSectionViewState {
 }
 
 describe('WorldBookEntriesSection view reset boundaries', () => {
+  test('reserves full-corpus loading for book-wide tools', () => {
+    expect(shouldLoadFullWorldBookEntryCorpus('', 'all', 50)).toBe(false)
+    expect(shouldLoadFullWorldBookEntryCorpus('dragon', 'all', 50)).toBe(true)
+    expect(shouldLoadFullWorldBookEntryCorpus('', 'vector', 50)).toBe(true)
+    expect(shouldLoadFullWorldBookEntryCorpus('', 'all', 'all')).toBe(true)
+  })
+
   test('restores the authored array for custom order and sorts other views without mutating it', () => {
     const authored = [
       { id: 'b', comment: 'Second', priority: 1, created_at: 20, updated_at: 20 } as WorldBookEntry,

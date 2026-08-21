@@ -13,6 +13,11 @@ import {
   putSharpSettings,
 } from "../services/sharp-settings.service";
 import {
+  discardImageProcessingQueue,
+  getImageProcessingQueueSnapshot,
+  recoverImageProcessingQueue,
+} from "../services/images.service";
+import {
   getDnsSettingsStatus,
   putDnsSettings,
 } from "../services/dns-settings.service";
@@ -46,7 +51,12 @@ app.get("/database", async (c) => {
 });
 
 app.get("/sharp", (c) => {
-  return c.json(getSharpSettingsStatus());
+  const snapshot = getImageProcessingQueueSnapshot();
+  return c.json({
+    ...getSharpSettingsStatus(),
+    thumbnailQueue: snapshot.queue,
+    thumbnailRecovery: snapshot.recovery,
+  });
 });
 
 app.put("/sharp", async (c) => {
@@ -60,6 +70,16 @@ app.put("/sharp", async (c) => {
     }
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }
+});
+
+app.post("/sharp/queue/recover", (c) => {
+  recoverImageProcessingQueue();
+  return c.json(getImageProcessingQueueSnapshot());
+});
+
+app.post("/sharp/queue/discard", (c) => {
+  discardImageProcessingQueue();
+  return c.json(getImageProcessingQueueSnapshot());
 });
 
 app.get("/dns", (c) => {

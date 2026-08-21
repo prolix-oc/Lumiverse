@@ -16,9 +16,15 @@ export const createSttConnectionsSlice: StateCreator<AppStore, [], [], SttConnec
     set((state) => {
       const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
       const order = connectionsOrder.stt
+      const existingIndex = state.sttProfiles.findIndex((candidate) => candidate.id === profile.id)
       return {
-        sttProfiles: [...state.sttProfiles, profile],
-        connectionsOrder: { ...connectionsOrder, stt: [...order, profile.id] },
+        sttProfiles: existingIndex === -1
+          ? [profile, ...state.sttProfiles]
+          : state.sttProfiles.map((candidate, index) => index === existingIndex ? profile : candidate),
+        connectionsOrder: {
+          ...connectionsOrder,
+          stt: order.includes(profile.id) ? order : [profile.id, ...order],
+        },
       }
     }),
 

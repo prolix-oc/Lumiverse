@@ -42,6 +42,7 @@ interface CharacterToolbarProps {
 const SORT_OPTIONS: { value: CharacterSortField; label: string }[] = [
   { value: 'name', label: 'name' },
   { value: 'recent', label: 'recent' },
+  { value: 'most_chats', label: 'mostChats' },
   { value: 'created', label: 'created' },
   { value: 'shuffle', label: 'shuffle' },
 ]
@@ -70,12 +71,13 @@ export default function CharacterToolbar({
 }: CharacterToolbarProps) {
   const { t } = useTranslation('panels')
   const isGroupsTab = filterTab === 'groups'
-  // shuffle is meaningless for group chats; the hook coerces it to 'recent'
+  // Shuffle and per-character chat counts are meaningless for group chats; the
+  // hook coerces either to 'recent'
   // for fetching — mirror that visually so the active item highlights correctly.
   const effectiveSortField: CharacterSortField =
-    isGroupsTab && sortField === 'shuffle' ? 'recent' : sortField
+    isGroupsTab && (sortField === 'shuffle' || sortField === 'most_chats') ? 'recent' : sortField
   const visibleSortOptions = isGroupsTab
-    ? SORT_OPTIONS.filter((opt) => opt.value !== 'shuffle')
+    ? SORT_OPTIONS.filter((opt) => opt.value !== 'shuffle' && opt.value !== 'most_chats')
     : SORT_OPTIONS
 
   return (

@@ -1,8 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { isTermuxLikeEnvironment } from "./utils/termux";
 
-const NATIVE_BINARY_VERSION = "0.29.0";
+const NATIVE_BINARY_VERSION = "0.37.1";
+const NATIVE_BINARY_RELEASE_TAG = "android-lancedb-v0.37.1";
+const NATIVE_BINARY_SHA256 = "4c269c41e8969589c4df1683d062172a541b48d2b748e3a4dfe0d142fd9f0fec";
 
 function needsDownload(binaryPath: string, stampPath: string): boolean {
   if (!existsSync(binaryPath)) return true;
@@ -37,8 +40,8 @@ export async function configureLanceDbNativeOverride(): Promise<void> {
     console.log("[startup] Downloading lancedb.termux-arm64.node... This may take a minute.");
     try {
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
-      // Fetch the precompiled (and stripped) binary from the rolling release
-      const response = await fetch("https://github.com/prolix-oc/Lumiverse/releases/download/android-binaries/lancedb.termux-arm64.node");
+      // Fetch the version-matched precompiled binary from its immutable release.
+      const response = await fetch(`https://github.com/prolix-oc/Lumiverse/releases/download/${NATIVE_BINARY_RELEASE_TAG}/lancedb.termux-arm64.node`);
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
 
       const totalBytes = Number(response.headers.get("content-length") || 0);
@@ -63,6 +66,11 @@ export async function configureLanceDbNativeOverride(): Promise<void> {
       const merged = new Uint8Array(receivedBytes);
       let offset = 0;
       for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+
+      const digest = createHash("sha256").update(merged).digest("hex");
+      if (digest !== NATIVE_BINARY_SHA256) {
+        throw new Error(`LanceDB native engine checksum mismatch: expected ${NATIVE_BINARY_SHA256}, received ${digest}`);
+      }
 
       await Bun.write(bundledAndroidOverride, merged);
       writeFileSync(versionStamp, NATIVE_BINARY_VERSION);

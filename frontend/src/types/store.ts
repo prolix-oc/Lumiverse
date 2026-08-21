@@ -55,6 +55,7 @@ export interface ChatSlice {
   setActiveChatDisplayOwner: (owner: string | null) => void
   setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
+  reconcileMessagesTail: (page: Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'>) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
@@ -103,7 +104,7 @@ export interface ChatSlice {
 
 // ---- Characters Slice ----
 export type CharacterFilterTab = 'characters' | 'favorites' | 'groups'
-export type CharacterSortField = 'name' | 'recent' | 'created' | 'shuffle'
+export type CharacterSortField = 'name' | 'recent' | 'most_chats' | 'created' | 'shuffle'
 export type CharacterSortDirection = 'asc' | 'desc'
 export type CharacterViewMode = 'grid' | 'single' | 'list'
 
@@ -251,6 +252,19 @@ export interface CustomCSSEditorSession {
   showAssets: boolean
 }
 
+export interface MessageEditDraft {
+  chatId: string
+  messageId: string
+  messageOffset: number
+  messageIndexInChat: number
+  content: string
+  reasoning: string
+  showReasoningEditor: boolean
+  hadReasoning: boolean
+  dirty: boolean
+  focusRequested: boolean
+}
+
 export interface UISlice {
   activeModal: string | null
   modalProps: Record<string, any>
@@ -281,6 +295,7 @@ export interface UISlice {
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
   openSettings: (view?: string, target?: { extensionId?: string; anchorId?: string }) => void
+  setSettingsActiveView: (view: string) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
@@ -301,7 +316,13 @@ export interface UISlice {
 
   // Message editing (globally single-slot)
   editingMessageId: string | null
+  messageEditDraft: MessageEditDraft | null
   setEditingMessageId: (id: string | null) => void
+  beginMessageEdit: (draft: Omit<MessageEditDraft, 'dirty' | 'focusRequested'>) => void
+  updateMessageEditDraft: (patch: Partial<Pick<MessageEditDraft, 'content' | 'reasoning'>>) => void
+  resumeMessageEdit: () => void
+  consumeMessageEditFocusRequest: () => void
+  clearMessageEdit: () => void
 
   // Transient highlight target for navigation feedback (e.g. greeting switch)
   highlightedMessageId: string | null
@@ -342,6 +363,8 @@ export interface RegenFeedbackSettings {
   enabled: boolean
   position: RegenFeedbackPosition
   includePreviousGeneration: boolean
+  /** Freeform prompt template. {{$regenInput}} is replaced with the submitted feedback. */
+  format: string
 }
 
 // ---- Reasoning Settings ----
@@ -384,6 +407,10 @@ export interface ReasoningSettings {
   /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
    *  'auto' leaves the field unset so the API picks a model-appropriate default. */
   thinkingDisplay: ThinkingDisplay
+  /** Z.AI-only. Omitted means use Z.AI's API/model default. */
+  clearThinking?: boolean
+  /** Google Gemini / Vertex only. Replays optional non-tool thought signatures. */
+  replayThoughtSignatures?: boolean
   /**
    * Extra request-body fields. Omitted for legacy settings so the backend can
    * continue honoring an old preset-level custom body until this is saved.
@@ -681,7 +708,7 @@ export interface SettingsSlice {
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
-  chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  chatDisplayMode: 'minimal' | 'immersive' | 'bubble'
   minimalUseFullAvatar: boolean
   bubbleUserAlign: 'left' | 'right'
   bubbleDisableHover: boolean
@@ -689,7 +716,7 @@ export interface SettingsSlice {
   bubbleUseFullAvatar: boolean
   /** Bubble background opacity, 0–1. 1 = the theme's natural bubble fill (default). */
   bubbleOpacity: number
-  chatSheldEnterToSend: boolean
+  inputBarEnterToSend: boolean
   saveDraftInput: boolean
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   chatContentMaxWidth: number
@@ -745,7 +772,6 @@ export interface SettingsSlice {
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
   connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
-  landingPageActiveTab: 'chats' | 'characters'
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings
   loreIndicatorSettings: LoreIndicatorSettings
@@ -761,6 +787,7 @@ export interface SettingsSlice {
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
+  setInputBarEnterToSend: (enabled: boolean) => void
   setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
@@ -1726,17 +1753,19 @@ export interface MigrationSlice {
 }
 
 // ---- Operator Slice ----
-import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
+import type { ImageThumbnailQueuePayload, OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
 
 export interface OperatorSlice {
   operatorLogs: OperatorLogEntry[]
   operatorStatus: OperatorStatusPayload | null
   operatorBusy: string | null
   operatorProgressMessage: string | null
+  thumbnailQueue: ImageThumbnailQueuePayload
   appendOperatorLogs: (entries: OperatorLogEntry[]) => void
   setOperatorStatus: (status: OperatorStatusPayload) => void
   setOperatorBusy: (operation: string | null) => void
   setOperatorProgressMessage: (message: string | null) => void
+  setThumbnailQueue: (status: ImageThumbnailQueuePayload) => void
   clearOperatorLogs: () => void
 }
 
@@ -1809,6 +1838,8 @@ export interface ConnectionSlice {
   wsAuthSynced: boolean
   /** True after a pong has been received since the last open — confirms the round-trip works. */
   wsRoundTripVerified: boolean
+  /** True while a previously healthy PWA is proving a fresh foreground round trip. */
+  wsResumeRecovering: boolean
   /**
    * Flips to true the first time all three healthy signals coincide. Stays true for the rest of
    * the session so the connection-lost overlay only appears AFTER an initial healthy connection.
@@ -1823,6 +1854,7 @@ export interface ConnectionSlice {
   setWsConnected: (connected: boolean) => void
   setWsAuthSynced: (synced: boolean) => void
   setWsRoundTripVerified: (verified: boolean) => void
+  setWsResumeRecovering: (recovering: boolean) => void
   setWsUpdatePending: (pending: boolean) => void
   resetConnectionState: () => void
 }

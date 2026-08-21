@@ -9,6 +9,17 @@ afterEach(() => {
 });
 
 describe("embedding secret status", () => {
+  test("writes each provider's key to its own secret slot", async () => {
+    const put = spyOn(secretsSvc, "putSecret").mockResolvedValue(undefined);
+    const remove = spyOn(secretsSvc, "deleteSecret").mockImplementation(() => false);
+    spies.push(put, remove);
+
+    await __test__.putEmbeddingSecret("profile-user", "nvidia-nim", "nim-key");
+
+    expect(put).toHaveBeenCalledWith("profile-user", "embedding_api_key_nvidia-nim", "nim-key");
+    expect(remove).toHaveBeenCalledWith("profile-user", "embedding_api_key");
+  });
+
   test("treats an unreadable API key as missing", async () => {
     spies.push(
       spyOn(secretsSvc, "getSecretForStatus").mockResolvedValue(null),

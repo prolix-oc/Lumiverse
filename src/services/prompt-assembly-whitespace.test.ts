@@ -1,7 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 
 import { evaluate, initMacros, registry, type MacroEnv } from "../macros";
-import { normalizePromptBlockText } from "./prompt-assembly.service";
+import type { AssemblyBreakdownEntry } from "../llm/types";
+import {
+  attributeExpandedMarkerWorldInfoTokens,
+  evaluatePromptBlockTokenCountContent,
+  normalizePromptBlockText,
+} from "./prompt-assembly.service";
 
 function makeEnv(): MacroEnv {
   return {
@@ -98,5 +103,43 @@ After
     expect(normalizePromptBlockText(raw)).toBe(
       "<self_reasoning>\nAlright.\n\nAfter\n</self_reasoning>",
     );
+  });
+
+  test("resolves wiMarker normally but suppresses it in token-count content", async () => {
+    const env = makeEnv();
+    env.extra.worldInfoAtMarker = "Eight chars";
+    const template = "Prompt header\n{{wiMarker}}\nPrompt footer";
+
+    expect((await evaluate(template, env, registry)).text).toContain("Eight chars");
+    expect(await evaluatePromptBlockTokenCountContent(template, env, {
+      id: "marker-block",
+      role: "system",
+      position: "pre_history",
+      depth: 0,
+    })).toBe("Prompt header\n\nPrompt footer");
+  });
+
+  test("counts marker WI only when an emitted breakdown block expanded it", () => {
+    const markerEntry = {
+      type: "world_info" as const,
+      name: "WI At Marker: Entry",
+      content: "World info",
+      marker: "wi_marker",
+      excludeFromTotal: true,
+    };
+    const breakdown: AssemblyBreakdownEntry[] = [markerEntry];
+
+    attributeExpandedMarkerWorldInfoTokens(breakdown);
+    expect(markerEntry.excludeFromTotal).toBe(true);
+
+    breakdown.unshift({
+      type: "block",
+      name: "Activated WI",
+      content: "Header\nWorld info",
+      tokenCountContent: "Header",
+      attributesWorldInfoMarkerTokens: true,
+    });
+    attributeExpandedMarkerWorldInfoTokens(breakdown);
+    expect(markerEntry.excludeFromTotal).toBeUndefined();
   });
 });

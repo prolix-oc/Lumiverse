@@ -506,3 +506,55 @@
     gap: 8px;
   }
 }
+
+/* Find-in-prompt bar and inspector match highlighting */
+.findBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.findBarIcon {
+  flex-shrink: 0;
+  color: var(--lumiverse-text-muted);
+}
+
+.findInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+}
+
+.findInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.findCount {
+  flex-shrink: 0;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  white-space: nowrap;
+}
+
+.findMark {
+  background: rgba(124, 108, 240, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.findMarkCurrent {
+  background: var(--lumiverse-primary, #7c6cf0);
+  color: #fff;
+  border-radius: 2px;
+}

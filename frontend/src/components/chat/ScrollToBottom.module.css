@@ -1,6 +1,6 @@
 .btn {
   position: absolute;
-  bottom: calc(var(--lcs-input-safe-zone, 100px) - 10px);
+  bottom: calc(var(--lcs-input-safe-zone, 100px) + 8px);
   right: 20px;
   z-index: 32;
   width: 40px !important;
@@ -14,9 +14,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--lumiverse-bg-deep-080);
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text-muted);
+  background: var(--lumiverse-primary-deep, rgb(12 12 14));
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary-deep-contrast, #fff) 16%, transparent);
+  color: var(--lumiverse-primary-deep-contrast, #fff);
   cursor: pointer;
   transition:
     background var(--lumiverse-transition),
@@ -27,13 +27,9 @@
   animation: lumiverseSlideUp 180ms ease-out both;
 }
 
-:global(:not([data-glass])) .btn {
-  background: var(--lumiverse-bg-deep, var(--lumiverse-bg));
-}
-
 :global([data-glass]) .btn {
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
 }
 
 :global([data-select-mode]) .btn {
@@ -41,8 +37,8 @@
 }
 
 .btn:hover {
-  background: var(--lumiverse-bg);
-  color: var(--lumiverse-text);
-  border-color: var(--lumiverse-border-hover);
+  background: var(--lumiverse-primary-deep-hover, rgb(20 20 24));
+  color: var(--lumiverse-primary-deep-contrast, #fff);
+  border-color: color-mix(in srgb, var(--lumiverse-primary-deep-contrast, #fff) 28%, transparent);
   transform: translateY(-1px);
 }

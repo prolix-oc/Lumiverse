@@ -193,6 +193,7 @@ describe('useHomepageCharacterLibrary websocket invalidation', () => {
       EventType.CHARACTER_CREATED,
       EventType.CHARACTER_EDITED,
       EventType.CHARACTER_DELETED,
+      EventType.CHARACTER_LIBRARY_CHANGED,
     ]
 
     for (const event of activityEvents) {

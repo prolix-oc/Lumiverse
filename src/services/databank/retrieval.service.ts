@@ -55,7 +55,7 @@ export async function searchDatabanks(
 
     // Embed the query
     const embedStart = performance.now();
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal, inputType: "query" });
     onTiming?.("databank-embed", performance.now() - embedStart);
     if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
@@ -103,7 +103,7 @@ export async function searchDirect(
 ): Promise<DatabankSearchResult[]> {
   if (databankIds.length === 0) return [];
 
-  const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [query]);
+  const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [query], { inputType: "query" });
   const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, query);
 
   return raw.map((r) => ({

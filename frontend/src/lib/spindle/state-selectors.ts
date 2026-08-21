@@ -261,16 +261,6 @@ function namedSelectors(): Array<StateSelector> {
       read: (state) => state.activePersonaId,
       same: Object.is,
     },
-    {
-      id: 'landing.activeTab',
-      permission: null,
-      description: 'Landing-page active tab when supplied by the core store.',
-      read: (state) => {
-        const value = Reflect.get(state, 'landingPageActiveTab')
-        return typeof value === 'string' ? value : null
-      },
-      same: Object.is,
-    },
   ]
 }
 

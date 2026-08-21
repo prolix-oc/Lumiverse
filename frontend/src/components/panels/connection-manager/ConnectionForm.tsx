@@ -7,6 +7,7 @@ import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
 import { useStore } from '@/store'
 import {
   areReasoningSettingsEqual,
+  captureReasoningBindings,
   getReasoningBindingSummary,
   normalizeReasoningSettingsForProvider,
 } from '@/lib/reasoning-binding'
@@ -896,8 +897,9 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
               variant="ghost"
               size="sm"
               onClick={() => {
-                setBoundReasoningSettings({ ...reasoningSettings })
-                setBoundPromptBias(promptBias)
+                const captured = captureReasoningBindings(reasoningSettings, promptBias, provider, model)
+                setBoundReasoningSettings(captured.settings)
+                setBoundPromptBias(captured.promptBias ?? '')
               }}
               title={bindingMatchesCurrent ? t('connectionForm.snapshotAlreadyMatches') : t('connectionForm.replaceSavedSnapshot')}
             >

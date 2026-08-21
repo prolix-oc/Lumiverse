@@ -357,22 +357,86 @@ const TOOL_GRADE_HEURISTIC_CANDIDATES: ToolDefinition = {
 const EXTRACTION_TOOLS: ToolDefinition[] = [TOOL_SALIENCE, TOOL_ENTITIES, TOOL_RELATIONSHIPS, TOOL_FONT_COLORS];
 const ARBITER_EXTRACTION_TOOLS: ToolDefinition[] = [...EXTRACTION_TOOLS, TOOL_GRADE_HEURISTIC_CANDIDATES];
 
+const salienceProperties = (TOOL_SALIENCE.parameters as any).properties;
+const entityProperties = (TOOL_ENTITIES.parameters as any).properties;
+const relationshipProperties = (TOOL_RELATIONSHIPS.parameters as any).properties;
+const fontColorProperties = (TOOL_FONT_COLORS.parameters as any).properties;
+const gradingProperties = (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).properties;
+
+/** One tool call for a whole rebuild batch. Tool arguments are substantially
+ *  more reliable than asking smaller/local models to print a large JSON blob
+ *  into assistant content. The ordinary per-passage tools remain the fallback. */
+const TOOL_ANALYZE_PASSAGE_BATCH: ToolDefinition = {
+  name: "analyze_passage_batch",
+  description: "Analyze every indexed passage independently and return exactly one structured result for each passage index.",
+  parameters: {
+    type: "object",
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            index: { type: "integer", description: "The exact zero-based passage index supplied by the caller." },
+            importance: salienceProperties.importance,
+            emotional_tones: salienceProperties.emotional_tones,
+            narrative_flags: salienceProperties.narrative_flags,
+            key_facts: salienceProperties.key_facts,
+            entities_present: entityProperties.entities,
+            relationships_shown: relationshipProperties.relationships,
+            status_changes: entityProperties.status_changes,
+            color_attributions: fontColorProperties.color_attributions,
+            discovered_aliases: entityProperties.discovered_aliases,
+            grading: {
+              type: "object",
+              properties: gradingProperties,
+              required: (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).required,
+              description: "Candidate grading for this passage. Omit when no arbiter block was supplied for the passage.",
+            },
+          },
+          required: [
+            "index",
+            "importance",
+            "emotional_tones",
+            "narrative_flags",
+            "key_facts",
+            "entities_present",
+            "relationships_shown",
+            "status_changes",
+            "color_attributions",
+            "discovered_aliases",
+          ],
+        },
+      },
+    },
+    required: ["results"],
+  },
+};
+
 /**
  * Build the tool-forcing parameters for each provider.
  * Anthropic: tool_choice { type: "any" } — must use at least one tool
  * OpenAI/compat: tool_choice "required" — must use tools
  * Google: toolConfig { functionCallingConfig: { mode: "ANY" } }
+ * Nano-GPT: tool_choice "auto" — some routed models reject "required"
  */
 const GOOGLE_PROVIDERS = new Set(["google", "google_vertex"]);
 
 export function getToolChoiceParams(provider: string): Record<string, any> {
-  if (GOOGLE_PROVIDERS.has(provider)) {
+  const normalizedProvider = provider.trim().toLowerCase();
+  if (GOOGLE_PROVIDERS.has(normalizedProvider)) {
     return { toolConfig: { functionCallingConfig: { mode: "ANY" } } };
   }
   // Anthropic accepts tool_choice at body level; OpenAI/compat also accept it
   // Both use different formats but the passthrough sends it as-is
-  if (provider === "anthropic") {
+  if (normalizedProvider === "anthropic") {
     return { tool_choice: { type: "any" } };
+  }
+  // Nano-GPT routes requests to many upstream models. Some reject the OpenAI
+  // compatible `required` value, while still honoring the extraction prompt
+  // and tool definitions when `auto` is used.
+  if (normalizedProvider === "nanogpt") {
+    return { tool_choice: "auto" };
   }
   // OpenAI and compatibles
   return { tool_choice: "required" };
@@ -830,7 +894,7 @@ You will receive several roleplay passages, each wrapped in <passage index="N"> 
 Analyze EACH passage independently and convert it into structured data.
 
 OUTPUT FORMAT
-Return ONLY a single JSON object, no prose, no markdown fences, no commentary:
+Call analyze_passage_batch exactly once with arguments matching this shape:
 {"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
@@ -850,7 +914,7 @@ records to judge. Analyze EACH passage independently AND, when its arbiter
 block is present, grade those candidates.
 
 OUTPUT FORMAT
-Return ONLY a single JSON object, no prose, no markdown fences, no commentary:
+Call analyze_passage_batch exactly once with arguments matching this shape:
 {"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
@@ -979,7 +1043,7 @@ export async function extractBatchWithSidecar(
       : "";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze each roleplay passage below independently. Return the JSON object described in the system prompt with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${batchExistingBlock}\n\n${passages}`;
+    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${batchExistingBlock}\n\n${passages}`;
     const tag = options?.logTag ?? "batch";
     logSidecarDispatch(tag, {
       chunks: chunks.length,
@@ -998,10 +1062,13 @@ export async function extractBatchWithSidecar(
         { role: "user", content: userContent },
       ],
       parameters: options?.samplingParameters ?? { temperature: 0.1 },
+      tools: [TOOL_ANALYZE_PASSAGE_BATCH],
     });
     const responseMs = Date.now() - sentAt;
 
-    const parsed = extractJsonArray(response.content);
+    const batchToolCall = response.tool_calls?.find((call) => call.name === TOOL_ANALYZE_PASSAGE_BATCH.name);
+    const toolResults = batchToolCall?.args?.results;
+    const parsed = Array.isArray(toolResults) ? toolResults : extractJsonArray(response.content);
     const byIndex = new Map<number, any>();
     if (parsed) {
       for (const item of parsed) {
@@ -1021,7 +1088,7 @@ export async function extractBatchWithSidecar(
     }
     logSidecarResponse(tag, {
       ms: responseMs,
-      hasToolCalls: false,
+      hasToolCalls: !!batchToolCall,
       parsed: chunks.length - missing.length,
       missing: missing.length,
     });

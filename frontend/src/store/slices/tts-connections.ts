@@ -16,9 +16,15 @@ export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnec
     set((state) => {
       const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
       const order = connectionsOrder.tts
+      const existingIndex = state.ttsProfiles.findIndex((candidate) => candidate.id === profile.id)
       return {
-        ttsProfiles: [...state.ttsProfiles, profile],
-        connectionsOrder: { ...connectionsOrder, tts: [...order, profile.id] },
+        ttsProfiles: existingIndex === -1
+          ? [profile, ...state.ttsProfiles]
+          : state.ttsProfiles.map((candidate, index) => index === existingIndex ? profile : candidate),
+        connectionsOrder: {
+          ...connectionsOrder,
+          tts: order.includes(profile.id) ? order : [profile.id, ...order],
+        },
       }
     }),
 

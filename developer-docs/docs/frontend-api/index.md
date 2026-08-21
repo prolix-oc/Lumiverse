@@ -47,3 +47,4 @@ Frontend UI can follow two supported rendering paths:
 | [Message Tags](message-tags.md) | Free | Intercept custom XML tags in chat messages |
 | [Display Resolver](display-resolver.md) | Free | Resolve message display (macros, format, regex) in the browser for chats your extension owns |
 | [File Uploads](file-uploads.md) | Free | Open file picker and read selected files |
+| [Theme Authoring](theme-authoring.md) | Varies | Work with native theme assets, safe `.lumitheme` drafts, the component/variable catalog, and native Theme Editor navigation |

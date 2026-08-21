@@ -612,6 +612,8 @@ function rowToRecentChat(row: any): RecentChat {
     character_name: row.character_name || "",
     character_avatar_path: row.character_avatar_path || null,
     character_image_id: row.character_image_id || null,
+    message_count: row.message_count || 0,
+    last_message_preview: row.last_message_preview || "",
   };
 }
 
@@ -636,20 +638,80 @@ export function listChats(userId: string, pagination: PaginationParams, characte
   );
 }
 
-export function listRecentChats(userId: string, pagination: PaginationParams): PaginatedResult<RecentChat> {
-  return withRecentChatRecovery("loading recent chats", () =>
-    paginatedQuery(
-      `SELECT c.id, c.character_id, c.name, c.metadata, c.created_at, c.updated_at,
-         ch.name AS character_name, ch.avatar_path AS character_avatar_path, ch.image_id AS character_image_id
-       FROM chats c LEFT JOIN characters ch ON ch.id = c.character_id
-       WHERE c.user_id = ? AND c.character_id IS NOT NULL
-       ORDER BY c.updated_at DESC`,
-      "SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND character_id IS NOT NULL",
-      [userId],
-      pagination,
-      rowToRecentChat
-    )
+export type RecentChatSort = 'name' | 'recent' | 'created';
+
+export interface RecentChatOptions {
+  search?: string;
+  sort?: RecentChatSort;
+  direction?: 'asc' | 'desc';
+}
+
+/**
+ * Flat, one-row-per-chat recent list. Mirrors the landing semantics of
+ * listRecentChatsGrouped (hidden-from-recent chats excluded, metadata parsed
+ * in JS so a malformed row cannot abort the query) while keeping every chat
+ * as its own row for ST-style chat browsers. `message_count` and the 280-char
+ * `last_message_preview` ride along in the same query so list UIs never need
+ * a per-row message fetch.
+ */
+export function listRecentChats(
+  userId: string,
+  pagination: PaginationParams,
+  options: RecentChatOptions = {},
+): PaginatedResult<RecentChat> {
+  const db = getDb();
+  const searchTerm = options.search?.trim().toLowerCase() ?? '';
+  const sort: RecentChatSort = options.sort ?? 'recent';
+  const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
+
+  const rows = withRecentChatRecovery("loading recent chats", () =>
+    db.query(`
+      SELECT
+        c.id, c.character_id, c.name, c.metadata, c.created_at, c.updated_at,
+        ch.name AS character_name,
+        ch.avatar_path AS character_avatar_path,
+        ch.image_id AS character_image_id,
+        (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+        (SELECT substr(content, 1, 280) FROM messages
+           WHERE chat_id = c.id
+           ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
+      FROM chats c LEFT JOIN characters ch ON ch.id = c.character_id
+      WHERE c.user_id = ? AND c.character_id IS NOT NULL
+      ORDER BY c.updated_at DESC
+    `).all(userId) as any[]
   );
+
+  const parsedRows = rows
+    .map((row: any) => ({ ...row, metadata: parseMetadataObject(row.metadata) }))
+    .filter((row: any) => !isHiddenFromRecent(row.metadata));
+
+  const filteredRows = searchTerm
+    ? parsedRows.filter((row: any) => {
+        const chatName = (row.name || '').toLowerCase();
+        const charName = (row.character_name || '').toLowerCase();
+        return chatName.includes(searchTerm) || charName.includes(searchTerm);
+      })
+    : parsedRows;
+
+  const sign = direction === 'asc' ? 1 : -1;
+  const sortedRows = [...filteredRows].sort((a: any, b: any) => {
+    if (sort === 'name') {
+      return sign * (a.name || a.character_name || '')
+        .localeCompare(b.name || b.character_name || '', undefined, { sensitivity: 'base' });
+    }
+    const aVal = sort === 'created' ? (a.created_at ?? 0) : (a.updated_at ?? 0);
+    const bVal = sort === 'created' ? (b.created_at ?? 0) : (b.updated_at ?? 0);
+    return sign * (aVal - bVal);
+  });
+
+  const pageRows = sortedRows.slice(pagination.offset, pagination.offset + pagination.limit);
+
+  return {
+    data: pageRows.map(rowToRecentChat),
+    total: sortedRows.length,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
 }
 
 export type GroupedRecentChatSort = 'name' | 'recent' | 'created';
@@ -3650,6 +3712,23 @@ export function createChatRaw(userId: string, input: { character_id: string; nam
     .run(id, userId, input.character_id, input.name || "", JSON.stringify(input.metadata || {}), createdAt, updatedAt);
 
   return getChat(userId, id)!;
+}
+
+/** Load migration identities once so a rerun does not re-import the same ST chat. */
+export function listChatSourceFilenameIds(userId: string): Map<string, string> {
+  const rows = getDb()
+    .query(
+      `SELECT id, json_extract(metadata, '$._lumiverse_source_filename') AS source_filename
+       FROM chats
+       WHERE user_id = ?
+         AND json_type(metadata, '$._lumiverse_source_filename') = 'text'
+       ORDER BY updated_at ASC`,
+    )
+    .all(userId) as Array<{ id: string; source_filename: string }>;
+
+  const result = new Map<string, string>();
+  for (const row of rows) result.set(row.source_filename, row.id);
+  return result;
 }
 
 export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[], userId: string): number {

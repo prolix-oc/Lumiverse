@@ -31,7 +31,6 @@ beforeEach(async () => {
   initDatabase(":memory:");
   getDb().run("PRAGMA foreign_keys = OFF");
   getDb().run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
-  getDb().run("ALTER TABLE world_book_entries ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
 });
 afterEach(() => closeDatabase());
 

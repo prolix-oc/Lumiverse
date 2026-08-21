@@ -61,7 +61,10 @@ import {
   landingPageTabPanelId,
   normalizeLandingPageTab,
   resolveTabArrowKey,
+  type LandingPageTab,
 } from '@/lib/landingPageTabs'
+import { readDeviceLandingPageStartTab } from '@/lib/landingPageStartTab'
+import { resolveLandingChatPageSize } from '@/lib/landingChatPagination'
 
 type LandingSortField = 'name' | 'recent' | 'created'
 
@@ -751,6 +754,7 @@ interface VirtualRowProps {
   virtualRow: VirtualItem
   virtualColumns: number
   virtualGap: number
+  virtualScrollMargin: number
   rowItems: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
   initialPageSize: number
@@ -767,8 +771,10 @@ interface VirtualRowProps {
 function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
   if (prev.virtualRow.key !== next.virtualRow.key) return false
   if (prev.virtualRow.index !== next.virtualRow.index) return false
+  if (prev.virtualRow.start !== next.virtualRow.start) return false
   if (prev.virtualColumns !== next.virtualColumns) return false
   if (prev.virtualGap !== next.virtualGap) return false
+  if (prev.virtualScrollMargin !== next.virtualScrollMargin) return false
   if (prev.layoutMode !== next.layoutMode) return false
   if (prev.initialPageSize !== next.initialPageSize) return false
   if (prev.animateInitialEntries !== next.animateInitialEntries) return false
@@ -790,6 +796,7 @@ const VirtualRow = memo(function VirtualRow({
   virtualRow,
   virtualColumns,
   virtualGap,
+  virtualScrollMargin,
   rowItems,
   layoutMode,
   initialPageSize,
@@ -814,6 +821,7 @@ const VirtualRow = memo(function VirtualRow({
         gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
         gap: virtualGap,
         paddingBottom: virtualGap,
+        transform: `translateY(${virtualRow.start - virtualScrollMargin}px)`,
       }}
     >
       {rowItems.map((item) =>
@@ -963,6 +971,7 @@ function VirtualizedChatRows({
       data-spindle-mount="landing_recent_chats"
       data-spindle-scope="landing:recent-chats"
       ref={setContainerRef}
+      style={{ height: chatVirtualizer.getTotalSize() }}
       variants={containerVariants}
       initial="hidden"
       animate={navigatingToChat ? 'leaving' : 'visible'}
@@ -976,6 +985,7 @@ function VirtualizedChatRows({
             virtualRow={virtualRow}
             virtualColumns={virtualColumns}
             virtualGap={virtualGap}
+            virtualScrollMargin={virtualScrollMargin}
             rowItems={items.slice(start, start + virtualColumns)}
             layoutMode={layoutMode}
             initialPageSize={initialPageSize}
@@ -1018,24 +1028,37 @@ function LandingPageNative() {
   const authUser = useStore((s) => s.user)
   const hasGlobalWallpaper = useStore((s) => Boolean(s.wallpaper.global?.image_id))
   const accountLabel = authUser?.username || authUser?.name || t('account')
-  const landingPageActiveTab = useStore((s) => (s as typeof s & { landingPageActiveTab?: unknown }).landingPageActiveTab)
+  // The selected landing tab is intentionally local UI state. It must not be
+  // persisted with account settings: a tab click on one device should never
+  // move another device's landing page.
+  const [requestedLandingTab, setRequestedLandingTab] = useState<LandingPageTab>('characters')
   const [homepageSurfaceReady, setHomepageSurfaceReady] = useState(() => (
     typeof document !== 'undefined' && Boolean(document.querySelector(
       `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"]`,
     ))
   ))
+  const [suiteHomepageSurfaceReady, setSuiteHomepageSurfaceReady] = useState(() => (
+    typeof document !== 'undefined' && Boolean(document.querySelector(
+      `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"][data-spindle-ext-id="lumiverse_suite"]`,
+    ))
+  ))
   const selectedCharactersForReady = useRef(false)
+  const initializedStartTabForUser = useRef<string | null>(null)
   useEffect(() => {
     const readReady = () => {
       const ready = Boolean(document.querySelector(
         `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"]`,
       ))
+      const suiteReady = Boolean(document.querySelector(
+        `[data-spindle-mount="${'landing_characters'}"] [data-homepage-character-library-ready="true"][data-spindle-ext-id="lumiverse_suite"]`,
+      ))
       if (!ready) selectedCharactersForReady.current = false
       else if (!selectedCharactersForReady.current) {
         selectedCharactersForReady.current = true
-        ;(setSetting as unknown as (key: string, value: unknown) => void)('landingPageActiveTab', 'characters')
+        setRequestedLandingTab('characters')
       }
       setHomepageSurfaceReady(ready)
+      setSuiteHomepageSurfaceReady(suiteReady)
     }
     readReady()
     const Observer = document.defaultView?.MutationObserver
@@ -1043,16 +1066,45 @@ function LandingPageNative() {
     const observer = new Observer(readReady)
     observer.observe(document.body, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [setSetting])
+  }, [])
+  // Symmetric seam for the Chats tab: an extension-owned chats surface
+  // (e.g. a Recent Chats browser) marks its root ready and takes over the
+  // tab, suppressing the native chat browser exactly like the character
+  // library does for Characters. Unlike Characters it never auto-switches
+  // tabs — the native list stays usable until the user picks Chats.
+  const [chatsSurfaceReady, setChatsSurfaceReady] = useState(() => (
+    typeof document !== 'undefined' && Boolean(document.querySelector(
+      `[data-spindle-mount="${'landing_chats'}"] [data-recent-chats-ready="true"]`,
+    ))
+  ))
+  useEffect(() => {
+    const readReady = () => {
+      setChatsSurfaceReady(Boolean(document.querySelector(
+        `[data-spindle-mount="${'landing_chats'}"] [data-recent-chats-ready="true"]`,
+      )))
+    }
+    readReady()
+    const Observer = document.defaultView?.MutationObserver
+    if (!Observer) return undefined
+    const observer = new Observer(readReady)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-recent-chats-ready'] })
+    return () => observer.disconnect()
+  }, [])
   const availableLandingTabs = useMemo(
     () => getAvailableLandingPageTabs({ characterLibraryEnabled: homepageSurfaceReady }),
     [homepageSurfaceReady],
   )
-  const activeLandingTab = normalizeLandingPageTab(landingPageActiveTab, availableLandingTabs)
+  useEffect(() => {
+    const userId = authUser?.id ?? null
+    if (!suiteHomepageSurfaceReady || !userId || initializedStartTabForUser.current === userId) return
+    initializedStartTabForUser.current = userId
+    setRequestedLandingTab(readDeviceLandingPageStartTab(userId))
+  }, [authUser?.id, suiteHomepageSurfaceReady])
+  const activeLandingTab = normalizeLandingPageTab(requestedLandingTab, availableLandingTabs)
   const handleLandingTabChange = useCallback((tab: (typeof availableLandingTabs)[number]) => {
     if (!availableLandingTabs.includes(tab)) return
-    ;(setSetting as unknown as (key: string, value: unknown) => void)('landingPageActiveTab', tab)
-  }, [availableLandingTabs, setSetting])
+    setRequestedLandingTab(tab)
+  }, [availableLandingTabs])
 
   const [items, setItems] = useState<GroupedRecentChat[]>([])
   const [loading, setLoading] = useState(true)
@@ -1077,6 +1129,7 @@ function LandingPageNative() {
   const chatNavigationTimerRef = useRef<number | null>(null)
   const fetchSequenceRef = useRef(0)
   const loadingMoreRef = useRef(false)
+  const chatPageSizeRef = useRef(landingPageChatsDisplayed)
 
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -1201,7 +1254,23 @@ function LandingPageNative() {
   const mainRef = useRef<HTMLElement>(null)
   const virtualContainerRef = useRef<HTMLDivElement | null>(null)
   const [mainWidth, setMainWidth] = useState(() => Math.min(1400, Math.max(320, window.innerWidth - 64)))
+  const [chatViewportHeight, setChatViewportHeight] = useState(0)
   const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
+  const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
+  const virtualGap = getColumnGap(mainWidth, virtualLayout)
+  const virtualColumns = getColumnCount(mainWidth, virtualLayout)
+  const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
+  const virtualRowEstimate = virtualLayout === 'compact'
+    ? COMPACT_ROW_ESTIMATE + virtualGap
+    : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
+  const recentChatPageSize = resolveLandingChatPageSize({
+    configuredPageSize: landingPageChatsDisplayed,
+    isExpanded: landingPageGalleryWidth === 'expanded',
+    layout: virtualLayout,
+    columns: virtualColumns,
+    rowHeight: virtualRowEstimate,
+    availableHeight: chatViewportHeight,
+  })
 
   useScrollGate(scrollRef)
 
@@ -1284,6 +1353,13 @@ function LandingPageNative() {
     const update = () => {
       frame = 0
       setMainWidth(el.clientWidth)
+      const scroller = scrollRef.current
+      if (scroller) {
+        const availableHeight = renderedPxToLayoutPx(
+          scroller.getBoundingClientRect().bottom - el.getBoundingClientRect().top,
+        )
+        setChatViewportHeight(Math.max(0, availableHeight))
+      }
       updateVirtualScrollMargin()
     }
     const scheduleUpdate = () => {
@@ -1306,12 +1382,20 @@ function LandingPageNative() {
   const fetchChats = useCallback(async () => {
     if (!settingsLoaded) return
     const requestSequence = ++fetchSequenceRef.current
+    // Choose the expanded-grid capacity once per fresh query. Later offset
+    // requests must use this exact same size even if a measurement changes
+    // while the user is scrolling.
+    const pageSize = recentChatPageSize
+    chatPageSizeRef.current = pageSize
 
     // Bootstrap delivers the first recent-chats page alongside settings —
     // consume it once instead of issuing another round trip. Later runs
     // (WS chat-deleted, limit changes, revisits) find it cleared and fetch.
     const preload = useStore.getState().landingRecentChats
-    const canUsePreload = !debouncedSearchQuery && sortField === 'recent' && sortDirection === 'desc'
+    const canUsePreload = !debouncedSearchQuery
+      && sortField === 'recent'
+      && sortDirection === 'desc'
+      && (!preload || preload.total <= preload.data.length || preload.data.length >= pageSize)
     if (preload && canUsePreload) {
       useStore.getState().setLandingRecentChats(null)
       setItems(preload.data)
@@ -1326,7 +1410,7 @@ function LandingPageNative() {
     setError(null)
     try {
       const result = await chatsApi.listRecentGrouped({
-        limit: landingPageChatsDisplayed,
+        limit: pageSize,
         ...recentChatQuery,
       })
       if (requestSequence !== fetchSequenceRef.current) return
@@ -1339,7 +1423,7 @@ function LandingPageNative() {
     } finally {
       if (requestSequence === fetchSequenceRef.current) setLoading(false)
     }
-  }, [debouncedSearchQuery, landingPageChatsDisplayed, recentChatQuery, settingsLoaded, sortDirection, sortField])
+  }, [debouncedSearchQuery, recentChatPageSize, recentChatQuery, settingsLoaded, sortDirection, sortField])
 
   const loadMore = useCallback(async () => {
     // Intersection observers may deliver multiple entries during a grid
@@ -1352,7 +1436,7 @@ function LandingPageNative() {
     setLoadingMore(true)
     try {
       const result = await chatsApi.listRecentGrouped({
-        limit: landingPageChatsDisplayed,
+        limit: chatPageSizeRef.current,
         offset: items.length,
         ...recentChatQuery,
       })
@@ -1365,7 +1449,7 @@ function LandingPageNative() {
       loadingMoreRef.current = false
       setLoadingMore(false)
     }
-  }, [items.length, total, landingPageChatsDisplayed, recentChatQuery])
+  }, [items.length, total, recentChatQuery])
 
   useEffect(() => {
     fetchChats()
@@ -1394,6 +1478,24 @@ function LandingPageNative() {
     observer.observe(sentinel)
     return () => observer.disconnect()
   }, [items.length, total, loading, loadMore, mainWidth])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root || activeLandingTab !== 'chats' || chatsSurfaceReady || loading || items.length >= total) return
+
+    // The sentinel observer is the eager path, but extension-owned mounts can
+    // cause a layout change that leaves it out of IntersectionObserver's next
+    // evaluation. A real scroll to the end of the native Chats scroller must
+    // always request the next page. `loadMore` has its own synchronous guard,
+    // so this safely overlaps with observer deliveries.
+    const onScroll = () => {
+      const distanceFromEnd = root.scrollHeight - root.clientHeight - root.scrollTop
+      if (distanceFromEnd <= 2) void loadMore()
+    }
+
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  }, [activeLandingTab, chatsSurfaceReady, items.length, loading, loadMore, total])
 
   const navigateToChat = useCallback((chatId: string) => {
     if (chatNavigationTimerRef.current !== null) return
@@ -1696,13 +1798,6 @@ function LandingPageNative() {
   }, [])
 
   const hasMore = items.length < total
-  const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
-  const virtualGap = getColumnGap(mainWidth, virtualLayout)
-  const virtualColumns = getColumnCount(mainWidth, virtualLayout)
-  const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
-  const virtualRowEstimate = virtualLayout === 'compact'
-    ? COMPACT_ROW_ESTIMATE + virtualGap
-    : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
 
   const handleVirtualContainerChange = useCallback((node: HTMLDivElement | null) => {
     virtualContainerRef.current = node
@@ -1851,7 +1946,7 @@ function LandingPageNative() {
         </header>
 
         <div className={styles.landingToolbar} data-component="LandingPageTabs" data-spindle-mount="landing_toolbar">
-          <div className={styles.landingTabs} role="tablist" aria-label="Landing views">
+          <div className={clsx(styles.landingTabs, homepageSurfaceReady && styles.landingTabsWithSuite)} role="tablist" aria-label="Landing views">
             {availableLandingTabs.map((tab) => {
               const selected = activeLandingTab === tab
               return (
@@ -1868,12 +1963,12 @@ function LandingPageNative() {
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 10px', border: '1px solid var(--lumiverse-border)', borderRadius: 8, background: selected ? 'var(--lumiverse-primary-010)' : 'transparent', color: selected ? 'var(--lumiverse-text)' : 'var(--lumiverse-text-muted)', cursor: 'pointer' }}
                 >
                   {tab === 'characters' ? <Users size={14} strokeWidth={1.5} /> : <MessageSquare size={14} strokeWidth={1.5} />}
-                  <span>{tab === 'characters' ? 'Characters' : 'Chats'}</span>
+                  <span className={styles.landingTabLabel}>{tab === 'characters' ? 'Characters' : 'Chats'}</span>
                 </button>
               )
             })}
           </div>
-          {activeLandingTab === 'chats' && <>
+          {activeLandingTab === 'chats' && !chatsSurfaceReady && <>
           <SearchField
             value={searchQuery}
             onChange={setSearchQuery}
@@ -1907,7 +2002,7 @@ function LandingPageNative() {
           </button>
           <button
             type="button"
-            className={clsx(styles.hiddenManagerBtn, landingPageGalleryWidth === 'expanded' && styles.galleryWidthBtnActive)}
+            className={clsx(styles.hiddenManagerBtn, styles.galleryWidthBtn, landingPageGalleryWidth === 'expanded' && styles.galleryWidthBtnActive)}
             onClick={() => setSetting('landingPageGalleryWidth', landingPageGalleryWidth === 'expanded' ? 'compact' : 'expanded')}
             title={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
             aria-label={landingPageGalleryWidth === 'expanded' ? t('galleryWidth.compact') : t('galleryWidth.expanded')}
@@ -1925,8 +2020,11 @@ function LandingPageNative() {
           <div id={landingPageTabPanelId('characters')} role="tabpanel" aria-labelledby={landingPageTabId('characters')}
             data-component="LandingPageCharacterPanel" data-spindle-mount="landing_characters" data-spindle-scope="landing:characters"
             hidden={activeLandingTab !== 'characters' || !homepageSurfaceReady} />
+          <div id={landingPageTabPanelId('chats')} role="tabpanel" aria-labelledby={landingPageTabId('chats')}
+            data-component="LandingPageChatsPanel" data-spindle-mount="landing_chats"
+            hidden={activeLandingTab !== 'chats'} />
           <AnimatePresence mode="wait">
-            {activeLandingTab === 'characters' ? null : !settingsLoaded || (loading && items.length === 0) ? (
+            {activeLandingTab === 'characters' || chatsSurfaceReady ? null : !settingsLoaded || (loading && items.length === 0) ? (
               <motion.div
                 key={`loading-${skeletonLayout}`}
                 className={skeletonLayout === 'compact' ? styles.compactList : styles.gridCards}
@@ -1957,7 +2055,7 @@ function LandingPageNative() {
                 virtualRowEstimate={virtualRowEstimate}
                 virtualScrollMargin={virtualScrollMargin}
                 scrollRef={scrollRef}
-                initialPageSize={landingPageChatsDisplayed}
+                initialPageSize={chatPageSizeRef.current}
                 animateInitialEntries={animateInitialEntries}
                 navigatingToChat={navigatingToChat}
                 shiftPressed={shiftPressed}
@@ -1971,7 +2069,7 @@ function LandingPageNative() {
             )}
           </AnimatePresence>
 
-          {activeLandingTab === 'chats' && hasMore && (
+          {activeLandingTab === 'chats' && !chatsSurfaceReady && hasMore && (
             <div ref={sentinelRef} className={styles.loadMoreSentinel}>
               {loadingMore && (
                 <div className={styles.loadingMore}>

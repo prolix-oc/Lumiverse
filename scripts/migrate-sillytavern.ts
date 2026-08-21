@@ -1162,6 +1162,14 @@ async function importGroupChats(
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  if (process.env.LUMIVERSE_ALLOW_UPLOAD_ST_MIGRATOR !== "1") {
+    console.error(
+      "The upload-based SillyTavern migrator is retired. Use Settings → Data → SillyTavern migration in the app.\n" +
+      "Set LUMIVERSE_ALLOW_UPLOAD_ST_MIGRATOR=1 only if you must force this script.",
+    );
+    process.exit(1);
+  }
+
   printBanner("SillyTavern Migration Tool");
   printDivider();
 

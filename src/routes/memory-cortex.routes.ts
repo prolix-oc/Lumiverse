@@ -1355,15 +1355,32 @@ app.get("/chats/:chatId/entities", (c) => {
     ? entities.filter((e) => e.status === status)
     : entities;
 
-  // Enrich each entity with its most recent mention excerpt so the UI
-  // can show the actual chunk text that triggered classification
+  // Enrich each entity with its most recent mention excerpt and the source
+  // messages behind it. A single query avoids an extra query for every entity.
   const { getDb } = require("../db/connection");
   const db = getDb();
-  const enriched = filtered.map((e) => {
-    const mention = db.query(
-      "SELECT excerpt FROM memory_mentions WHERE entity_id = ? AND excerpt IS NOT NULL ORDER BY created_at DESC LIMIT 1",
-    ).get(e.id) as any;
-    return { ...e, latestExcerpt: mention?.excerpt ?? null };
+  const mentions = db.query(
+    `SELECT entity_id, excerpt, message_ids FROM (
+       SELECT mm.entity_id, mm.excerpt, cc.message_ids,
+              ROW_NUMBER() OVER (PARTITION BY mm.entity_id ORDER BY mm.created_at DESC) AS row_number
+       FROM memory_mentions mm
+       LEFT JOIN chat_chunks cc ON cc.id = mm.chunk_id
+       WHERE mm.chat_id = ? AND mm.excerpt IS NOT NULL
+     )
+     WHERE row_number = 1`,
+  ).all(chatId) as Array<{ entity_id: string; excerpt: string; message_ids: string | null }>;
+  const mentionReferences = resolveChunkMessageReferences(db, chatId, mentions);
+  const mentionByEntity = new Map(mentions.map((mention, index) => [
+    mention.entity_id,
+    { excerpt: mention.excerpt, messageReferences: mentionReferences[index] },
+  ]));
+  const enriched = filtered.map((entity) => {
+    const mention = mentionByEntity.get(entity.id);
+    return {
+      ...entity,
+      latestExcerpt: mention?.excerpt ?? null,
+      latestMessageReferences: mention?.messageReferences ?? [],
+    };
   });
 
   return c.json({
@@ -1841,10 +1858,115 @@ app.get("/chats/:chatId/consolidations", (c) => {
   if (!owned.ok) return owned.response;
   const tier = c.req.query("tier") ? parseInt(c.req.query("tier")!, 10) : undefined;
   const consolidations = memoryCortex.getConsolidations(chatId, tier);
-  return c.json({ data: consolidations, total: consolidations.length });
+  const data = enrichConsolidationsWithMessageReferences(getDb(), chatId, consolidations);
+  return c.json({ data, total: data.length });
 });
 
 // ─── Chunks ────────────────────────────────────────────────────
+
+type CortexChunkMessageReference = {
+  messageId: string;
+  /** The number shown on the source chat message, when it still exists. */
+  messageNumber: number | null;
+};
+
+function parseChunkMessageIds(raw: unknown): string[] {
+  if (typeof raw !== "string") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolve stored chunk message IDs to the numbers users see in a chat.  A
+ * missing message is intentional here: vaults and old/trimmed history can
+ * retain an ID after its source message is gone, so callers can fall back to
+ * that ID instead of presenting a misleading number.
+ */
+function resolveChunkMessageReferences(
+  db: ReturnType<typeof getDb>,
+  chatId: string,
+  rows: Array<{ message_ids?: string | null }>,
+): CortexChunkMessageReference[][] {
+  const idsByRow = rows.map((row) => parseChunkMessageIds(row.message_ids));
+  const uniqueIds = [...new Set(idsByRow.flat())];
+  const messageNumbers = new Map<string, number>();
+
+  // Keep each query comfortably beneath SQLite's bound-parameter limit.
+  for (const ids of chunksOf(uniqueIds, 500)) {
+    if (ids.length === 0) continue;
+    const placeholders = ids.map(() => "?").join(", ");
+    const messages = db.query(
+      `SELECT id, index_in_chat FROM messages WHERE chat_id = ? AND id IN (${placeholders})`,
+    ).all(chatId, ...ids) as Array<{ id: string; index_in_chat: number }>;
+    for (const message of messages) messageNumbers.set(message.id, message.index_in_chat);
+  }
+
+  return idsByRow.map((ids) => ids.map((messageId) => ({
+    messageId,
+    messageNumber: messageNumbers.get(messageId) ?? null,
+  })));
+}
+
+/** Resolve every source chunk beneath a consolidation, including arc tiers. */
+function enrichConsolidationsWithMessageReferences(
+  db: ReturnType<typeof getDb>,
+  chatId: string,
+  consolidations: Array<{ id: string }>,
+) {
+  const chunkMessageIds = new Map<string, string[]>();
+
+  // A consolidation can point to raw chunks (tier 1) or other
+  // consolidations (tier 2). The recursive query reaches the raw evidence in
+  // either case, and preserves archived-source IDs for the UI fallback.
+  for (const ids of chunksOf(consolidations.map((consolidation) => consolidation.id), 500)) {
+    if (ids.length === 0) continue;
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = db.query(
+      `WITH RECURSIVE source_tree(root_id, consolidation_id) AS (
+         SELECT id, id
+         FROM memory_consolidations
+         WHERE chat_id = ? AND id IN (${placeholders})
+         UNION
+         SELECT source_tree.root_id, json_each.value
+         FROM source_tree
+         JOIN memory_consolidations parent ON parent.id = source_tree.consolidation_id
+         JOIN json_each(parent.source_consolidation_ids)
+         WHERE parent.chat_id = ?
+       )
+       SELECT source_tree.root_id, cc.message_ids
+       FROM source_tree
+       JOIN memory_consolidations leaf ON leaf.id = source_tree.consolidation_id
+       JOIN json_each(leaf.source_chunk_ids)
+       JOIN chat_chunks cc ON cc.id = json_each.value AND cc.chat_id = ?
+       WHERE leaf.chat_id = ?
+       ORDER BY source_tree.root_id, cc.created_at ASC`,
+    ).all(chatId, ...ids, chatId, chatId, chatId) as Array<{ root_id: string; message_ids: string | null }>;
+
+    for (const row of rows) {
+      const sourceIds = chunkMessageIds.get(row.root_id) ?? [];
+      sourceIds.push(...parseChunkMessageIds(row.message_ids));
+      chunkMessageIds.set(row.root_id, sourceIds);
+    }
+  }
+
+  const references = resolveChunkMessageReferences(
+    db,
+    chatId,
+    consolidations.map((consolidation) => ({
+      message_ids: JSON.stringify(chunkMessageIds.get(consolidation.id) ?? []),
+    })),
+  );
+  return consolidations.map((consolidation, index) => ({
+    ...consolidation,
+    messageReferences: references[index],
+  }));
+}
 
 /** GET /chats/:chatId/chunks — List memory chunks with salience data */
 app.get("/chats/:chatId/chunks", (c) => {
@@ -1861,7 +1983,7 @@ app.get("/chats/:chatId/chunks", (c) => {
     `SELECT cc.id, cc.chat_id, cc.content, cc.token_count, cc.message_count,
             cc.retrieval_count, cc.last_retrieved_at, cc.vectorized_at,
             cc.salience_score, cc.emotional_tags, cc.entity_ids,
-            cc.created_at, cc.updated_at
+            cc.message_ids, cc.created_at, cc.updated_at
      FROM chat_chunks cc
      WHERE cc.chat_id = ?
      ORDER BY cc.created_at DESC
@@ -1869,8 +1991,13 @@ app.get("/chats/:chatId/chunks", (c) => {
   ).all(chatId, limit, offset);
 
   const countRow = db.query("SELECT COUNT(*) as c FROM chat_chunks WHERE chat_id = ?").get(chatId) as any;
+  const messageReferences = resolveChunkMessageReferences(db, chatId, rows);
+  const data = rows.map((row: any, index: number) => {
+    const { message_ids: _messageIds, ...chunk } = row;
+    return { ...chunk, messageReferences: messageReferences[index] };
+  });
 
-  return c.json({ data: rows, total: countRow?.c ?? 0, limit, offset });
+  return c.json({ data, total: countRow?.c ?? 0, limit, offset });
 });
 
 // ─── Salience ──────────────────────────────────────────────────

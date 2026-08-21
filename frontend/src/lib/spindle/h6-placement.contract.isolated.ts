@@ -145,8 +145,11 @@ const generation = 7
 let handles: Array<{ destroy(): void }> = []
 
 beforeEach(() => {
-  placementStore = createStore<SpindlePlacementSlice>()(createSpindlePlacementSlice)
+  // The slice hydrates persisted geometry during construction, so clear the
+  // fake browser storage before creating each store. Reversing this order
+  // carries the previous test's geometry into the new in-memory slice.
   fakeWindow.localStorage.clear()
+  placementStore = createStore<SpindlePlacementSlice>()(createSpindlePlacementSlice)
   handles = []
 })
 
@@ -351,13 +354,20 @@ describe('H6 dock placement contract', () => {
       minSize: 120,
       maxSize: 480,
       respectRequestedEdge: true,
+      showCollapsedTitle: true,
       persistGeometry: 'dock-panel',
       onGeometryCommit: (rect: { x: number; y: number; width: number; height: number }) => commits.push(rect),
     } as any, () => {}, generation)
     handles.push(handle)
 
     const panel = placementStore.getState().dockPanels[0]
-    expect(panel).toMatchObject({ edge: 'left', size: 240, minSize: 120, maxSize: 480 })
+    expect(panel).toMatchObject({
+      edge: 'left',
+      size: 240,
+      minSize: 120,
+      maxSize: 480,
+      showCollapsedTitle: true,
+    })
     expect((panel as any)?.respectRequestedEdge).toBe(true)
 
     const extendedHandle = handle as any
@@ -368,6 +378,20 @@ describe('H6 dock placement contract', () => {
     extendedHandle.setSize(500)
     expect(placementStore.getState().dockPanels[0]?.size).toBe(320)
     expect(commits.at(-1)).toEqual({ x: 0, y: 0, width: 320, height: 320 })
+
+    fakeWindow.dispatchEvent(new FakeCustomEvent('spindle:dock-resize-end', {
+      detail: { panelId: handle.panelId, size: 310 },
+    }))
+    expect(placementStore.getState().dockPanels[0]?.size).toBe(310)
+    expect(commits.at(-1)).toEqual({ x: 0, y: 0, width: 310, height: 310 })
+    expect(JSON.parse(fakeWindow.localStorage.getItem('spindle:placementGeometry')!)).toEqual({
+      'spindle:placementGeometry:h6-placement-extension:dock:dock-panel': {
+        x: 0,
+        y: 0,
+        width: 310,
+        height: 310,
+      },
+    })
   })
 
   test('revokes only the ui-panels generation and leaves newer replay state alive', () => {
@@ -381,6 +405,10 @@ describe('H6 dock placement contract', () => {
 
     destroyPlacementsForExtensionPermission(extensionId, 'ui_panels', generation)
     expect(placementStore.getState().dockPanels.map((panel) => panel.title)).toEqual(['Newer'])
+    fakeWindow.dispatchEvent(new FakeCustomEvent('spindle:dock-resize-end', {
+      detail: { panelId: current.panelId, size: 400 },
+    }))
+    expect(placementStore.getState().dockPanels[0]?.size).toBe(240)
     expect(() => (current as any).setSize(280)).toThrow('PLACEMENT_DESTROYED')
     ;(newer as any).setSize(280)
     expect(placementStore.getState().dockPanels[0]?.size).toBe(280)

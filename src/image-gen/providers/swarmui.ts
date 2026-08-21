@@ -3,7 +3,7 @@ import type { ImageProviderCapabilities, ImageParameterSchemaMap } from "../para
 import type { ImageGenRequest, ImageGenResponse } from "../types"
 import { applyRawOverride } from "../types"
 import { parseProviderErrorBody, ProviderRequestError, readBoundedText, throwProviderResponseError } from "../../utils/provider-errors"
-import { openWebSocket } from "./ws-helpers"
+import { closeWebSocketGracefully, openWebSocket } from "./ws-helpers"
 import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
 
 const PARAMETERS: ImageParameterSchemaMap = {
@@ -773,7 +773,10 @@ export class SwarmUIImageProvider implements ImageProvider {
       }
     } finally {
       request.signal?.removeEventListener("abort", abortHandler)
-      ws.close()
+      await closeWebSocketGracefully(
+        ws,
+        request.signal?.aborted ? 100 : 1_000,
+      )
     }
 
     if (!imagePath) {

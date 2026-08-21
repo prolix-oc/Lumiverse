@@ -1,15 +1,24 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, OperatorSlice } from '@/types/store'
-import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
+import type { ImageThumbnailQueuePayload, OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
 
 const DEFAULT_LOG_LIMIT = 150
 const MAX_LOG_LIMIT = 2000
+
+export const EMPTY_THUMBNAIL_QUEUE: ImageThumbnailQueuePayload = {
+  processed: 0,
+  remaining: 0,
+  total: 0,
+  active: 0,
+  queued: 0,
+}
 
 export const createOperatorSlice: StateCreator<AppStore, [], [], OperatorSlice> = (set) => ({
   operatorLogs: [],
   operatorStatus: null,
   operatorBusy: null,
   operatorProgressMessage: null,
+  thumbnailQueue: EMPTY_THUMBNAIL_QUEUE,
 
   appendOperatorLogs: (entries: OperatorLogEntry[]) =>
     set((state) => {
@@ -32,6 +41,9 @@ export const createOperatorSlice: StateCreator<AppStore, [], [], OperatorSlice> 
 
   setOperatorProgressMessage: (message: string | null) =>
     set({ operatorProgressMessage: message }),
+
+  setThumbnailQueue: (status: ImageThumbnailQueuePayload) =>
+    set({ thumbnailQueue: status }),
 
   clearOperatorLogs: () =>
     set({ operatorLogs: [] }),

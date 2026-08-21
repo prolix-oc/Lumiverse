@@ -20,6 +20,22 @@ describe("native reasoning prompt history", () => {
     });
   });
 
+  test("hydrates a persisted optional Gemini thought signature onto its assistant message", () => {
+    const message = {
+      is_user: false,
+      extra: {
+        reasoningCarrier: {
+          type: "gemini_thought_signature",
+          signature: "opaque-gemini-signature",
+        },
+      },
+    } as any;
+
+    expect(__reasoningHistoryTest.getStoredReasoningCarrier(message)).toEqual({
+      thought_signature: "opaque-gemini-signature",
+    });
+  });
+
   test("keepInHistory removes old native carriers without converting them to CoT", () => {
     const messages: LlmMessage[] = [
       { role: "assistant", content: "Older", reasoning_content: "old native" },

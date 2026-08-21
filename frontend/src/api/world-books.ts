@@ -1,4 +1,4 @@
-import { get, post, postBlob, put, patch, del } from './client'
+import { get, post, postBlob, put, patch, del, type RequestOptions } from './client'
 import type {
   WorldBook, CreateWorldBookInput, UpdateWorldBookInput,
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
@@ -77,14 +77,15 @@ export const worldBooksApi = {
       sort_by?: 'order' | 'priority' | 'created' | 'updated' | 'name'
       sort_dir?: 'asc' | 'desc'
       search?: string
-    }
+    },
+    options?: RequestOptions,
   ) {
-    return get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, params)
+    return get<PaginatedResult<WorldBookEntry>>(`/world-books/${bookId}/entries`, params, options)
   },
 
   /** Load every entry so book-wide tools are not limited by the editor's current page. */
-  async listAllEntries(bookId: string) {
-    const pageSize = 200
+  async listAllEntries(bookId: string, options?: RequestOptions) {
+    const pageSize = 1000
     const data: WorldBookEntry[] = []
     let offset = 0
     let total = Number.POSITIVE_INFINITY
@@ -95,7 +96,7 @@ export const worldBooksApi = {
         offset,
         sort_by: 'order',
         sort_dir: 'asc',
-      })
+      }, options)
       data.push(...page.data)
       total = page.total
       if (page.data.length === 0) break
@@ -178,8 +179,8 @@ export const worldBooksApi = {
     return post<{ world_book: WorldBook; entry_count: number }>('/world-books/import-character-book', { characterId })
   },
 
-  getVectorSummary(bookId: string) {
-    return get<WorldBookVectorSummary>(`/world-books/${bookId}/vector-summary`)
+  getVectorSummary(bookId: string, options?: RequestOptions) {
+    return get<WorldBookVectorSummary>(`/world-books/${bookId}/vector-summary`, undefined, options)
   },
 
   setSemanticActivation(bookId: string, enabled: boolean) {

@@ -37,6 +37,7 @@ import {
   type RegexActionActivation,
   type ResolvedRegexActionPayload,
 } from '@/lib/regex/actionBus'
+import { attachRegexActionLongPress } from '@/lib/regex/actionLongPress'
 import { toast } from '@/lib/toast'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
@@ -59,7 +60,7 @@ interface MessageContentProps {
   findQuery?: string
 }
 
-// Custom renderer for sheld prose classes
+// Custom renderer for chat prose classes
 const renderer = createEmphasisAwareRenderer({
   emClass: styles.proseItalic,
   strongClass: styles.proseBold,
@@ -1583,14 +1584,24 @@ export default function MessageContent({
     const container = containerRef.current
     if (!container || isStreaming || !chatId) return
 
-    const activate = (event: MouseEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return
-      const target = event.composedPath().find((node): node is Element => (
+    const findActionTarget = (event: Event): Element | null => (
+      event.composedPath().find((node): node is Element => (
         node instanceof Element && node.hasAttribute('data-lumiverse-regex-action')
-      ))
-      if (!target) return
+      )) ?? null
+    )
+
+    type ConfiguredAction = (typeof regexScripts)[number]['actions'][number]
+    type ResolvedAction = { payload: ResolvedRegexActionPayload; configured: ConfiguredAction }
+
+    const findConfiguredAction = (payload: Partial<ResolvedRegexActionPayload>) => regexScripts
+      .find((script) => script.id === payload.scriptId && !script.disabled && script.target.includes('display'))
+      ?.actions.find((action) => action.id === payload.id)
+
+    // Shared shape/config validation — silently ignores anything that is not
+    // a well-formed, currently-configured regex action.
+    const resolveConfigured = (target: Element): ResolvedAction | null => {
       const encoded = target.getAttribute('data-lumiverse-regex-action')
-      if (!encoded) return
+      if (!encoded) return null
       try {
         const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
         if (
@@ -1601,61 +1612,115 @@ export default function MessageContent({
           typeof payload.cost !== 'number' || !Number.isFinite(payload.cost) || payload.cost <= 0 ||
           typeof payload.limit !== 'number' || !Number.isFinite(payload.limit) || payload.limit < 0 ||
           typeof payload.content !== 'string' || (payload.type !== 'effects' && !payload.content.trim())
-        ) return
-        if (regexActionsSuperseded) {
-          event.preventDefault()
-          event.stopPropagation()
-          toast.info(t('toast.regexActionExpired'))
-          return
-        }
-        const configured = regexScripts
-          .find((script) => script.id === payload.scriptId && !script.disabled && script.target.includes('display'))
-          ?.actions.find((action) => action.id === payload.id)
-        if (
-          !configured ||
-          configured.type !== payload.type ||
-          configured.multi_select !== payload.multi_select
-        ) return
+        ) return null
+        const configured = findConfiguredAction(payload)
+        if (!configured) return null
+        if (configured.type !== payload.type || configured.multi_select !== payload.multi_select) return null
+        return { payload: payload as ResolvedRegexActionPayload, configured }
+      } catch {
+        return null
+      }
+    }
+
+    const isUsedOrDisabled = (target: Element, configured: ConfiguredAction, payload: ResolvedRegexActionPayload): boolean => {
+      const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
+      const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
+        key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
+      ))
+      const alreadyUsed = configured.multi_select
+        ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
+        : blockHasSelection
+      return target.getAttribute('aria-disabled') === 'true' || alreadyUsed
+    }
+
+    const dispatchActivation = (resolved: ResolvedAction, queue: boolean): void => {
+      const { payload, configured } = resolved
+      dispatchRegexAction({
+        id: payload.id,
+        type: payload.type,
+        multi_select: configured.multi_select,
+        cost: payload.cost,
+        limit: payload.limit,
+        title: typeof payload.title === 'string' ? payload.title : '',
+        subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+        content: payload.content,
+        scriptId: payload.scriptId,
+        instanceId: payload.instanceId,
+        chatId,
+        messageId,
+        ...(configured.effects?.length ? { effects: configured.effects } : {}),
+        ...(queue ? { queue: true } : {}),
+      })
+    }
+
+    // Ctrl/cmd-click or right-click queues the action content into the
+    // composer instead of claiming and sending it, so the user can build on
+    // top of it. Plain clicks and keyboard activation keep sending.
+    const queueIntent = (event: MouseEvent | KeyboardEvent): boolean => (
+      event instanceof MouseEvent && (event.type === 'contextmenu' || event.ctrlKey || event.metaKey)
+    )
+
+    // Touch/pen long-press produces the same queue activation. The
+    // controller suppresses the synthetic click (and any synthesized
+    // contextmenu) that follow the hold, so the gesture queues exactly once.
+    const longPress = attachRegexActionLongPress({
+      container,
+      findTarget: findActionTarget,
+      isQueueable: (target) => {
+        const resolved = resolveConfigured(target)
+        if (!resolved) return false
+        const { payload, configured } = resolved
+        if (configured.multi_select || payload.type !== 'send') return false
+        if (regexActionsSuperseded) return false
+        if (isUser && configured.effects?.length) return false
+        return !isUsedOrDisabled(target, configured, payload)
+      },
+      onQueue: (target) => {
+        const resolved = resolveConfigured(target)
+        if (!resolved) return
+        dispatchActivation(resolved, true)
+      },
+    })
+
+    const activate = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return
+      const target = findActionTarget(event)
+      if (!target) return
+      if (longPress.shouldSuppressEvent(event, target)) {
         event.preventDefault()
         event.stopPropagation()
-        if (isUser && configured.effects?.length) {
-          toast.info(t('toast.regexActionAssistantOnly'))
-          return
-        }
-        const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
-        const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
-          key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
-        ))
-        const alreadyUsed = configured.multi_select
-          ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
-          : blockHasSelection
-        if (target.getAttribute('aria-disabled') === 'true' || alreadyUsed) {
-          toast.info(t('toast.regexActionAlreadyUsed'))
-          return
-        }
-        dispatchRegexAction({
-          id: payload.id,
-          type: payload.type,
-          multi_select: configured.multi_select,
-          cost: payload.cost,
-          limit: payload.limit,
-          title: typeof payload.title === 'string' ? payload.title : '',
-          subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
-          content: payload.content,
-          scriptId: payload.scriptId,
-          instanceId: payload.instanceId,
-          chatId,
-          messageId,
-          ...(configured.effects?.length ? { effects: configured.effects } : {}),
-        })
-      } catch {}
+        return
+      }
+      const resolved = resolveConfigured(target)
+      if (!resolved) return
+      const { payload, configured } = resolved
+      if (regexActionsSuperseded) {
+        event.preventDefault()
+        event.stopPropagation()
+        toast.info(t('toast.regexActionExpired'))
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      if (isUser && configured.effects?.length) {
+        toast.info(t('toast.regexActionAssistantOnly'))
+        return
+      }
+      if (isUsedOrDisabled(target, configured, payload)) {
+        toast.info(t('toast.regexActionAlreadyUsed'))
+        return
+      }
+      dispatchActivation(resolved, queueIntent(event))
     }
 
     container.addEventListener('click', activate)
     container.addEventListener('keydown', activate)
+    container.addEventListener('contextmenu', activate)
     return () => {
       container.removeEventListener('click', activate)
       container.removeEventListener('keydown', activate)
+      container.removeEventListener('contextmenu', activate)
+      longPress.destroy()
     }
   }, [chatId, messageId, isUser, isStreaming, regexScripts, actionUsage, regexActionsSuperseded, t, regexSelectionVersion])
 

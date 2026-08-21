@@ -57,3 +57,46 @@ export async function openWebSocket(
   })
   return ws
 }
+
+async function waitForWebSocketClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
+  if (ws.readyState === WebSocket.CLOSED) return true
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (closed: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      ws.removeEventListener("close", onClose)
+      resolve(closed)
+    }
+    const onClose = () => finish(true)
+    const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs))
+    ws.addEventListener("close", onClose, { once: true })
+  })
+}
+
+/**
+ * Initiate a normal WebSocket close handshake and briefly await the peer's
+ * acknowledgement. Awaiting the close event gives Bun time to flush the close
+ * frame instead of letting the request tear down the transport immediately
+ * after `ws.close()`.
+ *
+ * If the peer has already started closing, just wait for that handshake to
+ * finish rather than issuing a second close.
+ */
+export async function closeWebSocketGracefully(
+  ws: WebSocket,
+  closeTimeoutMs = 1_000,
+): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return
+
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.close(1000, "complete")
+    } catch {
+      return
+    }
+  }
+
+  await waitForWebSocketClose(ws, closeTimeoutMs)
+}

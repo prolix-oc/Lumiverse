@@ -16,6 +16,7 @@ import {
   validateInstallThemePayload,
   validateInstallWorldbookPayload,
 } from "./payload-validation";
+import { getLumiHubInstanceInfo } from "./instance-info";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INITIAL_RECONNECT_MS = 1_000;
@@ -162,16 +163,9 @@ class LumiHubWSClient {
 
       case "auth_ok":
         console.log("[LumiHub WS] Authenticated successfully");
-        // Send instance info
-        this.send({
-          type: "instance_info",
-          id: crypto.randomUUID(),
-          payload: {
-            capabilities: ["character_import", "chub_import", "worldbook_import", "theme_import", "preset_import", "manifest_sync", "stats_sync"],
-            version: "1.0.0",
-          },
-          timestamp: Date.now(),
-        });
+        // Version/capability negotiation is additive; older LumiHub servers can
+        // continue reading the legacy `version` and `capabilities` fields.
+        void this.sendInstanceInfo();
         // Send initial install manifest
         this.syncManifest();
         // Send usage counters (no-op unless pted in)
@@ -201,6 +195,18 @@ class LumiHubWSClient {
         // Unknown message type, ignore
         break;
     }
+  }
+
+  private async sendInstanceInfo(): Promise<void> {
+    const socket = this.ws;
+    const payload = await getLumiHubInstanceInfo();
+    if (this.ws !== socket || !this.connected) return;
+    this.send({
+      type: "instance_info",
+      id: crypto.randomUUID(),
+      payload,
+      timestamp: Date.now(),
+    });
   }
 
   private async handleInstallCharacter(msg: LumiHubWSMessage): Promise<void> {
@@ -430,6 +436,7 @@ class LumiHubWSClient {
       eventBus.on(EventType.CHARACTER_CREATED, trigger),
       eventBus.on(EventType.CHARACTER_EDITED, trigger),
       eventBus.on(EventType.CHARACTER_DELETED, trigger),
+      eventBus.on(EventType.CHARACTER_LIBRARY_CHANGED, trigger),
       eventBus.on(EventType.PRESET_CHANGED, trigger),
       eventBus.on(EventType.PRESET_DELETED, trigger),
       eventBus.on(EventType.LUMIHUB_INSTALL_COMPLETED, trigger),

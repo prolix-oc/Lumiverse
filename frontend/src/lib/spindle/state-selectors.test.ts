@@ -58,7 +58,6 @@ function resetState(): void {
     }],
     activeLoomPresetId: 'loom-1',
     activePersonaId: 'persona-1',
-    landingPageActiveTab: 'recent',
     testSetting: { nested: true },
   }
   listeners = []
@@ -129,7 +128,6 @@ describe('H2 state selector registry', () => {
       'worldInfo.selectedEntryId',
       'loom.activePresetId',
       'persona.activeId',
-      'landing.activeTab',
       'setting:testSetting',
     ])
     expect(selectors.list().find((item) => item.id === 'characters.editingId')?.permission).toBe('characters')
@@ -156,7 +154,6 @@ describe('H2 state selector registry', () => {
       bookId: 'book-1',
       bookName: 'Book',
     }])
-    expect(selectors.get<string | null>('landing.activeTab')).toBe('recent')
   })
 
   test('gates protected selectors and rejects unknown selectors', () => {

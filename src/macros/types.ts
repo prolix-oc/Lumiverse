@@ -119,6 +119,10 @@ export interface MacroExecContext {
   env: MacroEnv;
   resolve: (text: string) => string | Promise<string>;
   resolveNodes: (nodes: AstNode[]) => string | Promise<string>;
+  resolvePromptSource?: (
+    input: string,
+    sourceHint: string,
+  ) => Promise<string | undefined>;
   warn: (message: string) => void;
 }
 

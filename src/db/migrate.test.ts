@@ -26,6 +26,11 @@ describe("database migrations", () => {
       expect(
         db.query("SELECT name FROM _migrations WHERE name = ?").get("095_lumihub_link_user_scope.sql"),
       ).toEqual({ name: "095_lumihub_link_user_scope.sql" });
+      expect(
+        db.query("SELECT name FROM _migrations WHERE name = ?").get("107_world_book_entry_order_index.sql"),
+      ).toEqual({ name: "107_world_book_entry_order_index.sql" });
+      const entryIndexes = db.query("PRAGMA index_list('world_book_entries')").all() as Array<{ name: string }>;
+      expect(entryIndexes.map((index) => index.name)).toContain("idx_wbe_world_book_order");
     } finally {
       db.close();
     }

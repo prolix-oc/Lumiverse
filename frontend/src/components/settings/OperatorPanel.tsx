@@ -16,6 +16,7 @@ import {
   Globe,
   Plus,
   X,
+  Play,
 } from 'lucide-react'
 import { Toggle } from '@/components/shared/Toggle'
 import NumericInput from '@/components/shared/NumericInput'
@@ -40,7 +41,9 @@ import {
   type TrustedHostsResponse,
 } from '@/api/operator'
 import { settingsApi } from '@/api/settings'
+import { imagesApi } from '@/api/images'
 import { ApiError } from '@/api/client'
+import { sectionAnchorId } from '@/lib/settings-tab-registry'
 import {
   embeddingsApi,
   type UpdateVectorStoreConfigInput,
@@ -486,7 +489,16 @@ export default function OperatorPanel() {
   const [hostDraft, setHostDraft] = useState('')
   const storeBusy = useStore((s) => s.operatorBusy)
   const storeProgressMessage = useStore((s) => s.operatorProgressMessage)
+  const thumbnailQueue = useStore((s) => s.thumbnailQueue)
+  const setThumbnailQueue = useStore((s) => s.setThumbnailQueue)
+  const thumbnailSettings = useStore((s) => s.thumbnailSettings)
+  const setSetting = useStore((s) => s.setSetting)
   const addToast = useStore((s) => s.addToast)
+  const [rebuildingThumbnails, setRebuildingThumbnails] = useState(false)
+  const [thumbnailRecovery, setThumbnailRecovery] = useState({ pending: 0, process: 0, rebuild: 0 })
+  const [queueAction, setQueueAction] = useState<'recover' | 'discard' | null>(null)
+  const smallSize = thumbnailSettings?.smallSize ?? 300
+  const largeSize = thumbnailSettings?.largeSize ?? 700
 
   // Track the operation that triggered a server restart so we can
   // show "Reconnecting..." once the WS drops and recover on reconnect.
@@ -612,11 +624,13 @@ export default function OperatorPanel() {
         cacheFiles: next.configuredSettings.cacheFiles ?? null,
         cacheItems: next.configuredSettings.cacheItems ?? null,
       })
+      if (next.thumbnailQueue) setThumbnailQueue(next.thumbnailQueue)
+      setThumbnailRecovery(next.thumbnailRecovery ?? { pending: 0, process: 0, rebuild: 0 })
       return next
     } catch {
       return null
     }
-  }, [])
+  }, [setThumbnailQueue])
 
   const refreshDnsSettings = useCallback(async () => {
     try {
@@ -1155,6 +1169,69 @@ export default function OperatorPanel() {
     }
     setBusy(null)
   }, [addToast, t])
+
+  const formatRebuildParts = useCallback((generated: number, skipped: number, failed: number) => {
+    const parts: string[] = []
+    if (generated > 0) parts.push(t('operator.sharpRebuildGenerated', { count: generated }))
+    if (skipped > 0) parts.push(t('operator.sharpRebuildSkipped', { count: skipped }))
+    if (failed > 0) parts.push(t('operator.sharpRebuildFailedCount', { count: failed }))
+    return parts.join(', ')
+  }, [t])
+
+  const updateThumbnailTiers = useCallback((patch: { smallSize?: number, largeSize?: number }) => {
+    setSetting('thumbnailSettings', { smallSize, largeSize, ...patch })
+  }, [largeSize, setSetting, smallSize])
+
+  const handleRebuildThumbnails = useCallback(async () => {
+    if (rebuildingThumbnails) return
+    setRebuildingThumbnails(true)
+    addToast({ type: 'success', message: t('operator.sharpRebuildStarting') })
+    try {
+      const result = await imagesApi.rebuildThumbnails()
+      const summary = formatRebuildParts(result.generated, result.skipped, result.failed)
+      addToast({
+        type: result.failed > 0 ? 'error' : 'success',
+        message: t('operator.sharpRebuildDone', { summary: summary || String(result.total) }),
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t('operator.sharpRebuildUnknownError')
+      addToast({ type: 'error', message: t('operator.sharpRebuildFailed', { error: message }) })
+    } finally {
+      setRebuildingThumbnails(false)
+    }
+  }, [addToast, formatRebuildParts, rebuildingThumbnails, t])
+
+  const applyThumbnailSnapshot = useCallback((snapshot: { queue: typeof thumbnailQueue, recovery: typeof thumbnailRecovery }) => {
+    setThumbnailQueue(snapshot.queue)
+    setThumbnailRecovery(snapshot.recovery)
+  }, [setThumbnailQueue])
+
+  const handleRecoverThumbnailQueue = useCallback(async () => {
+    if (queueAction) return
+    setQueueAction('recover')
+    try {
+      applyThumbnailSnapshot(await operatorApi.recoverThumbnailQueue())
+      addToast({ type: 'success', message: t('operator.sharpQueueRecoverStarted') })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : t('operator.sharpQueueRecoverFailed') })
+    } finally {
+      setQueueAction(null)
+    }
+  }, [addToast, applyThumbnailSnapshot, queueAction, t])
+
+  const handleDiscardThumbnailQueue = useCallback(async () => {
+    if (queueAction) return
+    setQueueAction('discard')
+    try {
+      applyThumbnailSnapshot(await operatorApi.discardThumbnailQueue())
+      await refreshSharpSettings()
+      addToast({ type: 'success', message: t('operator.sharpQueueDiscarded') })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : t('operator.sharpQueueDiscardFailed') })
+    } finally {
+      setQueueAction(null)
+    }
+  }, [addToast, applyThumbnailSnapshot, queueAction, refreshSharpSettings, t])
 
   const handleSaveDnsSettings = useCallback(async (override?: DnsSettings) => {
     setBusy('saving dns settings')
@@ -2302,7 +2379,7 @@ export default function OperatorPanel() {
 
       {/* Image Processing */}
       <div className={styles.section}>
-        <div className={styles.sectionHeader}>
+        <div className={styles.sectionHeader} id={sectionAnchorId('operator', 'imageProcessing')}>
           <span className={styles.sectionTitle}>{t('operator.imageProcessing')}</span>
         </div>
         <div className={styles.sectionBody}>
@@ -2397,6 +2474,123 @@ export default function OperatorPanel() {
               />
             </label>
           </div>
+
+          <div className={styles.tuningGrid}>
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>{t('operator.sharpSmallTier')}</span>
+              <NumericInput
+                min={100}
+                max={600}
+                step={10}
+                className={styles.fieldInput}
+                value={smallSize}
+                integer
+                onChange={(value) => {
+                  if (value != null) updateThumbnailTiers({ smallSize: value })
+                }}
+              />
+              <span className={styles.fieldHint}>{t('operator.sharpSmallTierHint')}</span>
+            </label>
+
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>{t('operator.sharpLargeTier')}</span>
+              <NumericInput
+                min={400}
+                max={1200}
+                step={10}
+                className={styles.fieldInput}
+                value={largeSize}
+                integer
+                onChange={(value) => {
+                  if (value != null) updateThumbnailTiers({ largeSize: value })
+                }}
+              />
+              <span className={styles.fieldHint}>{t('operator.sharpLargeTierHint')}</span>
+            </label>
+          </div>
+
+          <div className={styles.controls}>
+            <button
+              className={styles.controlBtn}
+              disabled={rebuildingThumbnails || !!effectiveBusy}
+              onClick={handleRebuildThumbnails}
+            >
+              {rebuildingThumbnails ? <Loader2 size={14} className={spinClass} /> : <RefreshCw size={14} />}
+              {rebuildingThumbnails ? t('operator.sharpRebuilding') : t('operator.sharpRebuild')}
+            </button>
+          </div>
+          <p className={styles.thumbnailQueueHint}>{t('operator.sharpRebuildHint')}</p>
+
+          <div
+            className={styles.thumbnailQueue}
+            role="status"
+            aria-live="polite"
+            aria-label={t('operator.sharpThumbnailTitle')}
+          >
+            <div className={styles.thumbnailQueueHeader}>
+              <span className={styles.thumbnailQueueTitle}>{t('operator.sharpThumbnailTitle')}</span>
+              <span className={styles.thumbnailQueueCounts}>
+                {thumbnailQueue.remaining > 0
+                  ? t('operator.sharpThumbnailCounts', {
+                      processed: thumbnailQueue.processed,
+                      remaining: thumbnailQueue.remaining,
+                      total: thumbnailQueue.total,
+                    })
+                  : t('operator.sharpThumbnailIdle')}
+              </span>
+            </div>
+            <div
+              className={styles.thumbnailQueueTrack}
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={Math.max(thumbnailQueue.total, 1)}
+              aria-valuenow={thumbnailQueue.processed}
+            >
+              <div
+                className={`${styles.thumbnailQueueFill}${thumbnailQueue.remaining > 0 ? ` ${styles.thumbnailQueueFillActive}` : ''}`}
+                style={{
+                  width: thumbnailQueue.remaining > 0 && thumbnailQueue.total > 0
+                    ? `${Math.min(100, (thumbnailQueue.processed / thumbnailQueue.total) * 100)}%`
+                    : '0%',
+                }}
+              />
+            </div>
+            <p className={styles.thumbnailQueueHint}>{t('operator.sharpThumbnailHint')}</p>
+          </div>
+
+          {thumbnailRecovery.pending > 0 && (
+            <div className={styles.thumbnailQueue} role="status">
+              <div className={styles.thumbnailQueueHeader}>
+                <span className={styles.thumbnailQueueTitle}>{t('operator.sharpQueueLeftoversTitle')}</span>
+                <span className={styles.thumbnailQueueCounts}>
+                  {t('operator.sharpQueueLeftoversCounts', {
+                    pending: thumbnailRecovery.pending,
+                    process: thumbnailRecovery.process,
+                    rebuild: thumbnailRecovery.rebuild,
+                  })}
+                </span>
+              </div>
+              <p className={styles.thumbnailQueueHint}>{t('operator.sharpQueueLeftoversHint')}</p>
+              <div className={styles.controls}>
+                <button
+                  className={styles.controlBtnPrimary}
+                  disabled={!!queueAction || rebuildingThumbnails || !!effectiveBusy}
+                  onClick={handleRecoverThumbnailQueue}
+                >
+                  {queueAction === 'recover' ? <Loader2 size={14} className={spinClass} /> : <Play size={14} />}
+                  {t('operator.sharpQueueRecover')}
+                </button>
+                <button
+                  className={styles.controlBtn}
+                  disabled={!!queueAction || rebuildingThumbnails || !!effectiveBusy}
+                  onClick={handleDiscardThumbnailQueue}
+                >
+                  {queueAction === 'discard' ? <Loader2 size={14} className={spinClass} /> : <Trash2 size={14} />}
+                  {t('operator.sharpQueueDiscard')}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className={styles.controls}>
             <button

@@ -21,6 +21,7 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   GripVertical,
   Plus,
   Trash2,
@@ -38,6 +39,7 @@ import type {
   PromptVariableType,
 } from '@/lib/loom/types'
 import css from './PromptVariablesEditor.module.css'
+import PromptVariableMoveModal, { type VariableMoveTarget } from './PromptVariableMoveModal'
 
 // ============================================================================
 // Public API — the shape BlockEditor already consumes.
@@ -49,6 +51,9 @@ export interface VariablesEditorProps {
   placementBinding?: PromptBlockPlacementBinding
   fallbackPlacement: PromptBlockPlacement
   onPlacementBindingChange: (binding: PromptBlockPlacementBinding | undefined) => void
+  /** When provided, each variable row can open the native move-target picker. */
+  moveTargets?: VariableMoveTarget[]
+  onMoveToBlock?: (variableId: string, targetBlockId: string) => void
 }
 
 const TYPE_ACCENT_CLASS: Record<PromptVariableType, string> = {
@@ -217,9 +222,12 @@ export function VariablesEditor({
   placementBinding,
   fallbackPlacement,
   onPlacementBindingChange,
+  moveTargets,
+  onMoveToBlock,
 }: VariablesEditorProps) {
   const { t } = useTranslation('panels')
   const [expanded, setExpanded] = useState(variables.length > 0)
+  const [moveVariable, setMoveVariable] = useState<PromptVariableDef | null>(null)
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
@@ -313,6 +321,10 @@ export function VariablesEditor({
                     onUpdate={(patch) => updateVar(v.id, patch)}
                     onChangeType={(type) => changeType(v.id, type)}
                     onRemove={() => removeVar(v.id)}
+                    canMove={Boolean(moveTargets?.length && onMoveToBlock)}
+                    onOpenMovePicker={moveTargets?.length && onMoveToBlock
+                      ? () => setMoveVariable(v)
+                      : undefined}
                   />
                 ))}
               </div>
@@ -327,6 +339,18 @@ export function VariablesEditor({
         fallbackPlacement={fallbackPlacement}
         onChange={onPlacementBindingChange}
       />
+
+      {moveVariable && moveTargets && onMoveToBlock && (
+        <PromptVariableMoveModal
+          variable={moveVariable}
+          targets={moveTargets}
+          onClose={() => setMoveVariable(null)}
+          onMove={(targetBlockId) => {
+            onMoveToBlock(moveVariable.id, targetBlockId)
+            setMoveVariable(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -502,6 +526,8 @@ interface VariableRowProps {
   onUpdate: (patch: Partial<PromptVariableDef>) => void
   onChangeType: (type: PromptVariableType) => void
   onRemove: () => void
+  canMove?: boolean
+  onOpenMovePicker?: () => void
 }
 
 function VariableRow({
@@ -512,6 +538,8 @@ function VariableRow({
   onUpdate,
   onChangeType,
   onRemove,
+  canMove,
+  onOpenMovePicker,
 }: VariableRowProps) {
   const { t } = useTranslation('panels')
   const sortingDisabled = total < 2
@@ -620,15 +648,32 @@ function VariableRow({
           </div>
         </div>
 
-        <button
-          type="button"
-          className={css.deleteBtn}
-          onClick={onRemove}
-          aria-label={t('promptVariablesEditor.removeVariable')}
-          title={t('promptVariablesEditor.removeVariable')}
-        >
-          <Trash2 size={13} />
-        </button>
+        <div className={css.variableActions}>
+          {canMove && onOpenMovePicker && (
+            <button
+              type="button"
+              className={css.deleteBtn}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenMovePicker()
+              }}
+              aria-label={t('promptVariablesEditor.moveToBlock')}
+              title={t('promptVariablesEditor.moveToBlock')}
+            >
+              <CornerDownRight size={13} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className={css.deleteBtn}
+            onClick={onRemove}
+            aria-label={t('promptVariablesEditor.removeVariable')}
+            title={t('promptVariablesEditor.removeVariable')}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Row 2: label */}

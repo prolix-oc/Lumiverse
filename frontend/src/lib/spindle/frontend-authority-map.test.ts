@@ -28,13 +28,6 @@ describe('frontend authority map', () => {
       expect(permissions.size, source).toBe(1)
     }
   })
-  test('joins the landing selector to the canonical active-tab setting', () => {
-    expect(FRONTEND_AUTHORITY_MAP.find((row) => row.id === 'landing.activeTab')).toMatchObject({
-      source: 'settings.landingPageActiveTab',
-      permission: null,
-    })
-  })
-
   test('keeps every H7 surface in the canonical authority map', () => {
     const expected: Record<string, string | null> = {
       provider_icon: null,

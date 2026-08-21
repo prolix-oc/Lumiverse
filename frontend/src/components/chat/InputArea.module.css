@@ -1182,10 +1182,26 @@
   .actionBar {
     gap: 1px;
     padding: 0;
+    max-width: 100%;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .actionBar::-webkit-scrollbar {
+    display: none;
   }
 
   .actionBtn {
     width: 28px;
+    flex: 0 0 28px;
+  }
+
+  .actionBar :global([data-spindle-mount='chat_actions'] > *) {
+    flex-shrink: 0;
   }
 
   :global(html[data-ios-pwa]) .container {

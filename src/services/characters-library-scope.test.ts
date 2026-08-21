@@ -33,9 +33,6 @@ async function initDb(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
-  db.run(await Bun.file(join(import.meta.dir, "..", "db", "migrations", "092_characters_deleting_flag.sql")).text());
-  db.run(await Bun.file(join(import.meta.dir, "..", "db", "migrations", "096_character_folders.sql")).text());
-  db.run(await Bun.file(join(import.meta.dir, "..", "db", "migrations", "099_character_library_scope.sql")).text());
 }
 
 function summaryIds(userId: string, scope: "mine" | "shared", options: Omit<SummaryQueryOptions, "scope"> = {}): string[] {

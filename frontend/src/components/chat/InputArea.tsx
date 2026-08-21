@@ -20,6 +20,10 @@ import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
+import {
+  inspectPromptVariablesAvailability,
+  type PromptVariablesAvailability,
+} from '@/lib/loom/prompt-variable-availability'
 import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
@@ -304,6 +308,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   promptVariablesBindingRef.current = promptVariablesBinding
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [memoryCortexInFlight, setMemoryCortexInFlight] = useState(false)
+  const [promptVariablesAvailability, setPromptVariablesAvailability] = useState<PromptVariablesAvailability | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -356,7 +361,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   )
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
-  const enterToSend = useStore((s) => s.chatSheldEnterToSend)
+  const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
@@ -1087,7 +1092,48 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeGuides = guidedGenerations.filter((g) => g.enabled)
   const activeGuideCount = activeGuides.length
   const activeQuickReplySets = quickReplySets.filter((s) => s.enabled)
-  const activeLoomPresetName = activeLoomPresetId ? loomRegistry[activeLoomPresetId]?.name ?? null : null
+  const activeLoomPresetRegistryUpdatedAt = activeLoomPresetId
+    ? loomRegistry[activeLoomPresetId]?.updatedAt ?? null
+    : null
+  const promptVariablesAvailable = !!activeLoomPresetId
+    && promptVariablesAvailability?.presetId === activeLoomPresetId
+    && promptVariablesAvailability.registryUpdatedAt === activeLoomPresetRegistryUpdatedAt
+    && promptVariablesAvailability.hasDefinitions
+
+  useEffect(() => {
+    setPromptVariablesAvailability(null)
+    if (!activeLoomPresetId) return
+
+    let cancelled = false
+    const presetId = activeLoomPresetId
+    const registryUpdatedAt = activeLoomPresetRegistryUpdatedAt
+    const isCurrent = () => {
+      const state = useStore.getState()
+      return !cancelled
+        && state.activeLoomPresetId === presetId
+        && (state.loomRegistry[presetId]?.updatedAt ?? null) === registryUpdatedAt
+    }
+
+    void inspectPromptVariablesAvailability({
+      presetId,
+      registryUpdatedAt,
+      loadBlocks: async () => {
+        const preset = await presetsApi.get(presetId)
+        return unmarshalPreset(preset).blocks
+      },
+      isCurrent,
+    }).then((availability) => {
+      if (!availability) return
+      setPromptVariablesAvailability(availability)
+    }).catch((err) => {
+      if (!isCurrent()) return
+      console.warn('[InputArea] Failed to inspect prompt variable availability:', err)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeLoomPresetId, activeLoomPresetRegistryUpdatedAt])
 
   const openPromptVariablesModal = useCallback(async () => {
     if (!activeLoomPresetId) {
@@ -2019,6 +2065,21 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         toast.info(t('toast.regexActionClaimFailed'))
         return
       }
+      // Ctrl/cmd-click or right-click queues the send-action content into
+      // the composer as an editable draft. Nothing is claimed server-side;
+      // the action stays usable until the user sends the drafted message.
+      if (action.queue && !action.multi_select && action.type === 'send') {
+        setText((current) => applyRegexActionDraft(current, { content: action.content, mode: 'append' }))
+        requestAnimationFrame(() => {
+          resizeTextarea(textareaRef.current)
+          textareaRef.current?.focus()
+        })
+        toast.info(action.subtitle || t('toast.regexActionDraftQueued'), {
+          title: action.title || t('toast.regexActionSelected'),
+          duration: 2500,
+        })
+        return
+      }
       regexActionHandlingRef.current = true
       try {
         if (action.multi_select) {
@@ -2224,6 +2285,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       if (feedback) {
         genOpts.regen_feedback = feedback
         genOpts.regen_feedback_position = regenFeedback.position
+        genOpts.regen_feedback_format = regenFeedback.format
       }
       const res = await generateApi.start(genOpts)
       if (generationNonceRef.current !== nonce) return
@@ -2238,7 +2300,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
@@ -3239,6 +3301,18 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               {chatAddonOverrideCount > 0 && <span className={styles.badge}>{chatAddonOverrideCount}</span>}
             </button>
           ) : null,
+          promptVariables: promptVariablesAvailable ? (
+            <button
+              type="button"
+              className={styles.actionBtn}
+              onClick={() => void openPromptVariablesModal()}
+              disabled={promptVariablesLoading}
+              title={t('quickMenu.promptVariables')}
+              aria-label={t('quickMenu.promptVariables')}
+            >
+              <Sliders size={14} />
+            </button>
+          ) : null,
           guides: (
             <button
               type="button"
@@ -3583,28 +3657,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                 <span className={styles.personaMain}>
                   <Settings2 size={14} />
                   <span>{isGroupChat ? t('quickMenu.groupSettings') : t('quickMenu.chatSettings')}</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={styles.popRowBtn}
-                onClick={() => void openPromptVariablesModal()}
-                disabled={!activeLoomPresetId || promptVariablesLoading}
-                style={!activeLoomPresetId || promptVariablesLoading ? { opacity: 0.5 } : undefined}
-                title={!activeLoomPresetId ? t('quickMenu.promptVariablesSelectPreset') : undefined}
-              >
-                <span className={styles.personaMain}>
-                  <Sliders size={14} />
-                  <span className={styles.personaNameGroup}>
-                    <span>{t('quickMenu.promptVariables')}</span>
-                    <span className={styles.personaTitle}>
-                      {promptVariablesLoading
-                        ? t('quickMenu.loadingPromptVariables')
-                        : activeLoomPresetName
-                          ? t('quickMenu.promptVariablesFor', { name: activeLoomPresetName })
-                          : t('quickMenu.promptVariablesActivePreset')}
-                    </span>
-                  </span>
                 </span>
               </button>
               {!isGroupChat && activeCharacterId && (

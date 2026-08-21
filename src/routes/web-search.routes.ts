@@ -38,7 +38,7 @@ app.post("/test", async (c) => {
     const merged = normalizeWebSearchSettings({ ...stored, ...(body.settings || {}) }, hasInlineApiKey);
     const effectiveApiKey = typeof body.apiKey === "string"
       ? (body.apiKey.trim() || null)
-      : await getWebSearchApiKey(userId);
+      : await getWebSearchApiKey(userId, merged.provider);
 
     const result = await searchWebWithConfig(body.query || "", undefined, merged, effectiveApiKey);
     return c.json(result);

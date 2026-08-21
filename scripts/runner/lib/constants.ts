@@ -28,4 +28,6 @@ export const TIMEOUT_BUN_CACHE_MS = 30_000;
 // firm ceiling so an actual hang still recovers, but do not abort a healthy
 // install halfway through its normal work.
 export const TIMEOUT_BUN_INSTALL_MS = 10 * 60_000;
-export const TIMEOUT_BUN_BUILD_MS = 5 * 60_000;
+// Windows Vite builds can legitimately take longer than five minutes on cold
+// disks or when an antivirus scanner inspects generated assets.
+export const TIMEOUT_BUN_BUILD_MS = 10 * 60_000;

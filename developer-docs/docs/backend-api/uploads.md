@@ -1,8 +1,8 @@
 # Uploads
 
-Receive large files from your extension's frontend without the WebSocket frame-size limits, then read the assembled bytes in the backend worker by id.
+Receive large files from your extension's frontend without the WebSocket frame-size limits, then read the staged upload in the backend worker by id.
 
-The browser streams the file to a resumable [tus](https://tus.io) endpoint on the host, which writes it straight to disk. The worker then pulls the bytes with `spindle.uploads.get(uploadId)`. This avoids base64-over-WebSocket inflation, the 4 MB `SPINDLE_BACKEND_MSG` cap, and buffering the whole file in browser memory at send time.
+The browser streams the file to a resumable [tus](https://tus.io) endpoint on the host, which writes it straight to disk. The worker can pull the complete bytes with `spindle.uploads.get(uploadId)` or read bounded pieces with `spindle.uploads.readChunk(uploadId, offset)`. This avoids base64-over-WebSocket inflation and the 4 MB `SPINDLE_BACKEND_MSG` cap.
 
 If your next step is a [`spindle.media.*`](media.md) transform, you usually do **not** need to call `spindle.uploads.get()` first. Pass `{ kind: "upload", upload_id }` directly to the media API and let the host read the staged file in place.
 
@@ -12,7 +12,7 @@ No permission is required. Each upload is scoped to the extension that created i
 
 1. The frontend uploads the file to `/api/v1/spindle-uploads` with the tus protocol, tagging it with your extension identifier.
 2. On success the frontend sends your own backend a small message carrying the returned `uploadId`.
-3. The worker calls `spindle.uploads.get(uploadId)`, processes the bytes, then calls `spindle.uploads.delete(uploadId)`.
+3. The worker calls `spindle.uploads.get(uploadId)` or repeatedly calls `spindle.uploads.readChunk(uploadId, offset)`, then deletes the upload.
 
 ### Frontend
 
@@ -39,6 +39,8 @@ upload.start()
 ```
 
 The `extension` metadata value must be your manifest identifier. The host stores it so only your worker can read the upload back. `filename` is optional and is returned to the worker.
+
+Uploads default to the existing 1 GiB limit. To opt into the 100 GiB limit, include `spindle_read_mode: 'chunked'` in the tus metadata and consume the upload with `spindle.uploads.readChunk()`.
 
 ### Backend
 
@@ -68,6 +70,14 @@ Read a completed upload's bytes. Returns `null` if the upload is missing, expire
 
 **Returns:** `Promise<SpindleUploadDTO | null>`
 
+### `spindle.uploads.readChunk(uploadId, offset, userId?)`
+
+Read at most 16 MiB from a completed upload, beginning at `offset`. Returns `null` if the upload is missing, expired, or belongs to another extension or user. Invalid offsets and incomplete uploads reject the request.
+
+Advance the next request by `result.data.byteLength` until `result.eof` is true. Each successful read refreshes the upload's inactivity timeout.
+
+**Returns:** `Promise<SpindleUploadChunkDTO | null>`
+
 ### `spindle.uploads.delete(uploadId, userId?)`
 
 Delete a staged upload and its on-disk file. Returns `false` if it was already gone. Call this once you have consumed the bytes so the file does not sit on disk until its TTL expires.
@@ -81,6 +91,14 @@ type SpindleUploadDTO = {
   fileName: string
   size: number
   data: Uint8Array
+}
+
+type SpindleUploadChunkDTO = {
+  fileName: string
+  size: number
+  offset: number
+  data: Uint8Array
+  eof: boolean
 }
 ```
 
@@ -101,13 +119,14 @@ The endpoint implements the tus 1.0.0 core protocol plus the `creation` extensio
 | `HEAD` | `/api/v1/spindle-uploads/:id` | Report the current `Upload-Offset` for resuming |
 | `PATCH` | `/api/v1/spindle-uploads/:id` | Append bytes at `Upload-Offset` |
 
-`Upload-Metadata` is a comma-separated list of `key base64(value)` pairs. The `extension` key is required. The `filename` key is optional.
+`Upload-Metadata` is a comma-separated list of `key base64(value)` pairs. The `extension` key is required. The `filename` key is optional. Set `spindle_read_mode` to `chunked` to opt into large uploads.
 
 ## Notes
 
-- The maximum upload size is 1 GB. `POST` rejects a larger `Upload-Length`, and `PATCH` stops a stream that exceeds the cap.
+- Uploads default to a 1 GiB maximum. `spindle_read_mode=chunked` raises the individual limit to 100 GiB. Staged uploads currently have no aggregate storage quota or free-space reservation.
 - Uploads expire after 30 minutes of inactivity and are swept from disk. Read and delete promptly.
 - `get` returns the full file as a `Uint8Array`, so size your processing for the byte length you expect.
+- `readChunk` never returns more than 16 MiB and does not load the complete staged file into host or worker memory.
 - The upload is bound to the extension identifier in `Upload-Metadata` and the signed-in user. Another extension cannot read it even with the id.
 
 !!! note

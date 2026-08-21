@@ -100,7 +100,7 @@ export function hasPendingVectorization(chunkId: string): boolean {
 /**
  * Remove LanceDB vectors for chunks that have been consolidated.
  * Once a chunk is rolled into a tier-1 consolidation, its individual vector
- * is redundant — the consolidation has its own vector.
+ * is redundant only after the consolidation itself has been vectorized.
  *
  * @returns Number of vectors removed
  */
@@ -113,8 +113,12 @@ export async function compactConsolidatedVectors(
 
   const staleChunks = db
     .query(
-      `SELECT id FROM chat_chunks
-       WHERE chat_id = ? AND consolidation_id IS NOT NULL AND vectorized_at IS NOT NULL`,
+      `SELECT cc.id FROM chat_chunks cc
+       JOIN memory_consolidations mc ON mc.id = cc.consolidation_id
+       WHERE cc.chat_id = ?
+         AND cc.consolidation_id IS NOT NULL
+         AND cc.vectorized_at IS NOT NULL
+         AND mc.vectorized_at IS NOT NULL`,
     )
     .all(chatId) as Array<{ id: string }>;
 

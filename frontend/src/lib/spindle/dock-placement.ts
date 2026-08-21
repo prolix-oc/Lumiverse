@@ -6,12 +6,16 @@ export function resolveDockPanelEdge(
   edge: SpindleDockEdge,
   desktopSide: SpindleDockPanelDesktopSide,
   isMobile: boolean,
+  respectRequestedEdge = false,
 ): SpindleDockEdge {
   if (edge !== 'left' && edge !== 'right') {
     return edge
   }
   if (isMobile) {
     return 'top'
+  }
+  if (respectRequestedEdge) {
+    return edge
   }
   return desktopSide
 }

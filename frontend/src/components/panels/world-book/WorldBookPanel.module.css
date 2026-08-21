@@ -33,6 +33,17 @@
   padding-bottom: calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
 }
 
+/* Chromium/Android PWAs use interactive-widget=resizes-content, so the layout
+   viewport already ends above the software keyboard. Do not reserve the same
+   keyboard height again inside the lorebook scroller. */
+:global(html[data-pwa][data-resizes-content]) .panelScroll {
+  scroll-padding-block: 12px calc(12px + var(--worldbook-footer-height, 0px));
+}
+
+:global(html[data-pwa][data-resizes-content]) .panelBody {
+  padding-bottom: calc(12px + var(--worldbook-footer-height, 0px));
+}
+
 .panelMobile .panelScroll {
   gap: 10px;
   padding: 10px 10px 0;
@@ -57,12 +68,10 @@
   display: none;
 }
 
-/* Keep the docked pagination physically pinned to the screen bottom.
-   Chromium/Android shrinks the viewport above the keyboard, while iOS PWA can
-   pan the visual viewport upward when an editor is focused. In both cases we
-   pull the footer's margin box down by the live keyboard inset so it stays
-   behind the keyboard instead of riding up with the focused field. */
-:global(html[data-resizes-content]) .panelFooter,
+/* iOS PWA can pan the visual viewport upward when an editor is focused. Pull
+   the footer's margin box down by the live keyboard inset so it stays behind
+   the keyboard instead of riding up with the focused field. Chromium/Android
+   uses the naturally resized viewport and must not receive this correction. */
 :global(html[data-ios-pwa]) .panelFooter {
   margin-bottom: calc(-1 * var(--app-keyboard-inset-bottom, 0px));
 }

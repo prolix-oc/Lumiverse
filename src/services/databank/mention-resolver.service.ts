@@ -179,7 +179,7 @@ export async function resolveSlugContent(
           const [v] = await embeddingsSvc.cachedEmbedTexts(
             userId,
             [queryContext],
-            { signal },
+            { signal, inputType: "query" },
           );
           if (signal?.aborted) break;
           queryVector = v;

@@ -205,7 +205,14 @@ export const wsHandler = upgradeWebSocket((c) => {
 
         const data = JSON.parse(raw_data);
         if (data.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+          // Echo a client-generated probe id when present. This lets a resumed
+          // PWA distinguish a new foreground round trip from a pong that was
+          // queued before the document was frozen.
+          ws.send(JSON.stringify({
+            type: "pong",
+            timestamp: Date.now(),
+            ...(typeof data.id === "string" ? { id: data.id } : {}),
+          }));
           return;
         }
 

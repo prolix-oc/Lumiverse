@@ -121,7 +121,7 @@ app.post("/pollinations/auth-url", async (c) => {
     return c.json({ error: "redirect_url must use http or https" }, 400);
   }
 
-  const auth_url = svc.buildPollinationsAuthorizeUrl(userId, {
+  const auth_url = await svc.buildPollinationsAuthorizeUrl(userId, {
     redirect_url: redirectUrl,
     models: body?.models ? String(body.models) : undefined,
     budget: typeof body?.budget === "number" ? body.budget : undefined,

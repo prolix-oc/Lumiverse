@@ -17,6 +17,8 @@ import {
 import clsx from 'clsx'
 import { ApiError } from '@/api/client'
 import { worldBooksApi } from '@/api/world-books'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import {
   backfillEntryMetadata,
   buildEntryGridTemplate,
@@ -171,6 +173,9 @@ export default function LorebookEditorWorkspace({
   selectedBookIdRef.current = selectedBookId
   const requestedEntriesBookId = useRef<string | null>(null)
   const entriesRequestSeq = useRef(0)
+  const entriesAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => entriesAbortRef.current?.abort(), [])
 
   useEffect(() => {
     setSavedAt(null)
@@ -181,11 +186,14 @@ export default function LorebookEditorWorkspace({
   const loadEntries = useCallback((bookId: string, preserveSelection = true): Promise<void> => {
     requestedEntriesBookId.current = bookId
     const seq = ++entriesRequestSeq.current
+    entriesAbortRef.current?.abort()
+    const controller = new AbortController()
+    entriesAbortRef.current = controller
     setLoading(true)
     setEntriesComplete(false)
     return (async () => {
       try {
-        const result = await worldBooksApi.listAllEntries(bookId)
+        const result = await worldBooksApi.listAllEntries(bookId, { signal: controller.signal })
         // A newer request started while this one was in flight — a book switch,
         // Refresh, or the reload that ends every bulk action. That answer is the
         // current one, so this older payload is dropped rather than committed
@@ -203,7 +211,10 @@ export default function LorebookEditorWorkspace({
           return result[0]?.id ?? null
         })
         setSelectedIds((current) => current.filter((id) => result.some((entry) => entry.id === id)))
+      } catch (error) {
+        if (!controller.signal.aborted) throw error
       } finally {
+        if (entriesAbortRef.current === controller) entriesAbortRef.current = null
         // Only the newest request owns the spinner; a superseded one clearing it
         // would report "loaded" while the current fetch is still out.
         if (seq === entriesRequestSeq.current) setLoading(false)
@@ -231,6 +242,12 @@ export default function LorebookEditorWorkspace({
     setSelectedBookId((current) => current ?? initialBookId ?? result.data[0]?.id ?? null)
     if (resolved && requestedEntriesBookId.current !== resolved) void loadEntries(resolved, false)
   }, [initialBookId, loadEntries])
+
+  useEffect(() => {
+    return wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, () => {
+      void loadBooks()
+    })
+  }, [loadBooks])
 
   // The two opening requests, issued in the same tick.
   //

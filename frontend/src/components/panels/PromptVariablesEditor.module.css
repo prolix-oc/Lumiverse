@@ -450,7 +450,7 @@
 .headerRow {
   grid-column: span 12;
   display: grid;
-  grid-template-columns: 20px 128px 1fr 30px;
+  grid-template-columns: 20px 128px 1fr 64px;
   gap: 10px;
   align-items: end;
 }
@@ -526,6 +526,13 @@
   letter-spacing: 0.2px;
   white-space: nowrap;
   cursor: help;
+}
+
+.variableActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: max-content;
 }
 
 .deleteBtn {
@@ -621,7 +628,7 @@
 
 @container (max-width: 360px) {
   .headerRow {
-    grid-template-columns: 20px 1fr 30px;
+    grid-template-columns: 20px 1fr 64px;
   }
   .headerRow .typeField {
     grid-column: 2 / -1;

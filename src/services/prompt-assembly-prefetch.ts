@@ -182,7 +182,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
         // (AsyncHTTP.onAsyncHTTPCallback). The embedding service's internal
         // timeout still bounds the request.
         void embeddingsSvc
-          .cachedEmbedTexts(ctx.userId, [databankQueryPreview])
+          .cachedEmbedTexts(ctx.userId, [databankQueryPreview], { inputType: "query" })
           .catch(() => {
             /* Surface errors at the consumer site, not the warm-up. */
           });

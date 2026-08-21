@@ -32,6 +32,7 @@ import { useTokenizerAvailability } from '@/hooks/useTokenCounts'
 import { ENTRY_METADATA_VERSION } from '@/lib/lorebookEntryColumns'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { getHomepageCardMetadata, getHomepageVisibleTags } from '@/lib/characterDisplaySettings'
+import { readDeviceLandingPageStartTab, writeDeviceLandingPageStartTab } from '@/lib/landingPageStartTab'
 import type { Character } from '@/types/api'
 import ProductivityFeatureToggles from './ProductivityFeatureToggles'
 import styles from './ProductivitySettings.module.css'
@@ -125,7 +126,7 @@ function MetadataChecklist({ label, options, value, onChange, disabled = false }
 
 function CharacterDisplayControls({ settings, onChange, disabled = false, compactFooterLabel = 'Compact', idPrefix, characterTabLayout = false }: { settings: Blob; onChange: (patch: Blob) => void; disabled?: boolean; compactFooterLabel?: string; idPrefix: string; characterTabLayout?: boolean }) {
   const thumbnails = <><NumberField id={`${idPrefix}-thumbnail-width`} label="Thumbnail width" value={settings.thumbnailWidth} onChange={(thumbnailWidth) => onChange({ thumbnailWidth })} min={100} max={360} suffix="px" disabled={disabled} /><NumberField id={`${idPrefix}-thumbnail-height`} label="Thumbnail height" value={settings.thumbnailHeight} onChange={(thumbnailHeight) => onChange({ thumbnailHeight })} min={120} max={520} suffix="px" disabled={disabled} /></>
-  const controls = <><NumberField id={`${idPrefix}-tag-rows`} label="Tag rows" value={settings.tagRows} onChange={(tagRows) => onChange({ tagRows })} min={0} max={5} disabled={disabled} className={characterTabLayout ? styles.characterTagRows : undefined} /><SegmentedField label="Density" value={settings.density} disabled={disabled} options={[['compact', 'Compact'], ['balanced', 'Balanced'], ['large', 'Large'], ['custom', 'Custom']]} onChange={(density) => onChange({ density })} /><SegmentedField label="Footer mode" value={settings.footerMode} disabled={disabled} options={[['compact', compactFooterLabel], ['balanced', 'Balanced'], ['spacious', 'Spacious']]} onChange={(footerMode) => onChange({ footerMode })} /><SegmentedField label="View mode" value={settings.viewMode} disabled={disabled} options={[['grid', 'Grid'], ['single', 'Single'], ['list', 'List']]} onChange={(viewMode) => onChange({ viewMode })} /><SegmentedField label="Default sort" value={settings.defaultSort} disabled={disabled} options={[['recent', 'Recent'], ['name', 'Name'], ['created', 'Created'], ['shuffle', 'Shuffle']]} onChange={(defaultSort) => onChange({ defaultSort })} /><SegmentedField label="Default filter" value={settings.defaultFilter} disabled={disabled} options={[['characters', 'Characters'], ['favorites', 'Favorites'], ['groups', 'Groups']]} onChange={(defaultFilter) => onChange({ defaultFilter })} /><MetadataChecklist label="Visible metadata" options={CHARACTER_METADATA_OPTIONS} value={settings.visibleMetadata ?? []} disabled={disabled} onChange={(visibleMetadata) => onChange({ visibleMetadata })} /></>
+  const controls = <><NumberField id={`${idPrefix}-tag-rows`} label="Tag rows" value={settings.tagRows} onChange={(tagRows) => onChange({ tagRows })} min={0} max={5} disabled={disabled} className={characterTabLayout ? styles.characterTagRows : undefined} /><SegmentedField label="Density" value={settings.density} disabled={disabled} options={[['compact', 'Compact'], ['balanced', 'Balanced'], ['large', 'Large'], ['custom', 'Custom']]} onChange={(density) => onChange({ density })} /><SegmentedField label="Footer mode" value={settings.footerMode} disabled={disabled} options={[['compact', compactFooterLabel], ['balanced', 'Balanced'], ['spacious', 'Spacious']]} onChange={(footerMode) => onChange({ footerMode })} /><SegmentedField label="View mode" value={settings.viewMode} disabled={disabled} options={[['grid', 'Grid'], ['single', 'Single'], ['list', 'List']]} onChange={(viewMode) => onChange({ viewMode })} /><SegmentedField label="Default sort" value={settings.defaultSort} disabled={disabled} options={[['recent', 'Recent'], ['most_chats', 'Most chats'], ['name', 'Name'], ['created', 'Created'], ['shuffle', 'Shuffle']]} onChange={(defaultSort) => onChange({ defaultSort })} /><SegmentedField label="Default filter" value={settings.defaultFilter} disabled={disabled} options={[['characters', 'Characters'], ['favorites', 'Favorites'], ['groups', 'Groups']]} onChange={(defaultFilter) => onChange({ defaultFilter })} /><MetadataChecklist label="Visible metadata" options={CHARACTER_METADATA_OPTIONS} value={settings.visibleMetadata ?? []} disabled={disabled} onChange={(visibleMetadata) => onChange({ visibleMetadata })} /></>
 
   return characterTabLayout ? <div className={styles.characterTabControls} data-productivity-layout="character-tab-controls"><div className={styles.characterThumbnailPair} data-productivity-layout="character-thumbnail-pair">{thumbnails}</div>{controls}</div> : <>{thumbnails}{controls}</>
 }
@@ -217,6 +218,15 @@ function CardHeader({ id, title, description, action, cardId }: { id: string; ti
 export default function ProductivitySettings() {
   const store = useStore((state) => state)
   const [toolbarQuery, setToolbarQuery] = useState('')
+  const userId = (store as { user?: { id?: string } | null }).user?.id ?? null
+  const hasLumiverseSuite = ((store as { extensions?: unknown[] }).extensions ?? []).some((extension) => {
+    const candidate = extension as { identifier?: unknown; enabled?: unknown; has_frontend?: unknown }
+    return candidate.identifier === 'lumiverse_suite' && candidate.enabled === true && candidate.has_frontend === true
+  })
+  const [landingStartTab, setLandingStartTab] = useState(() => readDeviceLandingPageStartTab(userId))
+  useEffect(() => {
+    setLandingStartTab(readDeviceLandingPageStartTab(userId))
+  }, [userId])
   const getBlob = (key: ProductivitySettingKey): Blob => (store as any)[key] ?? PRODUCTIVITY_DEFAULTS[key]
   const update = (key: ProductivitySettingKey, patch: Blob) => {
     const current = (useStore.getState() as any)[key] ?? PRODUCTIVITY_DEFAULTS[key]
@@ -470,6 +480,11 @@ export default function ProductivitySettings() {
 
     <section id="homepage-character-library-settings" className={styles.card} aria-labelledby="productivity-home-title" data-spindle-mount="settings_section" data-spindle-scope="settings-section:productivity:homepage"><CardHeader id="productivity-home-title" cardId="homepage" title={labels.homepageCharacterLibrarySettings} description="Control homepage cards, filters, view defaults, and selected-character panel." action={<Toggle.Switch checked={homepage.enabled !== false} onChange={(enabled) => update('homepageCharacterLibrarySettings', { enabled })} aria-label="Enable homepage library" title="Enable homepage library" />} /><div className={styles.cardBody}>
       <HomepageCharacterLibraryPreview settings={homepage} character={characters.find((character) => character.id === homepage.lastSelectedCharacterId) ?? characters[0]} />
+      {hasLumiverseSuite && homepage.enabled !== false && <SegmentedField label="Landing page start view" value={landingStartTab} options={[['characters', 'Characters'], ['chats', 'Chats']]} onChange={(value) => {
+        if (value !== 'characters' && value !== 'chats') return
+        setLandingStartTab(value)
+        writeDeviceLandingPageStartTab(userId, value)
+      }} />}
       <CharacterDisplayControls settings={homepage} onChange={(patch) => update('homepageCharacterLibrarySettings', patch)} compactFooterLabel="Compact glass" idPrefix="home" />
       <NumberField id="home-max-tags" label="Maximum visible tags" value={homepage.maxVisibleTags} onChange={(maxVisibleTags) => update('homepageCharacterLibrarySettings', { maxVisibleTags })} min={1} max={20} />
       <NumberField id="home-panel-width" label="Preview panel width" value={homepage.panelWidth} onChange={(panelWidth) => update('homepageCharacterLibrarySettings', { panelWidth })} min={360} max={720} suffix="px" />

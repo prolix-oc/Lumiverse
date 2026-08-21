@@ -253,10 +253,30 @@ export default function MinimalMessageDefault({
     },
   })
 
+  const isRegexActionEvent = useCallback((e: React.SyntheticEvent) => {
+    const path = typeof e.nativeEvent.composedPath === 'function'
+      ? e.nativeEvent.composedPath()
+      : [e.target]
+
+    return path.some((node) => (
+      node instanceof Element
+      && node.hasAttribute('data-lumiverse-regex-action')
+    ))
+  }, [])
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (!canOpenContextMenu) return
+    if (isRegexActionEvent(e)) {
+      e.preventDefault()
+      return
+    }
     longPress.onContextMenu(e)
-  }, [canOpenContextMenu, longPress])
+  }, [canOpenContextMenu, isRegexActionEvent, longPress])
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!canOpenContextMenu || isRegexActionEvent(e)) return
+    longPress.onTouchStart(e)
+  }, [canOpenContextMenu, isRegexActionEvent, longPress])
 
   const contextMenuItems: ContextMenuEntry[] = useMemo(() => [
     {
@@ -346,7 +366,7 @@ export default function MinimalMessageDefault({
       data-message-id={message.id}
       onClick={isSelectMode ? onToggleSelect : undefined}
       onContextMenu={handleContextMenu}
-      onTouchStart={canOpenContextMenu ? longPress.onTouchStart : undefined}
+      onTouchStart={canOpenContextMenu ? handleTouchStart : undefined}
       onTouchMove={canOpenContextMenu ? longPress.onTouchMove : undefined}
       onTouchEnd={canOpenContextMenu ? longPress.onTouchEnd : undefined}
     >

@@ -19,6 +19,7 @@ graphify-out/
 vendor/lancedb-android/upstream/
 vendor/lancedb-android/build/
 vendor/lancedb-android/out/
+.cache/
 
 # =============================================================================
 # User instance data — NEVER commit these

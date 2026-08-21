@@ -803,32 +803,6 @@
   border-color: var(--lumiverse-primary);
 }
 
-/* ── Image Optimization ── */
-
-.imgOptSliderHeader {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.imgOptSliderValue {
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--lumiverse-primary);
-}
-
-.imgOptSlider {
-  width: 100%;
-  accent-color: var(--lumiverse-primary);
-}
-
-.imgOptRebuild {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 8px 0;
-}
 
 /* ── Chat Memory grid ── */
 

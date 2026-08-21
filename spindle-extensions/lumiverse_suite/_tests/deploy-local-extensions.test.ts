@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -28,7 +29,11 @@ const PERMISSIONS = [
 const workspaces: string[] = [];
 
 function workspace(): string {
-  const path = mkdtempSync(join(tmpdir(), "lumiverse-deploy-test-"));
+  // macOS exposes the temporary directory through /var while realpath resolves
+  // it through /private/var. Keep the fixture on the same canonical spelling as
+  // the production containment checks so a valid child is not mistaken for an
+  // escape from its project root.
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "lumiverse-deploy-test-")));
   workspaces.push(path);
   return path;
 }

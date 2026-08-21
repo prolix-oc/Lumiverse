@@ -430,6 +430,7 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   characterTabDisplaySettings: DEFAULT_CHARACTER_TAB_DISPLAY_SETTINGS,
   portraitDockSettings: DEFAULT_PORTRAIT_DOCK_SETTINGS,
   lorebookEditorSettings: DEFAULT_LOREBOOK_EDITOR_SETTINGS,
+  showEmbeddingFallbackUi: true,
   showCortexSecondaryUi: true,
   showEditAndSend: true,
   enableToolbarIconReorder: true,

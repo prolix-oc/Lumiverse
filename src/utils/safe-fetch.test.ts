@@ -96,3 +96,52 @@ describe("safeFetch SSRF protections", () => {
     }
   });
 });
+
+describe("safeFetch User-Agent", () => {
+  test("sends a product/version User-Agent when the caller omitted one", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("user-agent")).toMatch(/^Lumiverse\/\S+$/);
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    try {
+      await safeFetch("http://93.184.216.34/image.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("replaces a blank User-Agent so hosts that RST empty tokens still accept the request", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("user-agent")).toMatch(/^Lumiverse\/\S+$/);
+      expect(new Headers(init?.headers).get("accept")).toBe("image/*");
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    try {
+      await safeFetch("http://93.184.216.34/image.png", {
+        headers: { Accept: "image/*", "User-Agent": "" },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("keeps an explicit caller User-Agent", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("user-agent")).toBe("Lumiverse");
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+
+    try {
+      await safeFetch("http://93.184.216.34/image.png", {
+        headers: { "User-Agent": "Lumiverse" },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

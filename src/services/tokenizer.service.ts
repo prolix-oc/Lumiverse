@@ -504,7 +504,7 @@ export async function countBreakdown(
       );
       tokens = countText(bulk);
     } else {
-      tokens = countText(entry.content || "");
+      tokens = countText(entry.tokenCountContent ?? entry.content ?? "");
     }
 
     if (!entry.excludeFromTotal) {

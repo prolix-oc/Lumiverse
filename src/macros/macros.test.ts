@@ -2533,9 +2533,14 @@ describe("Temporal macros", () => {
     expect(await ev("{{idleDuration}}", env)).toBe("unknown");
   });
 
-  test("{{idleDuration}} formats time since the last message", async () => {
+  test("{{idleDuration}} formats time since the last assistant message", async () => {
     const env = makeEnv({ lastMessageTime: Date.now() - 90_000 });
     expect(await ev("{{idleDuration}}", env)).toBe("1 minute");
+  });
+
+  test("{{idleDuration}} formats multi-day durations", async () => {
+    const env = makeEnv({ lastMessageTime: Date.now() - 3 * 24 * 60 * 60 * 1000 });
+    expect(await ev("{{idleDuration}}", env)).toBe("3 days");
   });
 
   test("{{idle_duration}} alias works", async () => {

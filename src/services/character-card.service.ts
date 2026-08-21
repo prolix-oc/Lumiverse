@@ -423,8 +423,12 @@ export function normalizeJannyCharacterInput(input: CreateCharacterInput): Creat
  * Extracts character card JSON from a PNG file's tEXt/zTXt/iTXt chunk.
  * Checks for "chara" (V1/V2 standard) and "ccv3" (V3 standard) keywords.
  */
-export async function extractCardFromPng(file: File): Promise<CreateCharacterInput> {
-  const buffer = Buffer.from(await file.arrayBuffer());
+export async function extractCardFromPng(file: File | Buffer | Uint8Array): Promise<CreateCharacterInput> {
+  const buffer = Buffer.isBuffer(file)
+    ? file
+    : file instanceof Uint8Array
+      ? Buffer.from(file.buffer, file.byteOffset, file.byteLength)
+      : Buffer.from(await file.arrayBuffer());
   const charaText = extractPngTextChunk(buffer, "chara") ?? extractPngTextChunk(buffer, "ccv3");
 
   if (!charaText) {

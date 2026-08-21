@@ -6,9 +6,11 @@ import { settingsApi } from '@/api/settings'
 import { createGenerationSlice } from './generation'
 import {
   createSettingsSlice,
+  DEVICE_ENTER_TO_SEND_STORAGE_KEY,
   canPersistPortraitDockInitialization,
   flushSettingsNow,
   resetSettingsPersistence,
+  setSettingsPersistenceScope,
   shouldReloadSettingsAfterUpdate,
 } from './settings'
 
@@ -33,6 +35,8 @@ function database(rows: Map<string, unknown>) {
 
 afterEach(() => {
   resetSettingsPersistence()
+  setSettingsPersistenceScope(null)
+  localStorage.removeItem(`${DEVICE_ENTER_TO_SEND_STORAGE_KEY}:device-preference-test-user`)
   settingsApi.getAll = original.getAll
   settingsApi.putMany = original.putMany
 })
@@ -262,5 +266,48 @@ describe('portrait dock persistence', () => {
     restored.setSetting('portraitDockSettings', { ...automatic, dockSide: 'left' }, 'user-interaction')
     await flushSettingsNow()
     expect(puts).toBe(1)
+  })
+})
+
+describe('per-device enter-to-send preference', () => {
+  test('migrates the committed backend value once, then keeps changes local to the device', async () => {
+    setSettingsPersistenceScope('device-preference-test-user')
+    const rows = new Map<string, unknown>([['chatSheldEnterToSend', false]])
+    database(rows)
+    let puts = 0
+    const putMany = settingsApi.putMany
+    settingsApi.putMany = async values => {
+      puts += 1
+      return putMany(values)
+    }
+
+    const firstDeviceSession = store()
+    await firstDeviceSession.loadSettings()
+
+    expect(firstDeviceSession.inputBarEnterToSend).toBe(false)
+    expect(localStorage.getItem(`${DEVICE_ENTER_TO_SEND_STORAGE_KEY}:device-preference-test-user`)).toBe('false')
+
+    firstDeviceSession.setInputBarEnterToSend(true)
+    await flushSettingsNow()
+    expect(puts).toBe(0)
+    expect(rows.get('chatSheldEnterToSend')).toBe(false)
+
+    const laterDeviceSession = store()
+    await laterDeviceSession.loadSettings()
+    expect(laterDeviceSession.inputBarEnterToSend).toBe(true)
+  })
+})
+
+describe('legacy input settings migration', () => {
+  test('renames the saved message display setting to its canonical key', async () => {
+    const rows = new Map<string, unknown>([['chatSheldDisplayMode', 'bubble']])
+    database(rows)
+
+    const restored = store()
+    await restored.loadSettings()
+    await flushSettingsNow()
+
+    expect(restored.chatDisplayMode).toBe('bubble')
+    expect(rows.get('chatDisplayMode')).toBe('bubble')
   })
 })

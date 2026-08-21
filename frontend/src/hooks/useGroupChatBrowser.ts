@@ -10,7 +10,7 @@ const SEARCH_DEBOUNCE_MS = 150
 const GROUP_CHATS_FETCH_LIMIT = 500
 
 function resolveSort(sortField: CharacterSortField): 'name' | 'recent' | 'created' {
-  return sortField === 'shuffle' ? 'recent' : sortField
+  return sortField === 'name' || sortField === 'created' ? sortField : 'recent'
 }
 
 function resolveDirection(

@@ -39,7 +39,7 @@ describe('atomic frontend build promotion', () => {
       .toBe('/home/user/.bun/bin/bun')
   })
 
-  test('restores the previous bundle after an interrupted directory swap', () => {
+  test('restores the previous bundle after an interrupted directory swap', async () => {
     const root = makeTempDir()
     const staged = join(root, '.dist-build-stale')
     const backup = join(root, '.dist-backup-stale')
@@ -47,14 +47,14 @@ describe('atomic frontend build promotion', () => {
     writeBuild(staged, 'partial')
     writeBuild(backup, 'old')
 
-    recoverInterruptedBuild(root, dist)
+    await recoverInterruptedBuild(root, dist)
 
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
     expect(existsSync(staged)).toBe(false)
     expect(existsSync(backup)).toBe(false)
   })
 
-  test('replaces dist only after the staged bundle validates', () => {
+  test('replaces dist only after the staged bundle validates', async () => {
     const root = makeTempDir()
     const staged = join(root, 'staged')
     const dist = join(root, 'dist')
@@ -62,14 +62,14 @@ describe('atomic frontend build promotion', () => {
     writeBuild(staged, 'new')
     writeBuild(dist, 'old')
 
-    promoteFrontendBuild(staged, dist, backup)
+    await promoteFrontendBuild(staged, dist, backup)
 
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('new')
     expect(existsSync(staged)).toBe(false)
     expect(existsSync(backup)).toBe(false)
   })
 
-  test('preserves the existing dist when validation fails', () => {
+  test('preserves the existing dist when validation fails', async () => {
     const root = makeTempDir()
     const staged = join(root, 'staged')
     const dist = join(root, 'dist')
@@ -77,7 +77,7 @@ describe('atomic frontend build promotion', () => {
     writeBuild(staged, 'new', false)
     writeBuild(dist, 'old')
 
-    expect(() => promoteFrontendBuild(staged, dist, backup)).toThrow('missing sw.js')
+    await expect(promoteFrontendBuild(staged, dist, backup)).rejects.toThrow('missing sw.js')
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
     expect(existsSync(staged)).toBe(false)
     expect(existsSync(backup)).toBe(false)

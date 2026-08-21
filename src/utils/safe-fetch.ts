@@ -13,6 +13,16 @@ import { getEffectiveDnsSettings } from "../services/dns-settings.service";
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_DNS_TIMEOUT_MS = 5_000;
+const DEFAULT_USER_AGENT = (() => {
+  try {
+    const pkg = require("../../package.json") as { version?: string };
+    const version = typeof pkg.version === "string" && pkg.version.trim() ? pkg.version.trim() : "unknown";
+    return `Lumiverse/${version}`;
+  } catch {
+    return "Lumiverse/unknown";
+  }
+})();
+
 const DOH_TIMEOUT_MS = 5_000;
 
 // DNS record type codes used by RFC 8484 JSON DoH responses.
@@ -377,12 +387,16 @@ export async function safeFetch(
 
     let response: Response;
     try {
+      const headers = new Headers(options?.headers);
+      if (!headers.get("user-agent")?.trim()) {
+        headers.set("User-Agent", DEFAULT_USER_AGENT);
+      }
       response = await fetch(currentUrl, {
         method,
         body,
         redirect: "manual",
         signal: controller.signal,
-        headers: options?.headers,
+        headers,
       });
     } catch (err: any) {
       clearTimeout(timer);

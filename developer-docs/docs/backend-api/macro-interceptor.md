@@ -2,10 +2,18 @@
 
 !!! warning "Permission required: `macro_interceptor`"
 
-Macro interceptors run at the top of `MacroEvaluator.evaluate()`, once per fixed-point iteration, before Lumi parses the template. They receive the raw template plus a read-only env snapshot, and return a transformed template or `void` to pass through.
+Macro interceptors let an extension inspect a template before Lumiverse
+evaluates its macros. Native preset text is evaluated by Lumiverse rather than
+by whole-template interceptors. Individually registered extension macros still
+work inside presets.
+
+When a preset references a character field, that field is offered separately
+with a `prompt_source:character.<field>` source hint. An interceptor can process
+the field and return text; Lumiverse then continues its normal macro evaluation.
 
 ```ts
 spindle.registerMacroInterceptor(async (ctx) => {
+  if (!ctx.sourceHint?.startsWith('prompt_source:character.')) return
   if (!ctx.template.includes('{{my_macro')) return
   return myInWorkerEvaluator(ctx.template, ctx.env)
 }, 100)
@@ -17,7 +25,7 @@ Use this when per-macro RPC cost dominates iteration-heavy templates (`{{#each L
 
 | Param | Type | Description |
 |---|---|---|
-| `handler` | `(ctx: MacroInterceptorCtx) => Promise<string \| void>` | Returns the transformed template, or `void` to pass through |
+| `handler` | `(ctx: MacroInterceptorCtx) => Promise<string \| MacroInterceptorRichResult \| void>` | Return processed text, or `void` to leave the template unchanged |
 | `priority` | `number` | Optional. Lower values run first. Default: `100` |
 
 One interceptor per extension; a second registration replaces the first.

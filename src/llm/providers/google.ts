@@ -92,6 +92,10 @@ export class GoogleProvider implements LlmProvider {
         content += p.text || "";
       }
     }
+    const thoughtSignature = this.getNonToolThoughtSignature(
+      parts,
+      request.parameters?._replay_thought_signatures === true,
+    );
 
     const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
     const groundingMetadata = candidate?.groundingMetadata ?? data.groundingMetadata;
@@ -101,6 +105,7 @@ export class GoogleProvider implements LlmProvider {
       reasoning: reasoning || undefined,
       finish_reason: toolCalls ? "tool_calls" : (candidate?.finishReason || "STOP"),
       tool_calls: toolCalls,
+      ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
       usage: data.usageMetadata
         ? {
             prompt_tokens: data.usageMetadata.promptTokenCount || 0,
@@ -132,6 +137,14 @@ export class GoogleProvider implements LlmProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     const maybeYield = createCooperativeYielder(64, request.signal);
+    // Some Vertex-based providers serialize a completed response as several
+    // SSE messages, including an empty `STOP` envelope before the envelope
+    // containing the response text. A finish reason is a property of the
+    // complete response, not proof that this individual SSE message is final,
+    // so hold it until the stream itself closes.
+    // This also lets us retain the final (and often only accurate) usage data.
+    let terminalFinishReason: string | undefined;
+    let finalUsage: StreamChunk["usage"];
 
     let streamDoneNaturally = false;
     try {
@@ -167,6 +180,10 @@ export class GoogleProvider implements LlmProvider {
               text += p.text || "";
             }
           }
+          const thoughtSignature = this.getNonToolThoughtSignature(
+            parts,
+            request.parameters?._replay_thought_signatures === true,
+          );
 
           // Capture usage metadata (Google includes it in the final streaming chunk)
           const usage = data.usageMetadata
@@ -182,21 +199,31 @@ export class GoogleProvider implements LlmProvider {
 
           const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
 
-          if (text || reasoning || toolCalls) {
+          if (toolCalls) {
+            terminalFinishReason = "tool_calls";
+          } else if (finishReason && terminalFinishReason !== "tool_calls") {
+            terminalFinishReason = finishReason === "STOP" ? "stop" : finishReason;
+          }
+          if (usage) finalUsage = usage;
+
+          if (text || reasoning || toolCalls || thoughtSignature) {
             yield {
               token: text,
               reasoning: reasoning || undefined,
-              finish_reason: toolCalls ? "tool_calls" : (finishReason === "STOP" ? "stop" : undefined),
               tool_calls: toolCalls,
+              ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
               usage,
             };
-          } else if (finishReason || usage) {
-            yield { token: "", finish_reason: finishReason === "STOP" ? "stop" : (finishReason || undefined), usage };
+          } else if (usage) {
+            yield { token: "", usage };
           }
         } catch {
           // Skip malformed SSE lines
         }
       }
+    }
+    if (terminalFinishReason) {
+      yield { token: "", finish_reason: terminalFinishReason, usage: finalUsage };
     }
     } finally {
       if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
@@ -230,12 +257,39 @@ export class GoogleProvider implements LlmProvider {
   }
 
   /** Format message content into Google Gemini parts array, handling multipart (vision/audio) content. */
-  private formatParts(m: LlmMessage, toolNameById: Map<string, string>): any[] {
-    if (typeof m.content === "string") return [{ text: m.content }];
-    return m.content.map((part: LlmMessagePart) => {
+  private getNonToolThoughtSignature(parts: any[], enabled: boolean): string | undefined {
+    if (!enabled) return undefined;
+    for (let index = parts.length - 1; index >= 0; index--) {
+      const part = parts[index];
+      if (!part?.functionCall && typeof part?.thoughtSignature === "string") {
+        return part.thoughtSignature;
+      }
+    }
+    return undefined;
+  }
+
+  private formatParts(
+    m: LlmMessage,
+    toolNameById: Map<string, string>,
+    replayThoughtSignatures: boolean,
+  ): any[] {
+    if (typeof m.content === "string") {
+      return [{
+        text: m.content,
+        ...(m.role === "assistant" && replayThoughtSignatures && m.thought_signature
+          ? { thoughtSignature: m.thought_signature }
+          : {}),
+      }];
+    }
+    const formatted = m.content.map((part: LlmMessagePart) => {
       switch (part.type) {
         case "text":
-          return { text: part.text };
+          return {
+            text: part.text,
+            ...(m.role === "assistant" && replayThoughtSignatures && part.thought_signature
+              ? { thoughtSignature: part.thought_signature }
+              : {}),
+          };
         case "image":
         case "audio":
           return { inlineData: { mimeType: part.mime_type, data: part.data } };
@@ -253,6 +307,13 @@ export class GoogleProvider implements LlmProvider {
           return { text: "" };
       }
     });
+    if (m.role === "assistant" && replayThoughtSignatures && m.thought_signature) {
+      const target = [...formatted].reverse().find((part) =>
+        Object.hasOwn(part, "text") || Object.hasOwn(part, "inlineData"),
+      );
+      if (target) target.thoughtSignature = m.thought_signature;
+    }
+    return formatted;
   }
 
   private buildToolNameMap(messages: readonly LlmMessage[]): Map<string, string> {
@@ -267,7 +328,7 @@ export class GoogleProvider implements LlmProvider {
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming"]);
+  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming", "_replay_thought_signatures"]);
 
   /** Keys explicitly handled by Google's buildBody — excluded from passthrough. */
   private static readonly HANDLED_PARAMS = new Set([
@@ -283,6 +344,7 @@ export class GoogleProvider implements LlmProvider {
     const systemMessages = request.messages.filter((m) => m.role === "system");
     const otherMessages = request.messages.filter((m) => m.role !== "system");
     const toolNameById = this.buildToolNameMap(request.messages);
+    const replayThoughtSignatures = params._replay_thought_signatures === true;
     const functionTools = request.tools ?? [];
     const hasFunctionDeclarations = functionTools.length > 0;
     const googleSearchTool = buildGoogleSearchTool(
@@ -295,7 +357,7 @@ export class GoogleProvider implements LlmProvider {
     const body: any = {
       contents: otherMessages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
-        parts: this.formatParts(m, toolNameById),
+        parts: this.formatParts(m, toolNameById, replayThoughtSignatures),
       })),
     };
 
@@ -368,7 +430,9 @@ export class GoogleProvider implements LlmProvider {
       for (const entry of body.contents) {
         if (entry.role === "model") {
           for (const part of entry.parts) {
-            part.thoughtSignature = "context_engineering_is_the_way_to_go";
+            if (!part.thoughtSignature) {
+              part.thoughtSignature = "context_engineering_is_the_way_to_go";
+            }
           }
         }
       }

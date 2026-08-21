@@ -96,10 +96,10 @@ import {
 } from '@/lib/lorebookEntrySearch'
 
 const DEFAULT_PAGE_SIZE = 50 as const
-const CUSTOM_PAGE_SIZE = 200 as const
 const ENTRY_FIELD_VISIBLE_TOP_GUTTER = 12
 const ENTRY_FIELD_KEYBOARD_GUTTER = 72
 const ENTRY_FIELD_REVEAL_THRESHOLD = 10
+const ENTRY_FIELD_RESIZED_VIEWPORT_SETTLE_DELAY = 160
 const ENTRY_FIELD_FOCUS_SETTLE_DELAYS = [40, 180, 360, 520] as const
 const TOKEN_PREFETCH_DWELL_MS = 180
 
@@ -160,6 +160,14 @@ export function getWorldBookEntriesSectionBookResetState(): WorldBookEntriesSect
   }
 }
 
+export function shouldLoadFullWorldBookEntryCorpus(
+  search: string,
+  typeFilter: 'all' | 'trigger' | 'constant' | 'vector',
+  pageSize: WorldBookEntryPageSize,
+): boolean {
+  return search.trim().length > 0 || typeFilter !== 'all' || pageSize === 'all'
+}
+
 /** Ignore WORLD_BOOK_ENTRY_CHANGED echoes of our own writes for this long. */
 const SELF_ECHO_WINDOW_MS = 2_000
 
@@ -190,9 +198,17 @@ function parseCssPx(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function usesBrowserResizedKeyboardViewport(): boolean {
+  const root = document.documentElement
+  return root.hasAttribute('data-pwa') && root.hasAttribute('data-resizes-content')
+}
+
 function getEntryFieldBottomGutter(container: HTMLElement): number {
   const style = getComputedStyle(container)
   const footerHeight = parseCssPx(style.getPropertyValue('--worldbook-footer-height'))
+  if (usesBrowserResizedKeyboardViewport()) {
+    return footerHeight + ENTRY_FIELD_VISIBLE_TOP_GUTTER
+  }
   return Math.max(ENTRY_FIELD_KEYBOARD_GUTTER, footerHeight + ENTRY_FIELD_VISIBLE_TOP_GUTTER)
 }
 
@@ -225,6 +241,10 @@ function getEntryType(entry: WorldBookEntry): 'trigger' | 'constant' | 'vector' 
   if (entry.constant) return 'constant'
   if (entry.vectorized) return 'vector'
   return 'trigger'
+}
+
+function mapSortForApi(sortBy: WorldBookEntrySortBy): 'order' | 'priority' | 'created' | 'updated' | 'name' {
+  return sortBy === 'custom' ? 'order' : sortBy
 }
 
 export function sortWorldBookEntriesForView(
@@ -692,6 +712,7 @@ export default function WorldBookEntriesSection({
   const isMobile = useIsMobile()
 
   const [entries, setEntries] = useState<WorldBookEntry[]>([])
+  const [sourceEntryTotal, setSourceEntryTotal] = useState(0)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [entryPage, setEntryPage] = useState(1)
   const [loadingEntries, setLoadingEntries] = useState(false)
@@ -730,6 +751,8 @@ export default function WorldBookEntriesSection({
   const mountedRef = useRef(false)
   const selectedBookIdRef = useRef(selectedBookId)
   const requestGenerationRef = useRef(0)
+  const entriesAbortRef = useRef<AbortController | null>(null)
+  const fullCorpusBookIdRef = useRef<string | null>(null)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const sectionRef = useRef<HTMLDivElement>(null)
   const entrySearchInputRef = useRef<HTMLInputElement>(null)
@@ -756,6 +779,7 @@ export default function WorldBookEntriesSection({
     return () => {
       mountedRef.current = false
       requestGenerationRef.current += 1
+      entriesAbortRef.current?.abort()
       clearEntryTimers()
       clearTimeout(liveRefetchTimer.current)
       retryOperations.clear()
@@ -766,6 +790,8 @@ export default function WorldBookEntriesSection({
   useEffect(() => {
     selectedBookIdRef.current = selectedBookId
     requestGenerationRef.current += 1
+    entriesAbortRef.current?.abort()
+    fullCorpusBookIdRef.current = null
     clearEntryTimers()
     retryOperationsRef.current.clear()
     entryIntentsRef.current.clear()
@@ -795,6 +821,20 @@ export default function WorldBookEntriesSection({
   const scheduleEntryFieldFocusCorrection = useCallback((target: HTMLElement) => {
     focusedEntryFieldRef.current = target
     clearFocusRevealTimers()
+
+    // Chromium/Android PWAs opt into `interactive-widget=resizes-content`, so
+    // the browser has already resized the layout viewport above the keyboard.
+    // Wait until that resize settles, then perform at most one minimal fallback
+    // correction. Running the immediate + multi-timer path here counts the
+    // keyboard twice and visibly throws the lorebook panel upward.
+    if (usesBrowserResizedKeyboardViewport()) {
+      focusRevealTimersRef.current = [window.setTimeout(
+        () => scheduleEntryFieldReveal(target),
+        ENTRY_FIELD_RESIZED_VIEWPORT_SETTLE_DELAY,
+      )]
+      return
+    }
+
     scheduleEntryFieldReveal(target)
     focusRevealTimersRef.current = ENTRY_FIELD_FOCUS_SETTLE_DELAYS.map((delay) =>
       window.setTimeout(() => scheduleEntryFieldReveal(target), delay)
@@ -820,11 +860,18 @@ export default function WorldBookEntriesSection({
     const handleInput = (event: Event) => {
       if (!isEditableEntryField(event.target)) return
       focusedEntryFieldRef.current = event.target
+      if (usesBrowserResizedKeyboardViewport()) return
       scheduleEntryFieldReveal(event.target)
     }
 
     const handleViewportChange = () => {
-      scheduleEntryFieldReveal()
+      const target = focusedEntryFieldRef.current
+      if (!target) return
+      if (usesBrowserResizedKeyboardViewport()) {
+        scheduleEntryFieldFocusCorrection(target)
+      } else {
+        scheduleEntryFieldReveal(target)
+      }
     }
 
     root.addEventListener('focusin', handleFocusIn)
@@ -858,9 +905,16 @@ export default function WorldBookEntriesSection({
   const liveRefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const pageSize = entryPageSize === 'all' ? null : entryPageSize
+  // Ordinary navigation stays server-paginated. Features that genuinely need
+  // book-wide knowledge opt into a cancellable full-corpus load only while in use.
+  const fullCorpusMode = shouldLoadFullWorldBookEntryCorpus(
+    entrySearchFilter,
+    entryTypeFilter,
+    entryPageSize,
+  )
   const orderedEntries = useMemo(
-    () => sortWorldBookEntriesForView(entries, entrySortBy, entrySortDir),
-    [entries, entrySortBy, entrySortDir],
+    () => fullCorpusMode ? sortWorldBookEntriesForView(entries, entrySortBy, entrySortDir) : entries,
+    [entries, entrySortBy, entrySortDir, fullCorpusMode],
   )
   const entrySearchResults = useMemo(
     () => searchEntriesByQuery(entries, entrySearchFilter, entrySearchIndex),
@@ -882,13 +936,13 @@ export default function WorldBookEntriesSection({
       : queryEntries.filter((entry) => getEntryType(entry) === entryTypeFilter),
     [entryTypeFilter, queryEntries],
   )
-  const entryTotal = filteredEntries.length
+  const entryTotal = fullCorpusMode ? filteredEntries.length : sourceEntryTotal
   const entryTotalPages = pageSize ? Math.max(1, Math.ceil(entryTotal / pageSize)) : 1
   const visibleEntries = useMemo(
-    () => pageSize == null
+    () => !fullCorpusMode || pageSize == null
       ? filteredEntries
       : filteredEntries.slice((entryPage - 1) * pageSize, entryPage * pageSize),
-    [entryPage, filteredEntries, pageSize],
+    [entryPage, filteredEntries, fullCorpusMode, pageSize],
   )
   useTokenCountSweep(visibleEntries)
   const entrySearchResultsById = useMemo(
@@ -1043,38 +1097,32 @@ export default function WorldBookEntriesSection({
     await onRefreshVectorSummary(selectedBookId)
   }, [onRefreshVectorSummary, selectedBookId])
 
-  const fetchAllEntries = useCallback(async (bookId: string) => {
-    const chunkSize = CUSTOM_PAGE_SIZE
-    let offset = 0
-    let total = 0
-    const aggregated: WorldBookEntry[] = []
-
-    do {
-      const res = await worldBooksApi.listEntries(bookId, {
-        limit: chunkSize,
-        offset,
-        sort_by: 'order',
-        sort_dir: 'asc',
-      })
-      aggregated.push(...res.data)
-      total = res.total
-      offset += res.data.length
-      if (res.data.length === 0) break
-    } while (offset < total)
-
-    return { data: aggregated, total }
-  }, [])
-
   const loadEntries = useCallback(async (
     bookId: string,
-    opts?: { silent?: boolean },
+    opts?: { silent?: boolean; force?: boolean },
   ) => {
+    if (fullCorpusMode && !opts?.force && fullCorpusBookIdRef.current === bookId) return
+
     const requestGeneration = requestGenerationRef.current
     const isCurrent = () => mountedRef.current && selectedBookIdRef.current === bookId && requestGenerationRef.current === requestGeneration
     const silent = opts?.silent ?? false
+    entriesAbortRef.current?.abort()
+    const controller = new AbortController()
+    entriesAbortRef.current = controller
     if (!silent && isCurrent()) setLoadingEntries(true)
     try {
-      const res = await fetchAllEntries(bookId)
+      const paginatedPageSize = entryPageSize === 'all' ? DEFAULT_PAGE_SIZE : entryPageSize
+      const res = fullCorpusMode
+        ? await worldBooksApi.listAllEntries(bookId, { signal: controller.signal }).then((data) => ({
+            data,
+            total: data.length,
+          }))
+        : await worldBooksApi.listEntries(bookId, {
+            limit: paginatedPageSize,
+            offset: (entryPage - 1) * paginatedPageSize,
+            sort_by: mapSortForApi(entrySortBy),
+            sort_dir: entrySortBy === 'custom' ? 'asc' : entrySortDir,
+          }, { signal: controller.signal })
       let nextEntries = res.data
       const pendingEntryId = useStore.getState().pendingWorldBookEditEntryId
       if (pendingEntryId && !nextEntries.some((entry) => entry.id === pendingEntryId)) {
@@ -1087,10 +1135,16 @@ export default function WorldBookEntriesSection({
       }
       if (!isCurrent()) return
       setEntries(nextEntries)
+      setSourceEntryTotal(res.total)
+      fullCorpusBookIdRef.current = fullCorpusMode ? bookId : null
+    } catch (error) {
+      if (!controller.signal.aborted) throw error
     } finally {
-      if (!silent && isCurrent()) setLoadingEntries(false)
+      const ownsRequest = entriesAbortRef.current === controller
+      if (ownsRequest) entriesAbortRef.current = null
+      if (!silent && ownsRequest && isCurrent()) setLoadingEntries(false)
     }
-  }, [fetchAllEntries])
+  }, [entryPage, entryPageSize, entrySortBy, entrySortDir, fullCorpusMode])
 
   const selectedBookViewPreference = worldBookEntryViewPrefs[selectedBookId]
   const resolvedSelectedBookViewPreference = useMemo(
@@ -1132,7 +1186,7 @@ export default function WorldBookEntriesSection({
   useEffect(() => {
     liveRefetchRef.current = () => {
       if (!selectedBookId) return
-      void loadEntries(selectedBookId, { silent: true })
+      void loadEntries(selectedBookId, { silent: true, force: true })
     }
   }, [loadEntries, selectedBookId])
 
@@ -1170,10 +1224,14 @@ export default function WorldBookEntriesSection({
     const offEntryDeleted = wsClient.on(EventType.WORLD_BOOK_ENTRY_DELETED, (p: WorldBookEntryDeletedPayload) => {
       if (!p?.id || p.worldBookId !== selectedBookId) return
       invalidateTokenCountsForEntry(p.id)
-      if (!entriesRef.current.some((e) => e.id === p.id)) return
-      setEntries((cur) => cur.filter((e) => e.id !== p.id))
-      setSelectedEntryId((cur) => (cur === p.id ? null : cur))
-      setSelectedIds((cur) => cur.filter((id) => id !== p.id))
+      if (entriesRef.current.some((e) => e.id === p.id)) {
+        setEntries((cur) => cur.filter((e) => e.id !== p.id))
+        setSelectedEntryId((cur) => (cur === p.id ? null : cur))
+        setSelectedIds((cur) => cur.filter((id) => id !== p.id))
+      }
+      // A server-paginated view does not hold enough rows to repair its total
+      // or backfill the page after a deletion, including one on another page.
+      scheduleLiveRefetch()
     })
     const offBookChanged = wsClient.on(EventType.WORLD_BOOK_CHANGED, (p: WorldBookChangedPayload) => {
       if (p?.id !== selectedBookId) return
@@ -1198,19 +1256,21 @@ export default function WorldBookEntriesSection({
 
   useEffect(() => {
     if (!pendingWorldBookEditEntryId) return
-    if (!entries.some((entry) => entry.id === pendingWorldBookEditEntryId)) return
+    const targetIndex = filteredEntries.findIndex((entry) => entry.id === pendingWorldBookEditEntryId)
+    if (targetIndex < 0) return
+    if (fullCorpusMode && pageSize != null) setEntryPage(Math.floor(targetIndex / pageSize) + 1)
     setSelectedEntryId(pendingWorldBookEditEntryId)
     setPendingWorldBookEditEntryId(null)
-  }, [entries, pendingWorldBookEditEntryId, setPendingWorldBookEditEntryId])
+  }, [filteredEntries, fullCorpusMode, pageSize, pendingWorldBookEditEntryId, setPendingWorldBookEditEntryId])
 
   useEffect(() => {
     if (!selectedEntryId) return
     const element = entryListRef.current?.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(selectedEntryId)}"]`)
     element?.scrollIntoView({ block: 'nearest' })
-  }, [selectedEntryId])
+  }, [entryPage, selectedEntryId])
 
   const refetchCurrentPage = useCallback(async () => {
-    await loadEntries(selectedBookId)
+    await loadEntries(selectedBookId, { force: true })
   }, [selectedBookId, loadEntries])
 
   const persistEntryUpdate = useCallback(async (entryId: string, intent: EntryIntent) => {
@@ -1287,7 +1347,7 @@ export default function WorldBookEntriesSection({
     recentLocalWrites.current.set(entry.id, Date.now())
     setSelectedEntryId(entry.id)
     setEntryPage(1)
-    await loadEntries(selectedBookId)
+    await loadEntries(selectedBookId, { force: true })
     await refreshVectorSummary()
   }, [selectedBookId, loadEntries, refreshVectorSummary, t])
 
@@ -1842,7 +1902,7 @@ export default function WorldBookEntriesSection({
 
       <div className={styles.entryTypeFilters} role="group" aria-label="Filter entries by trigger type">
         {([
-          ['all', 'All', queryEntries.length],
+          ['all', 'All', fullCorpusMode ? queryEntries.length : sourceEntryTotal],
           ['trigger', labels.typeOptions.find((option) => option.value === 'trigger')?.label ?? 'Trigger', typeCounts.trigger],
           ['constant', labels.typeOptions.find((option) => option.value === 'constant')?.label ?? 'Constant', typeCounts.constant],
           ['vector', labels.typeOptions.find((option) => option.value === 'vector')?.label ?? 'Vector', typeCounts.vector],
@@ -1861,7 +1921,7 @@ export default function WorldBookEntriesSection({
               setEntryPage(1)
             }}
           >
-            <span>{label}</span><b>{count}</b>
+            <span>{label}</span><b>{value === 'all' || fullCorpusMode ? count : '—'}</b>
           </button>
         ))}
       </div>

@@ -112,7 +112,7 @@ export function registerTimeMacros(): void {
     volatile: true,
     name: "idleDuration",
     category: "Time",
-    description: "Human-readable time since last message",
+    description: "Human-readable time since the last assistant message",
     returnType: "string",
     aliases: ["idle_duration"],
     handler: (ctx) => {

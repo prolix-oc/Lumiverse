@@ -29,6 +29,7 @@ import type {
   RelationType,
   EmotionalTag,
   MemorySalienceRow,
+  MemoryConsolidationRow,
 } from "./types";
 import type { MemoryCortexConfig } from "./config";
 
@@ -114,7 +115,7 @@ export async function queryCortex(
   let vectorResults: VectorSearchResult[];
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal });
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(query.userId, [query.queryText], { signal, inputType: "query" });
     if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) {
       return emptyResult(startTime);
@@ -257,6 +258,20 @@ export async function queryCortex(
       .slice(0, query.topK);
   }
 
+  // Semantic relevance comes from the source chunk vectors. Once one or more
+  // selected chunks belong to a tier-1 consolidation, replace those raw hits
+  // with their shared scene continuity note. This avoids duplicate transcript
+  // evidence while making includeConsolidations actually functional.
+  const selectedChunkIds = selected.map((memory) => memory.sourceId);
+  if (query.includeConsolidations && config.formatterMode !== "minimal") {
+    selected = replaceSelectedChunksWithConsolidations(
+      db,
+      selected,
+      chunkMetaMap,
+      query.excludeMessageIds,
+    );
+  }
+
   // ────────────────────────────────────────────
   // PHASE 5: Entity Context Assembly
   // ────────────────────────────────────────────
@@ -305,7 +320,7 @@ export async function queryCortex(
   }
 
   // Update retrieval stats on selected chunks
-  batchUpdateRetrievalStats(db, selected.map((m) => m.sourceId));
+  batchUpdateRetrievalStats(db, selectedChunkIds);
 
   return {
     memories: selected,
@@ -494,6 +509,7 @@ interface ChunkMeta {
   entity_ids: string | null;
   message_range_start: number;
   message_range_end: number;
+  consolidation_id: string | null;
 }
 
 function loadChunkMeta(db: any, chunkId: string): ChunkMeta | null {
@@ -501,7 +517,7 @@ function loadChunkMeta(db: any, chunkId: string): ChunkMeta | null {
   // Falls back to 0 if not yet populated — harmless for scoring
   const row = db
     .query(
-      `SELECT created_at, updated_at, retrieval_count, entity_ids,
+      `SELECT created_at, updated_at, retrieval_count, entity_ids, consolidation_id,
               COALESCE(message_range_start, 0) as message_range_start,
               COALESCE(message_range_end, 0) as message_range_end
        FROM chat_chunks WHERE id = ?`,
@@ -520,7 +536,7 @@ function batchLoadChunkMeta(db: any, chunkIds: string[]): Map<string, ChunkMeta>
     const placeholders = batch.map(() => "?").join(",");
     const rows = db
       .query(
-        `SELECT id, created_at, updated_at, retrieval_count, entity_ids,
+        `SELECT id, created_at, updated_at, retrieval_count, entity_ids, consolidation_id,
                 COALESCE(message_range_start, 0) as message_range_start,
                 COALESCE(message_range_end, 0) as message_range_end
          FROM chat_chunks WHERE id IN (${placeholders})`,
@@ -533,6 +549,121 @@ function batchLoadChunkMeta(db: any, chunkIds: string[]): Map<string, ChunkMeta>
   }
 
   return map;
+}
+
+function replaceSelectedChunksWithConsolidations(
+  db: any,
+  selected: CortexMemory[],
+  chunkMetaMap: Map<string, ChunkMeta>,
+  excludeMessageIds?: string[],
+): CortexMemory[] {
+  const consolidationIds = [...new Set(selected
+    .map((memory) => chunkMetaMap.get(memory.sourceId)?.consolidation_id)
+    .filter((id): id is string => !!id))];
+  if (consolidationIds.length === 0) return selected;
+
+  const placeholders = consolidationIds.map(() => "?").join(",");
+  const rows = db.query(
+    `SELECT * FROM memory_consolidations
+     WHERE tier = 1 AND id IN (${placeholders})`,
+  ).all(...consolidationIds) as MemoryConsolidationRow[];
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  if (rowsById.size === 0) return selected;
+
+  const sourceRanges = new Map<string, {
+    messageStart: number;
+    messageEnd: number;
+    timeStart: number;
+    timeEnd: number;
+  }>();
+  const rangeRows = db.query(
+    `SELECT consolidation_id,
+            MIN(COALESCE(message_range_start, 0)) AS message_start,
+            MAX(COALESCE(message_range_end, 0)) AS message_end,
+            MIN(created_at) AS time_start,
+            MAX(updated_at) AS time_end
+       FROM chat_chunks
+      WHERE consolidation_id IN (${placeholders})
+      GROUP BY consolidation_id`,
+  ).all(...consolidationIds) as Array<{
+    consolidation_id: string;
+    message_start: number;
+    message_end: number;
+    time_start: number;
+    time_end: number;
+  }>;
+  for (const range of rangeRows) {
+    sourceRanges.set(range.consolidation_id, {
+      messageStart: range.message_start,
+      messageEnd: range.message_end,
+      timeStart: range.time_start,
+      timeEnd: range.time_end,
+    });
+  }
+
+  // A consolidation may cover more chunks than the particular relevant hit.
+  // Suppress it during regeneration if any source chunk contains an excluded
+  // message, otherwise the summary could leak the response being regenerated.
+  const unsafeConsolidationIds = new Set<string>();
+  const excluded = new Set(excludeMessageIds ?? []);
+  if (excluded.size > 0) {
+    const sourceRows = db.query(
+      `SELECT consolidation_id, message_ids FROM chat_chunks
+       WHERE consolidation_id IN (${placeholders})`,
+    ).all(...consolidationIds) as Array<{ consolidation_id: string; message_ids: string | null }>;
+    for (const source of sourceRows) {
+      if (safeJsonArray(source.message_ids).some((id) => excluded.has(id))) {
+        unsafeConsolidationIds.add(source.consolidation_id);
+      }
+    }
+  }
+
+  const bestHitByConsolidation = new Map<string, CortexMemory>();
+  for (const memory of selected) {
+    const consolidationId = chunkMetaMap.get(memory.sourceId)?.consolidation_id;
+    if (!consolidationId) continue;
+    const current = bestHitByConsolidation.get(consolidationId);
+    if (!current || memory.finalScore > current.finalScore) {
+      bestHitByConsolidation.set(consolidationId, memory);
+    }
+  }
+
+  const emitted = new Set<string>();
+  const result: CortexMemory[] = [];
+  for (const memory of selected) {
+    const consolidationId = chunkMetaMap.get(memory.sourceId)?.consolidation_id;
+    const row = consolidationId ? rowsById.get(consolidationId) : undefined;
+    if (!consolidationId || !row || unsafeConsolidationIds.has(consolidationId)) {
+      result.push(memory);
+      continue;
+    }
+    if (emitted.has(consolidationId)) continue;
+    emitted.add(consolidationId);
+
+    const bestHit = bestHitByConsolidation.get(consolidationId) ?? memory;
+    const range = sourceRanges.get(consolidationId);
+    result.push({
+      source: "consolidation",
+      sourceId: consolidationId,
+      content: row.title ? `${row.title}: ${row.summary}` : row.summary,
+      finalScore: bestHit.finalScore,
+      components: {
+        ...bestHit.components,
+        salience: Math.max(bestHit.components.salience, row.salience_avg ?? 0),
+      },
+      emotionalTags: safeJsonArray(row.emotional_tags) as EmotionalTag[],
+      entityNames: resolveEntityNames(db, row.entity_ids),
+      messageRange: [
+        range?.messageStart ?? row.message_range_start ?? 0,
+        range?.messageEnd ?? row.message_range_end ?? 0,
+      ],
+      timeRange: [
+        range?.timeStart ?? row.time_range_start ?? row.created_at,
+        range?.timeEnd ?? row.time_range_end ?? row.updated_at,
+      ],
+    });
+  }
+  return result;
 }
 
 function resolveEntityNames(db: any, entityIdsJson: string | null): string[] {
@@ -734,7 +865,7 @@ export async function queryVaultCortex(
   // ── Phase 2: LanceDB vector search scoped to this vault ──
   let vectorResults: VectorSearchResult[];
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal, inputType: "query" });
     if (signal?.aborted) return emptyResult(startTime);
     if (!queryVector || queryVector.length === 0) return emptyResult(startTime);
 

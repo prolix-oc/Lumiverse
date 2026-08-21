@@ -1,4 +1,17 @@
 import { registry } from "../MacroRegistry";
+import type { MacroExecContext } from "../types";
+
+async function resolveCharacterSource(
+  ctx: MacroExecContext,
+  field: string,
+  value: string,
+): Promise<string> {
+  const resolved = await ctx.resolvePromptSource?.(
+    value,
+    `prompt_source:character.${field}`,
+  );
+  return resolved ?? value;
+}
 
 function getFocusedCharacterField(
   ctx: {
@@ -25,7 +38,7 @@ export function registerCharacterMacros(): void {
     description: "Character description",
     returnType: "string",
     aliases: ["charDescription"],
-    handler: (ctx) => ctx.env.character.description,
+    handler: (ctx) => resolveCharacterSource(ctx, "description", ctx.env.character.description),
   });
 
   registry.registerMacro({
@@ -35,7 +48,7 @@ export function registerCharacterMacros(): void {
     description: "Character personality",
     returnType: "string",
     aliases: ["charPersonality"],
-    handler: (ctx) => ctx.env.character.personality,
+    handler: (ctx) => resolveCharacterSource(ctx, "personality", ctx.env.character.personality),
   });
 
   registry.registerMacro({
@@ -45,7 +58,11 @@ export function registerCharacterMacros(): void {
     description: "Focused group character description",
     returnType: "string",
     aliases: ["charFocusedDescription", "char_group_focused_description"],
-    handler: (ctx) => getFocusedCharacterField(ctx, "description"),
+    handler: (ctx) => resolveCharacterSource(
+      ctx,
+      "focused.description",
+      getFocusedCharacterField(ctx, "description"),
+    ),
   });
 
   registry.registerMacro({
@@ -55,7 +72,11 @@ export function registerCharacterMacros(): void {
     description: "Focused group character personality",
     returnType: "string",
     aliases: ["charFocusedPersonality", "char_group_focused_personality"],
-    handler: (ctx) => getFocusedCharacterField(ctx, "personality"),
+    handler: (ctx) => resolveCharacterSource(
+      ctx,
+      "focused.personality",
+      getFocusedCharacterField(ctx, "personality"),
+    ),
   });
 
   registry.registerMacro({
@@ -65,7 +86,7 @@ export function registerCharacterMacros(): void {
     description: "Character scenario",
     returnType: "string",
     aliases: ["charScenario"],
-    handler: (ctx) => ctx.env.character.scenario,
+    handler: (ctx) => resolveCharacterSource(ctx, "scenario", ctx.env.character.scenario),
   });
 
   registry.registerMacro({
@@ -135,7 +156,7 @@ export function registerCharacterMacros(): void {
     description: "Character example dialogue messages",
     returnType: "string",
     aliases: ["mes_examples", "exampleMessages"],
-    handler: (ctx) => ctx.env.character.mesExamples,
+    handler: (ctx) => resolveCharacterSource(ctx, "mes_examples", ctx.env.character.mesExamples),
   });
 
   registry.registerMacro({
@@ -154,7 +175,7 @@ export function registerCharacterMacros(): void {
     description: "Character system prompt",
     returnType: "string",
     aliases: ["charPrompt", "charSystem"],
-    handler: (ctx) => ctx.env.character.systemPrompt,
+    handler: (ctx) => resolveCharacterSource(ctx, "system_prompt", ctx.env.character.systemPrompt),
   });
 
   registry.registerMacro({
@@ -164,7 +185,11 @@ export function registerCharacterMacros(): void {
     description: "Character jailbreak/post-history instructions",
     returnType: "string",
     aliases: ["charInstruction", "jailbreak", "charJailbreak"],
-    handler: (ctx) => ctx.env.character.postHistoryInstructions,
+    handler: (ctx) => resolveCharacterSource(
+      ctx,
+      "post_history_instructions",
+      ctx.env.character.postHistoryInstructions,
+    ),
   });
 
   registry.registerMacro({
@@ -174,7 +199,7 @@ export function registerCharacterMacros(): void {
     description: "Character depth prompt (extension)",
     returnType: "string",
     aliases: ["depth_prompt"],
-    handler: (ctx) => ctx.env.character.depthPrompt,
+    handler: (ctx) => resolveCharacterSource(ctx, "depth_prompt", ctx.env.character.depthPrompt),
   });
 
   registry.registerMacro({
@@ -184,7 +209,7 @@ export function registerCharacterMacros(): void {
     description: "Character creator notes",
     returnType: "string",
     aliases: ["creatorNotes"],
-    handler: (ctx) => ctx.env.character.creatorNotes,
+    handler: (ctx) => resolveCharacterSource(ctx, "creator_notes", ctx.env.character.creatorNotes),
   });
 
   registry.registerMacro({
@@ -212,7 +237,7 @@ export function registerCharacterMacros(): void {
     description: "Character's first message / greeting",
     returnType: "string",
     aliases: ["firstMes", "first_message"],
-    handler: (ctx) => ctx.env.character.firstMessage,
+    handler: (ctx) => resolveCharacterSource(ctx, "first_message", ctx.env.character.firstMessage),
   });
 
   registry.registerMacro({
@@ -221,6 +246,6 @@ export function registerCharacterMacros(): void {
     category: "Character",
     description: "Alias for character description (original card text)",
     returnType: "string",
-    handler: (ctx) => ctx.env.character.description,
+    handler: (ctx) => resolveCharacterSource(ctx, "description", ctx.env.character.description),
   });
 }

@@ -105,6 +105,12 @@ export interface PromptBlock {
   characterTagTrigger?: string[]
   group?: string | null
   categoryMode?: 'radio' | 'checkbox' | null
+  /**
+   * Child enablement snapshot captured when the category was blanket-
+   * disabled via the category-row "and contents" control, restored on the
+   * blanket re-enable. Category blocks only.
+   */
+  savedChildEnabled?: Record<string, boolean>
   variables?: PromptVariableDef[]
   placementBinding?: PromptBlockPlacementBinding
   /** Stable identity of a user-owned stash entry shared across presets. */

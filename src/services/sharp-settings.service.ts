@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { availableParallelism } from "node:os";
+import { currentWorkerBudget } from "../utils/cpu-budget";
 import { getFirstUserId } from "../auth/seed";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -29,7 +29,7 @@ export interface SharpSettingsStatus {
 }
 
 const DEFAULT_SHARP_SETTINGS: ResolvedSharpSettings = {
-  concurrency: Math.max(1, Math.min(4, availableParallelism())),
+  concurrency: currentWorkerBudget().sharpConcurrency,
   cacheMemoryMb: 64,
   cacheFiles: 128,
   cacheItems: 256,

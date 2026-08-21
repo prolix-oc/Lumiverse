@@ -332,7 +332,7 @@ describe("buildEnv lastMessageTime", () => {
     expect(env.extra.lastMessageTime).toBeUndefined();
   });
 
-  test("is derived from the last message's send_date in milliseconds", () => {
+  test("is derived from the last assistant message's send_date in milliseconds", () => {
     const env = buildEnv({
       character: baseCharacter,
       persona: null,
@@ -346,6 +346,22 @@ describe("buildEnv lastMessageTime", () => {
     });
 
     expect(env.extra.lastMessageTime).toBe(1_700_000_060_000);
+  });
+
+  test("is not reset by a newer user message", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [
+        makeMessage({ content: "Earlier assistant reply", is_user: false, send_date: 1_700_000_000 }),
+        makeMessage({ id: "msg-2", content: "New user input", index_in_chat: 1, is_user: true, send_date: 1_700_000_600 }),
+      ],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.extra.lastMessageTime).toBe(1_700_000_000_000);
   });
 });
 

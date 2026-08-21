@@ -67,9 +67,13 @@ export function useWorldBookListLiveSync({
       setBooksRef.current((prev) => prev.filter((b) => b.id !== p.id))
       if (p.id === selectedRef.current) onDeletedRef.current()
     })
+    const offLibraryChanged = wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, () => {
+      void refreshRef.current?.()
+    })
     return () => {
       offChanged()
       offDeleted()
+      offLibraryChanged()
     }
   }, [])
 

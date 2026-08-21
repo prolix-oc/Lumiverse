@@ -47,6 +47,16 @@ import {
   buildInlineToolContinuation,
   type InlineCouncilToolResult,
 } from "./inline-tool-continuation";
+import {
+  applyInlineWebSearchContextSlots,
+  formatInlineWebSearchContext,
+  INLINE_WEB_SEARCH_MAX_QUERY_CHARS,
+  INLINE_WEB_SEARCH_MAX_RESULTS,
+  INLINE_WEB_SEARCH_TOOL,
+  INLINE_WEB_SEARCH_TOOL_NAME,
+  prepareInlineWebSearchMessagesForProvider,
+} from "./inline-web-search";
+import { getWebSearchSettings } from "./web-search-settings.service";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { CustomBody } from "../types/preset";
@@ -172,6 +182,7 @@ interface GenerateInput {
   target_character_id?: string;
   regen_feedback?: string;
   regen_feedback_position?: "system" | "user";
+  regen_feedback_format?: string;
   retain_council?: boolean;
   /** Dry-run only: reassemble as if this message were absent from history
    *  (used to reconstruct the prompt that produced an existing assistant turn). */
@@ -244,16 +255,23 @@ function collectTrailingUserMessageIds(userId: string, chatId: string): string[]
 function injectConnectionMetadataFlags(
   connection: { provider: string; metadata?: Record<string, any> },
   params: GenerationParameters,
+  chatId?: string,
 ): void {
   if (connection.metadata?.use_responses_api) {
     params.use_responses_api = true;
   }
 
-  if (
-    connection.provider === "openrouter" &&
-    connection.metadata?.openrouter
-  ) {
-    params._openrouter = connection.metadata.openrouter;
+  if (connection.provider === "openrouter") {
+    if (connection.metadata?.openrouter) {
+      params._openrouter = connection.metadata.openrouter;
+    }
+    // OpenRouter documents `session_id` as the explicit sticky-routing key.
+    // Keep it scoped to a Lumiverse chat and never replace a caller-provided
+    // session or cache key. The provider then reuses the same upstream cache
+    // across normal turns, swipes, and retries without forcing no-fallback.
+    if (chatId && params.session_id === undefined && params.prompt_cache_key === undefined) {
+      params.session_id = `lumiverse:${chatId}`;
+    }
   }
 }
 
@@ -735,21 +753,31 @@ async function executeInlineCouncilToolCalls(
   toolsByName: Map<string, RuntimeCouncilToolDefinition>,
   membersByPrefix: Map<string, CouncilMember> | undefined,
   contextMessages: LlmMessage[],
+  allowDirectWebSearch = false,
 ): Promise<InlineCouncilToolResult[]> {
   const results: InlineCouncilToolResult[] = [];
+  let directWebSearchExecuted = false;
 
   for (const toolCall of toolCalls) {
     // Try Council-prefixed tool name first (memberIdPrefix_toolName)
     const parsedName = parseInlineToolCallName(toolCall.name);
     let tool: RuntimeCouncilToolDefinition | undefined;
     let member: CouncilMember | undefined;
-    let resolvedQualifiedName: string;
+    let resolvedQualifiedName = toolCall.name;
+    let isCouncilQualifiedCall = false;
 
     if (parsedName) {
       const { memberIdPrefix, qualifiedName } = parsedName;
-      tool = toolsByName.get(qualifiedName);
-      member = membersByPrefix?.get(memberIdPrefix);
-      resolvedQualifiedName = qualifiedName;
+      const candidateTool = toolsByName.get(qualifiedName);
+      const candidateMember = membersByPrefix?.get(memberIdPrefix);
+      // A direct tool may itself contain an underscore (web_search). Treat it
+      // as Council-qualified only when both the member prefix and tool match.
+      if (candidateTool && candidateMember) {
+        tool = candidateTool;
+        member = candidateMember;
+        resolvedQualifiedName = qualifiedName;
+        isCouncilQualifiedCall = true;
+      }
     }
 
     // Fall back to direct lookup — extension inline tools use the sanitized
@@ -760,8 +788,39 @@ async function executeInlineCouncilToolCalls(
     }
 
     if (!tool) continue;
-    // Council tools require a member match; extension inline tools do not
-    if (parsedName && !member && membersByPrefix?.size) continue;
+    const isDirectWebSearch =
+      !isCouncilQualifiedCall &&
+      toolCall.name === INLINE_WEB_SEARCH_TOOL_NAME &&
+      resolvedQualifiedName === INLINE_WEB_SEARCH_TOOL_NAME;
+    if (isDirectWebSearch && (!allowDirectWebSearch || directWebSearchExecuted)) {
+      results.push({
+        callId: toolCall.call_id,
+        qualifiedName: resolvedQualifiedName,
+        toolName: tool.name,
+        toolDisplayName: tool.displayName,
+        result: "Web search can be called only once per generation.",
+        isError: true,
+        isInlineWebSearch: true,
+      });
+      continue;
+    }
+
+    const directQuery = isDirectWebSearch && typeof toolCall.args?.query === "string"
+      ? toolCall.args.query.trim().slice(0, INLINE_WEB_SEARCH_MAX_QUERY_CHARS)
+      : undefined;
+    if (isDirectWebSearch && (!directQuery || directQuery.length < 2)) {
+      results.push({
+        callId: toolCall.call_id,
+        qualifiedName: resolvedQualifiedName,
+        toolName: tool.name,
+        toolDisplayName: tool.displayName,
+        result: "Web search requires a query of at least two characters.",
+        isError: true,
+        isInlineWebSearch: true,
+      });
+      directWebSearchExecuted = true;
+      continue;
+    }
 
     const execution = getCouncilToolExecution(userId, tool);
     if (execution === "llm") continue;
@@ -820,23 +879,52 @@ async function executeInlineCouncilToolCalls(
         contextMessages,
       );
     } else if (execution === "host") {
-      if (!member) continue; // Host tools require a council member
+      if (isCouncilQualifiedCall && !member) continue;
       let lumiaItem: ReturnType<typeof packsSvc.getLumiaItem> = null;
-      try {
-        lumiaItem = packsSvc.getLumiaItem(userId, member.itemId);
-      } catch {
-        // Pack/item may have been removed mid-generation.
+      if (member) {
+        try {
+          lumiaItem = packsSvc.getLumiaItem(userId, member.itemId);
+        } catch {
+          // Pack/item may have been removed mid-generation.
+        }
       }
 
-      result = await executeHostCouncilTool({
-        userId,
-        tool,
-        args: toolCall.args ?? {},
-        member,
-        memberContext: buildCouncilMemberContext(member, lumiaItem),
-        contextMessages,
-        timeoutMs,
-      });
+      try {
+        const requestedCount = typeof toolCall.args?.result_count === "number"
+          ? toolCall.args.result_count
+          : Number(toolCall.args?.result_count);
+        const args = isDirectWebSearch
+          ? {
+            ...(toolCall.args ?? {}),
+            query: directQuery,
+            result_count: Number.isFinite(requestedCount)
+              ? Math.max(1, Math.min(INLINE_WEB_SEARCH_MAX_RESULTS, Math.round(requestedCount)))
+              : INLINE_WEB_SEARCH_MAX_RESULTS,
+          }
+          : toolCall.args ?? {};
+        result = await executeHostCouncilTool({
+          userId,
+          tool,
+          args,
+          member,
+          memberContext: member ? buildCouncilMemberContext(member, lumiaItem) : undefined,
+          contextMessages,
+          timeoutMs,
+        });
+      } catch (err) {
+        if (!isDirectWebSearch) throw err;
+        results.push({
+          callId: toolCall.call_id,
+          qualifiedName: resolvedQualifiedName,
+          toolName: tool.name,
+          toolDisplayName: tool.displayName,
+          result: `Web search failed: ${errorMessage(err)}`,
+          isError: true,
+          isInlineWebSearch: true,
+        });
+        directWebSearchExecuted = true;
+        continue;
+      }
     }
 
     results.push({
@@ -845,8 +933,17 @@ async function executeInlineCouncilToolCalls(
       toolName: tool.name,
       toolDisplayName: tool.displayName,
       memberName: member?.itemName,
-      result,
+      // Keep the immediate result compact. The full, untrusted source text is
+      // attached exactly once in the continuation using the provider-safe form.
+      result: isDirectWebSearch
+        ? "Web search completed. Retrieved reference context is available in the following system message."
+        : result,
+      ...(isDirectWebSearch ? {
+        inlineWebSearchContext: result,
+        isInlineWebSearch: true,
+      } : {}),
     });
+    if (isDirectWebSearch) directWebSearchExecuted = true;
   }
 
   return results;
@@ -1025,6 +1122,8 @@ type ReasoningSettingsSnapshot = {
   apiReasoning?: boolean;
   reasoningEffort?: string;
   thinkingDisplay?: string;
+  clearThinking?: boolean;
+  replayThoughtSignatures?: boolean;
   customBody?: CustomBody;
 } | null;
 
@@ -1201,7 +1300,14 @@ function applyEffectiveReasoningSettings(
         effort,
         modelName,
         reasoningSettings.thinkingDisplay,
+        reasoningSettings.clearThinking,
       );
+    }
+    if (
+      reasoningSettings.replayThoughtSignatures === true &&
+      (providerName === "google" || providerName === "google_vertex")
+    ) {
+      params._replay_thought_signatures = true;
     }
     return;
   }
@@ -1273,6 +1379,7 @@ async function runPromptPipeline(opts: {
   precomputedVectorEntries?: VectorActivatedEntry[];
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
+  regenFeedbackFormat?: string;
   signal?: AbortSignal;
   isDryRun?: boolean;
 }): Promise<PromptPipelineResult> {
@@ -1356,6 +1463,7 @@ async function runPromptPipeline(opts: {
       precomputedVectorEntries: opts.precomputedVectorEntries,
       regenFeedback: opts.regenFeedback,
       regenFeedbackPosition: opts.regenFeedbackPosition,
+      regenFeedbackFormat: opts.regenFeedbackFormat,
       skipPromptRegex: isPromptRegexChatOwned(opts.chatId, isExtensionRunning),
       signal: opts.signal,
     };
@@ -2172,6 +2280,7 @@ export async function startGeneration(
           | Map<string, RuntimeCouncilToolDefinition>
           | undefined;
         let inlineMembersByPrefix: Map<string, CouncilMember> | undefined;
+        let inlineWebSearchEnabled = false;
         let precomputedVectorEntries: VectorActivatedEntry[] | undefined;
 
         // Council is active when enabled with members. Tools run if any member has tools assigned.
@@ -2623,6 +2732,40 @@ export async function startGeneration(
           }
         }
 
+        // ── Built-in Inline Web Search (independent of Council) ──────────
+        // This is intentionally separate from the preset's Google-native
+        // grounding option. It uses the user's configured web-search
+        // provider and is only offered when both web search and function
+        // calling are explicitly available.
+        if (genType !== "impersonate") {
+          const presetId = input.preset_id || connection.preset_id;
+          const preset = presetId
+            ? presetsSvc.getPreset(input.userId, presetId)
+            : null;
+          const completionSettings = preset?.prompts?.completionSettings;
+          const webSearchSettings = await getWebSearchSettings(input.userId);
+          const configured = webSearchSettings.enabled && !!webSearchSettings.apiUrl &&
+            (webSearchSettings.provider === "searxng" || webSearchSettings.hasApiKey);
+          if (configured && webSearchSettings.inlineToolEnabled && completionSettings?.enableFunctionCalling !== false) {
+            if (!inlineTools) inlineTools = [];
+            if (!inlineToolDefsByName) {
+              inlineToolDefsByName = new Map<string, RuntimeCouncilToolDefinition>();
+            }
+            inlineToolDefsByName.set(INLINE_WEB_SEARCH_TOOL_NAME, {
+              name: INLINE_WEB_SEARCH_TOOL_NAME,
+              displayName: "Web Search",
+              description: INLINE_WEB_SEARCH_TOOL.description,
+              category: "context",
+              execution: "host",
+              argsSchema: INLINE_WEB_SEARCH_TOOL.parameters,
+              strict: true,
+              inputExamples: INLINE_WEB_SEARCH_TOOL.inputExamples,
+            });
+            inlineTools.push(INLINE_WEB_SEARCH_TOOL);
+            inlineWebSearchEnabled = true;
+          }
+        }
+
         // Wire staged message into lifecycle so GENERATION_STARTED includes it as
         // targetMessageId and runGeneration knows to update instead of create.
         if (stagedMessageId) {
@@ -2783,6 +2926,7 @@ export async function startGeneration(
             precomputedVectorEntries,
             regenFeedback: input.regen_feedback,
             regenFeedbackPosition: input.regen_feedback_position,
+            regenFeedbackFormat: input.regen_feedback_format,
             signal: abortController.signal,
           }),
           abortController.signal,
@@ -2878,7 +3022,7 @@ export async function startGeneration(
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
 
-        injectConnectionMetadataFlags(connection, mergedParams);
+        injectConnectionMetadataFlags(connection, mergedParams, input.chat_id);
 
         const cached = applyPromptCaching(
           {
@@ -2942,6 +3086,7 @@ export async function startGeneration(
           inlineTools,
           inlineToolDefsByName,
           inlineMembersByPrefix,
+          inlineWebSearchEnabled,
           councilSettings.toolsSettings.timeoutMs,
           pipeline.assistantPrefill,
           pipeline.assistantReasoningPrefill,
@@ -3233,6 +3378,7 @@ async function runGeneration(
   tools?: ToolDefinition[],
   inlineToolDefsByName?: Map<string, RuntimeCouncilToolDefinition>,
   inlineMembersByPrefix?: Map<string, CouncilMember>,
+  inlineWebSearchEnabled = false,
   inlineToolTimeoutMs?: number,
   assistantPrefill?: string,
   assistantReasoningPrefill?: string,
@@ -3390,6 +3536,7 @@ async function runGeneration(
   let nativeReasoningContent = "";
   let nativeThinkingBlocks: LlmThinkingBlock[] | undefined;
   let nativeReasoningDetails: Record<string, unknown>[] | undefined;
+  let nativeThoughtSignature: string | undefined;
 
   function storedReasoningCarrier(): Record<string, unknown> | undefined {
     if (nativeThinkingBlocks?.length) {
@@ -3397,6 +3544,9 @@ async function runGeneration(
     }
     if (nativeReasoningDetails?.length) {
       return { type: "reasoning_details", details: nativeReasoningDetails };
+    }
+    if (nativeThoughtSignature) {
+      return { type: "gemini_thought_signature", signature: nativeThoughtSignature };
     }
     if (nativeReasoningContent) {
       return { type: "reasoning_content", content: nativeReasoningContent };
@@ -3641,6 +3791,7 @@ async function runGeneration(
     // they must stay on the legacy path until their carrier is wired).
     const interleavedStructured =
       !!tools?.length && provider.capabilities.interleavedThinking === true;
+    let inlineWebSearchUsed = false;
 
     for (let inlineRound = 0; inlineRound < INLINE_TOOL_MAX_ROUNDS; inlineRound++) {
       // fullContent/fullReasoning accumulate across rounds for the final
@@ -3654,12 +3805,13 @@ async function runGeneration(
       let pendingThinkingBlocks: LlmThinkingBlock[] | undefined;
       // OpenRouter reasoning_details captured this round, replayed likewise.
       let pendingReasoningDetails: Record<string, unknown>[] | undefined;
+      let pendingThoughtSignature: string | undefined;
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
       // Wrapped in a factory so the pre-token retry below can re-issue a clean request.
       const makeStream = (): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
         ? provider.generateStream(apiKey, apiUrl, {
-            messages: generationMessages,
+            messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
             model,
             parameters,
             stream: true,
@@ -3668,7 +3820,7 @@ async function runGeneration(
           })
         : (async function* () {
             const result = await provider.generate(apiKey, apiUrl, {
-              messages: generationMessages,
+              messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
               model,
               parameters,
               stream: false,
@@ -3682,6 +3834,7 @@ async function runGeneration(
               tool_calls: result.tool_calls,
               thinking_blocks: result.thinking_blocks,
               reasoning_details: result.reasoning_details,
+              thought_signature: result.thought_signature,
               usage: result.usage,
             };
           })();
@@ -3813,6 +3966,11 @@ async function runGeneration(
           ];
         }
 
+        if (chunk.thought_signature) {
+          pendingThoughtSignature = chunk.thought_signature;
+          nativeThoughtSignature = chunk.thought_signature;
+        }
+
         // Capture provider usage data (token counts) from the stream
         if (chunk.usage) {
           streamUsage = chunk.usage;
@@ -3858,6 +4016,7 @@ async function runGeneration(
               inlineToolDefsByName,
               inlineMembersByPrefix,
               inlineContextMessages,
+              inlineWebSearchEnabled && !inlineWebSearchUsed,
             )
           : [];
 
@@ -3865,18 +4024,54 @@ async function runGeneration(
         break;
       }
 
+      const inlineWebSearchContexts = inlineCouncilResults
+        .flatMap((result) => result.inlineWebSearchContext
+          ? [formatInlineWebSearchContext(result.inlineWebSearchContext)]
+          : []);
+      if (inlineCouncilResults.some((result) => result.isInlineWebSearch)) {
+        inlineWebSearchUsed = true;
+      }
+
+      // Prefer explicit {{webSearchContext}} slots captured from preset blocks.
+      // If none exist, retain the safe end-of-context fallback from phase one.
+      const manualPlacement = inlineWebSearchContexts.length > 0
+        ? applyInlineWebSearchContextSlots(generationMessages, inlineWebSearchContexts.join("\n\n"))
+        : { messages: generationMessages, placed: false };
+
+      // Native tool-result protocols require the matching user tool_result to
+      // immediately follow the assistant tool_use. When no manual slot exists,
+      // put the bounded context in that result for structured providers; legacy
+      // continuations retain the separate system-context fallback below.
+      const manuallyPlacedResults = manualPlacement.placed
+        ? inlineCouncilResults.map((result) => result.inlineWebSearchContext
+          ? {
+            ...result,
+            result: "Web search completed. Retrieved reference context has been placed in the preset's webSearchContext slot.",
+          }
+          : result)
+        : inlineCouncilResults;
+      const continuationResults = interleavedStructured && !manualPlacement.placed
+        ? inlineCouncilResults.map((result) => result.inlineWebSearchContext
+          ? { ...result, result: formatInlineWebSearchContext(result.inlineWebSearchContext) }
+          : result)
+        : manuallyPlacedResults;
+
       generationMessages = [
-        ...generationMessages,
+        ...manualPlacement.messages,
         ...buildInlineToolContinuation({
           structured: interleavedStructured,
           legacyAssistantOutput: fullAssistantOutput,
           roundContent,
           roundReasoning,
           toolCalls: pendingToolCalls ?? [],
-          results: inlineCouncilResults,
+          results: continuationResults,
           thinkingBlocks: pendingThinkingBlocks,
           reasoningDetails: pendingReasoningDetails,
+          thoughtSignature: pendingThoughtSignature,
         }),
+        ...(!interleavedStructured && !manualPlacement.placed
+          ? inlineWebSearchContexts.map((content) => ({ role: "system", content } satisfies LlmMessage))
+          : []),
       ];
     }
 

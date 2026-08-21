@@ -14,6 +14,7 @@ import {
   RotateCcw,
   RotateCw,
   Search,
+  Sliders,
   UserCircle,
   Waypoints,
   Wrench,
@@ -60,6 +61,7 @@ export const COMPOSER_ACTION_IDS = [
   'addons',
   'guides',
   'quickReplies',
+  'promptVariables',
   'tools',
   'extras',
   'selectMessages',
@@ -97,6 +99,7 @@ export const COMPOSER_ACTION_CATALOG: ComposerActionItem[] = [
   { id: 'addons', label: 'Addons', description: 'Persona addons for this chat', icon: IconPlaylistAdd },
   { id: 'guides', label: 'Guides', description: 'Guided generations', icon: Compass },
   { id: 'quickReplies', label: 'Quick replies', description: 'Insert a saved quick reply', icon: MessageSquareQuote },
+  { id: 'promptVariables', label: 'Prompt variables', description: 'Configure prompt variables for the active preset', icon: Sliders },
   { id: 'tools', label: 'Tools', description: 'Chat tools and settings', icon: Wrench },
   { id: 'extras', label: 'Extras', description: 'Extra composer actions', icon: MoreHorizontal },
   {

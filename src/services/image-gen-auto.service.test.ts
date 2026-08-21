@@ -54,9 +54,6 @@ async function applyBaseline(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(sql);
-  db.run("ALTER TABLE images ADD COLUMN owner_extension_identifier TEXT");
-  db.run("ALTER TABLE images ADD COLUMN owner_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL");
-  db.run("ALTER TABLE images ADD COLUMN owner_chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL");
 }
 
 async function seedChatWithAssistantReply(userId: string) {

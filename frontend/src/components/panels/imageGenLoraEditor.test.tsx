@@ -126,6 +126,7 @@ mock.module('@/store', () => ({
 
 
 const englishI18n = createInstance()
+mock.module('@/i18n', () => ({ default: englishI18n }))
 const mountedRoots: Array<{ root: Root; host: HTMLDivElement }> = []
 
 type ObservedDragEnd = {

@@ -47,6 +47,7 @@ import {
   type WorldInfoInterceptorCtxDTO,
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
+import { projectWorldInfoCaptureContext } from "./world-info-capture";
 import { toolRegistry } from "./tool-registry";
 import {
   setPromptRegexOwnedChats,
@@ -435,6 +436,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_read_chunk"; requestId: string; uploadId: string; offset: number; userId?: string }
   | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
   | {
@@ -785,7 +787,14 @@ const THINKING_DISPLAY_VALUES = new Set<ThinkingDisplayDTO>([
   "omitted",
 ]);
 
-function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
+type ReasoningSettingsWithProviderOptions = ReasoningSettingsDTO & {
+  /** Z.AI's `thinking.clear_thinking` option, retained in bound profiles. */
+  clearThinking?: boolean;
+  /** Google Gemini / Vertex optional non-tool signature replay setting. */
+  replayThoughtSignatures?: boolean;
+};
+
+function coerceReasoningSettings(raw: unknown): ReasoningSettingsWithProviderOptions | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   const effort = REASONING_EFFORT_VALUES.has(r.reasoningEffort as ReasoningEffortDTO)
@@ -802,6 +811,10 @@ function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
     suffix: typeof r.suffix === "string" ? r.suffix : "",
     autoParse: r.autoParse !== false,
     keepInHistory: typeof r.keepInHistory === "number" ? r.keepInHistory : 0,
+    ...(typeof r.clearThinking === "boolean" ? { clearThinking: r.clearThinking } : {}),
+    ...(typeof r.replayThoughtSignatures === "boolean"
+      ? { replayThoughtSignatures: r.replayThoughtSignatures }
+      : {}),
   };
 }
 
@@ -2311,6 +2324,9 @@ export class WorkerHost {
       case "uploads_get":
         this.handleUploadsGet(msg.requestId, msg.uploadId, msg.userId);
         break;
+      case "uploads_read_chunk":
+        this.handleUploadsReadChunk(msg.requestId, msg.uploadId, msg.offset, msg.userId);
+        break;
       case "uploads_delete":
         this.handleUploadsDelete(msg.requestId, msg.uploadId, msg.userId);
         break;
@@ -2748,7 +2764,11 @@ export class WorkerHost {
           };
         });
 
-        const interceptorContext = context as Omit<InterceptorContextDTO, "signal">;
+        const interceptorContext =
+          projectWorldInfoCaptureContext(
+            context,
+            this.extensionId,
+          ) as unknown as Omit<InterceptorContextDTO, "signal">;
         this.activeInterceptorContexts.set(registrationId, interceptorContext);
         this.postToWorker({
           type: "intercept_request",
@@ -4515,6 +4535,33 @@ export class WorkerHost {
       }
       const data = await spindleUploads.readUploadBytes(uploadId);
       this.postToWorker({ type: "response", requestId, result: { fileName: rec.fileName, size: data.byteLength, data } });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleUploadsReadChunk(requestId: string, uploadId: string, offset: number, userId?: string): Promise<void> {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const rec = spindleUploads.getUpload(uploadId);
+      if (!rec || rec.ownerUserId !== resolvedUserId || rec.extensionIdentifier !== this.manifest.identifier) {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+      const data = await spindleUploads.readUploadChunk(uploadId, offset);
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          fileName: rec.fileName,
+          size: rec.declaredSize,
+          offset,
+          data,
+          eof: offset + data.byteLength >= rec.declaredSize,
+        },
+      });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

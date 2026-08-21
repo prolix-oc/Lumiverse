@@ -3,6 +3,7 @@ import "../image-gen/index";
 import type { ImageProvider } from "../image-gen/provider";
 import type { ImageGenRequest, ImageGenResponse } from "../image-gen/types";
 import * as imageGenConnSvc from "../services/image-gen-connections.service";
+import { applyActiveComfyUIWorkflowConfig } from "../services/image-gen.service";
 import { PERMISSION_DENIED_PREFIX, type SpindlePermission } from "lumiverse-spindle-types";
 
 type ImageGenStreamEvent =
@@ -132,6 +133,25 @@ export class WorkerHostImageGenApi {
       throw new Error(`No API key for image gen connection "${connection.name}"`);
     }
 
+    const hasExplicitWorkflow = Boolean(
+      input?.parameters?.workflow && typeof input.parameters.workflow === "object",
+    );
+    const parameters = { ...connection.default_parameters, ...(input?.parameters || {}) };
+    if (
+      !hasExplicitWorkflow
+      && (connection.provider === "comfyui" || connection.provider === "swarmui")
+    ) {
+      await applyActiveComfyUIWorkflowConfig(
+        connection,
+        parameters,
+        typeof input?.prompt === "string" ? input.prompt : "",
+        typeof input?.negativePrompt === "string" ? input.negativePrompt : undefined,
+        undefined,
+        false,
+        apiKey || undefined,
+      );
+    }
+
     return {
       userId,
       connection,
@@ -141,7 +161,7 @@ export class WorkerHostImageGenApi {
         prompt: typeof input?.prompt === "string" ? input.prompt : "",
         negativePrompt: typeof input?.negativePrompt === "string" ? input.negativePrompt : undefined,
         model: typeof input?.model === "string" && input.model ? input.model : connection.model,
-        parameters: { ...connection.default_parameters, ...(input?.parameters || {}) },
+        parameters,
         signal,
       },
     };

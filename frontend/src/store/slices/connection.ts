@@ -5,6 +5,7 @@ export const createConnectionSlice: StateCreator<ConnectionSlice> = (set) => ({
   wsConnected: false,
   wsAuthSynced: false,
   wsRoundTripVerified: false,
+  wsResumeRecovering: false,
   wsHasEverConnected: false,
   wsUpdatePending: false,
 
@@ -24,12 +25,14 @@ export const createConnectionSlice: StateCreator<ConnectionSlice> = (set) => ({
         wsHasEverConnected: state.wsHasEverConnected || healthy,
       }
     }),
+  setWsResumeRecovering: (recovering) => set({ wsResumeRecovering: recovering }),
   setWsUpdatePending: (pending) => set({ wsUpdatePending: pending }),
   resetConnectionState: () =>
     set({
       wsConnected: false,
       wsAuthSynced: false,
       wsRoundTripVerified: false,
+      wsResumeRecovering: false,
       wsHasEverConnected: false,
       wsUpdatePending: false,
     }),

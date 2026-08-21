@@ -196,7 +196,7 @@
     },
     "settings-webSearch": {
       "label": "Web Search",
-      "description": "Configure SearXNG-backed web search for council tools"
+      "description": "Configure SearXNG, Exa, or Tavily web search for council tools"
     },
     "settings-embeddings": {
       "label": "Embeddings",

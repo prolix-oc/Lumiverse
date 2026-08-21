@@ -25,7 +25,7 @@ app.options("*", () =>
     headers: tusHeaders({
       "Tus-Version": TUS_VERSION,
       "Tus-Extension": "creation",
-      "Tus-Max-Size": String(uploads.getMaxUploadBytes()),
+      "Tus-Max-Size": String(uploads.getMaxUploadBytes(true)),
     }),
   }),
 );
@@ -33,10 +33,11 @@ app.options("*", () =>
 app.post("/", (c) => {
   const userId = c.get("userId");
   const length = Number(c.req.header("Upload-Length"));
-  if (!Number.isInteger(length) || length < 0 || length > uploads.getMaxUploadBytes()) {
+  const meta = parseMetadata(c.req.header("Upload-Metadata"));
+  const maxBytes = uploads.getMaxUploadBytes(meta.spindle_read_mode === "chunked");
+  if (!Number.isInteger(length) || length < 0 || length > maxBytes) {
     return c.json({ error: "invalid Upload-Length" }, 400);
   }
-  const meta = parseMetadata(c.req.header("Upload-Metadata"));
   if (!meta.extension) return c.json({ error: "Upload-Metadata 'extension' is required" }, 400);
   let rec;
   try {

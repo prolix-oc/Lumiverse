@@ -3,10 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  ensureVectorIndex,
   isCrossProcessLockFromPriorProcessInstance,
   isRetryableLanceWriteConflict,
+  pauseLanceDbForExternalMaintenance,
+  raceWithSignal,
   shouldUseCrossProcessWriteLock,
   sweepEmptyIndexDirs,
+  WORLD_BOOK_EMBEDDINGS_TABLE,
 } from "./lancedb";
 
 describe("lancedb write conflict handling", () => {
@@ -87,6 +91,34 @@ describe("lancedb empty index directory cleanup", () => {
 });
 
 describe("lancedb index maintenance", () => {
+  test("blocks native reads while an external maintenance child owns the gate", async () => {
+    const release = await pauseLanceDbForExternalMaintenance();
+    let started = false;
+    const read = raceWithSignal(async () => {
+      started = true;
+      return "read complete";
+    }, undefined);
+
+    await Bun.sleep(10);
+    expect(started).toBe(false);
+    release();
+    await expect(read).resolves.toBe("read complete");
+  });
+
+  test("keeps an existing vector index after runtime state is reset", async () => {
+    let countRowsCalls = 0;
+    const table: any = {
+      listIndices: async () => [{ name: "vector_idx" }],
+      countRows: async () => {
+        countRowsCalls += 1;
+        return 10_000;
+      },
+    };
+
+    await expect(ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, table)).resolves.toBe(table);
+    expect(countRowsCalls).toBe(0);
+  });
+
   test("does not rebuild every scalar and FTS index after Lance optimize", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-maintenance-test-"));
     const repoRoot = join(import.meta.dir, "../../../..");
@@ -151,6 +183,45 @@ describe("lancedb index maintenance", () => {
       // Lance may create one optimized generation per index. The application
       // must not immediately create a second generation for the same indexes.
       expect(after - before).toBeLessThanOrEqual(before);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lancedb maintenance supervisor", () => {
+  test("runs maintenance in a child process", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-supervisor-test-"));
+    const repoRoot = join(import.meta.dir, "../../../..");
+    const resultMarker = "__LANCEDB_MAINTENANCE_SUPERVISOR_RESULT__";
+
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          "--eval",
+          `
+            const { runLanceDbMaintenanceInChild } = await import("./src/services/lancedb-maintenance-supervisor.ts");
+            await runLanceDbMaintenanceInChild({ mode: "startup" });
+            const { stopIndexHealthMonitor } = await import("./src/services/vector-store/providers/lancedb.ts");
+            stopIndexHealthMonitor();
+            console.log("${resultMarker}");
+          `,
+        ],
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DATA_DIR: dataDir,
+          LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK: "false",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`LanceDB maintenance supervisor subprocess failed:\n${result.stderr.toString()}`);
+      }
+      expect(result.stdout.toString()).toContain(resultMarker);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

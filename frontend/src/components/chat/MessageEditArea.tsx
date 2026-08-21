@@ -91,6 +91,8 @@ function MessageEditAreaNative({
   const hasReasoning = editReasoning != null && onChangeReasoning != null
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const reasoningRef = useRef<HTMLTextAreaElement>(null)
+  const focusRequested = useStore((s) => s.messageEditDraft?.focusRequested === true)
+  const consumeFocusRequest = useStore((s) => s.consumeMessageEditFocusRequest)
   const contentRevealFrameRef = useRef(0)
   const reasoningRevealFrameRef = useRef(0)
   const focusCorrectionTimersRef = useRef<number[]>([])
@@ -128,6 +130,12 @@ function MessageEditAreaNative({
   useLayoutEffect(() => {
     autoResize(reasoningRef.current)
   }, [editReasoning])
+
+  useLayoutEffect(() => {
+    if (!focusRequested) return
+    contentRef.current?.focus({ preventScroll: true })
+    consumeFocusRequest()
+  }, [consumeFocusRequest, focusRequested])
 
   useEffect(() => {
     if (navigator.maxTouchPoints <= 0) return
@@ -239,7 +247,6 @@ function MessageEditAreaNative({
             value={editContent}
             onChange={handleContentChange}
             onFocus={handleContentFocus}
-            autoFocus
           />
           <button
             type="button"

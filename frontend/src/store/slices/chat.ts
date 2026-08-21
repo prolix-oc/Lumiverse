@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { ChatSlice } from '@/types/store'
 import type { Message } from '@/types/api'
 import { settingsApi } from '@/api/settings'
+import { reconcileMessageTail } from '@/store/messageTailReconciliation'
 
 export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
   const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
@@ -205,6 +206,16 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           totalChatLength: total ?? nextMessages.length,
         }
       }),
+
+    reconcileMessagesTail: (page) =>
+      set((state) => ({
+        messages: sortMessagesByPosition(reconcileMessageTail(
+          state.messages,
+          state.totalChatLength,
+          page,
+        )),
+        totalChatLength: page.total,
+      })),
 
     prependMessages: (olderMessages) =>
       set((state) => {

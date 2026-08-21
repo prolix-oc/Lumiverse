@@ -58,12 +58,14 @@ describe('H6 frontend geometry runtime contract', () => {
       title: 'Geometry',
       size: 320,
       respectRequestedEdge: true,
+      showCollapsedTitle: true,
       persistGeometry: 'panel',
       onGeometryCommit: () => {},
     }
 
     expect(floatOptions.resizable).toBe(true)
     expect(dockOptions.respectRequestedEdge).toBe(true)
+    expect(dockOptions.showCollapsedTitle).toBe(true)
   })
 
   test('returns a disposer for the framework-free resize adapter', () => {

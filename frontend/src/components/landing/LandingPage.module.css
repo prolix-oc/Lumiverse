@@ -141,6 +141,10 @@
   flex: 0 0 auto;
 }
 
+.landingTabLabel {
+  white-space: nowrap;
+}
+
 .landingSearch {
   /* Allow the search field to yield space to the fixed-width toolbar actions
      at high UI scales and narrow viewports. Without this, its intrinsic
@@ -1278,6 +1282,27 @@
 
   .landingToolbar {
     margin-bottom: 14px;
+  }
+
+  /* The Suite adds the Characters tab beside native Chats. Keep the two tabs
+     compact so the chat search remains a useful, tappable width. The label is
+     visually hidden rather than removed so each tab retains its accessible
+     name. */
+  .landingTabsWithSuite .landingTabLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Gallery width only changes the desktop/tablet layout. */
+  .galleryWidthBtn {
+    display: none;
   }
 
   .content {

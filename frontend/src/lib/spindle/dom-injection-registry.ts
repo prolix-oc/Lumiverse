@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import { useStore } from '@/store'
 import { scheduleSpindleDomTask } from './browser-scheduler'
+import { stampExtensionRoot } from './extension-root-stamp'
 
 /**
  * Host-side replay registry for Spindle `dom.inject()` calls that land
@@ -288,7 +289,7 @@ function replayRecord(messageId: string, root: Element, record: InjectionRecord)
       FORBID_ATTR: ['formaction'],
     })
     wrapper = document.createElement('div')
-    wrapper.setAttribute(DATA_EXT_ATTR, record.extensionId)
+    stampExtensionRoot(wrapper, record.extensionId, DATA_EXT_ATTR)
     wrapper.setAttribute(DATA_INJ_ATTR, record.injectionId)
     wrapper.appendChild(sanitized)
     record.element = wrapper

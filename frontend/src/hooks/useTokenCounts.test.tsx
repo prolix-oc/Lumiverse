@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { act, createElement } from 'react'
 import type { Root } from 'react-dom/client'
@@ -25,15 +25,6 @@ type Deferred<T> = {
 
 const countCalls: CountCall[] = []
 const pendingCounts: Array<Deferred<CountResult>> = []
-const tokenizersApiMock = {
-  countForModel(model: string, content: string, options?: { signal?: AbortSignal }): Promise<CountResult> {
-    countCalls.push({ model, content, options })
-    const deferred = createDeferred<CountResult>()
-    pendingCounts.push(deferred)
-    return deferred.promise
-  },
-}
-
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -45,7 +36,6 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 mock.module('@/store', () => ({ useStore: useStoreMock }))
-mock.module('@/api/tokenizers', () => ({ tokenizersApi: tokenizersApiMock }))
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true })
 const globalObject = globalThis as unknown as Record<string, unknown>
@@ -99,6 +89,16 @@ const {
 } = await import('@/lib/storedTokenCount')
 const { fnv1a32 } = await import('@/lib/tokenCountCache')
 mock.restore()
+
+const { tokenizersApi } = await import('@/api/tokenizers')
+const countForModelSpy = spyOn(tokenizersApi, 'countForModel').mockImplementation(
+  (model: string, content: string, options?: { signal?: AbortSignal }): Promise<CountResult> => {
+    countCalls.push({ model, content, options })
+    const deferred = createDeferred<CountResult>()
+    pendingCounts.push(deferred)
+    return deferred.promise
+  },
+)
 
 type HookOptions = {
   entryId?: string
@@ -199,6 +199,7 @@ afterEach(async () => {
 })
 
 afterAll(() => {
+  countForModelSpy.mockRestore()
   for (const [key, value] of originalGlobals) {
     if (value === undefined) delete globalObject[key]
     else globalObject[key] = value

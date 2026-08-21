@@ -267,6 +267,19 @@ afterAll(() => {
 })
 
 describe('WorldBookEntriesSection token-count invalidation', () => {
+  test('moves to the page containing a pending deep-linked entry', async () => {
+    const entries = Array.from({ length: 75 }, (_, index) => entry(`entry-${String(index + 1).padStart(2, '0')}`))
+    storeState.pendingWorldBookEditEntryId = 'entry-60'
+    const { root, host } = await render(entries)
+    try {
+      expect(storeState.pendingWorldBookEditEntryId).toBeNull()
+      expect(host.querySelector('[data-entry-id="entry-60"]')).not.toBeNull()
+      expect(host.querySelector('[data-entry-id="entry-01"]')).toBeNull()
+    } finally {
+      unmount(root)
+    }
+  })
+
   test('renders stable row and token-cell anchors with an immediate estimate', async () => {
     const { root, host } = await render([entry('entry-anchor', '12345678')])
     try {

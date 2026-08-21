@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, unlinkSync, statSync } from "fs";
 import * as fs from "fs";
 import * as fsPromises from "fs/promises";
 import { tmpdir } from "os";
@@ -15,11 +15,24 @@ import {
   deleteImageIfUnreferenced,
   deleteImagesBulk,
   deleteWallpaperLibraryImage,
+  discardImageProcessingQueue,
+  getDeferredImageProcessingStatus,
   getImage,
   getImageFilePath,
+  getImageProcessingRecovery,
   listImages,
+  rebuildAllThumbnails,
+  recoverImageProcessingQueue,
+  resetDeferredImageProcessingForTests,
+  saveImageFromDataUrl,
   uploadImage,
+  uploadImageDeferred,
+  uploadImages,
+  uploadOptimizedWebpImage,
+  waitForDeferredImageProcessing,
 } from "./images.service";
+import { recordImageProcessingJob } from "./image-processing-queue";
+import { deriveWorkerBudget, setWorkerBudgetOverride } from "../utils/cpu-budget";
 
 const originalDataDir = env.dataDir;
 let testDataDir = "";
@@ -141,12 +154,16 @@ function seedChat(id: string, metadata: Record<string, unknown>, updatedAt = 100
 }
 
 beforeEach(() => {
+  resetDeferredImageProcessingForTests();
+  setWorkerBudgetOverride(null);
   initImagesTestDb();
   testDataDir = mkdtempSync(join(tmpdir(), "lumiverse-images-test-"));
   env.dataDir = testDataDir;
 });
 
 afterEach(() => {
+  resetDeferredImageProcessingForTests();
+  setWorkerBudgetOverride(null);
   closeDatabase();
   env.dataDir = originalDataDir;
   if (testDataDir) {
@@ -483,5 +500,225 @@ describe("images.service ownership filters", () => {
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("deferred image processing", () => {
+  const ONE_BY_ONE_PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  test("single deferred uploads infer MIME, preserve ownership, and finish queued processing", async () => {
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const file = new File([ONE_BY_ONE_PNG], "embedded.png");
+
+    const image = await uploadImageDeferred("u1", file, { owner_character_id: "char-1" });
+
+    expect(image.mime_type).toBe("image/png");
+    expect(image.owner_character_id).toBe("char-1");
+    await waitForDeferredImageProcessing();
+    expect(getImage("u1", image.id)).toMatchObject({
+      width: 1,
+      height: 1,
+      has_thumbnail: true,
+      owner_character_id: "char-1",
+    });
+  });
+
+  test("single deferred uploads recognize supported image extensions when MIME is absent", async () => {
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const image = await uploadImageDeferred("u1", new File([ONE_BY_ONE_PNG], "embedded.apng"));
+
+    expect(image.mime_type).toBe("image/apng");
+    await waitForDeferredImageProcessing();
+    expect(getImage("u1", image.id)).toMatchObject({ width: 1, height: 1, has_thumbnail: true });
+  });
+
+  test("ordinary uploadImage calls use deferred processing", async () => {
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const image = await uploadImage(
+      "u1",
+      new File([ONE_BY_ONE_PNG], "avatar.png", { type: "image/png" }),
+      { owner_character_id: "char-1" },
+    );
+
+    await waitForDeferredImageProcessing();
+    expect(getImage("u1", image.id)).toMatchObject({
+      width: 1,
+      height: 1,
+      has_thumbnail: true,
+      owner_character_id: "char-1",
+    });
+  });
+
+  test("data URL and optimized WebP uploads finish through the deferred queue", async () => {
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const dataUrlImage = await saveImageFromDataUrl(
+      "u1",
+      `data:image/png;base64,${ONE_BY_ONE_PNG.toString("base64")}`,
+      "generated.png",
+    );
+    const webpImage = await uploadOptimizedWebpImage(
+      "u1",
+      new File([ONE_BY_ONE_PNG], "layer.png", { type: "image/png" }),
+      { owner_character_id: "char-1" },
+    );
+
+    await waitForDeferredImageProcessing();
+    expect(getImage("u1", dataUrlImage.id)).toMatchObject({ width: 1, height: 1, has_thumbnail: true });
+    expect(getImage("u1", webpImage.id)).toMatchObject({
+      width: 1,
+      height: 1,
+      has_thumbnail: true,
+      mime_type: "image/webp",
+      owner_character_id: "char-1",
+    });
+  });
+
+  test("waitForDeferredImageProcessing drains queued thumbnail work", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const results = await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+      { data: ONE_BY_ONE_PNG, filename: "b.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    expect(results.every((row) => row.image)).toBe(true);
+    await waitForDeferredImageProcessing();
+    const thumbs = getDb().query("SELECT COUNT(*) AS count FROM images WHERE has_thumbnail = 1").get() as { count: number };
+    expect(thumbs.count).toBe(2);
+  });
+
+  test("reports processed and remaining counts until drain completes", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+      { data: ONE_BY_ONE_PNG, filename: "b.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    const mid = getDeferredImageProcessingStatus();
+    expect(mid.total).toBe(2);
+    expect(mid.processed + mid.remaining).toBe(2);
+    await waitForDeferredImageProcessing();
+    expect(getDeferredImageProcessingStatus()).toEqual({
+      processed: 2,
+      remaining: 0,
+      total: 2,
+      active: 0,
+      queued: 0,
+    });
+  });
+
+  test("repeated uploads append to one processing queue", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+
+    await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+      { data: ONE_BY_ONE_PNG, filename: "b.png", mime_type: "image/png" },
+      { data: ONE_BY_ONE_PNG, filename: "c.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+
+    const status = getDeferredImageProcessingStatus();
+    expect(status.total).toBe(3);
+    expect(status.processed + status.remaining).toBe(3);
+    expect(status.active).toBeLessThanOrEqual(1);
+    await waitForDeferredImageProcessing();
+    expect(getDeferredImageProcessingStatus().processed).toBe(3);
+  });
+
+  test("rebuildAllThumbnails drains through the deferred Sharp queue", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const uploaded = await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+      { data: ONE_BY_ONE_PNG, filename: "b.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    await waitForDeferredImageProcessing();
+    const first = uploaded[0]?.image;
+    if (!first) throw new Error("expected uploaded image");
+    unlinkSync(join(testDataDir, "images", `${first.id}_thumb_sm_v2.webp`));
+
+    const ticks: number[] = [];
+    const result = await rebuildAllThumbnails("u1", {
+      onProgress: (progress) => ticks.push(progress.current),
+    });
+    expect(result).toEqual({
+      total: 2,
+      current: 2,
+      generated: 2,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(ticks.at(-1)).toBe(2);
+    expect(getDeferredImageProcessingStatus()).toMatchObject({
+      processed: 2,
+      remaining: 0,
+      total: 2,
+    });
+    expect(existsSync(join(testDataDir, "images", `${first.id}_thumb_sm_v2.webp`))).toBe(true);
+  });
+
+  test("rebuildAllThumbnails wipes existing thumbs then reattributes them", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const uploaded = await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    await waitForDeferredImageProcessing();
+    const image = uploaded[0]?.image;
+    if (!image) throw new Error("expected uploaded image");
+    const smPath = join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`);
+    const stalePath = join(testDataDir, "images", `${image.id}_thumb_sm.webp`);
+    writeFileSync(stalePath, "stale-legacy-thumb");
+    const before = existsSync(smPath) ? statSync(smPath).mtimeMs : 0;
+    getDb().query("UPDATE images SET has_thumbnail = 1 WHERE id = ?").run(image.id);
+
+    const result = await rebuildAllThumbnails("u1");
+    expect(result).toMatchObject({ total: 1, generated: 1, skipped: 0, failed: 0 });
+    expect(existsSync(stalePath)).toBe(false);
+    expect(existsSync(smPath)).toBe(true);
+    expect(statSync(smPath).mtimeMs).toBeGreaterThanOrEqual(before);
+    expect(getDb().query("SELECT has_thumbnail AS flag FROM images WHERE id = ?").get(image.id)).toEqual({ flag: 1 });
+  });
+
+  test("does not auto-run leftover rows and recover starts them", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const uploaded = await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    await waitForDeferredImageProcessing();
+    const image = uploaded[0]?.image;
+    if (!image) throw new Error("expected uploaded image");
+    unlinkSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`));
+    recordImageProcessingJob("u1", image.id, "process");
+
+    expect(getImageProcessingRecovery()).toEqual({
+      pending: 1,
+      process: 1,
+      rebuild: 0,
+    });
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(false);
+
+    recoverImageProcessingQueue();
+    await waitForDeferredImageProcessing();
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(true);
+    expect(getImageProcessingRecovery().pending).toBe(0);
+  });
+
+  test("discard leftover rows without starting them", async () => {
+    setWorkerBudgetOverride(deriveWorkerBudget(2));
+    mkdirSync(join(testDataDir, "images"), { recursive: true });
+    const uploaded = await uploadImages("u1", [
+      { data: ONE_BY_ONE_PNG, filename: "a.png", mime_type: "image/png" },
+    ], { deferProcessing: true });
+    await waitForDeferredImageProcessing();
+    const image = uploaded[0]?.image;
+    if (!image) throw new Error("expected uploaded image");
+    recordImageProcessingJob("u1", image.id, "rebuild");
+    expect(getImageProcessingRecovery().pending).toBe(1);
+    expect(discardImageProcessingQueue()).toEqual({ pending: 0, process: 0, rebuild: 0 });
+    expect(getImageProcessingRecovery().pending).toBe(0);
   });
 });

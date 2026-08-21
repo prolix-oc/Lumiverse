@@ -232,7 +232,7 @@ export default function ConnectionManager() {
                 profile={profile}
                 isActive={activeProfileId === profile.id}
                 providers={providers}
-                onSelect={() => setActiveProfile(activeProfileId === profile.id ? null : profile.id)}
+                onSelect={() => setActiveProfile(profile.id)}
                 onUpdate={handleUpdate}
                 onDuplicate={() => handleDuplicate(profile.id)}
                 onDelete={() => setDeleteTarget(profile)}

@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -6,8 +5,6 @@ import { WifiOff, Download } from 'lucide-react'
 import { useStore } from '@/store'
 import { Spinner } from './Spinner'
 import styles from './ConnectionLostOverlay.module.css'
-
-const RESUME_GRACE_MS = 7_000
 
 export default function ConnectionLostOverlay() {
   const { t } = useTranslation('shared')
@@ -17,40 +14,12 @@ export default function ConnectionLostOverlay() {
   const wsRoundTripVerified = useStore((s) => s.wsRoundTripVerified)
   const wsHasEverConnected = useStore((s) => s.wsHasEverConnected)
   const wsUpdatePending = useStore((s) => s.wsUpdatePending)
-
-  const [inResumeGrace, setInResumeGrace] = useState(false)
-  const overlayWasShowingAtHideRef = useRef(false)
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    const onVisChange = () => {
-      if (document.visibilityState === 'hidden') {
-        const state = useStore.getState()
-        const healthyNow = state.wsConnected && state.wsAuthSynced && state.wsRoundTripVerified
-        overlayWasShowingAtHideRef.current =
-          state.isAuthenticated && state.wsHasEverConnected && !healthyNow
-      } else if (document.visibilityState === 'visible') {
-        if (!overlayWasShowingAtHideRef.current) {
-          setInResumeGrace(true)
-          if (timer) clearTimeout(timer)
-          timer = setTimeout(() => setInResumeGrace(false), RESUME_GRACE_MS)
-        }
-        overlayWasShowingAtHideRef.current = false
-      }
-    }
-
-    document.addEventListener('visibilitychange', onVisChange)
-    return () => {
-      document.removeEventListener('visibilitychange', onVisChange)
-      if (timer) clearTimeout(timer)
-    }
-  }, [])
+  const wsResumeRecovering = useStore((s) => s.wsResumeRecovering)
 
   const healthy = wsConnected && wsAuthSynced && wsRoundTripVerified
   const visible =
     isAuthenticated &&
-    (wsUpdatePending || (wsHasEverConnected && !healthy && !inResumeGrace))
+    (wsUpdatePending || (wsHasEverConnected && !healthy && !wsResumeRecovering))
 
   const title = wsUpdatePending
     ? t('connectionLost.updatingTitle')

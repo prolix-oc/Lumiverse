@@ -11,6 +11,8 @@ function initCharactersTestDb(): void {
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    personality TEXT NOT NULL DEFAULT '',
     creator TEXT NOT NULL DEFAULT '',
     folder TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '[]',
@@ -47,10 +49,10 @@ function seedCharacter(index: number, namePrefix: string, updatedAt: number): st
   return id;
 }
 
-function seedChat(chatId: string, characterId: string, updatedAt: number, metadata = "{}"): void {
+function seedChat(chatId: string, characterId: string, updatedAt: number, metadata = "{}", userId = "u1"): void {
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, metadata, updated_at) VALUES (?, ?, ?, ?, ?)")
-    .run(chatId, "u1", characterId, metadata, updatedAt);
+    .run(chatId, userId, characterId, metadata, updatedAt);
 }
 
 beforeEach(() => {
@@ -132,5 +134,42 @@ describe("character recent chat sorting", () => {
 
     const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "recent" });
     expect(summaries.data[0]?.id).toBe(char1);
+  });
+});
+
+describe("character most-chats sorting", () => {
+  test("ranks cards by their one-on-one chat count and excludes group chats", () => {
+    const mostChatted = seedCharacter(30, "Most Chatted", 1_000);
+    const someChats = seedCharacter(31, "Some Chats", 2_000);
+    const groupOnly = seedCharacter(32, "Group Only", 3_000);
+    const noChats = seedCharacter(33, "No Chats", 4_000);
+
+    seedChat("most-1", mostChatted, 1_000);
+    seedChat("most-2", mostChatted, 2_000);
+    seedChat("most-3", mostChatted, 3_000);
+    seedChat("some-1", someChats, 4_000);
+    seedChat("group-1", groupOnly, 5_000, JSON.stringify({ group: true, character_ids: [groupOnly] }));
+
+    const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "most_chats" });
+
+    expect(summaries.data.map((character) => character.id)).toEqual([
+      mostChatted,
+      someChats,
+      noChats,
+      groupOnly,
+    ]);
+  });
+
+  test("counts only chats belonging to the requesting user", () => {
+    const character = seedCharacter(40, "Private", 1_000);
+    const otherCharacter = seedCharacter(41, "Other", 2_000);
+
+    seedChat("mine", character, 1_000);
+    seedChat("someone-else-1", otherCharacter, 2_000, "{}", "u2");
+    seedChat("someone-else-2", otherCharacter, 3_000, "{}", "u2");
+
+    const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "most_chats" });
+
+    expect(summaries.data.map((item) => item.id)).toEqual([character, otherCharacter]);
   });
 });

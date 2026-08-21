@@ -251,7 +251,11 @@ function defaultRuntime(
     },
     navigate: (path) => { void router.navigate(path) },
     setEditingCharacterId: (id) => useStore.getState().setEditingCharacterId(id),
-    openWorldBookEditor: (id) => useStore.getState().openModal('worldBookEditor', { bookId: id }),
+    openWorldBookEditor: (id, entryId) => {
+      const state = useStore.getState()
+      state.setPendingWorldBookEditEntryId(entryId ?? null)
+      state.openModal('worldBookEditor', { bookId: id })
+    },
     invokeInputBarAction: async (id) => {
       const action = getInputAction(id)
       if (!action) throw new Error(`HOST_ACTION_UNMAPPED:input_bar_action:${id}`)

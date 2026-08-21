@@ -131,6 +131,48 @@ const OPTIMIZE_DEBOUNCE_MS = 15_000; // 15 seconds after last write (reduced fro
 const CLEANUP_GRACE_PERIOD_MS = 5 * 60_000;
 const READ_CONSISTENCY_INTERVAL_SECONDS = 5;
 const LANCE_INDEX_UUID_DIR_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const STARTUP_FULL_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60_000;
+const STARTUP_MAINTENANCE_STATE_PATH = join(env.dataDir, ".lancedb-maintenance.json");
+
+type StartupMaintenanceState = {
+  tables?: Record<string, { lastFullMaintenanceAt?: number }>;
+};
+
+function readStartupMaintenanceState(): StartupMaintenanceState {
+  try {
+    const value = JSON.parse(readFileSync(STARTUP_MAINTENANCE_STATE_PATH, "utf8")) as StartupMaintenanceState;
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function shouldRunFullStartupMaintenance(
+  state: StartupMaintenanceState,
+  tableName: string,
+  now = Date.now(),
+): boolean {
+  const lastRun = state.tables?.[tableName]?.lastFullMaintenanceAt;
+  return typeof lastRun !== "number" || now - lastRun >= STARTUP_FULL_MAINTENANCE_INTERVAL_MS;
+}
+
+function recordFullStartupMaintenance(
+  state: StartupMaintenanceState,
+  tableName: string,
+  completedAt = Date.now(),
+): void {
+  state.tables ??= {};
+  state.tables[tableName] = { lastFullMaintenanceAt: completedAt };
+}
+
+function persistStartupMaintenanceState(state: StartupMaintenanceState): void {
+  try {
+    writeFileSync(STARTUP_MAINTENANCE_STATE_PATH, JSON.stringify(state), "utf8");
+  } catch (err) {
+    // Maintenance still succeeded; only its restart cadence is lost.
+    console.warn("[embeddings] Failed to persist LanceDB maintenance cadence:", err);
+  }
+}
 
 /**
  * Lance's object-store cleanup removes orphaned index files but local object
@@ -321,6 +363,11 @@ async function acquireCrossProcessWriteLockIfNeeded(): Promise<(() => void) | nu
 }
 
 export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  // A child maintenance process asks the serving process to close this gate
+  // before it starts mutating Lance files. Writers need to honor the same
+  // gate as readers; the cross-process write lock alone cannot protect a
+  // native read from optimize() deleting its version files.
+  await awaitMaintenanceGate();
   if (!_writeLockHeld) {
     _writeLockHeld = true;
   } else {
@@ -477,11 +524,11 @@ function raceMaintenanceGate(gate: Promise<void>, signal?: AbortSignal): Promise
   });
 }
 
-async function waitForReadsToDrain(timeoutMs = 30_000): Promise<void> {
+async function waitForReadsToDrain(timeoutMs?: number): Promise<void> {
   if (_activeReadCount === 0) return;
   const startedAt = Date.now();
   while (_activeReadCount > 0) {
-    if (Date.now() - startedAt >= timeoutMs) {
+    if (timeoutMs !== undefined && Date.now() - startedAt >= timeoutMs) {
       console.warn(
         `[embeddings] Compaction proceeding with ${_activeReadCount} read(s) still in flight (drain wait timed out after ${timeoutMs}ms)`,
       );
@@ -502,12 +549,42 @@ async function withMaintenanceExclusive<T>(fn: () => Promise<T>): Promise<T> {
   let release!: () => void;
   _maintenanceGate = new Promise<void>((resolve) => { release = resolve; });
   try {
-    await waitForReadsToDrain();
+    await waitForReadsToDrain(30_000);
     return await fn();
   } finally {
     _maintenanceGate = null;
     release();
   }
+}
+
+/**
+ * Close the serving process's LanceDB gate while maintenance runs in a child
+ * process. Unlike the in-process maintenance path, this waits indefinitely
+ * for existing scans: once the child has started, it has no visibility into
+ * this process's read count and therefore must never compact under a reader.
+ *
+ * The caller must invoke the returned release function after the child exits.
+ * The child separately takes the existing cross-process write lock, which also
+ * serializes it with any write that was already underway when this gate closed.
+ */
+export async function pauseLanceDbForExternalMaintenance(): Promise<() => void> {
+  // Do not overwrite an active in-process gate. This is normally unreachable
+  // because the supervisor serializes jobs, but waiting here keeps the helper
+  // safe if a manual optimize is already finishing.
+  await awaitMaintenanceGate();
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  _maintenanceGate = gate;
+  await waitForReadsToDrain();
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (_maintenanceGate === gate) _maintenanceGate = null;
+    release();
+  };
 }
 
 /**
@@ -694,6 +771,16 @@ function resetInMemoryVectorStoreState(): void {
       state.indexHealthTimer = null;
     }
   }
+}
+
+/**
+ * Drop every serving-process handle after a child process changed Lance files.
+ * The parent did not execute the transaction and may otherwise retain a table
+ * handle pointing at a pre-compaction manifest or index generation.
+ */
+export function refreshLanceDbAfterExternalMaintenance(): void {
+  resetInMemoryVectorStoreState();
+  startIndexHealthMonitor(EMBEDDINGS_TABLE);
 }
 
 export function resetSqliteVectorizationState(): void {
@@ -985,8 +1072,10 @@ const MIN_ROWS_FOR_PQ_VECTOR_INDEX = 65_536;
 export const MAX_LANCE_SOURCE_FILTER_IDS = 250;
 const OPTIMIZE_MAX_WAIT_MS = 2 * 60_000; // 2 minutes (reduced from 5 min to prevent fragment buildup)
 const CHAT_OPTIMIZE_MIN_INTERVAL_MS = 30 * 60_000; // Avoid full-table optimize churn from active chat writes
+const WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS = 10 * 60_000; // Lorebook edits used to rewrite the table every 15s
 let optimizeQueuedAt: number | null = null;
 let lastChatOptimizeScheduledAt = 0;
+let lastWorldBookOptimizeScheduledAt = 0;
 let optimizeWorldBooksQueued = false;
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1119,23 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
   let activeTable = table;
   let rebuilt = false;
   try {
+    // Runtime state is reset on every server restart, but the index is not.
+    // Do not turn that reset into an expensive replace:true rebuild: optimize()
+    // already incorporates new data into a healthy index, and the health
+    // monitor repairs a genuinely missing/unreadable one.
+    const existingIndexes = await activeTable.listIndices();
+    const hasVectorIndex = existingIndexes.some((index: any) => {
+      const name = index.name || index.indexName || "";
+      return name.includes("vector");
+    });
+    if (hasVectorIndex) {
+      state.vectorIndexReady = true;
+      if (tableName !== WORLD_BOOK_EMBEDDINGS_TABLE) {
+        startIndexHealthMonitor(tableName);
+      }
+      return activeTable;
+    }
+
     const rowCount = await activeTable.countRows();
     const indexConfig = getVectorIndexConfig(rowCount);
     if (indexConfig === null) {
@@ -1322,6 +1428,8 @@ export async function runStartupVectorMaintenance(): Promise<void> {
     console.warn(`[embeddings] Startup WI split: legacy world-book rows still appear present in ${EMBEDDINGS_TABLE}`);
   }
   const tablesToMaintain = [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE];
+  const maintenanceState = readStartupMaintenanceState();
+  let maintenanceStateChanged = false;
 
   await withWriteLock(async () => {
     for (const tableName of tablesToMaintain) {
@@ -1344,19 +1452,28 @@ export async function runStartupVectorMaintenance(): Promise<void> {
       const idxType = vectorIdx ? ((vectorIdx as any).indexType || (vectorIdx as any).type || "") : "";
       const needsMigration = vectorIdx && /hnsw/i.test(idxType);
       let activeTable: Table = table;
+      const fullMaintenanceDue = shouldRunFullStartupMaintenance(maintenanceState, tableName);
 
       try {
-        console.info(`[embeddings] Running startup compaction for ${tableName}...`);
-        // optimize() unlinks superseded version files and the index rebuilds
-        // below rewrite index files; hold reads off for the whole sequence.
+        if (fullMaintenanceDue) {
+          console.info(`[embeddings] Running scheduled startup compaction for ${tableName}...`);
+        } else {
+          console.info(`[embeddings] Skipping recent startup compaction for ${tableName}; checking indexes only.`);
+        }
+        // optimize() and any index repair can rewrite or unlink files; hold
+        // reads off for the whole sequence.
         await withMaintenanceExclusive(async () => {
-          try {
-            await withRetryableLanceWriteConflictRetry(`${tableName}: startup optimize`, tableName, async () => {
-              activeTable = await reopenTableForWrite(tableName);
-              await activeTable.optimize({ cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS) });
-            });
-          } catch (err) {
-            console.warn(`[embeddings] Startup compaction failed for ${tableName}:`, err);
+          if (fullMaintenanceDue) {
+            try {
+              await withRetryableLanceWriteConflictRetry(`${tableName}: startup optimize`, tableName, async () => {
+                activeTable = await reopenTableForWrite(tableName);
+                await activeTable.optimize({ cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS) });
+              });
+              recordFullStartupMaintenance(maintenanceState, tableName);
+              maintenanceStateChanged = true;
+            } catch (err) {
+              console.warn(`[embeddings] Startup compaction failed for ${tableName}:`, err);
+            }
           }
 
           try {
@@ -1385,8 +1502,10 @@ export async function runStartupVectorMaintenance(): Promise<void> {
             }
           }
 
-          activeTable = await ensureScalarIndexes(tableName, activeTable, true);
-          activeTable = await ensureFtsIndex(tableName, activeTable, true);
+          // Only repair missing/broken indexes. Replacing every index at every
+          // startup doubles the file churn immediately after optimize().
+          activeTable = await ensureScalarIndexes(tableName, activeTable);
+          activeTable = await ensureFtsIndex(tableName, activeTable);
           activeTable = await ensureVectorIndex(tableName, activeTable);
           sweepTableEmptyIndexDirs(tableName);
         });
@@ -1395,6 +1514,10 @@ export async function runStartupVectorMaintenance(): Promise<void> {
       }
     }
   });
+
+  if (maintenanceStateChanged) {
+    persistStartupMaintenanceState(maintenanceState);
+  }
 
   startIndexHealthMonitor(EMBEDDINGS_TABLE);
 }
@@ -1555,14 +1678,18 @@ export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book"
     // Chat memory writes are high-frequency, but they share the same Lance table
     // as large static world-book corpora. Running full optimize/index rebuilds on
     // every chat-churn window can make disk usage balloon during active chats.
-    // Rate-limit the background optimize for chat-only writes and leave startup,
-    // manual, and bulk world-book/databank maintenance paths unchanged.
+    // Rate-limit the background optimize for chat-only writes. Lorebook edits are
+    // independently rate-limited below so typing does not rewrite the table.
     if (now - lastChatOptimizeScheduledAt < CHAT_OPTIMIZE_MIN_INTERVAL_MS) {
       return;
     }
     lastChatOptimizeScheduledAt = now;
   }
   if (reason === "world_book") {
+    if (now - lastWorldBookOptimizeScheduledAt < WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS) {
+      return;
+    }
+    lastWorldBookOptimizeScheduledAt = now;
     optimizeWorldBooksQueued = true;
   }
   if (optimizeQueuedAt == null) optimizeQueuedAt = now;

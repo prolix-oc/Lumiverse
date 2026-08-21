@@ -34,6 +34,10 @@ export class MoonshotProvider extends OpenAICompatibleProvider {
     interleavedThinking: true,
   };
 
+  protected override replayReasoningContentOnPlainAssistant(_message: LlmMessage): boolean {
+    return false;
+  }
+
   /**
    * Kimi Partial Mode is enabled per message, not with a top-level request
    * parameter. A trailing assistant prefill must therefore be serialized as

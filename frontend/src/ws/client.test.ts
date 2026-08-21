@@ -184,6 +184,46 @@ describe('WebSocketClient resume watchdog guard', () => {
     expect(client.ws).toBe(socket)
     client.disconnect()
   })
+
+  test('invalidates a heartbeat deadline while the PWA is backgrounded', () => {
+    const client = makeClient()
+    const socket = client.ws as MockWebSocket
+    client.startPing()
+    const worker = MockWorker.instances.at(-1)!
+    const start = worker.sent.find((message) => message.type === 'start')
+
+    client.pauseForBackground()
+    worker.emit({ type: 'timeout', generation: start.generation })
+
+    expect(socket.closeCalls).toBe(0)
+    expect(client.ws).toBe(socket)
+    client.disconnect()
+  })
+
+  test('requires an ID-correlated pong to complete foreground recovery', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws') as any
+    client.connect()
+    const socket = MockWebSocket.instances.at(-1)!
+    ;(socket as any).onopen?.({} as Event)
+    const events: string[] = []
+    client.on('__ws_resume_recovery_start', () => events.push('start'))
+    client.on('__ws_resume_recovery_complete', () => events.push('complete'))
+
+    client.pauseForBackground()
+    client.resumeFromBackground()
+    const worker = MockWorker.instances.at(-1)!
+    const resumePing = worker.sent.find((message) => message.type === 'ping-now' && message.resumeProof)
+    expect(resumePing).toMatchObject({ timeoutMs: 3_000, resumeProof: true })
+
+    worker.emit({ type: 'ping', generation: resumePing.generation, timeoutMs: 3_000, resumeProof: true })
+    const frame = JSON.parse(socket.sent.at(-1)!)
+    expect(frame).toMatchObject({ type: 'ping' })
+    expect(typeof frame.id).toBe('string')
+
+    ;(socket as any).onmessage({ data: JSON.stringify({ type: 'pong', id: frame.id }) })
+    expect(events).toEqual(['start', 'complete'])
+    client.disconnect()
+  })
 })
 
 describe('WebSocketClient Spindle console logging', () => {

@@ -115,6 +115,14 @@ describe('P12 chat dock preservation contracts', () => {
     expect(hiddenEditPath).toContain('--lcs-input-safe-zone')
   })
 
+  test('keeps the scroll shortcut clear of the composer with its own contrast pair', async () => {
+    const css = await readSource('ScrollToBottom.module.css')
+
+    expect(css).toMatch(/bottom:\s*calc\(var\(--lcs-input-safe-zone, 100px\) \+ 8px\)/)
+    expect(css).toContain('background: var(--lumiverse-primary-deep')
+    expect(css).toContain('color: var(--lumiverse-primary-deep-contrast')
+  })
+
   test('preserves claimed and unclaimed H9 fallback behavior for native and message avatars', async () => {
     const portrait = await readSource('PortraitPanel.tsx')
     const bubble = await readSource('BubbleMessageDefault.tsx')

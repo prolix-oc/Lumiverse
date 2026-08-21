@@ -7,7 +7,7 @@ export interface HostCouncilToolExecutionInput {
   userId: string;
   tool: RuntimeCouncilToolDefinition;
   args: Record<string, unknown>;
-  member: CouncilMember;
+  member?: CouncilMember;
   memberContext?: CouncilMemberContext;
   contextMessages: LlmMessage[];
   timeoutMs: number;

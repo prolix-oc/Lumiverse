@@ -61,6 +61,32 @@ describe("applyAnthropicCaching", () => {
     ]);
   });
 
+  test("marks only the final tool definition, keeping the request within the breakpoint limit", () => {
+    const result = applyAnthropicCaching(
+      {
+        provider: "anthropic",
+        metadata: { prompt_caching: { type: "ephemeral", breakpoints: { tools: true } } },
+      },
+      {
+        params: {},
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          { name: "first", description: "First", parameters: { type: "object" } },
+          { name: "second", description: "Second", parameters: { type: "object" } },
+        ],
+      },
+    );
+    expect(result.tools).toEqual([
+      { name: "first", description: "First", parameters: { type: "object" } },
+      {
+        name: "second",
+        description: "Second",
+        parameters: { type: "object" },
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+  });
+
   test("leaves messages and tools untouched without breakpoint config (no system message)", () => {
     const messages = [{ role: "user" as const, content: "hi" }];
     const tools = [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }];
@@ -91,7 +117,7 @@ describe("applyAnthropicCaching", () => {
     ]);
   });
 
-  test("marks only the last leading system message (single breakpoint for the prefix)", () => {
+  test("tiers automatic checkpoints across the leading system prefix", () => {
     const result = applyAnthropicCaching(
       { provider: "anthropic", metadata: { prompt_caching: true } },
       {
@@ -99,6 +125,9 @@ describe("applyAnthropicCaching", () => {
         messages: [
           { role: "system", content: "a" },
           { role: "system", content: "b" },
+          { role: "system", content: "c" },
+          { role: "system", content: "dynamic retrieval" },
+          { role: "system", content: "dynamic memory" },
           { role: "user", content: "hi" },
         ],
       },
@@ -106,7 +135,69 @@ describe("applyAnthropicCaching", () => {
     expect(result.messages).toEqual([
       { role: "system", content: "a" },
       { role: "system", content: "b", cache_control: { type: "ephemeral" } },
+      { role: "system", content: "c", cache_control: { type: "ephemeral" } },
+      { role: "system", content: "dynamic retrieval", cache_control: { type: "ephemeral" } },
+      { role: "system", content: "dynamic memory", cache_control: { type: "ephemeral" } },
       { role: "user", content: "hi" },
+    ]);
+  });
+
+  test("reserves checkpoints for tools and conversation before tiering the system prefix", () => {
+    const result = applyAnthropicCaching(
+      {
+        provider: "anthropic",
+        metadata: {
+          prompt_caching: {
+            type: "ephemeral",
+            breakpoints: { tools: true, messages: true },
+          },
+        },
+      },
+      {
+        params: {},
+        messages: [
+          { role: "system", content: "a" },
+          { role: "system", content: "b" },
+          { role: "system", content: "c" },
+          { role: "system", content: "d" },
+          { role: "user", content: "hello" },
+        ],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
+    );
+    const messageMarkers = result.messages.filter((message) => message.cache_control).length;
+    const toolMarkers = result.tools!.filter((tool) => tool.cache_control).length;
+    expect(messageMarkers + toolMarkers).toBe(4);
+    expect(result.messages[1]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(result.messages[3]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(result.messages[4]?.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  test("uses one explicit system checkpoint when automatic caching is off", () => {
+    const result = applyAnthropicCaching(
+      {
+        provider: "anthropic",
+        metadata: {
+          prompt_caching: {
+            type: "ephemeral",
+            automatic: false,
+            breakpoints: { system: true },
+          },
+        },
+      },
+      {
+        params: {},
+        messages: [
+          { role: "system", content: "a" },
+          { role: "system", content: "b" },
+          { role: "user", content: "hello" },
+        ],
+      },
+    );
+    expect(result.messages).toEqual([
+      { role: "system", content: "a" },
+      { role: "system", content: "b", cache_control: { type: "ephemeral" } },
+      { role: "user", content: "hello" },
     ]);
   });
 

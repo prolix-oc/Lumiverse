@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { createPreset, getPreset, updatePreset } from "../services/presets.service";
+import { createRegexScript, getRegexScript, getRegexScriptsByPresetId } from "../services/regex-scripts.service";
 import { validateInstallPresetPayload } from "./payload-validation";
 import { installPreset as installPresetForUser, type InstallPresetDependencies } from "./installer";
 import type { InstallPresetPayload } from "./types";
@@ -52,9 +53,36 @@ function initInstallerTestDb(): void {
   db.run(`CREATE TABLE regex_scripts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    script_id TEXT NOT NULL DEFAULT '',
+    find_regex TEXT NOT NULL,
+    replace_string TEXT NOT NULL DEFAULT '',
+    actions TEXT NOT NULL DEFAULT '[]',
+    flags TEXT NOT NULL DEFAULT 'gi',
+    placement TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    scope_id TEXT,
+    target TEXT NOT NULL,
+    min_depth INTEGER,
+    max_depth INTEGER,
+    trim_strings TEXT NOT NULL,
+    run_on_edit INTEGER NOT NULL DEFAULT 0,
+    substitute_macros TEXT NOT NULL DEFAULT 'none',
+    disabled INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    folder TEXT NOT NULL DEFAULT '',
+    pack_id TEXT,
     preset_id TEXT,
-    owner_extension_identifier TEXT
+    character_id TEXT,
+    owner_extension_identifier TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
   )`);
+  db.run(`CREATE UNIQUE INDEX idx_regex_scripts_script_id
+    ON regex_scripts(user_id, script_id)
+    WHERE script_id != ''`);
 }
 
 function installPayload(
@@ -79,6 +107,57 @@ beforeEach(initInstallerTestDb);
 afterEach(() => closeDatabase());
 
 describe("LumiHub preset installer metadata", () => {
+  test("keeps older bundled regexes disabled without touching a same-named local folder", async () => {
+    const firstPayload = installPayload("hub-regex-history", {
+      name: "Hub preset",
+      presetVersion: "1.0.0",
+      blocks: [],
+    });
+    firstPayload.presetData.regex_scripts = [{
+      name: "Bundled v1",
+      find_regex: "v1",
+      disabled: false,
+    }];
+    const first = await installPreset("request-regex-v1", firstPayload);
+    expect(first.success).toBe(true);
+
+    const local = createRegexScript(USER_ID, {
+      name: "Local same-folder regex",
+      find_regex: "local",
+      folder: "Hub preset",
+      disabled: false,
+    });
+    expect(typeof local).not.toBe("string");
+
+    const secondPayload = installPayload("hub-regex-history", {
+      name: "Hub preset",
+      presetVersion: "2.0.0",
+      blocks: [],
+    });
+    secondPayload.presetVersion = "2.0.0";
+    secondPayload.presetData.regex_scripts = [{
+      name: "Bundled v2",
+      find_regex: "v2",
+      folder: "Hub preset",
+      disabled: false,
+    }];
+    const second = await installPreset("request-regex-v2", secondPayload);
+    expect(second.success).toBe(true);
+    expect(second.presetId).toBe(first.presetId);
+
+    const bundled = getRegexScriptsByPresetId(USER_ID, first.presetId!);
+    const v1 = bundled.find((script) => script.metadata._lumiverse_lumihub_preset?.version === "1.0.0");
+    const v2 = bundled.find((script) => script.metadata._lumiverse_lumihub_preset?.version === "2.0.0");
+    expect(v1).toMatchObject({ disabled: true, folder: "Hub preset · v1.0.0" });
+    expect(v2).toMatchObject({ disabled: true, folder: "Hub preset · LumiHub" });
+    expect(getRegexScript(USER_ID, (local as { id: string }).id)).toMatchObject({
+      disabled: false,
+      folder: "Hub preset",
+      preset_id: null,
+      metadata: {},
+    });
+  });
+
   test("preserves internal passthrough metadata on create and serialized metadata on update", async () => {
     const first = await installPreset("request-1", installPayload("hub-1", {
       name: "Hub preset",

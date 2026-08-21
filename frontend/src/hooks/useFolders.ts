@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { settingsApi } from '@/api/settings'
+import { scheduleLowPriorityTask } from '@/lib/low-priority-task'
 
 type FolderSettingsKey = 'characterFolders' | 'personaFolders' | 'regexScriptFolders' | 'worldBookFolders'
 const FOLDERS_UPDATED_EVENT = 'lumiverse:folders-updated'
@@ -63,7 +64,7 @@ export function useFolders(
       setStoredFolders((prev) => {
         if (prev.includes(name)) return prev
         const next = [...prev, name]
-        queueMicrotask(() => persistFolders(next))
+        scheduleLowPriorityTask(() => persistFolders(next), { label: 'persist created folder' })
         return next
       })
     },
@@ -79,7 +80,7 @@ export function useFolders(
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== source)
         if (!next.includes(target)) next.push(target)
-        queueMicrotask(() => persistFolders(next))
+        scheduleLowPriorityTask(() => persistFolders(next), { label: 'persist renamed folders' })
         return next
       })
     },
@@ -90,7 +91,7 @@ export function useFolders(
     (name: string) => {
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== name)
-        queueMicrotask(() => persistFolders(next))
+        scheduleLowPriorityTask(() => persistFolders(next), { label: 'persist deleted folders' })
         return next
       })
     },

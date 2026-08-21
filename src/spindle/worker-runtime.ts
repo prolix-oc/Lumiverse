@@ -347,6 +347,7 @@ type RuntimeWorkerToHost =
   | { type: "preset_blocks_delete"; requestId: string; presetId: string; blockId: string; userId?: string }
   | { type: "preset_categories_list"; requestId: string; presetId: string; userId?: string }
   | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_read_chunk"; requestId: string; uploadId: string; offset: number; userId?: string }
   | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | {
       type: "tokens_count_text";
@@ -741,7 +742,15 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
       phase: "prompt" | "display" | "response" | "other";
       sourceHint?: string;
       userId?: string;
-    }) => Promise<string | void>,
+    }) => Promise<
+      | string
+      | {
+          text: string;
+          touchedVars?: readonly string[];
+          volatile?: boolean;
+        }
+      | void
+    >,
     priority?: number
   ): void;
   registerWorldInfoInterceptor(
@@ -815,6 +824,13 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
   };
   uploads: {
     get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null>;
+    readChunk(uploadId: string, offset: number, userId?: string): Promise<{
+      fileName: string;
+      size: number;
+      offset: number;
+      data: Uint8Array;
+      eof: boolean;
+    } | null>;
     delete(uploadId: string, userId?: string): Promise<boolean>;
   };
   media: {
@@ -2224,6 +2240,22 @@ const spindleApi: RuntimeSpindleAPI = {
       return (await request({ type: "uploads_get", requestId, uploadId, userId })) as
         | { fileName: string; size: number; data: Uint8Array }
         | null;
+    },
+    async readChunk(uploadId: string, offset: number, userId?: string): Promise<{
+      fileName: string;
+      size: number;
+      offset: number;
+      data: Uint8Array;
+      eof: boolean;
+    } | null> {
+      const requestId = crypto.randomUUID();
+      return (await request({ type: "uploads_read_chunk", requestId, uploadId, offset, userId })) as {
+        fileName: string;
+        size: number;
+        offset: number;
+        data: Uint8Array;
+        eof: boolean;
+      } | null;
     },
     async delete(uploadId: string, userId?: string): Promise<boolean> {
       const requestId = crypto.randomUUID();
@@ -3814,7 +3846,11 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+  contracts: Object.freeze({
+    preAssemblyGenerationContext: 1,
+    worldInfoActivationCapture: 1,
+    worldInfoRuntimePlacement: 1,
+  }),
 
   registerContextHandler(
     handler: (context: unknown) => Promise<unknown>,

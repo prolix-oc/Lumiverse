@@ -13,8 +13,9 @@ When you regenerate a response, Lumiverse can prompt you for feedback — a brie
 1. Open **Settings > Chat**
 2. Toggle **Regen Feedback** on
 3. Choose an **injection position**:
-    - **User Message** — Feedback is appended to the last user message as `[OOC: your feedback]`
-    - **System Prompt** — Feedback is appended to the system prompt as `[OOC: your feedback]`
+    - **User Message** — The formatted feedback prompt is appended to the last user message
+    - **System Prompt** — The formatted feedback prompt is appended to the system prompt
+4. Optionally customize **Feedback prompt format**. This is a freeform, expandable prompt field. Place `{{$regenInput}}` wherever the submitted feedback should appear; the rest of the field supports normal macros. The default is `[OOC: {{$regenInput}}]`.
 
 ---
 

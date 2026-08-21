@@ -1,5 +1,5 @@
 import { getDb } from "../db/connection";
-import { deleteImageIfUnreferenced, uploadImage } from "./images.service";
+import { deleteImageIfUnreferenced, uploadImageDeferred } from "./images.service";
 import { getCharacter } from "./characters.service";
 import type { CharacterGalleryItem } from "../types/character-gallery";
 import { safeFetch } from "../utils/safe-fetch";
@@ -82,7 +82,7 @@ export async function uploadToGallery(
   file: File,
   caption?: string
 ): Promise<CharacterGalleryItem> {
-  const image = await uploadImage(userId, file, { owner_character_id: characterId });
+  const image = await uploadImageDeferred(userId, file, { owner_character_id: characterId });
   return addToGallery(userId, characterId, image.id, caption);
 }
 

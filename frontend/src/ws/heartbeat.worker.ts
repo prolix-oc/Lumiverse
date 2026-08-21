@@ -1,7 +1,7 @@
 type HeartbeatCommand =
   | { type: 'start'; generation: number; intervalMs: number; timeoutMs: number }
   | { type: 'stop'; generation: number }
-  | { type: 'ping-now'; generation: number; timeoutMs: number }
+  | { type: 'ping-now'; generation: number; timeoutMs: number; resumeProof?: boolean }
   | { type: 'arm'; generation: number; timeoutMs: number }
   | { type: 'ack'; generation: number }
 
@@ -43,12 +43,12 @@ function armWatchdog(generation: number, timeoutMs: number): void {
   }, timeoutMs)
 }
 
-function requestPing(generation: number, timeoutMs: number): void {
+function requestPing(generation: number, timeoutMs: number, resumeProof = false): void {
   if (generation !== activeGeneration) return
   // The client sends this on the real event socket, then replies with `arm`.
   // Waiting to arm until after send avoids false timeouts when the page's main
   // thread is temporarily busy and worker messages are queued.
-  self.postMessage({ type: 'ping', generation, timeoutMs })
+  self.postMessage({ type: 'ping', generation, timeoutMs, resumeProof })
 }
 
 function start(command: Extract<HeartbeatCommand, { type: 'start' }>): void {
@@ -71,7 +71,7 @@ self.onmessage = (event: MessageEvent<HeartbeatCommand>) => {
       stop()
       break
     case 'ping-now':
-      requestPing(command.generation, command.timeoutMs)
+      requestPing(command.generation, command.timeoutMs, command.resumeProof)
       break
     case 'arm':
       if (command.generation === activeGeneration) {

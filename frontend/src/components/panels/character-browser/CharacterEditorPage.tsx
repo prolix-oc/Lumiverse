@@ -655,8 +655,10 @@ export default function CharacterEditorPage() {
       }
     }
     loadWorldBooks()
+    const offLibraryChanged = wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, loadWorldBooks)
     return () => {
       cancelled = true
+      offLibraryChanged()
     }
   }, [editingCharacterId])
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronLeft, ChevronRight, Check, Code, Copy } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Check, Code, Copy, Search, X } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/FormComponents'
@@ -10,9 +10,11 @@ import { useStore } from '@/store'
 import type { DryRunResponse, DryRunMessage } from '@/api/generate'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
+import { findExpandedTextMatches } from '@/lib/expandedTextSearch'
 import i18n from '@/i18n'
 import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import { getNanoGptCacheUsageSummary } from '@/lib/nanogpt-breakdown-cache'
+import { getOpenAiCompatibleCacheUsageSummary } from '@/lib/openai-compatible-breakdown-cache'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -135,10 +137,11 @@ interface VirtualizedMessagesProps {
   selectedIndex: number
   clipBoundaryIndex: number
   clipBoundaryLabel?: string
+  scrollTick: number
   onSelect: (index: number) => void
 }
 
-function VirtualizedMessages({ messages, selectedIndex, clipBoundaryIndex, clipBoundaryLabel, onSelect }: VirtualizedMessagesProps) {
+function VirtualizedMessages({ messages, selectedIndex, clipBoundaryIndex, clipBoundaryLabel, scrollTick, onSelect }: VirtualizedMessagesProps) {
   const parentRef = useRef<HTMLDivElement>(null)
 
   const virtualizer = useVirtualizer({
@@ -147,6 +150,11 @@ function VirtualizedMessages({ messages, selectedIndex, clipBoundaryIndex, clipB
     estimateSize: () => MESSAGE_ROW_HEIGHT,
     overscan: 10,
   })
+
+  useEffect(() => {
+    if (scrollTick <= 0 || messages.length === 0) return
+    virtualizer.scrollToIndex(selectedIndex, { align: 'center' })
+  }, [messages.length, scrollTick, selectedIndex, virtualizer])
 
   return (
     <div ref={parentRef} className={styles.messagesScroll}>
@@ -190,6 +198,7 @@ function VirtualizedMessages({ messages, selectedIndex, clipBoundaryIndex, clipB
 export default function DryRunModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'dryRun' })
   const { t: ts } = useTranslation('modals', { keyPrefix: 'shared' })
+  const { t: tf } = useTranslation('modals', { keyPrefix: 'promptItemizer' })
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
@@ -212,6 +221,13 @@ export default function DryRunModal() {
   const [copied, setCopied] = useState(false)
   const [selectedMessageIndex, setSelectedMessageIndex] = useState(0)
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findMatchIndex, setFindMatchIndex] = useState(0)
+  const [findNavTick, setFindNavTick] = useState(0)
+  const findInputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const inspectorContentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setSelectedMessageIndex((prev) => {
@@ -243,6 +259,152 @@ export default function DryRunModal() {
 
   const rawButtonLabel = rawView === 'off' ? ts('raw') : rawView === 'text' ? ts('json') : ts('visual')
 
+  type DryRunFindMatch =
+    | { kind: 'message'; messageIndex: number; field: 'content' | 'reasoning'; start: number; end: number }
+    | { kind: 'raw'; start: number; end: number }
+
+  const messageFindMatches = useMemo<DryRunFindMatch[]>(() => {
+    const query = findQuery.trim()
+    if (!query) return []
+    const matches: DryRunFindMatch[] = []
+    messages.forEach((message, messageIndex) => {
+      for (const range of findExpandedTextMatches(message.content ?? '', query)) {
+        matches.push({ kind: 'message', messageIndex, field: 'content', start: range.start, end: range.end })
+      }
+      for (const range of findExpandedTextMatches(message.reasoning ?? '', query)) {
+        matches.push({ kind: 'message', messageIndex, field: 'reasoning', start: range.start, end: range.end })
+      }
+    })
+    return matches
+  }, [findQuery, messages])
+
+  const rawFindMatches = useMemo<DryRunFindMatch[]>(() => {
+    const query = findQuery.trim()
+    if (!query || rawView === 'off' || !rawText) return []
+    return findExpandedTextMatches(rawText, query).map((range) => ({
+      kind: 'raw' as const,
+      start: range.start,
+      end: range.end,
+    }))
+  }, [findQuery, rawText, rawView])
+
+  const findMatches = rawView === 'off' ? messageFindMatches : rawFindMatches
+  const currentFindMatchIndex = findMatches.length === 0
+    ? 0
+    : Math.min(findMatchIndex, findMatches.length - 1)
+  const currentFindMatch = findMatches[currentFindMatchIndex] ?? null
+
+  const goToFindMatch = (nextIndex: number) => {
+    if (findMatches.length === 0) return
+    const wrapped = ((nextIndex % findMatches.length) + findMatches.length) % findMatches.length
+    const match = findMatches[wrapped]
+    setFindMatchIndex(wrapped)
+    if (match.kind === 'message') {
+      setMessagesOpen(true)
+      setSelectedMessageIndex(match.messageIndex)
+      setMobileInspectorOpen(true)
+    }
+    setFindNavTick((tick) => tick + 1)
+  }
+
+  useEffect(() => {
+    setFindMatchIndex(0)
+  }, [rawView])
+
+  // Ctrl/Cmd+F opens the same find affordance used by Prompt Breakdown.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'f' || event.key === 'F')) {
+        event.preventDefault()
+        setFindOpen(true)
+        requestAnimationFrame(() => findInputRef.current?.focus())
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Explicit navigation controls both panes: the virtualizer centers the
+  // selected message on the left, then this centers the active mark on the
+  // right (or in Raw/JSON's body scroller).
+  useEffect(() => {
+    if (!findOpen || !findQuery.trim() || !currentFindMatch || findNavTick <= 0) return
+    const frame = requestAnimationFrame(() => {
+      const container = currentFindMatch.kind === 'message'
+        ? inspectorContentRef.current
+        : bodyRef.current
+      const mark = container?.querySelector<HTMLElement>('[data-dry-find-current="true"]')
+      if (!container || !mark) return
+      const containerRect = container.getBoundingClientRect()
+      const markRect = mark.getBoundingClientRect()
+      const top = container.scrollTop
+        + (markRect.top - containerRect.top)
+        - ((container.clientHeight - markRect.height) / 2)
+      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [currentFindMatch, findNavTick, findOpen, findQuery])
+
+  const highlightMessageFindMatches = (
+    text: string,
+    messageIndex: number,
+    field: 'content' | 'reasoning',
+  ) => {
+    const query = findQuery.trim()
+    if (!query) return text
+    const ranges = findExpandedTextMatches(text, query)
+    if (ranges.length === 0) return text
+    const nodes = []
+    let cursor = 0
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) nodes.push(text.slice(cursor, range.start))
+      const isCurrent = currentFindMatch?.kind === 'message'
+        && currentFindMatch.messageIndex === messageIndex
+        && currentFindMatch.field === field
+        && currentFindMatch.start === range.start
+        && currentFindMatch.end === range.end
+      nodes.push(
+        <mark
+          key={index}
+          className={isCurrent ? styles.findMarkCurrent : styles.findMark}
+          data-dry-find-current={isCurrent ? 'true' : undefined}
+        >
+          {text.slice(range.start, range.end)}
+        </mark>,
+      )
+      cursor = range.end
+    })
+    if (cursor < text.length) nodes.push(text.slice(cursor))
+    return nodes
+  }
+
+  const highlightRawFindMatches = (text: string) => {
+    const query = findQuery.trim()
+    if (!query) return text
+    const ranges = findExpandedTextMatches(text, query)
+    if (ranges.length === 0) return text
+    const nodes = []
+    let cursor = 0
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) nodes.push(text.slice(cursor, range.start))
+      const isCurrent = currentFindMatch?.kind === 'raw'
+        && currentFindMatch.start === range.start
+        && currentFindMatch.end === range.end
+      nodes.push(
+        <mark
+          key={index}
+          className={isCurrent ? styles.findMarkCurrent : styles.findMark}
+          data-dry-find-current={isCurrent ? 'true' : undefined}
+        >
+          {text.slice(range.start, range.end)}
+        </mark>,
+      )
+      cursor = range.end
+    })
+    if (cursor < text.length) nodes.push(text.slice(cursor))
+    return nodes
+  }
+
   // Memoise derived values so toggling a sibling section doesn't re-serialise
   // potentially large payloads on every render.
   const tokenBreakdown = useMemo(
@@ -259,6 +421,10 @@ export default function DryRunModal() {
   )
   const nanoGptCacheUsage = useMemo(
     () => getNanoGptCacheUsageSummary(provider, modalProps.usage),
+    [provider, modalProps.usage],
+  )
+  const openAiCompatibleCacheUsage = useMemo(
+    () => getOpenAiCompatibleCacheUsageSummary(provider, modalProps.usage),
     [provider, modalProps.usage],
   )
 
@@ -311,9 +477,67 @@ export default function DryRunModal() {
           </div>
 
           {/* Scrollable body */}
-          <div className={styles.body}>
+          <div ref={bodyRef} className={styles.body}>
+            {findOpen && (
+              <div className={styles.findBar}>
+                <Search size={12} className={styles.findBarIcon} />
+                <input
+                  ref={findInputRef}
+                  className={styles.findInput}
+                  value={findQuery}
+                  placeholder={tf('findPlaceholder')}
+                  onChange={(event) => {
+                    setFindQuery(event.target.value)
+                    setFindMatchIndex(0)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      goToFindMatch(event.shiftKey
+                        ? currentFindMatchIndex - 1
+                        : currentFindMatchIndex + 1)
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault()
+                      setFindOpen(false)
+                    }
+                  }}
+                />
+                <span className={styles.findCounter}>
+                  {findQuery.trim()
+                    ? findMatches.length > 0
+                      ? String(currentFindMatchIndex + 1) + '/' + String(findMatches.length)
+                      : tf('noMatches')
+                    : ''}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<ChevronUp size={12} />}
+                  disabled={findMatches.length === 0}
+                  onClick={() => goToFindMatch(currentFindMatchIndex - 1)}
+                  aria-label={tf('findPrevious')}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<ChevronDown size={12} />}
+                  disabled={findMatches.length === 0}
+                  onClick={() => goToFindMatch(currentFindMatchIndex + 1)}
+                  aria-label={tf('findNext')}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<X size={12} />}
+                  onClick={() => setFindOpen(false)}
+                  aria-label={tf('closeFind')}
+                />
+              </div>
+            )}
             {rawView !== 'off' ? (
-              <pre className={styles.rawView}>{rawText}</pre>
+              <pre className={styles.rawView}>
+                {findOpen ? highlightRawFindMatches(rawText) : rawText}
+              </pre>
             ) : (
               <>
             {/* Messages — collapsible + virtualised so 600+ message chats stay responsive */}
@@ -350,6 +574,7 @@ export default function DryRunModal() {
                     selectedIndex={selectedMessageIndex}
                     clipBoundaryIndex={clipBoundaryIndex}
                     clipBoundaryLabel={clipBoundaryLabel}
+                    scrollTick={findNavTick}
                     onSelect={handleSelectMessage}
                   />
                   <div className={styles.messageInspector}>
@@ -378,18 +603,22 @@ export default function DryRunModal() {
                             {selectedMessageLineCount > 0 && ` • ${ts('lines', { count: selectedMessageLineCount })}`}
                           </span>
                         </div>
-                        <div className={styles.messageInspectorContent}>
+                        <div ref={inspectorContentRef} className={styles.messageInspectorContent}>
                           <div className={styles.messageInspectorSection}>
                             <p className={styles.messageInspectorLabel}>{t('content')}</p>
                             <pre className={styles.messageInspectorText}>
-                              {selectedMessage.content || ts('emptyMessage')}
+                              {findOpen && selectedMessage.content
+                                ? highlightMessageFindMatches(selectedMessage.content, selectedMessageIndex, 'content')
+                                : selectedMessage.content || ts('emptyMessage')}
                             </pre>
                           </div>
                           {selectedMessageHasReasoning && (
                             <div className={styles.messageInspectorSection}>
                               <p className={styles.messageInspectorLabel}>{t('reasoning')}</p>
                               <pre className={styles.messageInspectorText}>
-                                {selectedMessage.reasoning}
+                                {findOpen
+                                  ? highlightMessageFindMatches(selectedMessage.reasoning ?? '', selectedMessageIndex, 'reasoning')
+                                  : selectedMessage.reasoning}
                               </pre>
                             </div>
                           )}
@@ -450,6 +679,17 @@ export default function DryRunModal() {
                               nanoGptCacheUsage.cacheReadInputTokens > 0 && `read ${nanoGptCacheUsage.cacheReadInputTokens.toLocaleString()}`,
                               nanoGptCacheUsage.cacheCreationInputTokens > 0 && `write ${nanoGptCacheUsage.cacheCreationInputTokens.toLocaleString()}`,
                               nanoGptCacheUsage.cachedTokensOpenAiStyle > 0 && `cached ${nanoGptCacheUsage.cachedTokensOpenAiStyle.toLocaleString()}`,
+                            ].filter(Boolean).join(' • ')}
+                          </span>
+                        )}
+                        {openAiCompatibleCacheUsage && (
+                          <span className={styles.breakdownSource}>
+                            {provider === 'openrouter' ? t('openRouterCache') : t('openAiCache')}
+                            {' • '}
+                            {[
+                              openAiCompatibleCacheUsage.cacheReadInputTokens > 0 && `read ${openAiCompatibleCacheUsage.cacheReadInputTokens.toLocaleString()}`,
+                              openAiCompatibleCacheUsage.cacheCreationInputTokens > 0 && `write ${openAiCompatibleCacheUsage.cacheCreationInputTokens.toLocaleString()}`,
+                              openAiCompatibleCacheUsage.cachedTokens > 0 && `cached ${openAiCompatibleCacheUsage.cachedTokens.toLocaleString()}`,
                             ].filter(Boolean).join(' • ')}
                           </span>
                         )}
@@ -965,6 +1205,17 @@ export default function DryRunModal() {
               </span>
             )}
             <div className={styles.footerSpacer} />
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Search size={12} />}
+              onClick={() => {
+                setFindOpen((open) => !open)
+                requestAnimationFrame(() => findInputRef.current?.focus())
+              }}
+            >
+              {tf('find')}
+            </Button>
             <Button variant="ghost" size="sm" icon={<Code size={12} />} onClick={cycleRawView}>
               {rawButtonLabel}
             </Button>

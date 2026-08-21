@@ -119,6 +119,10 @@ export interface RecentChat {
   character_name: string;
   character_avatar_path: string | null;
   character_image_id: string | null;
+  /** Total messages in the chat; rides along so list UIs avoid per-row fetches. */
+  message_count: number;
+  /** First 280 chars of the newest message, for list previews. */
+  last_message_preview: string;
 }
 
 export interface GroupedRecentChat {
@@ -1258,9 +1262,31 @@ export interface WorldBookEntryBulkActionResult {
   target_book_id?: string;
 }
 
+export type EmbeddingProvider = 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt' | 'nvidia-nim' | 'google_vertex';
+
+export interface EmbeddingProviderProfile {
+  api_url: string;
+  model: string;
+  dimensions: number | null;
+  send_dimensions: boolean;
+  retrieval_top_k: number;
+  hybrid_weight_mode: 'keyword_first' | 'balanced' | 'vector_first';
+  preferred_context_size: number;
+  batch_size: number;
+  similarity_threshold: number;
+  rerank_cutoff: number;
+  vectorize_world_books: boolean;
+  vectorize_chat_messages: boolean;
+  vectorize_chat_documents: boolean;
+  chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
+  request_timeout: number;
+  vertex_region?: string;
+  has_api_key: boolean;
+}
+
 export interface EmbeddingConfig {
   enabled: boolean;
-  provider: 'openai-compatible' | 'openai' | 'openrouter' | 'electronhub' | 'bananabread' | 'nanogpt';
+  provider: EmbeddingProvider;
   api_url: string;
   model: string;
   dimensions: number | null;
@@ -1277,6 +1303,7 @@ export interface EmbeddingConfig {
   chat_memory_mode: 'conservative' | 'balanced' | 'aggressive';
   request_timeout: number;
   has_api_key: boolean;
+  provider_profiles?: Partial<Record<EmbeddingProvider, EmbeddingProviderProfile>>;
   /** True when the server owner has enabled a shared embedding config and the
    *  current user is a non-owner inheriting it. The form should be read-only
    *  and the config is not user-editable while this flag is set. */

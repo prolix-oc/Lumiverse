@@ -1,5 +1,5 @@
 -- Lumiverse Database Baseline Schema
--- Generated from migrations 001 through 065.
+-- Generated from migrations 001 through 106.
 -- Fresh databases bootstrap from this file instead of replaying the full
 -- migration stack. All squashed migration names are recorded in _migrations
 -- so the runner treats them as already applied.
@@ -18,6 +18,17 @@ CREATE TABLE "account" (
   password TEXT,
   createdAt INTEGER NOT NULL DEFAULT (unixepoch()),
   updatedAt INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE audio_files (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  filename      TEXT NOT NULL,
+  original_filename TEXT NOT NULL DEFAULT '',
+  mime_type     TEXT NOT NULL DEFAULT '',
+  size_bytes    INTEGER NOT NULL DEFAULT 0,
+  duration_ms   INTEGER,
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE TABLE character_gallery (
@@ -48,7 +59,7 @@ CREATE TABLE characters (
   extensions TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, image_id TEXT REFERENCES images(id) ON DELETE SET NULL, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE);
+, image_id TEXT REFERENCES images(id) ON DELETE SET NULL, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, deleting INTEGER NOT NULL DEFAULT 0, folder TEXT NOT NULL DEFAULT '', library_scope TEXT NOT NULL DEFAULT 'mine' CHECK(library_scope IN ('mine', 'shared')));
 
 CREATE VIRTUAL TABLE characters_fts USING fts5(
   name, creator, tags,
@@ -74,7 +85,7 @@ CREATE TABLE chat_chunks (
   has_action INTEGER DEFAULT 0,
   message_count INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL, salience_score REAL DEFAULT NULL, emotional_tags TEXT DEFAULT NULL, entity_ids TEXT DEFAULT NULL, consolidation_id TEXT DEFAULT NULL, message_range_start INTEGER DEFAULT NULL, message_range_end INTEGER DEFAULT NULL,
+  updated_at INTEGER NOT NULL, salience_score REAL DEFAULT NULL, emotional_tags TEXT DEFAULT NULL, entity_ids TEXT DEFAULT NULL, consolidation_id TEXT DEFAULT NULL, message_range_start INTEGER DEFAULT NULL, message_range_end INTEGER DEFAULT NULL, cortex_warmup_signature TEXT DEFAULT NULL, cortex_warmup_completed_at INTEGER DEFAULT NULL,
   FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
 );
 
@@ -98,14 +109,15 @@ CREATE TABLE chat_memory_cache (
   UNIQUE(chat_id, settings_key)
 );
 
-CREATE TABLE chats (
+CREATE TABLE "chats" (
   id TEXT PRIMARY KEY,
-  character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  character_id TEXT REFERENCES characters(id) ON DELETE CASCADE,
   name TEXT NOT NULL DEFAULT '',
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE);
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE
+);
 
 CREATE TABLE connection_profiles (
   id TEXT PRIMARY KEY,
@@ -236,6 +248,20 @@ CREATE TABLE databanks (
   updated_at  INTEGER NOT NULL
 );
 
+CREATE TABLE dream_weaver_messages (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL,
+  user_id       TEXT NOT NULL,
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+  seq           INTEGER NOT NULL,
+  kind          TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  tool_name     TEXT,
+  status        TEXT,
+  supersedes_id TEXT,
+  FOREIGN KEY (session_id) REFERENCES dream_weaver_sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE dream_weaver_saved_prompts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -250,23 +276,21 @@ CREATE TABLE dream_weaver_saved_prompts (
 CREATE TABLE dream_weaver_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
+  session_number INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-
-  dream_text TEXT NOT NULL,
+  dream_text TEXT NOT NULL DEFAULT '',
   tone TEXT,
   constraints TEXT,
   dislikes TEXT,
   persona_id TEXT,
   connection_id TEXT,
   model TEXT,
-
   draft TEXT,
-
-  status TEXT DEFAULT 'draft',
-
+  status TEXT NOT NULL DEFAULT 'draft',
+  workspace_kind TEXT NOT NULL DEFAULT 'character',
   character_id TEXT,
-
+  launch_chat_id TEXT,
   FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE,
   FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
   FOREIGN KEY (connection_id) REFERENCES connection_profiles(id) ON DELETE SET NULL,
@@ -323,6 +347,16 @@ CREATE TABLE image_gen_connections (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE image_processing_queue (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  image_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
+  UNIQUE (image_id, kind)
+);
+
 CREATE TABLE images (
   id TEXT PRIMARY KEY,
   filename TEXT NOT NULL,
@@ -333,7 +367,14 @@ CREATE TABLE images (
   height INTEGER,
   has_thumbnail INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
-, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE);
+, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, owner_extension_identifier TEXT, owner_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL, owner_chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL);
+
+CREATE TABLE import_consumed_tickets (
+  archive_id  TEXT PRIMARY KEY,
+  consumed_at INTEGER NOT NULL,
+  user_id     TEXT REFERENCES "user"(id) ON DELETE CASCADE,
+  uses        INTEGER NOT NULL DEFAULT 1
+);
 
 CREATE TABLE loom_items (
   id TEXT PRIMARY KEY,
@@ -392,7 +433,7 @@ CREATE TABLE lumihub_link (
   instance_id TEXT NOT NULL,
   linked_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_connected_at TEXT
-);
+, share_usage_stats INTEGER NOT NULL DEFAULT 0, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE);
 
 CREATE TABLE mcp_servers (
   id TEXT PRIMARY KEY,
@@ -455,7 +496,7 @@ CREATE TABLE memory_entities (
     emotional_valence TEXT DEFAULT '{}',
     metadata TEXT DEFAULT '{}',
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL, fact_extraction_status TEXT DEFAULT 'never', fact_extraction_last_attempt INTEGER, salience_breakdown TEXT DEFAULT '{"mentionComponent":0,"arcComponent":0,"graphComponent":0,"frequencyFloor":0,"total":0}', last_mention_timestamp INTEGER, recent_mention_count INTEGER DEFAULT 0, confidence TEXT DEFAULT 'confirmed', salience_peak REAL DEFAULT 0.0,
+    updated_at INTEGER NOT NULL, fact_extraction_status TEXT DEFAULT 'never', fact_extraction_last_attempt INTEGER, salience_breakdown TEXT DEFAULT '{"mentionComponent":0,"arcComponent":0,"graphComponent":0,"frequencyFloor":0,"total":0}', last_mention_timestamp INTEGER, recent_mention_count INTEGER DEFAULT 0, confidence TEXT DEFAULT 'confirmed', salience_peak REAL DEFAULT 0.0, user_edited_at INTEGER,
     FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
 );
 
@@ -502,7 +543,7 @@ CREATE TABLE memory_relations (
     status TEXT DEFAULT 'active',
     metadata TEXT DEFAULT '{}',
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL, contradiction_flag TEXT DEFAULT 'none', contradiction_peer_id TEXT, sentiment_range TEXT, superseded_by TEXT, arc_ids TEXT DEFAULT '[]', first_seen_arc_id TEXT, last_seen_arc_id TEXT, last_evidence_timestamp INTEGER, decay_rate REAL DEFAULT 0.05, edge_salience REAL DEFAULT 0.0, label_aliases TEXT DEFAULT '[]', canonical_edge_id TEXT, merged_into TEXT,
+    updated_at INTEGER NOT NULL, contradiction_flag TEXT DEFAULT 'none', contradiction_peer_id TEXT, sentiment_range TEXT, superseded_by TEXT, arc_ids TEXT DEFAULT '[]', first_seen_arc_id TEXT, last_seen_arc_id TEXT, last_evidence_timestamp INTEGER, decay_rate REAL DEFAULT 0.05, edge_salience REAL DEFAULT 0.0, label_aliases TEXT DEFAULT '[]', canonical_edge_id TEXT, merged_into TEXT, user_edited_at INTEGER,
     FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
     FOREIGN KEY (source_entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE,
     FOREIGN KEY (target_entity_id) REFERENCES memory_entities(id) ON DELETE CASCADE
@@ -550,6 +591,45 @@ CREATE TABLE messages (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 , swipe_dates TEXT NOT NULL DEFAULT '[]');
 
+CREATE TABLE multiplayer_bans (
+  id            TEXT PRIMARY KEY,
+  room_id       TEXT NOT NULL REFERENCES multiplayer_rooms(id) ON DELETE CASCADE,
+  identity_kind TEXT NOT NULL,                                        -- mirrors participants
+  identity_ref  TEXT NOT NULL,
+  display_name  TEXT NOT NULL DEFAULT '',
+  reason        TEXT NOT NULL DEFAULT '',
+  banned_at     INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE multiplayer_participants (
+  id               TEXT PRIMARY KEY,                                  -- participant id; also the author key stamped on messages.extra.mp
+  room_id          TEXT NOT NULL REFERENCES multiplayer_rooms(id) ON DELETE CASCADE,
+  role             TEXT NOT NULL DEFAULT 'peer',                      -- 'host' | 'peer'
+  identity_kind    TEXT NOT NULL,                                     -- 'user' | 'token'
+  identity_ref     TEXT NOT NULL,                                     -- user_id (local account) OR token subject (remote peer)
+  display_name     TEXT NOT NULL DEFAULT '',                          -- peer-supplied, validated, UNTRUSTED
+  persona_snapshot TEXT NOT NULL DEFAULT '{}',                        -- JSON frozen copy {name, description, pronouns?, avatarUrl?}
+  status           TEXT NOT NULL DEFAULT 'active',                    -- 'active' | 'left' | 'kicked'
+  joined_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+  last_seen        INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE multiplayer_rooms (
+  id                          TEXT PRIMARY KEY,
+  chat_id                     TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  host_user_id                TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  status                      TEXT NOT NULL DEFAULT 'open',          -- 'open' | 'locked' | 'closed'
+  turn_strategy               TEXT NOT NULL DEFAULT 'round_robin',   -- 'round_robin' | 'freeform'
+  freeform_deadline           INTEGER,                                -- unixepoch sec; null unless a freeform window is open
+  turn_order                  TEXT NOT NULL DEFAULT '[]',            -- JSON array of participant ids (host-managed sequence)
+  current_turn_participant_id TEXT,                                   -- round_robin: whose turn (always = turn_order[turn_index])
+  turn_index                  INTEGER NOT NULL DEFAULT 0,
+  round_counter               INTEGER NOT NULL DEFAULT 0,
+  settings                    TEXT NOT NULL DEFAULT '{}',            -- JSON: maxPeers (<=8), freeformWindowSec, ...
+  created_at                  INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at                  INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 CREATE TABLE packs (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
@@ -584,7 +664,7 @@ CREATE TABLE presets (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, prompts TEXT NOT NULL DEFAULT '{}', user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, engine TEXT NOT NULL DEFAULT 'classic');
+, prompts TEXT NOT NULL DEFAULT '{}', user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, engine TEXT NOT NULL DEFAULT 'classic', cache_revision INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE push_subscriptions (
   id TEXT PRIMARY KEY,
@@ -633,7 +713,7 @@ CREATE TABLE regex_scripts (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, folder TEXT NOT NULL DEFAULT '', script_id TEXT NOT NULL DEFAULT '', pack_id TEXT, preset_id TEXT, character_id TEXT);
+, folder TEXT NOT NULL DEFAULT '', script_id TEXT NOT NULL DEFAULT '', pack_id TEXT, preset_id TEXT, character_id TEXT, owner_extension_identifier TEXT);
 
 CREATE TABLE "secrets" (
   key TEXT NOT NULL,
@@ -662,6 +742,53 @@ CREATE TABLE "settings" (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE,
   PRIMARY KEY (key, user_id)
+);
+
+CREATE TABLE sso_providers (
+  id                      TEXT PRIMARY KEY,
+  provider_kind           TEXT NOT NULL, -- 'authelia' | 'authentik' | 'keycloak' | 'custom_oidc'
+  name                    TEXT NOT NULL,
+  slug                    TEXT NOT NULL UNIQUE,
+  enabled                 INTEGER NOT NULL DEFAULT 0,
+  issuer_url              TEXT NOT NULL DEFAULT '',
+  discovery_url           TEXT NOT NULL DEFAULT '',
+  client_id               TEXT NOT NULL DEFAULT '',
+  encrypted_client_secret TEXT,
+  client_secret_iv        TEXT,
+  client_secret_tag       TEXT,
+  scopes                  TEXT NOT NULL DEFAULT '["openid","profile","email"]',
+  pkce                    INTEGER NOT NULL DEFAULT 1,
+  allow_signup            INTEGER NOT NULL DEFAULT 0,
+  metadata                TEXT NOT NULL DEFAULT '{}',
+  created_at              INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at              INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE stream_deck_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  token_prefix TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '["characters:read","chats:read"]',
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  expires_at INTEGER
+);
+
+CREATE TABLE stt_connections (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  api_url TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  has_api_key INTEGER NOT NULL DEFAULT 0,
+  default_parameters TEXT NOT NULL DEFAULT '{}',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE theme_assets (
@@ -742,6 +869,107 @@ CREATE TABLE "verification" (
   updatedAt INTEGER DEFAULT (unixepoch())
 );
 
+CREATE TABLE weaver_bible (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  spine TEXT NOT NULL DEFAULT '{}',            -- JSON: VEJA + links + contradiction + stance
+  status TEXT NOT NULL DEFAULT 'pending',      -- pending|gated|flagged
+  gated_at INTEGER, gate TEXT NOT NULL DEFAULT '{}', token_usage TEXT NOT NULL DEFAULT '{}', updated_at INTEGER,
+  FOREIGN KEY (session_id) REFERENCES weaver_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
+CREATE TABLE weaver_extraction (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  committed_facts TEXT NOT NULL DEFAULT '[]', -- JSON, slot-tagged
+  gaps TEXT NOT NULL DEFAULT '[]',            -- JSON
+  edited_at INTEGER NOT NULL DEFAULT (unixepoch()), dynamic_questions TEXT NOT NULL DEFAULT '[]',
+  FOREIGN KEY (session_id) REFERENCES weaver_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
+CREATE TABLE weaver_fields (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  field_name TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',      -- pending|streaming|passed|flagged|stale|manually_edited
+  provenance TEXT NOT NULL DEFAULT '{}',       -- JSON: link back to bible
+  token_usage TEXT NOT NULL DEFAULT '{}',      -- JSON
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (session_id) REFERENCES weaver_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
+CREATE TABLE weaver_interview_turns (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  slot TEXT NOT NULL,
+  axis TEXT NOT NULL DEFAULT '{}',            -- JSON: the spread offered
+  response_kind TEXT,                          -- pick|blend|redirect|typed|inferred
+  response TEXT NOT NULL DEFAULT '{}',         -- JSON
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (session_id) REFERENCES weaver_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
+CREATE TABLE "weaver_people" (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,                   -- the world session
+  name TEXT NOT NULL,
+  hook TEXT NOT NULL DEFAULT '',              -- the one-line hook
+  origin TEXT NOT NULL DEFAULT 'proposed',    -- proposed|manual
+  tier TEXT NOT NULL DEFAULT 'unfleshed',     -- unfleshed|extra|named
+  interview TEXT NOT NULL DEFAULT '[]',       -- JSON: Named-weave Q&A, provenance-kinded
+  npc_entry_id TEXT,                          -- the NPC-book entry once fleshed
+  promoted_session_id TEXT,                   -- the character session promotion opened
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (session_id) REFERENCES weaver_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
+CREATE TABLE weaver_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  session_number INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  seed_type TEXT NOT NULL DEFAULT 'dream',
+  seed_text TEXT NOT NULL DEFAULT '',
+  seed_provenance TEXT NOT NULL DEFAULT '{}', -- JSON
+
+  -- Studio flow
+  stage TEXT NOT NULL DEFAULT 'dream',        -- dream|readback|interview|bible|render|finalize
+  status TEXT NOT NULL DEFAULT 'draft',        -- draft|interviewing|bible|rendering|finalized
+
+  -- Generation context
+  connection_id TEXT,
+  model TEXT,
+  persona_id TEXT,
+
+  -- Output (set on finalize)
+  character_id TEXT,
+  launch_chat_id TEXT, interview_started_at INTEGER, interview_completed_at INTEGER, build_type TEXT NOT NULL DEFAULT 'character', narration_mode TEXT, persona_plan TEXT,
+
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE,
+  FOREIGN KEY (persona_id) REFERENCES personas(id) ON DELETE SET NULL,
+  FOREIGN KEY (connection_id) REFERENCES connection_profiles(id) ON DELETE SET NULL,
+  FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE SET NULL
+);
+
+CREATE TABLE weaver_taste (
+  user_id TEXT PRIMARY KEY,
+  profile TEXT NOT NULL DEFAULT '{}',          -- JSON
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (user_id) REFERENCES "user"(id) ON DELETE CASCADE
+);
+
 CREATE TABLE world_book_entries (
   id TEXT PRIMARY KEY,
   world_book_id TEXT NOT NULL REFERENCES world_books(id) ON DELETE CASCADE,
@@ -768,7 +996,7 @@ CREATE TABLE world_book_entries (
   extensions TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, use_regex INTEGER NOT NULL DEFAULT 0, prevent_recursion INTEGER NOT NULL DEFAULT 0, exclude_recursion INTEGER NOT NULL DEFAULT 0, delay_until_recursion INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 10, sticky INTEGER NOT NULL DEFAULT 0, cooldown INTEGER NOT NULL DEFAULT 0, delay INTEGER NOT NULL DEFAULT 0, selective_logic INTEGER NOT NULL DEFAULT 0, use_probability INTEGER NOT NULL DEFAULT 1, vectorized INTEGER NOT NULL DEFAULT 0, vector_index_status TEXT NOT NULL DEFAULT 'not_enabled', vector_indexed_at INTEGER, vector_index_error TEXT);
+, use_regex INTEGER NOT NULL DEFAULT 0, prevent_recursion INTEGER NOT NULL DEFAULT 0, exclude_recursion INTEGER NOT NULL DEFAULT 0, delay_until_recursion INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 10, sticky INTEGER NOT NULL DEFAULT 0, cooldown INTEGER NOT NULL DEFAULT 0, delay INTEGER NOT NULL DEFAULT 0, selective_logic INTEGER NOT NULL DEFAULT 0, use_probability INTEGER NOT NULL DEFAULT 1, vectorized INTEGER NOT NULL DEFAULT 0, vector_index_status TEXT NOT NULL DEFAULT 'not_enabled', vector_indexed_at INTEGER, vector_index_error TEXT, exclude_greeting INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1);
 
 CREATE VIRTUAL TABLE world_book_entries_fts USING fts5(
   comment, content, key, keysecondary,
@@ -786,7 +1014,18 @@ CREATE TABLE world_books (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 , user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, folder TEXT NOT NULL DEFAULT '');
 
+CREATE INDEX idx_account_provider_account
+  ON account(providerId, accountId);
+
 CREATE INDEX idx_account_userId ON "account"(userId);
+
+CREATE INDEX idx_account_user_provider
+  ON account(userId, providerId);
+
+CREATE INDEX idx_audio_files_user ON audio_files(user_id);
+
+CREATE INDEX idx_cc_chat_cortex_warmup
+  ON chat_chunks(chat_id, cortex_warmup_signature, created_at);
 
 CREATE INDEX idx_cc_chat_created_desc
   ON chat_chunks(chat_id, created_at DESC);
@@ -812,6 +1051,15 @@ CREATE INDEX idx_characters_image_id ON characters(image_id);
 
 CREATE INDEX idx_characters_user_id ON characters(user_id);
 
+CREATE INDEX idx_characters_user_library_scope
+  ON characters(user_id, library_scope);
+
+CREATE INDEX idx_characters_user_library_scope_updated
+  ON characters(user_id, library_scope, updated_at DESC);
+
+CREATE INDEX idx_characters_user_source_filename
+  ON characters(user_id, json_extract(extensions, '$._lumiverse_source_filename'));
+
 CREATE INDEX idx_characters_user_updated ON characters(user_id, updated_at DESC);
 
 CREATE INDEX idx_chat_chunks_chat ON chat_chunks(chat_id);
@@ -825,6 +1073,9 @@ CREATE INDEX idx_chats_character_id ON chats(character_id);
 CREATE INDEX idx_chats_user_character ON chats(user_id, character_id, updated_at DESC);
 
 CREATE INDEX idx_chats_user_id ON chats(user_id);
+
+CREATE INDEX idx_chats_user_source_filename
+  ON chats(user_id, json_extract(metadata, '$._lumiverse_source_filename'));
 
 CREATE INDEX idx_chats_user_updated ON chats(user_id, updated_at DESC);
 
@@ -865,9 +1116,21 @@ CREATE INDEX idx_databanks_user ON databanks(user_id);
 CREATE INDEX idx_dw_saved_prompts_user
   ON dream_weaver_saved_prompts(user_id, updated_at DESC);
 
-CREATE INDEX idx_dw_sessions_status ON dream_weaver_sessions(user_id, status);
+CREATE INDEX idx_dw_sessions_status
+  ON dream_weaver_sessions(user_id, status);
 
-CREATE INDEX idx_dw_sessions_user ON dream_weaver_sessions(user_id, created_at DESC);
+CREATE INDEX idx_dw_sessions_user
+  ON dream_weaver_sessions(user_id, created_at DESC);
+
+CREATE UNIQUE INDEX idx_dw_sessions_user_number
+  ON dream_weaver_sessions(user_id, session_number);
+
+CREATE INDEX idx_dwm_session_seq
+  ON dream_weaver_messages(session_id, seq);
+
+CREATE INDEX idx_dwm_session_status
+  ON dream_weaver_messages(session_id, status)
+  WHERE kind = 'tool_card';
 
 CREATE INDEX idx_extensions_install_scope ON extensions(install_scope);
 
@@ -875,17 +1138,35 @@ CREATE INDEX idx_extensions_installed_by_user_id ON extensions(installed_by_user
 
 CREATE INDEX idx_global_addons_user ON global_addons(user_id);
 
+CREATE INDEX idx_ict_user_consumed
+  ON import_consumed_tickets(user_id, consumed_at DESC);
+
 CREATE INDEX idx_igc_default ON image_gen_connections(user_id, is_default);
 
 CREATE INDEX idx_igc_user ON image_gen_connections(user_id);
 
+CREATE INDEX idx_image_processing_queue_user_created
+  ON image_processing_queue(user_id, created_at);
+
 CREATE INDEX idx_images_user_id ON images(user_id);
+
+CREATE INDEX idx_images_user_owner_character
+  ON images(user_id, owner_character_id, created_at DESC);
+
+CREATE INDEX idx_images_user_owner_chat
+  ON images(user_id, owner_chat_id, created_at DESC);
+
+CREATE INDEX idx_images_user_owner_extension
+  ON images(user_id, owner_extension_identifier, created_at DESC);
 
 CREATE INDEX idx_loom_items_pack_id ON loom_items(pack_id);
 
 CREATE INDEX idx_loom_tools_pack_id ON loom_tools(pack_id);
 
 CREATE INDEX idx_lumia_items_pack_id ON lumia_items(pack_id);
+
+CREATE UNIQUE INDEX idx_lumihub_link_user_id
+ON lumihub_link(user_id);
 
 CREATE INDEX idx_mc_chat_range ON memory_consolidations(chat_id, message_range_start, message_range_end);
 
@@ -916,6 +1197,9 @@ CREATE INDEX idx_me_fact_status ON memory_entities(chat_id, fact_extraction_stat
 
 CREATE INDEX idx_me_status ON memory_entities(chat_id, status);
 
+CREATE INDEX idx_me_user_edited ON memory_entities(chat_id)
+  WHERE user_edited_at IS NOT NULL;
+
 CREATE INDEX idx_message_breakdowns_chat ON message_breakdowns(chat_id);
 
 CREATE INDEX idx_message_breakdowns_user ON message_breakdowns(user_id);
@@ -942,6 +1226,18 @@ CREATE INDEX idx_mm_entity ON memory_mentions(entity_id);
 
 CREATE UNIQUE INDEX idx_mm_entity_chunk ON memory_mentions(entity_id, chunk_id);
 
+CREATE UNIQUE INDEX idx_mp_bans_identity
+  ON multiplayer_bans(room_id, identity_kind, identity_ref);
+
+CREATE UNIQUE INDEX idx_mp_participants_identity
+  ON multiplayer_participants(room_id, identity_kind, identity_ref);
+
+CREATE INDEX idx_mp_participants_room ON multiplayer_participants(room_id, status);
+
+CREATE UNIQUE INDEX idx_mp_rooms_chat ON multiplayer_rooms(chat_id);
+
+CREATE INDEX idx_mp_rooms_host ON multiplayer_rooms(host_user_id);
+
 CREATE INDEX idx_mr_active_source_salience
   ON memory_relations(chat_id, source_entity_id, edge_salience DESC, strength DESC)
   WHERE status = 'active' AND superseded_by IS NULL AND merged_into IS NULL AND contradiction_flag != 'suspect';
@@ -964,6 +1260,9 @@ CREATE INDEX idx_mr_source ON memory_relations(source_entity_id);
 
 CREATE INDEX idx_mr_target ON memory_relations(target_entity_id);
 
+CREATE INDEX idx_mr_user_edited ON memory_relations(chat_id)
+  WHERE user_edited_at IS NOT NULL;
+
 CREATE INDEX idx_ms_chat ON memory_salience(chat_id);
 
 CREATE INDEX idx_ms_chat_score ON memory_salience(chat_id, score DESC);
@@ -979,6 +1278,9 @@ CREATE INDEX idx_personas_attached_wb ON personas(attached_world_book_id);
 CREATE INDEX idx_personas_image_id ON personas(image_id);
 
 CREATE INDEX idx_personas_user_id ON personas(user_id);
+
+CREATE INDEX idx_personas_user_source_filename
+  ON personas(user_id, json_extract(metadata, '$._lumiverse_source_filename'));
 
 CREATE INDEX idx_personas_user_updated ON personas(user_id, updated_at DESC);
 
@@ -999,6 +1301,10 @@ CREATE UNIQUE INDEX idx_query_cache_chat_hash_unique ON query_vector_cache(chat_
 CREATE INDEX idx_query_cache_expires ON query_vector_cache(expires_at);
 
 CREATE INDEX idx_regex_scripts_character ON regex_scripts(character_id);
+
+CREATE INDEX idx_regex_scripts_extension_owner
+  ON regex_scripts(user_id, owner_extension_identifier)
+  WHERE owner_extension_identifier IS NOT NULL;
 
 CREATE INDEX idx_regex_scripts_pack ON regex_scripts(pack_id);
 
@@ -1022,6 +1328,15 @@ CREATE INDEX idx_session_userId ON "session"(userId);
 
 CREATE INDEX idx_settings_user_id ON settings(user_id);
 
+CREATE INDEX idx_sso_providers_enabled ON sso_providers(enabled);
+
+CREATE INDEX idx_stream_deck_tokens_user
+ON stream_deck_tokens(user_id, created_at DESC);
+
+CREATE INDEX idx_sttc_default ON stt_connections(user_id, is_default);
+
+CREATE INDEX idx_sttc_user ON stt_connections(user_id);
+
 CREATE INDEX idx_theme_assets_image_id
   ON theme_assets(image_id);
 
@@ -1041,12 +1356,28 @@ CREATE INDEX idx_ttsc_user ON tts_connections(user_id);
 
 CREATE INDEX idx_wbe_world_book_id ON world_book_entries(world_book_id);
 
+CREATE INDEX idx_wbe_world_book_order
+  ON world_book_entries(world_book_id, order_value, id);
+
 CREATE INDEX idx_wbe_world_book_vector_index_status
 ON world_book_entries(world_book_id, vector_index_status);
 
 CREATE INDEX idx_wbe_world_book_vectorized ON world_book_entries(world_book_id, vectorized);
 
+CREATE INDEX idx_weaver_fields_session ON weaver_fields(session_id, field_name);
+
+CREATE INDEX idx_weaver_people_session ON weaver_people(user_id, session_id);
+
+CREATE INDEX idx_weaver_sessions_status ON weaver_sessions(user_id, status);
+
+CREATE INDEX idx_weaver_sessions_user ON weaver_sessions(user_id, updated_at DESC);
+
+CREATE INDEX idx_weaver_turns_session ON weaver_interview_turns(session_id, seq);
+
 CREATE INDEX idx_world_books_user_id ON world_books(user_id);
+
+CREATE INDEX idx_world_books_user_source_filename
+  ON world_books(user_id, json_extract(metadata, '$._lumiverse_source_filename'));
 
 CREATE TRIGGER characters_fts_delete BEFORE DELETE ON characters BEGIN
   INSERT INTO characters_fts(characters_fts, rowid, name, creator, tags)
@@ -1058,12 +1389,14 @@ CREATE TRIGGER characters_fts_insert AFTER INSERT ON characters BEGIN
     VALUES (new.rowid, new.name, new.creator, new.tags);
 END;
 
-CREATE TRIGGER characters_fts_update BEFORE UPDATE ON characters BEGIN
+CREATE TRIGGER characters_fts_update
+BEFORE UPDATE OF name, creator, tags ON characters BEGIN
   INSERT INTO characters_fts(characters_fts, rowid, name, creator, tags)
     VALUES ('delete', old.rowid, old.name, old.creator, old.tags);
 END;
 
-CREATE TRIGGER characters_fts_update_after AFTER UPDATE ON characters BEGIN
+CREATE TRIGGER characters_fts_update_after
+AFTER UPDATE OF name, creator, tags ON characters BEGIN
   INSERT INTO characters_fts(rowid, name, creator, tags)
     VALUES (new.rowid, new.name, new.creator, new.tags);
 END;

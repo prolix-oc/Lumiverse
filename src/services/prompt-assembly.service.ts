@@ -138,6 +138,10 @@ import {
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
 import {
+  captureInlineWebSearchContextSlot,
+  stripInlineWebSearchContextSlot,
+} from "./inline-web-search";
+import {
   isGenuinelyNewChat,
   resolveNewChatPromptConfig,
   resolvePromptBehavior,
@@ -250,7 +254,7 @@ export { getSourceMessageMetadata };
  */
 function getStoredReasoningCarrier(message: Message): Pick<
   LlmMessage,
-  "reasoning_content" | "thinking_blocks" | "reasoning_details"
+  "reasoning_content" | "thinking_blocks" | "reasoning_details" | "thought_signature"
 > {
   if (message.is_user) return {};
   const carrier = message.extra?.reasoningCarrier;
@@ -282,19 +286,27 @@ function getStoredReasoningCarrier(message: Message): Pick<
   ) {
     return { reasoning_content: value.content };
   }
+  if (
+    value.type === "gemini_thought_signature" &&
+    typeof value.signature === "string" &&
+    value.signature.length > 0
+  ) {
+    return { thought_signature: value.signature };
+  }
   return {};
 }
 
 function hasNativeReasoningCarrier(message: LlmMessage): boolean {
   return Boolean(
-    message.reasoning_content ||
+      message.reasoning_content ||
       message.thinking_blocks?.length ||
-      message.reasoning_details?.length,
+      message.reasoning_details?.length ||
+      message.thought_signature,
   );
 }
 
 function omitNativeReasoningCarrier(message: LlmMessage): LlmMessage {
-  const { reasoning_content, thinking_blocks, reasoning_details, ...withoutCarrier } =
+  const { reasoning_content, thinking_blocks, reasoning_details, thought_signature, ...withoutCarrier } =
     message;
   return withoutCarrier;
 }
@@ -1300,14 +1312,88 @@ function resolveStoredPromptVariableValues(
  * wraps the existing single macro evaluation rather than scheduling a second
  * pass, so the placement macros are strictly observational.
  */
+async function evaluateHostPromptSource(
+  content: string,
+  macroEnv: MacroEnv,
+  sourceHint = "prompt_source:preset_setting",
+): Promise<string> {
+  return (await evaluate(content, macroEnv, registry, {
+    phase: "prompt",
+    sourceHint,
+    sourceOwner: "host",
+  })).text;
+}
+
+export const DEFAULT_REGEN_FEEDBACK_FORMAT = "[OOC: {{$regenInput}}]";
+const REGEN_INPUT_PLACEHOLDER = "{{$regenInput}}";
+
+/**
+ * Resolve macros in a freeform regen-feedback template without treating the
+ * submitted feedback itself as macro source. The placeholder is masked for
+ * the full evaluation and restored only after macro expansion completes.
+ */
+export async function resolveRegenFeedbackPrompt(
+  format: string | undefined,
+  regenInput: string,
+  macroEnv: MacroEnv,
+): Promise<string> {
+  const template = format ?? DEFAULT_REGEN_FEEDBACK_FORMAT;
+  let guard = "\u0000LUMIVERSE_REGEN_INPUT\u0000";
+  while (template.includes(guard) || regenInput.includes(guard)) guard += "_";
+
+  const guardedTemplate = template.split(REGEN_INPUT_PLACEHOLDER).join(guard);
+  const resolved = (
+    await evaluate(guardedTemplate, macroEnv, registry, {
+      phase: "prompt",
+      sourceHint: "prompt_source:regen_feedback",
+    })
+  ).text;
+  return resolved.split(guard).join(regenInput);
+}
+
 async function evaluatePromptBlockContent(
   content: string,
   macroEnv: MacroEnv,
   block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
 ): Promise<string> {
   return withPromptBlockContext(macroEnv, block, async () =>
-    (await evaluate(content, macroEnv, registry)).text,
+    evaluateHostPromptSource(content, macroEnv, "prompt_source:preset_block"),
   );
+}
+
+const WI_MARKER_MACRO_RE = /\{\{\s*wi_?marker\s*(?:\}\}|::)/i;
+
+/**
+ * Resolve the same block with marker-mode WI suppressed for breakdown
+ * accounting. The clone keeps this diagnostic pass from mutating the live
+ * block-local variables or persisted macro state.
+ */
+export async function evaluatePromptBlockTokenCountContent(
+  content: string,
+  macroEnv: MacroEnv,
+  block: Pick<PromptBlock, "id" | "role" | "position" | "depth">,
+): Promise<string | undefined> {
+  if (!WI_MARKER_MACRO_RE.test(content)) return undefined;
+
+  const tokenCountEnv = cloneEnv(macroEnv);
+  tokenCountEnv.commit = false;
+  tokenCountEnv.extra.worldInfoAtMarker = "";
+  return evaluatePromptBlockContent(content, tokenCountEnv, block);
+}
+
+export function attributeExpandedMarkerWorldInfoTokens(
+  breakdown: AssemblyBreakdownEntry[],
+): void {
+  const markerWorldInfoWasExpanded = breakdown.some(
+    (entry) => entry.attributesWorldInfoMarkerTokens === true,
+  );
+  if (!markerWorldInfoWasExpanded) return;
+
+  for (const entry of breakdown) {
+    if (entry.type === "world_info" && entry.marker === "wi_marker") {
+      delete entry.excludeFromTotal;
+    }
+  }
 }
 
 /**
@@ -1571,6 +1657,8 @@ interface PendingAppend {
   baseRole: "user" | "assistant";
   depth: number;
   content: string;
+  tokenCountContent?: string;
+  attributesWorldInfoMarkerTokens?: boolean;
   blockName: string;
   blockId: string;
 }
@@ -2911,6 +2999,8 @@ export async function assemblePrompt(
     role: LlmMessage["role"];
     depth: number;
     content: string;
+    tokenCountContent?: string;
+    attributesWorldInfoMarkerTokens?: boolean;
     blockName: string;
     blockId: string;
     marker?: string;
@@ -3029,8 +3119,7 @@ export async function assemblePrompt(
           chat.metadata?.group === true,
         );
         if (newChatPrompt) {
-          const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
-            .text;
+          const resolved = await evaluateHostPromptSource(newChatPrompt, macroEnv);
           const trimmed = resolved.trim();
           if (trimmed && !isDecorativeNewChatSeparator(trimmed)) {
             result.push({ role: "system", content: trimmed });
@@ -3402,11 +3491,21 @@ export async function assemblePrompt(
     ) {
       phiMacroReferenced = true;
     }
+    const rawTokenCountContent = await evaluatePromptBlockTokenCountContent(
+      content,
+      macroEnv,
+      block,
+    );
+    delete macroEnv.extra._worldInfoAtMarkerMacroUsed;
     const rawResolved = await evaluatePromptBlockContent(
       content,
       macroEnv,
       block,
     );
+    const attributesWorldInfoMarkerTokens =
+      macroEnv.extra._worldInfoAtMarkerMacroUsed === true
+      && rawTokenCountContent !== undefined;
+    delete macroEnv.extra._worldInfoAtMarkerMacroUsed;
 
     // Append roles: collect for deferred application after full assembly.
     // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
@@ -3417,6 +3516,10 @@ export async function assemblePrompt(
           baseRole: appendBaseRole(block.role),
           depth: block.depth || 0,
           content: rawResolved,
+          tokenCountContent: attributesWorldInfoMarkerTokens
+            ? rawTokenCountContent
+            : undefined,
+          attributesWorldInfoMarkerTokens,
           blockName: block.name,
           blockId: block.id,
         });
@@ -3425,6 +3528,10 @@ export async function assemblePrompt(
     }
 
     const resolved = normalizePromptBlockText(rawResolved);
+    const tokenCountContent = !attributesWorldInfoMarkerTokens
+      || rawTokenCountContent === undefined
+      ? undefined
+      : normalizePromptBlockText(rawTokenCountContent);
     if (resolved) {
       const role: LlmMessage["role"] =
         (block.role as LlmMessage["role"]) || "system";
@@ -3436,6 +3543,8 @@ export async function assemblePrompt(
           role,
           depth: Math.max(0, block.depth || 0),
           content: resolved,
+          tokenCountContent,
+          attributesWorldInfoMarkerTokens,
           blockName: block.name,
           blockId: block.id,
           marker: block.marker ?? undefined,
@@ -3447,6 +3556,8 @@ export async function assemblePrompt(
           name: block.name,
           role,
           content: resolved,
+          tokenCountContent,
+          attributesWorldInfoMarkerTokens,
           blockId: block.id,
           marker: block.marker ?? undefined,
         });
@@ -3463,13 +3574,11 @@ export async function assemblePrompt(
   // ---- Post-history instructions ----
   phaseStartedAt = performance.now();
   if (!phiMacroReferenced && effectiveCharacter.post_history_instructions) {
-    const resolved = (
-      await evaluate(
-        effectiveCharacter.post_history_instructions,
-        macroEnv,
-        registry,
-      )
-    ).text.trim();
+    const resolved = (await evaluateHostPromptSource(
+      "{{charPostHistoryInstructions}}",
+      macroEnv,
+      "prompt_source:character_wrapper",
+    )).trim();
     if (resolved) {
       result.push({ role: "system", content: resolved });
       breakdown.push({
@@ -3626,6 +3735,7 @@ export async function assemblePrompt(
       name: formatWorldInfoBreakdownName("WI At Marker", markerEntry.entryLabel),
       role: markerEntry.role,
       content: markerEntry.content,
+      marker: "wi_marker",
       excludeFromTotal: true,
     });
   }
@@ -3663,6 +3773,9 @@ export async function assemblePrompt(
       name: depthBlock.blockName,
       role: depthBlock.role,
       content: depthBlock.content,
+      tokenCountContent: depthBlock.tokenCountContent,
+      attributesWorldInfoMarkerTokens:
+        depthBlock.attributesWorldInfoMarkerTokens,
       blockId: depthBlock.blockId,
       marker: depthBlock.marker,
     });
@@ -3678,17 +3791,21 @@ export async function assemblePrompt(
     await applyGuidedGenerations(result, guided, macroEnv, breakdown);
   }
 
-  // Regen feedback injection (user-provided OOC guidance for regeneration)
+  // Regen feedback injection (user-provided guidance for regeneration)
   if (ctx.regenFeedback) {
-    const oocContent = `[OOC: ${ctx.regenFeedback}]`;
+    const feedbackContent = await resolveRegenFeedbackPrompt(
+      ctx.regenFeedbackFormat,
+      ctx.regenFeedback,
+      macroEnv,
+    );
     if (ctx.regenFeedbackPosition === "system") {
       // Append as a system message at the end
-      result.push({ role: "system", content: oocContent });
+      result.push({ role: "system", content: feedbackContent });
       breakdown.push({
         type: "utility",
         name: "Regen Feedback",
         role: "system",
-        content: oocContent,
+        content: feedbackContent,
       });
     } else {
       // Append to the last real chat-history user message so preset-added
@@ -3699,7 +3816,7 @@ export async function assemblePrompt(
           if (typeof result[i].content === "string") {
             result[i] = {
               ...result[i],
-              content: result[i].content + "\n" + oocContent,
+              content: result[i].content + "\n" + feedbackContent,
             };
           } else {
             const parts = [
@@ -3710,10 +3827,10 @@ export async function assemblePrompt(
               const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
               parts[textIdx] = {
                 type: "text",
-                text: tp.text + "\n" + oocContent,
+                text: tp.text + "\n" + feedbackContent,
               };
             } else {
-              parts.unshift({ type: "text", text: oocContent });
+              parts.unshift({ type: "text", text: feedbackContent });
             }
             result[i] = { ...result[i], content: parts };
           }
@@ -3722,19 +3839,19 @@ export async function assemblePrompt(
             type: "utility",
             name: "Regen Feedback",
             role: "user",
-            content: oocContent,
+            content: feedbackContent,
           });
           break;
         }
       }
       // Fallback: if no user message found, add as a user message
       if (!injected) {
-        result.push({ role: "user", content: oocContent });
+        result.push({ role: "user", content: feedbackContent });
         breakdown.push({
           type: "utility",
           name: "Regen Feedback",
           role: "user",
-          content: oocContent,
+          content: feedbackContent,
         });
       }
     }
@@ -3750,7 +3867,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.continueNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push(markAsContinueNudge({ role: "system", content: resolved }));
         breakdown.push({
@@ -3772,7 +3889,7 @@ export async function assemblePrompt(
         : "";
     let resolved = "";
     if (prompt) {
-      resolved = (await evaluate(prompt, macroEnv, registry)).text;
+      resolved = await evaluateHostPromptSource(prompt, macroEnv);
     }
     if (userInput) {
       resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -3796,9 +3913,10 @@ export async function assemblePrompt(
       typeof last.content === "string" &&
       !last.content.trim()
     ) {
-      const resolved = (
-        await evaluate(promptBehavior.sendIfEmpty, macroEnv, registry)
-      ).text;
+      const resolved = await evaluateHostPromptSource(
+        promptBehavior.sendIfEmpty,
+        macroEnv,
+      );
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3824,7 +3942,7 @@ export async function assemblePrompt(
   ) {
     const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
-      const resolved = (await evaluate(nudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(nudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3852,7 +3970,7 @@ export async function assemblePrompt(
   ) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
-      const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
+      const resolved = await evaluateHostPromptSource(groupNudge, macroEnv);
       if (resolved) {
         result.push({ role: "user", content: resolved });
         breakdown.push({
@@ -3886,8 +4004,11 @@ export async function assemblePrompt(
     typeof promptBiasVal === "string" &&
     promptBiasVal.trim()
   ) {
-    const resolvedBias = (await evaluate(promptBiasVal, macroEnv, registry))
-      .text;
+    const resolvedBias = await evaluateHostPromptSource(
+      promptBiasVal,
+      macroEnv,
+      "prompt_source:host_setting",
+    );
     if (resolvedBias) prefillParts.push(resolvedBias);
   }
 
@@ -3898,8 +4019,7 @@ export async function assemblePrompt(
         ? completionSettings.assistantImpersonation
         : completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) prefillParts.push(resolvedPrefill);
   }
 
@@ -3912,9 +4032,10 @@ export async function assemblePrompt(
     connection?.provider === "moonshot" &&
     completionSettings.reasoningPrefill
   ) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
     }
@@ -3973,6 +4094,13 @@ export async function assemblePrompt(
     applyAppendGroup(result, breakdown, group);
   }
 
+  // At-marker entries are absent from the outbound prompt unless an emitted
+  // block actually expanded {{wiMarker}}. Once that happens, the block's
+  // tokenCountContent owns only its non-WI wrapper and these rows own the WI
+  // tokens. Keep the old exclusion when the macro appeared only in a skipped
+  // branch/block, or was not present at all.
+  attributeExpandedMarkerWorldInfoTokens(breakdown);
+
   // Strip trailing whitespace from the last chat-history assistant message.
   // Anthropic (and other strict providers) reject turns ending in whitespace;
   // explicit prefills are left alone so users can intentionally seed responses.
@@ -4022,6 +4150,23 @@ export async function assemblePrompt(
     resolvePromptMacrosAfterRegexPass(result, macroEnv)
   );
   stripEmptyTextParts(result);
+
+  // {{webSearchContext}} resolves to a private token while prompt blocks are
+  // assembled. Retain the original message as an internal template, but strip
+  // the token from normal prompt display and the first model request. If the
+  // model later calls web_search, generate.service replays this exact location
+  // with bounded result context instead of using the fallback end block.
+  for (const message of result) {
+    captureInlineWebSearchContextSlot(message);
+  }
+  for (let index = breakdown.length - 1; index >= 0; index--) {
+    const entry = breakdown[index];
+    if (typeof entry.content !== "string") continue;
+    entry.content = stripInlineWebSearchContextSlot(entry.content);
+    if (entry.type === "block" && entry.content.trim().length === 0) {
+      breakdown.splice(index, 1);
+    }
+  }
 
   if (ctx.generationType === "continue") {
     const finalized = finalizeContinuePrompt(
@@ -5452,6 +5597,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     if (!queryVector) {
       const [vec] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], {
         signal,
+        inputType: "query",
       });
       queryVector = vec;
       if (queryVector && queryVector.length > 0) {
@@ -5910,12 +6056,23 @@ function formatCortexForAssembly(
   };
 
   if (cortexConfig.useChatMemoryFormatting) {
-    const memResult = memoryCortex.cortexToMemoryResult(cortexResult, chatMemorySettings);
+    // Preserve the user's Long-Term Memory templates for raw retrieved chunks.
+    // Cortex-owned scene consolidations, entities, relationships, and arcs
+    // still use the selected Cortex formatter mode.
+    const rawMemoryResult = {
+      ...cortexResult,
+      memories: cortexResult.memories.filter((memory) => memory.source === "chunk"),
+    };
+    const consolidationMemories = cortexResult.memories.filter(
+      (memory) => memory.source === "consolidation",
+    );
+    const memResult = memoryCortex.cortexToMemoryResult(rawMemoryResult, chatMemorySettings);
 
-    // Append entity/relationship/arc context so the LLM still benefits from
-    // cortex scoring signals even when memory chunks use chat memory templates.
+    // Append Cortex-owned context so the LLM still benefits from consolidation
+    // and graph signals even when raw memories use chat-memory templates.
     const contextBudget = Math.floor(cortexConfig.contextTokenBudget * 0.55);
-    const contextText = memoryCortex.formatContextSections(
+    const contextText = memoryCortex.formatShadowPrompt(
+      consolidationMemories,
       cortexResult.entityContext,
       cortexResult.activeRelationships,
       cortexResult.arcContext,
@@ -5924,7 +6081,7 @@ function formatCortexForAssembly(
         tokenBudget: contextBudget,
         currentSpeakerName: character?.name,
       },
-    );
+    ).text;
     if (contextText) {
       memResult.formatted = memResult.formatted
         ? memResult.formatted + "\n\n" + contextText
@@ -6199,6 +6356,9 @@ function applyAppendGroup(
             name: `${append.blockName} → ${baseRole}@${depth}`,
             role: baseRole,
             content: append.content,
+            tokenCountContent: append.tokenCountContent,
+            attributesWorldInfoMarkerTokens:
+              append.attributesWorldInfoMarkerTokens,
             blockId: append.blockId,
           });
         }
@@ -7109,6 +7269,10 @@ type ReasoningParameterSettings = {
   reasoningEffort?: string;
   keepInHistory?: number;
   thinkingDisplay?: string;
+  /** Z.AI-only. When set, forwards to `thinking.clear_thinking`. */
+  clearThinking?: boolean;
+  /** Google Gemini / Vertex only. Replays optional non-tool thought signatures. */
+  replayThoughtSignatures?: boolean;
   /** When present, supersedes the legacy preset-level custom body. */
   customBody?: CustomBody;
 };
@@ -7237,7 +7401,14 @@ export function buildParameters(
         effort,
         modelName || undefined,
         reasoningSettings.thinkingDisplay,
+        reasoningSettings.clearThinking,
       );
+    }
+    if (
+      reasoningSettings.replayThoughtSignatures === true &&
+      (providerName === "google" || providerName === "google_vertex")
+    ) {
+      params._replay_thought_signatures = true;
     }
   }
 
@@ -7289,9 +7460,12 @@ export function buildParameters(
  *                "max" at present). K2.7-code uses thinking: { type: "enabled",
  *                keep: "all" } (or omit, since thinking is always on). K2.6/K2.5
  *                use thinking: { type: "enabled" }.
- * - Z.AI:        thinking: { type: "enabled" } plus reasoning_effort for GLM-5.x
- *                models (max/xhigh/high/medium/low/minimal/none). GLM-4.x only
- *                receives the thinking toggle.
+ * - Z.AI:        thinking: { type: "enabled" } plus an optional user-selected
+ *                `clear_thinking` value and reasoning_effort for GLM-5.x models.
+ *                GLM-5.3 accepts low/high/max; older GLM-5 models retain their
+ *                compatibility values. GLM-4.5+ supports
+ *                the same user-selected clear-thinking behaviour without
+ *                reasoning_effort.
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
 export function injectReasoningParams(
@@ -7300,6 +7474,7 @@ export function injectReasoningParams(
   effort: string,
   model?: string,
   thinkingDisplay?: string,
+  clearThinking?: boolean,
 ): void {
   if (providerName === "anthropic") {
     if (!params.thinking) {
@@ -7447,23 +7622,26 @@ export function injectReasoningParams(
   } else if (providerName === "zai") {
     // Z.AI (Zhipu GLM): thinking.type controls CoT; GLM-5.x additionally
     // supports reasoning_effort (GLM-5.2+ officially, GLM-5/5.1 support max/high
-    // per the GLM-5 repo). Send both so GLM-5.x models use the requested effort.
+    // per the GLM-5 repo). `clear_thinking` is intentionally only sent when
+    // the user configures it on the connection's Reasoning tab; omitting it
+    // leaves Z.AI's model/API default in control.
     if (!params.thinking) {
-      params.thinking = { type: "enabled" };
+      params.thinking = {
+        type: "enabled",
+        ...(typeof clearThinking === "boolean"
+          ? { clear_thinking: clearThinking }
+          : {}),
+      };
     }
 
     const isGlm5 = model ? /^glm-5/i.test(model) : false;
     if (isGlm5 && params.reasoning_effort === undefined) {
-      const validEfforts = new Set([
-        "max",
-        "xhigh",
-        "high",
-        "medium",
-        "low",
-        "minimal",
-        "none",
-      ]);
-      // "auto" maps to the documented default deep-reasoning level.
+      const isGlm53 = /^glm-5\.3(?:$|[\[.:@-])/i.test(model || "");
+      const validEfforts = isGlm53
+        ? new Set(["low", "high", "max"])
+        : new Set(["max", "xhigh", "high", "medium", "low", "minimal", "none"]);
+      // "auto" maps to the documented default deep-reasoning level. Values
+      // outside GLM-5.3's low/high/max contract also fall back to max.
       params.reasoning_effort =
         effort === "auto" ? "max" : validEfforts.has(effort) ? effort : "max";
     }
@@ -7640,7 +7818,7 @@ async function onelinerImpersonation(
     typeof ctx.impersonateInput === "string" ? ctx.impersonateInput.trim() : "";
   let resolved = "";
   if (prompt) {
-    resolved = (await evaluate(prompt, macroEnv, registry)).text;
+    resolved = await evaluateHostPromptSource(prompt, macroEnv);
   }
   if (userInput) {
     resolved = resolved ? `${resolved}\n\n${userInput}` : userInput;
@@ -7662,8 +7840,7 @@ async function onelinerImpersonation(
     completionSettings.assistantImpersonation ||
     completionSettings.assistantPrefill;
   if (csPrefill) {
-    const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
-      .text;
+    const resolvedPrefill = await evaluateHostPromptSource(csPrefill, macroEnv);
     if (resolvedPrefill) {
       assistantPrefill = resolvedPrefill;
       result.push({ role: "assistant", content: assistantPrefill, partial: true });
@@ -7677,9 +7854,10 @@ async function onelinerImpersonation(
   }
 
   if (connection?.provider === "moonshot" && completionSettings.reasoningPrefill) {
-    const resolvedReasoningPrefill = (
-      await evaluate(completionSettings.reasoningPrefill, macroEnv, registry)
-    ).text;
+    const resolvedReasoningPrefill = await evaluateHostPromptSource(
+      completionSettings.reasoningPrefill,
+      macroEnv,
+    );
     if (resolvedReasoningPrefill) {
       assistantReasoningPrefill = resolvedReasoningPrefill;
       const prefillMessage = result.findLast(

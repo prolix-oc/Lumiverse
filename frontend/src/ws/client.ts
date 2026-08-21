@@ -8,6 +8,9 @@ export const WS_OPEN = '__ws_open'
 export const WS_CLOSE = '__ws_close'
 export const WS_PONG = '__ws_pong'
 export const WS_AUTH_ERROR = '__ws_auth_error'
+export const WS_RESUME_RECOVERY_START = '__ws_resume_recovery_start'
+export const WS_RESUME_RECOVERY_COMPLETE = '__ws_resume_recovery_complete'
+export const WS_RESUME_RECOVERY_FAILED = '__ws_resume_recovery_failed'
 
 /** If we send a ping and don't see a pong within this window, treat the socket as dead. */
 const PONG_TIMEOUT_MS = 10_000
@@ -15,11 +18,11 @@ const PONG_TIMEOUT_MS = 10_000
 /**
  * Shorter watchdog used when the page returns from hidden — iOS PWAs and some
  * desktop browsers silently kill the WS during suspension, and a snappier
- * timeout here keeps the connection-lost overlay's grace window from
- * overflowing on resume.
+ * foreground probe lets the recovery state resolve promptly on resume.
  */
 const RESUME_PONG_TIMEOUT_MS = 3_000
 const PING_INTERVAL_MS = 30_000
+const RESUME_RECOVERY_TIMEOUT_MS = 20_000
 
 type MobilePlatform = {
   userAgent: string
@@ -39,7 +42,7 @@ export function shouldUseHeartbeatWorker(platform: MobilePlatform = navigator): 
 }
 
 type HeartbeatWorkerMessage =
-  | { type: 'ping'; generation: number; timeoutMs: number }
+  | { type: 'ping'; generation: number; timeoutMs: number; resumeProof?: boolean }
   | { type: 'timeout'; generation: number }
 
 export class WebSocketClient {
@@ -58,6 +61,11 @@ export class WebSocketClient {
   private focusedChatId: string | null = null
   /** Previous visibility state — used to detect hidden→visible transitions. */
   private wasVisible = false
+  /** True while the document is hidden/frozen and JS liveness deadlines are unreliable. */
+  private lifecyclePaused = false
+  private resumeRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+  /** The application-level pong that proves a *new* foreground round trip. */
+  private resumeProbeId: string | null = null
   /**
    * One-shot suppression window for the aggressive resume watchdog. Used for
    * expected system-modal hops like the file picker, which can blur/hide the
@@ -90,8 +98,12 @@ export class WebSocketClient {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
       }
-      this.startPing()
       this.startVisibilityTracking()
+      if (!this.lifecyclePaused) this.startPing()
+      // If the old transport died while the PWA was suspended, this is the
+      // first fresh socket of the resume recovery. Prove it explicitly rather
+      // than accepting a delayed pong from the pre-suspension socket.
+      if (this.resumeRecoveryTimer) this.sendPingNow(RESUME_PONG_TIMEOUT_MS, true)
       this.emit(WS_OPEN, {})
       this.emit(EventType.CONNECTED, {})
     }
@@ -101,6 +113,7 @@ export class WebSocketClient {
         const data = JSON.parse(event.data)
         if (data.type === 'pong') {
           this.ackHeartbeat()
+          if (data.id && data.id === this.resumeProbeId) this.completeResumeRecovery()
           this.emit(WS_PONG, {})
           return
         }
@@ -150,6 +163,7 @@ export class WebSocketClient {
     this.shouldReconnect = false
     this.stopPing()
     this.stopVisibilityTracking()
+    this.clearResumeRecovery()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -190,6 +204,7 @@ export class WebSocketClient {
   }
 
   private startPing() {
+    if (this.lifecyclePaused || !this.isDocumentVisible()) return
     this.stopPing()
     const generation = ++this.heartbeatGeneration
     if (this.ensureHeartbeatWorker()) {
@@ -214,23 +229,27 @@ export class WebSocketClient {
     this.clearFallbackPongWatchdog()
   }
 
-  private sendPingNow(timeoutMs: number = PONG_TIMEOUT_MS) {
+  private sendPingNow(timeoutMs: number = PONG_TIMEOUT_MS, resumeProof = false) {
+    if (this.lifecyclePaused || !this.isDocumentVisible()) return
     if (this.ensureHeartbeatWorker()) {
       this.heartbeatWorker!.postMessage({
         type: 'ping-now',
         generation: this.heartbeatGeneration,
         timeoutMs,
+        resumeProof,
       })
       return
     }
-    if (!this.sendPingFrame()) return
+    if (!this.sendPingFrame(resumeProof)) return
     this.armFallbackPongWatchdog(this.heartbeatGeneration, timeoutMs)
   }
 
-  private sendPingFrame(): boolean {
+  private sendPingFrame(resumeProof = false): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false
     try {
-      this.ws.send(JSON.stringify({ type: 'ping' }))
+      const id = resumeProof ? crypto.randomUUID() : undefined
+      if (id) this.resumeProbeId = id
+      this.ws.send(JSON.stringify({ type: 'ping', ...(id ? { id } : {}) }))
       return true
     } catch {
       return false
@@ -250,7 +269,7 @@ export class WebSocketClient {
         const message = event.data
         if (message.generation !== this.heartbeatGeneration) return
         if (message.type === 'ping') {
-          if (this.sendPingFrame()) {
+          if (this.sendPingFrame(message.resumeProof)) {
             worker.postMessage({
               type: 'arm',
               generation: message.generation,
@@ -312,6 +331,10 @@ export class WebSocketClient {
 
   private handleHeartbeatTimeout(generation: number): void {
     if (generation !== this.heartbeatGeneration) return
+    // A deadline created before a PWA/tab suspension is not evidence of a
+    // dead server. Lifecycle handlers invalidate timers before suspension,
+    // but this guard also covers an already-queued worker message on resume.
+    if (this.lifecyclePaused || !this.isDocumentVisible()) return
     console.warn('[WS] Pong timeout — forcing close to trigger reconnect')
     const socket = this.ws
     if (!socket) return
@@ -361,9 +384,17 @@ export class WebSocketClient {
     // doesn't fire a spurious resume-check ping. onopen → forcePing already
     // verifies round-trip for the initial connection.
     this.wasVisible = this.isDocumentVisible()
+    this.lifecyclePaused = !this.wasVisible
 
-    const handler = () => this.sendVisibility()
-    this.visibilityHandler = handler
+    const onVisibilityChange = () => {
+      if (this.isDocumentVisible()) this.resumeFromBackground()
+      else {
+        this.pauseForBackground()
+        this.sendVisibility()
+      }
+    }
+    const onFocusChange = () => this.sendVisibility()
+    this.visibilityHandler = onVisibilityChange
 
     const addListener = (
       target: Document | Window,
@@ -377,12 +408,22 @@ export class WebSocketClient {
     // Send current state immediately on connect, then refresh it from every
     // lifecycle event that commonly fires during backgrounding/suspension.
     this.sendVisibility()
-    addListener(document, 'visibilitychange', handler)
-    addListener(window, 'focus', handler)
-    addListener(window, 'blur', handler)
-    addListener(window, 'pageshow', handler)
-    addListener(window, 'pagehide', () => this.sendVisibility(true))
-    addListener(window, 'beforeunload', () => this.sendVisibility(true))
+    addListener(document, 'visibilitychange', onVisibilityChange)
+    addListener(window, 'focus', onFocusChange)
+    addListener(window, 'blur', onFocusChange)
+    addListener(window, 'pageshow', () => this.resumeFromBackground())
+    addListener(window, 'pagehide', () => {
+      this.pauseForBackground()
+      this.sendVisibility(true)
+    })
+    // Chrome's Page Lifecycle API gives an extra, earlier opportunity to
+    // disarm liveness timers before a document is frozen or bfcached.
+    addListener(document, 'freeze', () => this.pauseForBackground())
+    addListener(document, 'resume', () => this.resumeFromBackground())
+    addListener(window, 'beforeunload', () => {
+      this.pauseForBackground()
+      this.sendVisibility(true)
+    })
   }
 
   private stopVisibilityTracking() {
@@ -404,7 +445,12 @@ export class WebSocketClient {
     // of waiting up to a full 30s ping window before noticing.
     if (visible && !this.wasVisible) {
       if (!this.consumeResumePingSuppression()) {
-        this.sendPingNow(RESUME_PONG_TIMEOUT_MS)
+        this.sendPingNow(RESUME_PONG_TIMEOUT_MS, this.resumeRecoveryTimer !== null)
+      } else if (this.resumeRecoveryTimer) {
+        // A caller has explicitly told us this return is an expected system
+        // modal hop (for example a file picker), so retain the known-good
+        // transport rather than timing it out with no fresh probe.
+        this.completeResumeRecovery()
       }
     }
     this.wasVisible = visible
@@ -438,12 +484,56 @@ export class WebSocketClient {
   }
 
   private sendStreamFocus(forceHidden = false) {
-    const chatId = !forceHidden && this.isDocumentVisible() ? this.focusedChatId : null
+    const chatId = !forceHidden && this.isDocumentFocused() ? this.focusedChatId : null
     this.send({ type: 'stream_focus', chatId })
   }
 
   private isDocumentVisible() {
-    return document.visibilityState === 'visible' && document.hasFocus()
+    return document.visibilityState === 'visible'
+  }
+
+  private isDocumentFocused() {
+    return this.isDocumentVisible() && document.hasFocus()
+  }
+
+  private pauseForBackground() {
+    if (this.lifecyclePaused) return
+    this.lifecyclePaused = true
+    this.wasVisible = false
+    this.stopPing()
+  }
+
+  private resumeFromBackground() {
+    if (!this.isDocumentVisible()) return
+    const wasPaused = this.lifecyclePaused
+    this.lifecyclePaused = false
+    if (wasPaused) this.beginResumeRecovery()
+    this.startPing()
+    this.sendVisibility()
+  }
+
+  private beginResumeRecovery() {
+    this.clearResumeRecovery()
+    this.emit(WS_RESUME_RECOVERY_START, {})
+    this.resumeRecoveryTimer = setTimeout(() => {
+      this.resumeRecoveryTimer = null
+      this.resumeProbeId = null
+      this.emit(WS_RESUME_RECOVERY_FAILED, {})
+    }, RESUME_RECOVERY_TIMEOUT_MS)
+  }
+
+  private completeResumeRecovery() {
+    if (!this.resumeRecoveryTimer) return
+    this.clearResumeRecovery()
+    this.emit(WS_RESUME_RECOVERY_COMPLETE, {})
+  }
+
+  private clearResumeRecovery() {
+    if (this.resumeRecoveryTimer) {
+      clearTimeout(this.resumeRecoveryTimer)
+      this.resumeRecoveryTimer = null
+    }
+    this.resumeProbeId = null
   }
 
   private scheduleReconnect() {

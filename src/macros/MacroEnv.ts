@@ -160,8 +160,11 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
       characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],
-      lastMessageTime: lastMsg && typeof lastMsg.send_date === "number"
-        ? lastMsg.send_date * 1000
+      // Idle duration is relative to the most recent character/assistant
+      // message. A newly sent user message must not reset it to zero before
+      // the preset is assembled.
+      lastMessageTime: lastCharMsg && typeof lastCharMsg.send_date === "number"
+        ? lastCharMsg.send_date * 1000
         : undefined,
       userInput: ctx.userInput ?? "",
       // Persona outlets are intentionally separate from Lorebook outlets.

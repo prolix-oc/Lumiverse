@@ -28,12 +28,6 @@ async function applyBaseline(): Promise<void> {
   // auth here, so just disable FK enforcement for the in-memory test DB.
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "src", "db", "baseline.sql")).text());
-  // Baseline is a 001-065 snapshot; apply the rebuild under test on top.
-  db.run(
-    await Bun.file(
-      join(import.meta.dir, "..", "src", "db", "migrations", "078_chats_character_id_nullable.sql"),
-    ).text(),
-  );
 }
 
 function createTempChat() {

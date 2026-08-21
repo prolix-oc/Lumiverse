@@ -68,6 +68,7 @@ export const LEGACY_HOST_MOUNT_POINTS = [
   'chat_column_top',
   'landing_toolbar',
   'landing_main',
+  'landing_chats',
 ] as const
 
 export type CanonicalHostMountPoint = (typeof HOST_MOUNT_POINTS)[number]
@@ -140,6 +141,7 @@ const knownMountPoints: Readonly<Record<HostMountPoint, true>> = {
   chat_column_top: true,
   landing_toolbar: true,
   landing_main: true,
+  landing_chats: true,
 }
 
 export function isKnownMountPoint(point: string): point is HostMountPoint {

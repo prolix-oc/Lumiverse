@@ -5,6 +5,25 @@ import { CUSTOM_CSS_DOCK_DEFAULT_SIZE } from '@/lib/custom-css-dock'
 let toastCounter = 0
 let settingsScrollCounter = 0
 
+export const SETTINGS_ACTIVE_VIEW_STORAGE_KEY = 'lumiverse:settings-active-view'
+
+function readPersistedSettingsActiveView(): string | null {
+  try {
+    const view = localStorage.getItem(SETTINGS_ACTIVE_VIEW_STORAGE_KEY)?.trim()
+    return view || null
+  } catch {
+    return null
+  }
+}
+
+function persistSettingsActiveView(view: string): void {
+  try {
+    localStorage.setItem(SETTINGS_ACTIVE_VIEW_STORAGE_KEY, view)
+  } catch {
+    // Settings navigation should still work when browser storage is unavailable.
+  }
+}
+
 export const createUISlice: StateCreator<UISlice> = (set) => ({
   activeModal: null,
   modalProps: {},
@@ -13,7 +32,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   drawerOpen: false,
   drawerTab: null,
   settingsModalOpen: false,
-  settingsActiveView: 'display',
+  settingsActiveView: readPersistedSettingsActiveView() ?? 'display',
   settingsScrollTarget: null,
   portraitPanelOpen: false,
   commandPaletteOpen: false,
@@ -67,12 +86,20 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   closeDrawer: () => set({ drawerOpen: false }),
   setDrawerTab: (tab) => set({ drawerTab: tab }),
 
-  openSettings: (view = 'display', target) =>
-    set({
-      settingsModalOpen: true,
-      settingsActiveView: view,
-      settingsScrollTarget: target ? { ...target, nonce: ++settingsScrollCounter } : null,
+  openSettings: (view, target) =>
+    set((state) => {
+      const settingsActiveView = view || state.settingsActiveView
+      if (view) persistSettingsActiveView(settingsActiveView)
+      return {
+        settingsModalOpen: true,
+        settingsActiveView,
+        settingsScrollTarget: target ? { ...target, nonce: ++settingsScrollCounter } : null,
+      }
     }),
+  setSettingsActiveView: (view) => {
+    persistSettingsActiveView(view)
+    set({ settingsActiveView: view })
+  },
   closeSettings: () => set({ settingsModalOpen: false }),
 
   openCommandPalette: () => set({ commandPaletteOpen: true }),
@@ -109,7 +136,38 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
     })),
 
   editingMessageId: null,
-  setEditingMessageId: (id) => set({ editingMessageId: id }),
+  messageEditDraft: null,
+  setEditingMessageId: (id) => set((state) => ({
+    editingMessageId: id,
+    ...(id && state.messageEditDraft?.messageId === id
+      ? { messageEditDraft: { ...state.messageEditDraft, focusRequested: true } }
+      : {}),
+  })),
+  beginMessageEdit: (draft) => set({
+    editingMessageId: draft.messageId,
+    messageEditDraft: {
+      ...draft,
+      dirty: false,
+      focusRequested: true,
+    },
+  }),
+  updateMessageEditDraft: (patch) => set((state) => ({
+    messageEditDraft: state.messageEditDraft
+      ? { ...state.messageEditDraft, ...patch, dirty: true }
+      : null,
+  })),
+  resumeMessageEdit: () => set((state) => state.messageEditDraft
+    ? {
+        editingMessageId: state.messageEditDraft.messageId,
+        messageEditDraft: { ...state.messageEditDraft, focusRequested: true },
+      }
+    : {}),
+  consumeMessageEditFocusRequest: () => set((state) => ({
+    messageEditDraft: state.messageEditDraft
+      ? { ...state.messageEditDraft, focusRequested: false }
+      : null,
+  })),
+  clearMessageEdit: () => set({ editingMessageId: null, messageEditDraft: null }),
 
   highlightedMessageId: null,
   setHighlightedMessageId: (id) => set({ highlightedMessageId: id }),

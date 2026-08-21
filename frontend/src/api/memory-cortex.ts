@@ -136,6 +136,8 @@ export interface CortexEntity {
   saliencePeak: number;
   // Enriched by route: excerpt from the most recent mention (display only)
   latestExcerpt?: string | null;
+  /** Source chat messages for the latest excerpt, with archived-ID fallback. */
+  latestMessageReferences?: CortexChunkMessageReference[];
 }
 
 export interface CortexRelation {
@@ -164,6 +166,43 @@ export interface CortexRelation {
   // Enriched by route
   sourceName?: string;
   targetName?: string;
+}
+
+export interface CortexChunkMessageReference {
+  /** Persistent ID retained as a fallback for archived source messages. */
+  messageId: string;
+  /** The source chat's displayed message number, if the message still exists. */
+  messageNumber: number | null;
+}
+
+export interface CortexChunk {
+  id: string;
+  chat_id: string;
+  content: string;
+  token_count: number;
+  message_count: number;
+  retrieval_count: number;
+  last_retrieved_at: number | null;
+  vectorized_at: number | null;
+  salience_score: number | null;
+  emotional_tags: string | null;
+  entity_ids: string | null;
+  created_at: number;
+  updated_at: number;
+  messageReferences: CortexChunkMessageReference[];
+}
+
+export interface CortexConsolidation {
+  id: string;
+  tier: number;
+  title: string | null;
+  summary: string;
+  messageRangeStart: number | null;
+  messageRangeEnd: number | null;
+  entityIds: string[];
+  salienceAvg: number | null;
+  emotionalTags: string[];
+  messageReferences: CortexChunkMessageReference[];
 }
 
 export type CortexRelationType =
@@ -638,11 +677,11 @@ export const memoryCortexApi = {
 
   // Consolidations
   getConsolidations: (chatId: string, tier?: number) =>
-    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/consolidations`, tier != null ? { tier } : undefined),
+    get<{ data: CortexConsolidation[]; total: number }>(`${BASE}/chats/${chatId}/consolidations`, tier != null ? { tier } : undefined),
 
   // Chunks
   getChunks: (chatId: string, limit = 50, offset = 0) =>
-    get<{ data: any[]; total: number }>(`${BASE}/chats/${chatId}/chunks`, { limit, offset }),
+    get<{ data: CortexChunk[]; total: number }>(`${BASE}/chats/${chatId}/chunks`, { limit, offset }),
 
   // Salience
   getSalience: (chatId: string, limit = 50, offset = 0) =>

@@ -11,6 +11,8 @@ describe('LorebookEditorWorkspace reorder selection contract', () => {
     expect(source).toContain('refresh: () => loadEntries(reorderBookId)')
     expect(source).toMatch(/setSavedAt\(null\)[\s\S]*\[selectedBookId\]/)
     expect(source).not.toContain('worldBooksApi.reorderEntries(selectedBookId')
-    expect(source).not.toContain('loadEntries(selectedBookId)\n      setSavedAt')
+    expect(source).not.toMatch(
+      /worldBooksApi\.reorderEntries\(selectedBookId[\s\S]*loadEntries\(selectedBookId\)/,
+    )
   })
 })

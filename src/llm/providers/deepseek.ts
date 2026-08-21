@@ -1,5 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
+import type { LlmMessage } from "../types";
 
 export class DeepSeekProvider extends OpenAICompatibleProvider {
   readonly name = "deepseek";
@@ -27,4 +28,8 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     // calls — interleaved thinking.
     interleavedThinking: true,
   };
+
+  protected override replayReasoningContentOnPlainAssistant(_message: LlmMessage): boolean {
+    return false;
+  }
 }

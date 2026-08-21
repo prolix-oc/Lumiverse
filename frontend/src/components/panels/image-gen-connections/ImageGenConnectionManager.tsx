@@ -199,7 +199,7 @@ export default function ImageGenConnectionManager() {
                 profile={profile}
                 isActive={activeId === profile.id}
                 providers={providers}
-                onSelect={() => setActive(activeId === profile.id ? null : profile.id)}
+                onSelect={() => setActive(profile.id)}
                 onUpdate={handleUpdate}
                 onDuplicate={() => handleDuplicate(profile.id)}
                 onDelete={() => setDeleteTarget(profile)}

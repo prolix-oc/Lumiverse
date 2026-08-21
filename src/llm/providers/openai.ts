@@ -259,6 +259,10 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
             completion_tokens: data.usage.output_tokens || 0,
             total_tokens:
               (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+            // Retain `input_tokens_details.cached_tokens` (and any future
+            // cache telemetry) so the prompt inspector can report implicit
+            // OpenAI prompt-cache hits just as it can for Chat Completions.
+            provider_raw: { ...data.usage },
           }
         : undefined,
     };
@@ -365,6 +369,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
                     total_tokens:
                       (resp.usage.input_tokens || 0) +
                       (resp.usage.output_tokens || 0),
+                    provider_raw: { ...resp.usage },
                   }
                 : undefined;
 

@@ -7,9 +7,9 @@
  *   Tier 1 (Consolidated): N raw chunks → 1 summary paragraph
  *   Tier 2 (Arc):          N consolidations → 1 arc summary
  *
- * Supports two modes:
- *   - Extractive (no sidecar): Picks highest-salience sentences from source chunks
- *   - Generative (sidecar): LLM produces a focused narrative summary
+ * Semantic consolidation requires a sidecar. Without one, source chunks stay
+ * available as evidence rather than being mislabeled as a summary assembled
+ * from verbatim sentences.
  *
  * Consolidation is always async and never blocks generation.
  */
@@ -28,13 +28,20 @@ import type {
 } from "./config";
 import { getCortexConfig, listCortexFallbackEndpoints } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
+import type { ToolDefinition } from "../../llm/types";
 
-type ConsolidationGenerateRawFn = (opts: {
+export type ConsolidationGenerateRawFn = (opts: {
   connectionId: string;
   messages: Array<{ role: string; content: string }>;
   parameters: Record<string, any>;
+  tools?: ToolDefinition[];
   signal?: AbortSignal;
-}) => Promise<{ content: string }>;
+}) => Promise<{
+  content: string;
+  tool_calls?: Array<{ name: string; args: Record<string, unknown> }>;
+}>;
+
+const inFlightConsolidations = new Map<string, Promise<boolean>>();
 
 export type MemorySummarizationRole = "primary" | "secondary";
 export type MemorySummarizationChainStatus = "ok" | "aborted" | "timeout" | "unavailable" | "exhausted";
@@ -330,9 +337,9 @@ function resolveConsolidationSidecarOptions(
 
 /**
  * Check if consolidation is needed and run it if so.
- * Called after chunk creation, runs synchronously for extractive mode.
+ * Called after chunk creation; semantic consolidation runs asynchronously.
  */
-export async function maybeConsolidate(
+export function maybeConsolidate(
   userId: string,
   chatId: string,
   config: ConsolidationConfig,
@@ -344,11 +351,45 @@ export async function maybeConsolidate(
    *  from config.maxTokensPerSummary. */
   samplingParameters?: Record<string, unknown>,
   /** Additional scaffold tag names to strip from raw chunk content before
-   *  feeding it to the consolidation LLM or extractive scorer. */
+   *  feeding it to the consolidation LLM. */
   extraScaffoldTags?: string[],
   sidecarOptions?: ConsolidationSidecarOptions,
-): Promise<void> {
-  if (!config.enabled) return;
+): Promise<boolean> {
+  const existing = inFlightConsolidations.get(chatId);
+  if (existing) return existing;
+
+  const pending = runConsolidationCheck(
+    userId,
+    chatId,
+    config,
+    generateRawFn,
+    sidecarConnectionId,
+    sidecarTimeoutMs,
+    samplingParameters,
+    extraScaffoldTags,
+    sidecarOptions,
+  );
+  inFlightConsolidations.set(chatId, pending);
+  void pending.finally(() => {
+    if (inFlightConsolidations.get(chatId) === pending) {
+      inFlightConsolidations.delete(chatId);
+    }
+  }).catch(() => undefined);
+  return pending;
+}
+
+async function runConsolidationCheck(
+  userId: string,
+  chatId: string,
+  config: ConsolidationConfig,
+  generateRawFn?: ConsolidationGenerateRawFn,
+  sidecarConnectionId?: string,
+  sidecarTimeoutMs?: number,
+  samplingParameters?: Record<string, unknown>,
+  extraScaffoldTags?: string[],
+  sidecarOptions?: ConsolidationSidecarOptions,
+): Promise<boolean> {
+  if (!config.enabled) return false;
 
   const db = getDb();
 
@@ -362,7 +403,7 @@ export async function maybeConsolidate(
     )
     .get(chatId) as { count: number } | null;
 
-  if (!countRow || countRow.count < config.chunkThreshold) return;
+  if (!countRow || countRow.count < config.chunkThreshold) return false;
 
   // Only fetch the batch we actually need
   const batch = db
@@ -375,6 +416,11 @@ export async function maybeConsolidate(
        LIMIT ?`,
     )
     .all(chatId, config.chunksPerConsolidation) as any[];
+  if (batch.length === 0) return false;
+
+  // A transcript excerpt is useful evidence, but it is not a scene summary.
+  // Keep the chunks intact until a model is available to synthesize them.
+  if (!(config.useSidecar && generateRawFn && (sidecarConnectionId || sidecarOptions?.sidecar?.connectionProfileId))) return false;
 
   let summary: string;
   let title: string | null = null;
@@ -382,7 +428,7 @@ export async function maybeConsolidate(
   const resolvedSidecar = resolveConsolidationSidecarOptions(
     userId, sidecarConnectionId, sidecarTimeoutMs, sidecarOptions,
   );
-  if (resolvedSidecar.signal?.aborted) return;
+  if (resolvedSidecar.signal?.aborted) return false;
 
   if (config.useSidecar && generateRawFn) {
     const decision = await generateConsolidationSummary(
@@ -401,7 +447,7 @@ export async function maybeConsolidate(
       } else {
         console.warn("[memory-cortex] Consolidation sidecar exhausted, skip persist");
       }
-      return;
+      return false;
     }
 
     if (decision.result && !decision.useExtractive) {
@@ -412,9 +458,6 @@ export async function maybeConsolidate(
       summary = extractiveConsolidation(batch, extraScaffoldTags);
       title = inferTitle(batch);
     }
-  } else {
-    summary = extractiveConsolidation(batch, extraScaffoldTags);
-    title = inferTitle(batch);
   }
 
   // Collect metadata from source chunks
@@ -450,8 +493,8 @@ export async function maybeConsolidate(
     consolidationId, chatId, title, summary,
     JSON.stringify(batch.map((c: any) => c.id)),
     JSON.stringify([...entityIdSet]),
-    batch[0].created_at,
-    batch[batch.length - 1].created_at,
+    batch[0].message_range_start ?? 0,
+    batch[batch.length - 1].message_range_end ?? 0,
     batch[0].created_at,
     batch[batch.length - 1].created_at,
     salienceCount > 0 ? salienceSum / salienceCount : 0,
@@ -475,6 +518,40 @@ export async function maybeConsolidate(
     userId, chatId, config, generateRawFn, sidecarConnectionId, sidecarTimeoutMs,
     samplingParameters, extraScaffoldTags, resolvedSidecar,
   );
+  return true;
+}
+
+/**
+ * Drain an existing chunk backlog after a rebuild. Rebuild ingestion uses
+ * pre-computed extraction responses, so consolidation must run separately
+ * with the real sidecar adapter after all chunks have been persisted.
+ */
+export async function consolidateBacklog(
+  userId: string,
+  chatId: string,
+  config: ConsolidationConfig,
+  generateRawFn?: ConsolidationGenerateRawFn,
+  sidecarConnectionId?: string,
+  sidecarTimeoutMs?: number,
+  samplingParameters?: Record<string, unknown>,
+  extraScaffoldTags?: string[],
+  sidecarOptions?: ConsolidationSidecarOptions,
+): Promise<number> {
+  let created = 0;
+  while (await maybeConsolidate(
+    userId,
+    chatId,
+    config,
+    generateRawFn,
+    sidecarConnectionId,
+    sidecarTimeoutMs,
+    samplingParameters,
+    extraScaffoldTags,
+    sidecarOptions,
+  )) {
+    created++;
+  }
+  return created;
 }
 
 /**
@@ -524,8 +601,12 @@ async function maybeConsolidateArcs(
     .all(chatId, chatId, config.arcThreshold) as MemoryConsolidationRow[];
   const summaries = batch.map((c) => c.summary);
 
+  // Arc summaries must synthesize scene changes. Joining scene text merely
+  // creates a longer transcript, so defer until semantic generation is usable.
+  if (!(config.useSidecar && generateRawFn && (sidecarConnectionId || sidecarOptions?.sidecar?.connectionProfileId))) return;
+
   let arcSummary: string;
-  let arcTitle: string | null = null;
+  let arcTitle: string | null;
 
   if (sidecarOptions?.signal?.aborted) return;
 
@@ -601,95 +682,252 @@ async function maybeConsolidateArcs(
   );
 }
 
-// ─── Extractive Consolidation ──────────────────────────────────
-
-/**
- * Extractive summarization: no sidecar needed.
- * Selects the highest-salience sentences from source chunks,
- * preserving chronological order with diversity across chunks.
- */
-function extractiveConsolidation(chunks: any[], extraScaffoldTags?: string[]): string {
-  const sentences: Array<{ text: string; salience: number; chunkIdx: number; sentIdx: number }> = [];
-
-  for (let i = 0; i < chunks.length; i++) {
-    let content = stripNonProseTags(chunks[i].content || "", { extraScaffoldTags });
-    // Strip chunk format prefix: [CHARACTER | Name]: or [USER | Name]:
-    content = content.replace(/^\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/gi, "").trim();
-    const chunkSalience = chunks[i].salience_score ?? 0.3;
-    const sents = splitSentences(content);
-
-    for (let j = 0; j < sents.length; j++) {
-      const sent = sents[j].trim();
-      if (sent.length < 20) continue;
-      let sentScore = scoreChunkHeuristic(sent).score * chunkSalience;
-      // Slight boost for topic sentences (first in chunk)
-      if (j === 0) sentScore *= 1.15;
-      sentences.push({ text: sent, salience: sentScore, chunkIdx: i, sentIdx: j });
-    }
-  }
-
-  // Select top sentences with per-chunk diversity cap
-  const selected: typeof sentences = [];
-  const chunkCounts = new Map<number, number>();
-  const ranked = [...sentences].sort((a, b) => b.salience - a.salience);
-
-  for (const sent of ranked) {
-    if (selected.length >= 8) break;
-    const count = chunkCounts.get(sent.chunkIdx) || 0;
-    if (count >= 3) continue; // Max 3 sentences per source chunk
-    selected.push(sent);
-    chunkCounts.set(sent.chunkIdx, count + 1);
-  }
-
-  // Re-sort chronologically
-  selected.sort((a, b) => a.chunkIdx - b.chunkIdx || a.sentIdx - b.sentIdx);
-
-  return selected.map((s) => s.text).join(" ");
-}
-
-/**
- * Infer a title from the chunks using the highest-salience content.
- */
-function inferTitle(chunks: any[]): string | null {
-  // Extract message range for a fallback title
-  const firstTime = chunks[0]?.created_at;
-  const lastTime = chunks[chunks.length - 1]?.created_at;
-
-  // Try to find a distinctive proper noun or location from the highest-salience chunk
-  const sorted = [...chunks].sort((a, b) => (b.salience_score ?? 0) - (a.salience_score ?? 0));
-  for (const chunk of sorted.slice(0, 3)) {
-    let content = chunk.content || "";
-    content = content.replace(/^\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/gi, "");
-    const match = content.match(/(?:the\s+)?([A-Z][a-z]+(?:\s+(?:of\s+)?[A-Z][a-z]+){0,2})/);
-    if (match && match[0].length > 3) return match[0];
-  }
-
-  if (firstTime && lastTime) {
-    return `Scene ${new Date(firstTime * 1000).toLocaleDateString()}`;
-  }
-  return null;
-}
-
 // ─── Generative Consolidation (Sidecar) ────────────────────────
 
-const CONSOLIDATION_PROMPT = `Compress these roleplay passages into a factual long-term memory summary.
+const CONSOLIDATION_PROMPT = `Create a CONTINUITY NOTE, not a retelling or transcript of these roleplay passages.
+
+First identify only the durable deltas: who acted, what changed, decisions or commitments, discoveries, relationship/status/location changes, gains/losses, and unresolved obligations. Then synthesize those deltas.
 
 RULES
-- Use past tense and third person.
-- Use names instead of vague pronouns whenever possible.
-- Preserve only durable information: actions taken, decisions made, discoveries, promises, relationship changes, status changes, location moves, and important gains/losses.
-- Omit atmospheric filler, repeated banter, scenic description, and details that do not matter later.
-- Every sentence must contain a concrete event, state change, or decision supported by the source text.
-- Do NOT add interpretation, motives, symbolism, theme analysis, or likely implications.
-- Do NOT invent links between events that are not stated.
-- Keep chronology clear.
+- Use past tense, third person, and names instead of vague pronouns.
+- Merge repeated or related events into one outcome. Do not describe turn-by-turn dialogue or narration.
+- Do not quote, imitate, or copy long phrases from the passages. Do not preserve scene-setting, banter, or action choreography unless it changed later continuity.
+- Every statement must be directly supported by the passages. Do not infer motives, themes, symbolism, or unstated causality.
+- The summary must be at most {{MAX_WORDS}} words and no more than 5 sentences.
+- A bad summary says what each message said. A good summary says what is now true or different because of the scene.
 
 <passages>
 {{CONTENT}}
 </passages>
 
-Return exactly one JSON object with this shape and no extra text:
-{"title":"<3-6 word concrete scene title>","summary":"<dense factual summary>"}`;
+Call the write_scene_continuity tool exactly once. Put the compressed note in summary and the durable deltas it synthesizes in changes.`;
+
+const ARC_PROMPT = `Create a CONTINUITY NOTE for the full narrative arc, not a concatenation or recap of its scene summaries.
+
+First identify the arc's beginning state, decisive turning points, durable end state, and unresolved threads. Then synthesize the net changes across the whole sequence.
+
+RULES
+- Use past tense, third person, and names instead of vague pronouns.
+- Group related scenes into arc-level developments; do not list one sentence per scene.
+- Do not quote, imitate, or copy long phrases from the input. Do not retell scene order unless it establishes a supported causal change.
+- Preserve only decisions, discoveries, relationship/status/location changes, gains/losses, and unresolved obligations.
+- Do not infer motives, themes, symbolism, or unstated causality.
+- The summary must be at most {{MAX_WORDS}} words and no more than 7 sentences.
+- A bad summary recounts scenes. A good summary explains what changed from the beginning of the arc to its current state.
+
+<scene_summaries>
+{{CONTENT}}
+</scene_summaries>
+
+Call the write_arc_continuity tool exactly once. Put the compressed note in summary, supported decisive changes in turning_points, and explicitly unresolved obligations in open_threads.`;
+
+export type SummaryKind = "scene" | "arc";
+type GeneratedSummary = { summary: string; title: string | null };
+
+const SCENE_SUMMARY_TOOL: ToolDefinition = {
+  name: "write_scene_continuity",
+  description: "Write one compressed scene-level continuity note from the supplied passages. Report durable changes, not a transcript or turn-by-turn recap.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "A concrete 3-6 word title for the scene.",
+      },
+      summary: {
+        type: "string",
+        description: "A compact past-tense continuity note stating only supported durable changes and unresolved obligations.",
+      },
+      changes: {
+        type: "array",
+        items: { type: "string" },
+        description: "The durable state changes synthesized into the summary. Use an empty array if nothing changed.",
+      },
+    },
+    required: ["title", "summary", "changes"],
+  },
+};
+
+const ARC_SUMMARY_TOOL: ToolDefinition = {
+  name: "write_arc_continuity",
+  description: "Write one compressed arc-level continuity note that synthesizes net changes across scenes instead of concatenating scene recaps.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "A concrete 3-8 word title for the narrative arc.",
+      },
+      summary: {
+        type: "string",
+        description: "A compact past-tense note describing the arc's supported beginning-to-current state changes.",
+      },
+      turning_points: {
+        type: "array",
+        items: { type: "string" },
+        description: "Decisive supported changes in the arc, without one item per scene.",
+      },
+      open_threads: {
+        type: "array",
+        items: { type: "string" },
+        description: "Unresolved obligations or conflicts explicitly supported by the source.",
+      },
+    },
+    required: ["title", "summary", "turning_points", "open_threads"],
+  },
+};
+
+function summaryTool(kind: SummaryKind): ToolDefinition {
+  return kind === "scene" ? SCENE_SUMMARY_TOOL : ARC_SUMMARY_TOOL;
+}
+
+function summaryWordBudget(kind: SummaryKind, maxTokens: number): number {
+  const cap = kind === "scene" ? 120 : 180;
+  return Math.max(40, Math.min(cap, Math.floor(maxTokens * 0.65)));
+}
+
+/** Return the reason a candidate should be retried, or null when it is compact enough. */
+export function getSummaryQualityIssue(
+  summary: string,
+  source: string,
+  maxWords: number,
+): string | null {
+  const summaryWords = summary.trim().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+  const sourceWords = source.trim().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+  if (summaryWords.length < 8) return "it is too short to preserve useful continuity";
+  if (summaryWords.length > maxWords) return `it exceeds the ${maxWords}-word limit`;
+  if (sourceWords.length >= maxWords * 2 && summaryWords.length / sourceWords.length > 0.45) {
+    return "it does not compress the source enough";
+  }
+
+  // A weak model often emits source sentences unchanged. Flag sustained
+  // seven-word overlap, while allowing names and short factual phrases.
+  const normalize = (words: string[]) => words.map((word) => word.toLowerCase());
+  const sourcePhrases = new Set<string>();
+  const normalizedSource = normalize(sourceWords);
+  for (let index = 0; index + 7 <= normalizedSource.length; index++) {
+    sourcePhrases.add(normalizedSource.slice(index, index + 7).join(" "));
+  }
+  const normalizedSummary = normalize(summaryWords);
+  let phraseCount = 0;
+  let copiedPhrases = 0;
+  for (let index = 0; index + 7 <= normalizedSummary.length; index++) {
+    phraseCount++;
+    if (sourcePhrases.has(normalizedSummary.slice(index, index + 7).join(" "))) copiedPhrases++;
+  }
+  if (copiedPhrases >= 2 && copiedPhrases / phraseCount >= 0.35) {
+    return "it copies too much source wording instead of synthesizing changes";
+  }
+  return null;
+}
+
+function cleanSummaryResponse(content: string): string {
+  let cleaned = content.trim();
+  cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "");
+  cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*$/gi, "");
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json|text)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  }
+  return cleaned.trim();
+}
+
+export function parseGeneratedSummary(content: string): GeneratedSummary | null {
+  const json = extractJson(content);
+  if (json) {
+    const summary = typeof json.summary === "string" ? json.summary.trim() : "";
+    if (!summary) return null;
+    return {
+      summary,
+      title: typeof json.title === "string" && json.title.trim() ? json.title.trim() : null,
+    };
+  }
+
+  // JSON is preferred for titles and diagnostics, but many smaller or local
+  // models produce a perfectly usable note as plain text. Treat that as a
+  // candidate and let the semantic quality gate decide whether it needs retry.
+  const plain = cleanSummaryResponse(content);
+  if (!plain || /[{}]/.test(plain)) return null;
+  const summary = plain
+    .replace(/^(?:summary|continuity note)\s*:\s*/i, "")
+    .trim();
+  return summary ? { summary, title: null } : null;
+}
+
+export function parseGeneratedSummaryResponse(
+  response: {
+    content: string;
+    tool_calls?: Array<{ name: string; args: Record<string, unknown> }>;
+  },
+  kind: SummaryKind,
+): GeneratedSummary | null {
+  const expectedName = summaryTool(kind).name;
+  const call = response.tool_calls?.find((candidate) => candidate.name === expectedName);
+  if (call) {
+    const summary = typeof call.args.summary === "string" ? call.args.summary.trim() : "";
+    if (!summary) return null;
+    const title = typeof call.args.title === "string" && call.args.title.trim()
+      ? call.args.title.trim()
+      : null;
+    return { summary, title };
+  }
+  return parseGeneratedSummary(response.content);
+}
+
+async function generateSemanticSummary(
+  kind: SummaryKind,
+  source: string,
+  generateRawFn: ConsolidationGenerateRawFn,
+  connectionId: string,
+  maxTokens: number,
+  samplingParameters: Record<string, unknown> | undefined,
+): Promise<GeneratedSummary | null> {
+  const maxWords = summaryWordBudget(kind, maxTokens);
+  const template = kind === "scene" ? CONSOLIDATION_PROMPT : ARC_PROMPT;
+  const prompt = template
+    .replace("{{CONTENT}}", source)
+    .replace("{{MAX_WORDS}}", String(maxWords));
+  const tool = summaryTool(kind);
+  const system = `You write compact continuity notes for roleplay memory. Call ${tool.name} exactly once. Never turn source passages into a transcript.`;
+  const userParams = samplingParameters ?? { temperature: 0.1 };
+  const parameters = { ...userParams, max_tokens: maxTokens + 100 };
+
+  try {
+    const first = await generateRawFn({
+      connectionId,
+      messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
+      parameters,
+      tools: [tool],
+    });
+    const firstCandidate = parseGeneratedSummaryResponse(first, kind);
+    // No candidate usually means an incompatible provider response (often an
+    // empty completion). Retrying that same transport shape immediately only
+    // doubles the failure rate; the caller applies a short per-chat cooldown.
+    if (!firstCandidate) return null;
+
+    const firstIssue = getSummaryQualityIssue(firstCandidate.summary, source, maxWords);
+    if (!firstIssue) return firstCandidate;
+
+    // Spend one corrective retry only when the model did return a note but it
+    // was too long or transcript-like. That is a prompt-following problem the
+    // correction can realistically solve.
+    const correction = firstIssue;
+    const retry = await generateRawFn({
+      connectionId,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `${prompt}\n\nYour previous attempt was rejected because ${correction}. Call ${tool.name} exactly once with a shorter synthesis of durable changes; do not retell or quote the source.` },
+      ],
+      parameters,
+      tools: [tool],
+    });
+    const retryCandidate = parseGeneratedSummaryResponse(retry, kind);
+    const retryIssue = retryCandidate && getSummaryQualityIssue(retryCandidate.summary, source, maxWords);
+    if (retryCandidate && !retryIssue) return retryCandidate;
+  } catch (err) {
+    console.warn(`[memory-cortex] Generative ${kind} consolidation failed:`, err);
+  }
+  return null;
+}
 
 export async function generateConsolidationSummary(
   chunks: any[],
@@ -747,23 +985,6 @@ export async function generateConsolidationSummary(
   });
 }
 
-const ARC_PROMPT = `These are sequential scene summaries from a long roleplay. Compress them into ONE arc-level summary that tracks what changed across the sequence.
-
-RULES
-- Use past tense and third person.
-- Focus on durable change across the arc: decisions, discoveries, relationship shifts, status changes, movement, gains/losses, and turning points.
-- Preserve chronology and causal clarity when the source supports it.
-- Omit scenic filler and details that do not matter later.
-- Do NOT add interpretation, motives, themes, or unsupported links.
-- Dense and factual: this summary replaces the individual scene summaries.
-
-<summaries>
-{{CONTENT}}
-</summaries>
-
-Return exactly one JSON object with this shape and no extra text:
-{"title":"<3-8 word concrete arc title>","summary":"<arc-level factual summary>"}`;
-
 async function generateArcSummary(
   combinedSummaries: string,
   generateRawFn: ConsolidationGenerateRawFn,
@@ -816,11 +1037,6 @@ async function generateArcSummary(
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-function splitSentences(text: string): string[] {
-  // Split on sentence-ending punctuation followed by space or newline
-  return text.split(/(?<=[.!?])\s+|(?<=\n)\s*/).filter((s) => s.length > 0);
-}
-
 function estimateTokens(text: string): number {
   // Rough estimate: ~4 characters per token for English
   return Math.ceil(text.length / 4);
@@ -828,15 +1044,7 @@ function estimateTokens(text: string): number {
 
 function extractJson(text: string): any | null {
   try {
-    let cleaned = text.trim();
-    // Strip reasoning/thinking tags that some models emit
-    cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "");
-    cleaned = cleaned.replace(/<(think|thinking|reasoning)>[\s\S]*$/gi, "");
-    // Strip markdown fences
-    cleaned = cleaned.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-    }
+    const cleaned = cleanSummaryResponse(text);
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start === -1 || end === -1 || end <= start) return null;

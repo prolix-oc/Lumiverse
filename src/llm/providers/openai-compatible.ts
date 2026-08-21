@@ -453,9 +453,19 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     if (m.reasoning_details?.length) {
       return { reasoning_details: m.reasoning_details };
     }
-    return m.reasoning_content
+    return m.reasoning_content && this.replayReasoningContentOnPlainAssistant(m)
       ? { reasoning_content: m.reasoning_content }
       : {};
+  }
+
+  /**
+   * Most OpenAI-compatible relays retain native reasoning on ordinary history
+   * turns. Providers whose APIs only accept `reasoning_content` on tool-call
+   * continuations override this hook; the explicit tool-call branch above is
+   * intentionally unaffected.
+   */
+  protected replayReasoningContentOnPlainAssistant(_message: LlmMessage): boolean {
+    return true;
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */

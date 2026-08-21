@@ -93,3 +93,43 @@ describe("OpenAIProvider Responses API tool calling wire shape", () => {
     expect(body.input).toEqual([{ role: "user", content: "hi" }]);
   });
 });
+
+describe("OpenAIProvider Responses API usage mapping", () => {
+  test("preserves implicit prompt-cache telemetry", async () => {
+    const provider = new OpenAIProvider();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          output_text: "hello",
+          usage: {
+            input_tokens: 400,
+            output_tokens: 12,
+            input_tokens_details: { cached_tokens: 320 },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as unknown as typeof fetch;
+
+    try {
+      const response = await provider.generate("key", "", {
+        model: "gpt-5",
+        messages: [{ role: "user", content: "hi" }],
+        parameters: { use_responses_api: true },
+      });
+      expect(response.usage).toEqual({
+        prompt_tokens: 400,
+        completion_tokens: 12,
+        total_tokens: 412,
+        provider_raw: {
+          input_tokens: 400,
+          output_tokens: 12,
+          input_tokens_details: { cached_tokens: 320 },
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

@@ -6,7 +6,7 @@ import { getDb } from "../db/connection";
 import { scanSTData } from "../migration/st-reader";
 import { importTagLibraryBackup } from "../services/tag-library-import.service";
 import {
-  executeMigration,
+  startStMigration,
   isMigrationRunning,
   getActiveMigration,
   getLastMigration,
@@ -352,22 +352,7 @@ app.post("/execute", async (c) => {
   if (permissionError) return permissionError;
 
   const migrationId = crypto.randomUUID();
-
-  // For remote connections, create and connect the FileSystem before handing
-  // it off to the async migration. The migration service will disconnect it
-  // when done (in the finally block).
-  let fs: FileSystem = localFs;
-  if (config.type !== "local") {
-    try {
-      fs = await createFileSystem(config);
-      await fs.connect();
-    } catch (err: any) {
-      return c.json({ error: `Failed to connect: ${err.message}` }, 400);
-    }
-  }
-
-  // Run migration asynchronously — return immediately
-  executeMigration(migrationId, callerUserId, targetUserId, effectiveDataDir, {
+  const migrationScope = {
     characters: !!scope.characters,
     worldBooks: !!scope.worldBooks,
     personas: !!scope.personas,
@@ -376,7 +361,28 @@ app.post("/execute", async (c) => {
     connections: !!scope.connections,
     repairExisting: !!scope.repairExisting,
     dryRun: !!scope.dryRun,
-  }, fs);
+  };
+
+  // Remote connections are opened by the isolated child (or in-process
+  // fallback). Pre-connecting here would leave a second unused session.
+  if (config.type !== "local") {
+    try {
+      await withFileSystem(config, async () => {});
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: `Failed to connect: ${message}` }, 400);
+    }
+  }
+
+  void startStMigration(
+    migrationId,
+    callerUserId,
+    targetUserId,
+    effectiveDataDir,
+    migrationScope,
+    config,
+    config.type === "local" ? localFs : undefined,
+  );
 
   return c.json({ migrationId }, 202);
 });

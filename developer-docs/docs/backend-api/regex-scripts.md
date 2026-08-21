@@ -6,6 +6,8 @@ Read access to the user's regex scripts, CRUD access to scripts created by the c
 
 Extension-created scripts are attributed by the host. An extension cannot update or delete legacy/unattributed scripts, another extension's scripts, or preset-bound scripts. Those scripts remain visible through `list`, `get`, and `getActive` and continue to execute normally.
 
+Extensions whose purpose is to edit the user's complete regex library may also request the privileged `regex_scripts_unrestricted` permission. It is additive: both permissions must be granted. With it, `update` and `delete` may target legacy, card-bound, preset-bound, and other-extension-owned scripts. The host still protects ownership, binding, and trusted folder-version attribution from reassignment.
+
 ## Usage
 
 ```ts
@@ -37,6 +39,17 @@ const newScript = await spindle.regex_scripts.create({
   target: 'display',
   scope: 'character',
   scope_id: 'character-id',
+})
+
+// Optionally identify a versioned folder installed by this extension.
+// Use the same folder and folder_version for every script in the bundle.
+const bundledScript = await spindle.regex_scripts.create({
+  name: 'Extension display cleanup',
+  find_regex: '<extension-note>[\\s\\S]*?<\\/extension-note>',
+  replace_string: '',
+  target: 'display',
+  folder: 'My Extension',
+  folder_version: '2.4.0',
 })
 
 // Create a display action associated with
@@ -83,8 +96,8 @@ const active = await spindle.regex_scripts.getActive({
 | `list(options?)` | `Promise<{ data: RegexScriptDTO[], total: number }>` | List scripts with strict scope filtering. Options: `{ scope?, scopeId?, target?, limit?, offset?, userId? }`. Defaults: limit 50, max 200. |
 | `get(scriptId)` | `Promise<RegexScriptDTO \| null>` | Get a script by ID. Returns `null` if not found. |
 | `create(input)` | `Promise<RegexScriptDTO>` | Create a new regex script. `name` and `find_regex` are required. |
-| `update(scriptId, input)` | `Promise<RegexScriptDTO>` | Update an unbound script created by this extension. All fields are optional. Throws for protected scripts. |
-| `delete(scriptId)` | `Promise<boolean>` | Delete an unbound script created by this extension. Throws for protected scripts; returns `true` if deleted. |
+| `update(scriptId, input)` | `Promise<RegexScriptDTO>` | Update an unbound script created by this extension, or any script when `regex_scripts_unrestricted` is also granted. All fields are optional. Throws for protected scripts. |
+| `delete(scriptId)` | `Promise<boolean>` | Delete an unbound script created by this extension, or any script when `regex_scripts_unrestricted` is also granted. Throws for protected scripts; returns `true` if deleted. |
 | `getActive(options)` | `Promise<RegexScriptDTO[]>` | Resolve enabled scripts that would fire for a given target plus character/chat context. Merges global + character + chat scopes and orders them by scope tier then `sort_order`. |
 
 ## RegexScriptListOptionsDTO
@@ -131,12 +144,23 @@ const active = await spindle.regex_scripts.getActive({
 | `sort_order` | `number` | No | Lower values run earlier within the same scope tier. Default `0`. |
 | `description` | `string` | No | Free-form note. |
 | `folder` | `string` | No | Folder label shown in the regex panel. |
+| `folder_version` | `string \| null` | No | Optional version label for an extension-installed folder. Requires a non-empty `folder`; maximum 100 characters. Omit it for the normal folder display with no version chip. |
 | `metadata` | `Record<string, unknown>` | No | Host behavior fields described below, plus namespaced extension metadata. |
 | `script_id` | `string` | No | Stable identifier (normalized to lowercase + underscores) for cross-instance references. |
 
 ## RegexScriptUpdateDTO
 
 Same fields as `RegexScriptCreateDTO`, all optional.
+
+`folder_version` is script-level, host-managed attribution used by the regex panel. When creating a versioned bundle, provide the same `folder` and `folder_version` on every script in that folder. Lumiverse renders the unique attributed versions as Spindle-colored chips beside the folder name.
+
+- Omitting `folder_version` on create produces a normal folder with no version chip.
+- Omitting it on update preserves the script's current folder version.
+- Passing `null` or an empty string on update clears the script's folder version.
+- Clearing `folder` also removes the attribution when the extension performs the update.
+- A version supplied without a non-empty `folder` is accepted but not stored or rendered.
+
+The host records the calling extension identifier with the version and does not trust a lookalike value placed directly in `metadata`. Scripts not owned by the calling extension cannot acquire this attribution through the Spindle API.
 
 ## RegexActionDTO
 
@@ -184,6 +208,7 @@ Multi-select options toggle in a provisional client-side pool. They can be remov
   sort_order: number            // lower runs earlier within the same scope tier
   description: string
   folder: string
+  folder_version?: string | null // host-validated Spindle folder version; older hosts may omit it
   metadata: Record<string, unknown>
   created_at: number            // unix epoch seconds
   updated_at: number

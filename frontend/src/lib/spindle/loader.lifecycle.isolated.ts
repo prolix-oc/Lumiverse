@@ -58,6 +58,10 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
   pretendToBeVisual: true,
 })
+dom.window.matchMedia = (media: string) => ({
+  addEventListener() {}, addListener() {}, dispatchEvent: () => false, matches: false,
+  media, onchange: null, removeEventListener() {}, removeListener() {},
+})
 const originalGlobals = {
   window: globalThis.window,
   document: globalThis.document,
@@ -136,14 +140,20 @@ Object.defineProperty(URL, 'createObjectURL', {
 })
 Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} })
 const storeState = {
+  activeProfileId: null as string | null,
+  messages: [] as Array<{ id: string; content: string }>,
   pendingPermissionRequest: null as { id: string; extensionId: string } | null,
-  spindleSettings: { infoLoggingEnabled: false },
+  profiles: [] as Array<{ id: string; provider: string; model: string }>,
+  setActiveProfile() {},
   showPermissionRequest(request: { id: string; extensionId: string }) {
     storeState.pendingPermissionRequest = request
   },
+  spindleSettings: { infoLoggingEnabled: false },
+  updateProfile() {},
 }
 const useStoreMock = {
   getState: () => storeState,
+  subscribe: () => () => {},
   setState(update: { pendingPermissionRequest?: null } | ((state: typeof storeState) => Partial<typeof storeState>)) {
     const next = typeof update === 'function' ? update(storeState) : update
     Object.assign(storeState, next)
@@ -209,12 +219,22 @@ const presetAccessMock = {
 }
 
 mock.module('@/store', () => ({ useStore: useStoreMock }))
+mock.module('@/i18n', () => ({
+  UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
+  changeUiLanguage: async () => {},
+  default: { language: 'en', t: (key: string) => key },
+  ensureLanguageLoaded: async () => {},
+  initI18n: async () => ({}),
+}))
 mock.module('@/ws/client', () => ({
-  wsClient: wsClientMock,
-  WS_OPEN: '__ws_open',
-  WS_CLOSE: '__ws_close',
-  WS_PONG: '__ws_pong',
   WS_AUTH_ERROR: '__ws_auth_error',
+  WS_CLOSE: '__ws_close',
+  WS_OPEN: '__ws_open',
+  WS_PONG: '__ws_pong',
+  WS_RESUME_RECOVERY_START: '__ws_resume_recovery_start',
+  WS_RESUME_RECOVERY_COMPLETE: '__ws_resume_recovery_complete',
+  WS_RESUME_RECOVERY_FAILED: '__ws_resume_recovery_failed',
+  wsClient: wsClientMock,
 }))
 mock.module('./host-surfaces', () => ({
   createHostSurfaceAPI: () => ({
@@ -276,16 +296,37 @@ mock.module('./frontend-domain-api', () => ({
 }))
 mock.module('@/api/spindle', () => ({ spindleApi: { getPermissions: () => permissionPromise } }))
 mock.module('@/api/characters', () => ({ charactersApi: { get: async () => null } }))
-mock.module('@/api/chats', () => ({ messagesApi: { update: async () => ({ id: 'message' }) } }))
+mock.module('@/api/chats', () => ({ chatsApi: {}, messagesApi: { update: async () => ({ id: 'message' }) } }))
 mock.module('./dom-helper', () => ({ createDOMHelper: () => ({ cleanup() {} }) }))
-mock.module('./message-interceptors', () => ({ registerTagInterceptor: () => () => {}, unregisterTagInterceptorsByExtension() {} }))
-mock.module('./display-resolver-registry', () => ({ registerDisplayResolver: () => () => {}, unregisterDisplayResolver() {} }))
+mock.module('./message-interceptors', () => ({
+  dispatchMessageTagIntercepts() {},
+  getTagInterceptorRegistryVersion: () => 0,
+  registerTagInterceptor: () => () => {},
+  stripMessageTags: (content: string) => ({ cleanedContent: content, intercepts: [] }),
+  subscribeTagInterceptorRegistry: () => () => {},
+  unregisterTagInterceptorsByExtension() {},
+}))
+mock.module('./display-resolver-registry', () => ({
+  getDisplayOwnerIdentifier: () => null,
+  getDisplayResolverForChat: () => null,
+  isDisplayChatOwned: () => false,
+  registerDisplayResolver: () => () => {},
+  unregisterDisplayResolver() {},
+}))
 mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},
   invalidateDisplayRegexCacheForMessage() {},
   invalidateDisplayRegexCacheForVars() {},
+  useDisplayRegex: (content: string) => content,
 }))
-mock.module('./message-widgets', () => ({ removeMessageWidgetsByExtension() {}, upsertMessageWidget: () => {}, removeMessageWidget() {} }))
+mock.module('./message-widgets', () => ({
+  SpindleMessageWidgets: () => null,
+  getMessageWidgetVersion: () => 0,
+  removeMessageWidget() {},
+  removeMessageWidgetsByExtension() {},
+  subscribeMessageWidgets: () => () => {},
+  upsertMessageWidget() {},
+}))
 mock.module('./placement-helper', () => ({
   createDrawerTabHandle: () => ({ destroy() {} }),
   createSettingsTabHandle: () => ({ destroy() {} }),
@@ -299,6 +340,7 @@ mock.module('./placement-helper', () => ({
   createInputBarActionHandle: () => ({ destroy() {} }),
   createTabMobilityHandle: () => ({ requestTabLocation() {} }),
   clearTabMobilityHandle() {},
+  notifyFloatWidgetDragEnd() {},
   destroyAllPlacementsForExtension(extensionId: string) { placementDestroyCalls.push(extensionId) },
   destroyPlacementsForExtensionPermission(extensionId: string, permission: string) {
     placementDestroyCalls.push(`${permission}:${extensionId}`)
@@ -307,7 +349,9 @@ mock.module('./placement-helper', () => ({
 }))
 mock.module('./character-editor-helper', () => ({
   getCharacterEditorState: () => ({}),
+  setCharacterEditorController() {},
   subscribeCharacterEditorState: () => () => {},
+  syncCharacterEditorState() {},
   setCharacterEditorExtensions() {},
   updateCharacterEditorExtensions() {},
   flushCharacterEditorExtensions: async () => {},
@@ -333,9 +377,22 @@ mock.module('@/lib/uuid', () => ({
     uuidSequence += 1
     return uuidSequence === 1 ? 'request-id' : `request-id-${uuidSequence}`
   },
+  uuidv4: () => `uuid-v4-${uuidSequence += 1}`,
+  uuidv7: () => `uuid-v7-${uuidSequence += 1}`,
 }))
 mock.module('./navigation-guards', () => ({ installSpindleNavigationGuards() {} }))
-mock.module('@/lib/drawer-tab-registry', () => ({ DRAWER_TABS: [], ensureRegistryRoot: () => undefined }))
+mock.module('@/lib/drawer-tab-registry', () => ({
+  DRAWER_TABS: [],
+  adaptExtensionTabs: () => [],
+  applyDrawerTabOrder: (items: unknown[]) => items,
+  ensureRegistryRoot: () => undefined,
+  extensionCommandsToCommands: () => [],
+  extensionTabsToCommands: () => [],
+  isDrawerTabCore: () => false,
+  registryToCommands: () => [],
+  sanitizeDrawerTabOrder: (order?: string[]) => order ?? [],
+  sanitizeHiddenDrawerTabIds: (ids?: string[]) => ids ?? [],
+}))
 mock.module('./ui-events-helper', () => ({
   createUIEventsHelper: () => ({}),
   destroyAllUIEventBindingsForExtension(extensionId: string) {
@@ -345,7 +402,7 @@ mock.module('./ui-events-helper', () => ({
     uiEventDestroyPermissionCalls.push({ extensionId, permission })
   },
 }))
-mock.module('./browser-scheduler', () => ({ yieldToBrowser: async () => {} }))
+mock.module('./browser-scheduler', () => ({ scheduleSpindleDomTask: () => () => {}, yieldToBrowser: async () => {} }))
 
 const lifecycleModuleSource = `
   export function teardown() {

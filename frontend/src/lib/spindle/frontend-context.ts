@@ -65,6 +65,8 @@ export type FrontendFloatWidgetOptions = PublishedSpindleFloatWidgetOptions & {
 export type FrontendDockPanelOptions = PublishedSpindleDockPanelOptions & {
   persistGeometry?: string | false
   respectRequestedEdge?: boolean
+  /** Show the panel title while the dock is collapsed. Defaults to false. */
+  showCollapsedTitle?: boolean
   onGeometryCommit?(rect: SpindleGeometryRect): void
 }
 

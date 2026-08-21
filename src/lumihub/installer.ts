@@ -751,16 +751,31 @@ export async function installPreset(
     }
 
     // Preset-bound regex scripts ride at the top level of the export (sibling to
-    // `preset`); import them so remote installs keep parity with local preset
-    // imports. On update, clear the previous install's scripts first so successive
-    // versions don't accumulate duplicates. Best-effort — the preset is already saved.
+    // `preset`). On update, preserve older LumiHub-attributed versions as disabled
+    // history and replace only an existing copy of the incoming version. Folder
+    // names are never used as ownership, so same-named local folders are untouched.
+    // Best-effort — the preset is already saved, and retired scripts remain recoverable
+    // if importing the new payload fails.
     try {
-      if (existing) {
-        regexSvc.deleteRegexScriptsByPresetId(userId, saved.id);
-      }
       const regexScripts = extractPresetRegexScripts(exported);
-      if (regexScripts.length > 0) {
-        regexSvc.importPresetBoundRegexScripts(userId, saved.id, saved.name, regexScripts);
+      regexSvc.installLumiHubPresetRegexScripts(userId, {
+        presetId: saved.id,
+        presetName: saved.name,
+        hubPresetId: payload.presetId,
+        presetVersion,
+        scripts: regexScripts,
+        previous: existing ? {
+          hubPresetId: typeof existing.metadata?._lumiverse_lumihub_id === "string"
+            ? existing.metadata._lumiverse_lumihub_id
+            : null,
+          version: typeof existing.metadata?._lumiverse_preset_version === "string"
+            ? existing.metadata._lumiverse_preset_version
+            : null,
+          presetName: existing.name,
+        } : null,
+      });
+      if (regexScripts.length > 0 && presetsSvc.reconcileActiveLoomPreset(userId) === saved.id) {
+        regexSvc.activatePresetBoundRegexScripts(userId, saved.id);
       }
     } catch (err) {
       console.warn("[LumiHub Installer] Preset regex import failed:", err);

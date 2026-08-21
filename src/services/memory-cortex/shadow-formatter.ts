@@ -103,7 +103,31 @@ function formatEntitiesShadow(
   );
 }
 
-// ─── Attributed Mode: Character-Perspective Memories ───────────
+// ─── Memory Formatting ─────────────────────────────────────────
+
+function formatMemoriesShadow(
+  memories: CortexMemory[],
+  budget: number,
+): string {
+  if (memories.length === 0) return "";
+
+  const parts: string[] = [];
+  let used = 0;
+  for (const memory of memories) {
+    const block = memory.source === "consolidation"
+      ? `Scene continuity: ${memory.content.trim()}`
+      : memory.content.trim();
+    const tokens = estimateTokens(block);
+    if (used + tokens > budget) break;
+    parts.push(block);
+    used += tokens;
+  }
+  if (parts.length === 0) return "";
+  return (
+    "[Relevant continuity — internalize and weave naturally; never recite this block]\n" +
+    parts.join("\n\n")
+  );
+}
 
 function formatMemoriesAttributed(
   memories: CortexMemory[],
@@ -116,8 +140,10 @@ function formatMemoriesAttributed(
   let used = 0;
 
   for (const mem of memories) {
-    const distance = mem.messageRange[1] > 0
-      ? `~${mem.messageRange[1]} messages ago`
+    const evidenceRange = mem.messageRange[0] > 0 && mem.messageRange[1] > 0
+      ? (mem.messageRange[0] === mem.messageRange[1]
+          ? `message #${mem.messageRange[0]}`
+          : `messages #${mem.messageRange[0]}–#${mem.messageRange[1]}`)
       : "earlier in the story";
 
     // Determine narrative ownership
@@ -134,7 +160,8 @@ function formatMemoriesAttributed(
       ? ` The emotional undertone was ${mem.emotionalTags.slice(0, 2).join(" and ")}.`
       : "";
 
-    const block = `[${distance}] ${perspective}: ${mem.content.trim()}${emotionalHint}`;
+    const memoryKind = mem.source === "consolidation" ? "Scene continuity" : perspective;
+    const block = `[${evidenceRange}] ${memoryKind}: ${mem.content.trim()}${emotionalHint}`;
     const blockTokens = estimateTokens(block);
     if (used + blockTokens > budget) break;
 
@@ -148,6 +175,20 @@ function formatMemoriesAttributed(
     "[What the characters remember — reference through their perspective, not as exposition]\n" +
     parts.join("\n\n")
   );
+}
+
+function formatMemoriesMinimal(memories: CortexMemory[], budget: number): string {
+  const parts: string[] = [];
+  let used = 0;
+  for (const memory of memories) {
+    if (memory.source !== "chunk") continue;
+    const block = memory.content.trim();
+    const tokens = estimateTokens(block);
+    if (used + tokens > budget) break;
+    parts.push(block);
+    used += tokens;
+  }
+  return parts.join("\n\n");
 }
 
 // ─── Relationship Formatting ───────────────────────────────────
@@ -182,14 +223,23 @@ function formatRelationshipsShadow(
 
 // ─── Arc Summary ───────────────────────────────────────────────
 
-function formatArcShadow(arcContext: string | null, budget: number): string {
+function formatArc(
+  arcContext: string | null,
+  budget: number,
+  mode: Exclude<FormatterMode, "minimal">,
+): string {
   if (!arcContext) return "";
   const tokens = estimateTokens(arcContext);
+  const prefix = mode === "clinical"
+    ? "[ARC CONTINUITY]\n"
+    : mode === "attributed"
+      ? "[Shared story continuity — remember without reciting] "
+      : "[Story so far — internal continuity, not narration instructions] ";
   if (tokens > budget) {
     const chars = Math.floor(budget * 3.8);
-    return "[Story so far] " + arcContext.slice(0, chars).trim() + "...";
+    return prefix + arcContext.slice(0, chars).trim() + "...";
   }
-  return "[Story so far] " + arcContext;
+  return prefix + arcContext;
 }
 
 // ─── Main Formatter ────────────────────────────────────────────
@@ -217,7 +267,7 @@ export function formatShadowPrompt(
   }
 
   if (mode === "minimal") {
-    const memText = formatMemoriesAttributed(memories, tokenBudget, options.currentSpeakerName);
+    const memText = formatMemoriesMinimal(memories, tokenBudget);
     return {
       text: memText,
       tokensUsed: estimateTokens(memText),
@@ -236,7 +286,9 @@ export function formatShadowPrompt(
   const sections: string[] = [];
   const components: string[] = [];
 
-  const memSection = formatMemoriesAttributed(memories, memoryBudget, options.currentSpeakerName);
+  const memSection = mode === "attributed"
+    ? formatMemoriesAttributed(memories, memoryBudget, options.currentSpeakerName)
+    : formatMemoriesShadow(memories, memoryBudget);
   if (memSection) { sections.push(memSection); components.push("memories"); }
 
   const entSection = formatEntitiesShadow(entities, entityBudget);
@@ -245,7 +297,7 @@ export function formatShadowPrompt(
   const relSection = formatRelationshipsShadow(relationships, relBudget);
   if (relSection) { sections.push(relSection); components.push("relationships"); }
 
-  const arcSection = formatArcShadow(arcContext, arcBudget);
+  const arcSection = formatArc(arcContext, arcBudget, mode);
   if (arcSection) { sections.push(arcSection); components.push("arc"); }
 
   const text = sections.join("\n\n");
@@ -271,6 +323,11 @@ export function formatContextSections(
   arcContext: string | null,
   options: FormatOptions,
 ): string {
+  if (options.mode === "minimal") return "";
+  if (options.mode === "clinical") {
+    return formatClinical([], entities, relationships, arcContext, options.tokenBudget).text;
+  }
+
   const budget = options.tokenBudget;
   const entityBudget = Math.floor(budget * 0.55);
   const relBudget = Math.floor(budget * 0.25);
@@ -284,7 +341,7 @@ export function formatContextSections(
   const relSection = formatRelationshipsShadow(relationships, relBudget);
   if (relSection) sections.push(relSection);
 
-  const arcSection = formatArcShadow(arcContext, arcBudget);
+  const arcSection = formatArc(arcContext, arcBudget, options.mode);
   if (arcSection) sections.push(arcSection);
 
   return sections.join("\n\n");
@@ -301,9 +358,16 @@ function formatClinical(
 ): ShadowPromptResult {
   const entText = formatEntitySnapshotsClinical(entities);
   const relText = formatRelationshipsClinical(relationships);
-  const memText = memories.map((m) => m.content).join("\n---\n");
+  const memText = memories.map((memory) => {
+    const kind = memory.source === "consolidation" ? "SCENE CONTINUITY" : "MEMORY";
+    const range = memory.messageRange[0] > 0 && memory.messageRange[1] > 0
+      ? ` | #${memory.messageRange[0]}–#${memory.messageRange[1]}`
+      : "";
+    return `[${kind}${range}]\n${memory.content}`;
+  }).join("\n---\n");
 
-  const parts = [entText, relText, memText, arcContext].filter(Boolean);
+  const arcText = formatArc(arcContext, budget, "clinical");
+  const parts = [entText, relText, memText, arcText].filter(Boolean);
   const text = parts.join("\n\n");
   const truncated = text.slice(0, Math.floor(budget * 3.8));
 
@@ -313,7 +377,7 @@ function formatClinical(
     entitiesIncluded: entities.length,
     memoriesIncluded: memories.length,
     componentsIncluded: ["entities", "relationships", "memories", "arc"].filter(
-      (_, i) => !![entText, relText, memText, arcContext][i],
+      (_, i) => !![entText, relText, memText, arcText][i],
     ),
   };
 }
@@ -337,103 +401,35 @@ export function formatLinkedCortexSection(
   const totalSources = vaults.length + interlinks.length;
   if (totalSources === 0) return { text: "", tokensUsed: 0 };
 
-  const { mode, tokenBudget } = options;
+  const { tokenBudget } = options;
   const perSourceBudget = Math.floor(tokenBudget / totalSources);
   const sections: string[] = [];
 
   // Format vault data (entities/relations + optional source chat memories)
   for (const vault of vaults) {
-    const budget = perSourceBudget;
     const header = `[Knowledge from vault "${vault.vaultName}"]`;
-    let sectionParts: string[] = [header];
-    let remaining = budget - estimateTokens(header);
-
-    const hasMemories = vault.memories && vault.memories.length > 0;
-
-    if (mode === "clinical") {
-      const entText = formatEntitySnapshotsClinical(vault.entities);
-      const relText = formatRelationshipsClinical(vault.relations);
-      const memText = hasMemories ? vault.memories!.map((m) => m.content).join("\n---\n") : "";
-      const combined = [entText, relText, memText].filter(Boolean).join("\n");
-      sectionParts.push(combined.slice(0, Math.floor(remaining * 3.8)));
-    } else if (hasMemories) {
-      // With memories: use same proportions as interlink formatting
-      const memBudget = Math.floor(remaining * 0.35);
-      const entBudget = Math.floor(remaining * 0.35);
-      const relBudget = Math.floor(remaining * 0.20);
-      const arcBudget = Math.floor(remaining * 0.10);
-
-      const memSection = formatMemoriesAttributed(vault.memories!, memBudget, options.currentSpeakerName);
-      if (memSection) sectionParts.push(memSection);
-
-      const entSection = formatEntitiesShadow(vault.entities, entBudget);
-      if (entSection) sectionParts.push(entSection);
-
-      const relSection = formatRelationshipsShadow(vault.relations, relBudget);
-      if (relSection) sectionParts.push(relSection);
-
-      const arcSection = formatArcShadow(vault.arcContext ?? null, arcBudget);
-      if (arcSection) sectionParts.push(arcSection);
-    } else {
-      // No memories: original entity/relation only proportions
-      const entBudget = Math.floor(remaining * 0.6);
-      const relBudget = Math.floor(remaining * 0.4);
-
-      const entSection = formatEntitiesShadow(vault.entities, entBudget);
-      if (entSection) sectionParts.push(entSection);
-
-      const relSection = formatRelationshipsShadow(vault.relations, relBudget);
-      if (relSection) sectionParts.push(relSection);
-    }
-
-    const block = sectionParts.join("\n");
-    if (estimateTokens(block) > estimateTokens(header) + 5) {
-      sections.push(block);
-    }
+    const formatted = formatShadowPrompt(
+      vault.memories ?? [],
+      vault.entities,
+      vault.relations,
+      vault.arcContext ?? null,
+      { ...options, tokenBudget: Math.max(0, perSourceBudget - estimateTokens(header)) },
+    ).text;
+    if (formatted) sections.push(`${header}\n${formatted}`);
   }
 
   // Format interlink data
   for (const interlink of interlinks) {
-    const budget = perSourceBudget;
     const header = `[Shared memories from "${interlink.targetChatName}"]`;
-    let sectionParts: string[] = [header];
-    let remaining = budget - estimateTokens(header);
-
     const { memories, entityContext, activeRelationships, arcContext } = interlink.result;
-
-    if (mode === "clinical") {
-      const entText = formatEntitySnapshotsClinical(entityContext);
-      const relText = formatRelationshipsClinical(activeRelationships);
-      const memText = memories.map((m) => m.content).join("\n---\n");
-      const combined = [entText, relText, memText].filter(Boolean).join("\n");
-      sectionParts.push(combined.slice(0, Math.floor(remaining * 3.8)));
-    } else if (mode === "minimal") {
-      const memSection = formatMemoriesAttributed(memories, remaining, options.currentSpeakerName);
-      if (memSection) sectionParts.push(memSection);
-    } else {
-      // Same proportions as main formatter
-      const memBudget = Math.floor(remaining * 0.45);
-      const entBudget = Math.floor(remaining * 0.30);
-      const relBudget = Math.floor(remaining * 0.15);
-      const arcBudget = Math.floor(remaining * 0.10);
-
-      const memSection = formatMemoriesAttributed(memories, memBudget, options.currentSpeakerName);
-      if (memSection) sectionParts.push(memSection);
-
-      const entSection = formatEntitiesShadow(entityContext, entBudget);
-      if (entSection) sectionParts.push(entSection);
-
-      const relSection = formatRelationshipsShadow(activeRelationships, relBudget);
-      if (relSection) sectionParts.push(relSection);
-
-      const arcSection = formatArcShadow(arcContext, arcBudget);
-      if (arcSection) sectionParts.push(arcSection);
-    }
-
-    const block = sectionParts.join("\n");
-    if (estimateTokens(block) > estimateTokens(header) + 5) {
-      sections.push(block);
-    }
+    const formatted = formatShadowPrompt(
+      memories,
+      entityContext,
+      activeRelationships,
+      arcContext,
+      { ...options, tokenBudget: Math.max(0, perSourceBudget - estimateTokens(header)) },
+    ).text;
+    if (formatted) sections.push(`${header}\n${formatted}`);
   }
 
   const text = sections.join("\n\n");

@@ -246,12 +246,14 @@ interface SortableCategoryItemProps {
   onEdit: (block: PromptBlock) => void
   onDelete: (id: string) => void
   onToggle: (id: string) => void
+  /** Blanket enable/disable of the category and all of its children. */
+  onToggleChildren: (id: string) => void
   childCount: number
   dragDisabled?: boolean
 }
 
 function SortableCategoryItem({
-  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
+  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, onToggleChildren, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { t } = useLb()
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
@@ -291,6 +293,9 @@ function SortableCategoryItem({
       </div>
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('category.disable') : t('category.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
+      </Button>
+      <Button size="icon-sm" variant="ghost" onClick={() => onToggleChildren(block.id)} title={block.enabled ? t('category.disableAll') : t('category.enableAll')}>
+        <Layers size={14} />
       </Button>
       <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={t('category.rename')}>
         <Edit2 size={14} />
@@ -372,14 +377,14 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, o
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('block.disable') : t('block.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
-      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
-        <Edit2 size={14} />
-      </Button>
       {!isMarker && !block.stashId && onStash && (
         <Button size="icon-sm" variant="ghost" onClick={() => onStash(block)} title={t('actions.addToStash')}>
           <Archive size={14} />
         </Button>
       )}
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
+        <Edit2 size={14} />
+      </Button>
       {!block.isLocked && (
         <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={tc('actions.delete')}>
           <Trash2 size={14} />
@@ -548,6 +553,9 @@ interface BlockEditorProps {
   refreshMacros?: () => void
   compact: boolean
   trustedHostFeatures?: boolean
+  /** Preset-level move: relocates a variable def (and its value bucket) to
+   * another block. Returns false when the move was rejected. */
+  onMoveVariable?: (sourceBlockId: string, variable: PromptVariableDef, targetBlockId: string) => boolean
 }
 
 function cleanPlacementBinding(
@@ -590,6 +598,7 @@ export function BlockEditor({
   refreshMacros,
   compact,
   trustedHostFeatures = false,
+  onMoveVariable,
 }: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
@@ -948,6 +957,36 @@ export function BlockEditor({
             placementBinding={placementBinding}
             fallbackPlacement={{ role, position, depth }}
             onPlacementBindingChange={setPlacementBinding}
+            moveTargets={blocks
+              .filter((candidate) => candidate.id !== block.id)
+              .map((candidate) => {
+                const isCategory = candidate.marker === 'category'
+                const category = isCategory
+                  ? candidate
+                  : candidate.group
+                    ? blocks.find((entry) => entry.id === candidate.group && entry.marker === 'category')
+                    : undefined
+                return {
+                  id: candidate.id,
+                  name: candidate.name || candidate.id,
+                  categoryId: category?.id ?? null,
+                  categoryName: category?.name || null,
+                  isCategory,
+                  variableNames: (candidate.variables ?? [])
+                    .map((variable) => variable.name?.trim() ?? '')
+                    .filter(Boolean),
+                }
+              })}
+            onMoveToBlock={onMoveVariable ? (variableId, targetBlockId) => {
+              const moving = variables.find((variable) => variable.id === variableId)
+              if (!moving) return
+              // Move the in-editor version of the def (it may carry unsaved
+              // edits) and drop it from the local list so a later Save of
+              // this block doesn't resurrect it.
+              if (onMoveVariable(block.id, moving, targetBlockId)) {
+                setVariables((current) => current.filter((variable) => variable.id !== variableId))
+              }
+            } : undefined}
           />
         </div>
       </div>
@@ -1794,6 +1833,8 @@ function LoomBuilderNative({
     removeBlock,
     updateBlock,
     toggleBlock,
+    toggleCategoryChildren,
+    movePromptVariable,
     saveSamplerOverrides,
     savePromptBehavior,
     saveCompletionSettings,
@@ -2493,6 +2534,7 @@ useEffect(() => {
           refreshMacros={refreshMacros}
           compact={compact}
           trustedHostFeatures={true}
+          onMoveVariable={movePromptVariable}
         />
       </>
     )
@@ -2952,6 +2994,7 @@ useEffect(() => {
                         onEdit={handleEdit}
                         onDelete={handleDelete}
                         onToggle={toggleBlock}
+                        onToggleChildren={toggleCategoryChildren}
                         childCount={group.children.length}
                         dragDisabled={isSearchActive}
                       />

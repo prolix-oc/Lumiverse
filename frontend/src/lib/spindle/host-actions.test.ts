@@ -17,7 +17,7 @@ function runtime(overrides: Partial<HostActionRuntime> = {}) {
     runCommand: (id) => { calls.push(['runCommand', id]) },
     navigate: (path) => { calls.push(['navigate', path]) },
     setEditingCharacterId: (id) => { calls.push(['setEditingCharacterId', id]) },
-    openWorldBookEditor: (id) => { calls.push(['openWorldBookEditor', id]) },
+    openWorldBookEditor: (id, entryId) => { calls.push(['openWorldBookEditor', id, entryId]) },
     invokeInputBarAction: (id) => { calls.push(['invokeInputBarAction', id]) },
     invokeExtensionCommand: (id) => { calls.push(['invokeExtensionCommand', id]) },
   }
@@ -42,7 +42,7 @@ describe('H4 host action switch', () => {
     applyHostAction({ kind: 'settings_tab', id: 'voice' }, { anchorId: 'voice.stt' }, host)
     applyHostAction({ kind: 'command', id: 'action-new-chat' }, undefined, host)
     applyHostAction({ kind: 'modal', id: 'character_editor' }, { id: 'char-1' }, host)
-    applyHostAction({ kind: 'modal', id: 'world_book_editor' }, { id: 'book-1' }, host)
+    applyHostAction({ kind: 'modal', id: 'world_book_editor' }, { id: 'book-1', entryId: 'entry-1' }, host)
     await applyHostAction({ kind: 'input_bar_action', id: 'action-1' }, undefined, host)
     applyHostAction({ kind: 'ext_command', id: 'ext-cmd-other-command' }, undefined, host)
     expect(calls).toEqual([
@@ -50,7 +50,7 @@ describe('H4 host action switch', () => {
       ['openSettings', 'voice', 'voice.stt'],
       ['runCommand', 'action-new-chat'],
       ['setEditingCharacterId', 'char-1'],
-      ['openWorldBookEditor', 'book-1'],
+      ['openWorldBookEditor', 'book-1', 'entry-1'],
       ['invokeInputBarAction', 'action-1'],
       ['invokeExtensionCommand', 'ext-cmd-other-command'],
     ])
@@ -59,6 +59,8 @@ describe('H4 host action switch', () => {
   test('rejects arbitrary modal names and caller-supplied command params', () => {
     const { runtime: host } = runtime()
     expect(() => applyHostAction({ kind: 'modal', id: 'confirm' as never }, {}, host)).toThrow('HOST_ACTION_UNMAPPED')
+    expect(() => applyHostAction({ kind: 'modal', id: 'character_editor' }, { id: 'char-1', entryId: 'entry-1' }, host)).toThrow('HOST_ACTION_INVALID_PARAMS')
+    expect(() => applyHostAction({ kind: 'modal', id: 'world_book_editor' }, { id: 'book-1', entryId: '../entry' }, host)).toThrow('HOST_ACTION_INVALID_ID')
     expect(() => applyHostAction({ kind: 'command', id: 'action-new-chat' }, { params: 'unsafe' }, host)).toThrow('HOST_ACTION_INVALID_PARAMS')
   })
 })

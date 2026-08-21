@@ -1,7 +1,7 @@
 .item {
   display: flex;
   flex-direction: column;
-  border-radius: 10px;
+  border-radius: var(--lumiverse-radius-md);
   transition: background var(--lumiverse-transition-fast);
 }
 
@@ -35,7 +35,7 @@
   flex-shrink: 0;
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--lumiverse-radius-sm);
   color: var(--lumiverse-text-dim);
   cursor: grab;
   touch-action: none;
@@ -67,7 +67,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 8px;
-  border-radius: 10px;
+  border-radius: var(--lumiverse-radius-md);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -83,7 +83,7 @@
 .itemIcon {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: var(--lumiverse-radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -117,7 +117,7 @@
 
 .defaultStar {
   flex-shrink: 0;
-  color: #f5a623;
+  color: var(--lumiverse-warning);
 }
 
 .reasoningBound {
@@ -191,7 +191,7 @@
   padding: 8px 12px 8px 82px;
   background: var(--lumiverse-primary-light);
   border: none;
-  border-radius: 0 0 10px 10px;
+  border-radius: 0 0 var(--lumiverse-radius-md) var(--lumiverse-radius-md);
   cursor: pointer;
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
@@ -263,7 +263,7 @@
   color: var(--lumiverse-text-dim);
   padding: 2px;
   margin-left: 6px;
-  border-radius: 4px;
+  border-radius: var(--lumiverse-radius-sm);
   display: flex;
   align-items: center;
   flex-shrink: 0;

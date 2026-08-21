@@ -548,7 +548,7 @@ Macros for current time information.
 | `{{isotime}}` | — | ISO 8601 date and time | — |
 | `{{isodate}}` | — | ISO date (`YYYY-MM-DD`) | — |
 | `{{datetimeformat::...}}` | — | Custom formatted date/time | Intl.DateTimeFormat options as `key=value` |
-| `{{idleDuration}}` | `{{idle_duration}}` | Human-readable time since last message | — |
+| `{{idleDuration}}` | `{{idle_duration}}` | Human-readable time since the last assistant message | — |
 | `{{timeDiff::date1::date2}}` | `{{time_diff}}` | Human-readable difference between two dates | Two ISO date strings (second defaults to now) |
 
 **Examples:**

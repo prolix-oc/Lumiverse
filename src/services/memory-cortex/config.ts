@@ -43,7 +43,7 @@ export interface ConsolidationConfig {
   chunksPerConsolidation: number;
   /** Tier-1 consolidation count before arc-level fires */
   arcThreshold: number;
-  /** Use sidecar LLM for summaries (false = extractive) */
+  /** Use sidecar LLM for semantic summaries (false = retain source chunks) */
   useSidecar: boolean;
   /** Max tokens per generated summary */
   maxTokensPerSummary: number;
@@ -370,7 +370,11 @@ function applyStandardPreset(config: MemoryCortexConfig): MemoryCortexConfig {
     entityExtractionMode: "heuristic",
     salienceScoring: true,
     salienceScoringMode: "heuristic",
-    consolidation: { ...DEFAULT_CONSOLIDATION_CONFIG, enabled: true },
+    consolidation: {
+      ...DEFAULT_CONSOLIDATION_CONFIG,
+      enabled: true,
+      useSidecar: !!config.sidecar.connectionProfileId,
+    },
     retrieval: {
       useFusedScoring: true,
       emotionalResonance: true,

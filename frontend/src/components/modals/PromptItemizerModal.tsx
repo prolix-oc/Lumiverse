@@ -1,18 +1,20 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
-import { ChevronRight, Copy, Check, Code } from 'lucide-react'
+import { ChevronRight, ChevronUp, ChevronDown, Copy, Check, Code, Search, X } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { generateApi, type DryRunMessage, type DryRunResponse } from '@/api/generate'
 import type { BreakdownCacheEntry } from '@/types/store'
+import { findExpandedTextMatches } from '@/lib/expandedTextSearch'
 import { groupBreakdownEntries, getBlockDisplayColor } from '@/lib/prompt-breakdown'
 import type { BreakdownGroup } from '@/lib/prompt-breakdown'
 import { translateBreakdownGroupLabel } from '@/lib/i18n/breakdownGroupLabel'
 import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import { getNanoGptCacheUsageSummary } from '@/lib/nanogpt-breakdown-cache'
+import { getOpenAiCompatibleCacheUsageSummary } from '@/lib/openai-compatible-breakdown-cache'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
@@ -83,6 +85,12 @@ export default function PromptItemizerModal() {
   const [rawLoading, setRawLoading] = useState(false)
   const [rawError, setRawError] = useState<string | null>(null)
   const [rawData, setRawData] = useState<DryRunResponse | null>(null)
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [matchIndex, setMatchIndex] = useState(0)
+  const [matchNavTick, setMatchNavTick] = useState(0)
+  const findInputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!messageId) return
@@ -179,6 +187,10 @@ export default function PromptItemizerModal() {
 
   const rawButtonLabel = rawView === 'off' ? ts('raw') : rawView === 'text' ? ts('json') : ts('visual')
 
+  useEffect(() => {
+    setMatchIndex(0)
+  }, [rawView])
+
   const groups = useMemo(() => (data ? groupBreakdownEntries(data.entries) : []), [data])
   const groupLabel = useCallback((id: string, fallback: string) => translateBreakdownGroupLabel(id, t), [t])
   const sidecarGroup = groups.find((g) => g.id === 'sidecar')
@@ -196,6 +208,7 @@ export default function PromptItemizerModal() {
   const flatEntries = useMemo(
     () => groups.flatMap((group) => group.entries.map((entry, index) => ({
       key: getEntryKey(group.id, index),
+      groupId: group.id,
       groupLabel: groupLabel(group.id, group.label),
       entry,
     }))),
@@ -215,6 +228,175 @@ export default function PromptItemizerModal() {
   }, [flatEntries])
 
   const selectedEntry = flatEntries.find((item) => item.key === selectedEntryKey) ?? null
+
+  // ---- Find in prompt ----
+  // Name and content are matched separately so content offsets line up with
+  // the inspector highlight; chat-history entries fall back to their
+  // reassembled messages when the snapshot carries no inline content.
+  // Name-only matches navigate to the entry but highlight nothing (start<0).
+  const entryContentSearchText = useCallback((entry: typeof flatEntries[number]['entry']): string => {
+    if (
+      entry.type === 'chat_history' &&
+      entry.content == null &&
+      data?.messages &&
+      entry.firstMessageIndex != null &&
+      entry.messageCount != null && entry.messageCount > 0
+    ) {
+      return data.messages
+        .slice(entry.firstMessageIndex, entry.firstMessageIndex + entry.messageCount)
+        .map((message) => message.content)
+        .join('\n')
+    }
+    return entry.content ?? ''
+  }, [data?.messages])
+
+  type FindMatch =
+    | { kind: 'breakdown'; entryKey: string; groupId: string; start: number; end: number }
+    | { kind: 'raw'; start: number; end: number }
+
+  const breakdownFindMatches = useMemo<FindMatch[]>(() => {
+    const query = findQuery.trim()
+    if (!query) return []
+    const matches: FindMatch[] = []
+    for (const item of flatEntries) {
+      for (const _nameMatch of findExpandedTextMatches(item.entry.name, query)) {
+        matches.push({
+          kind: 'breakdown',
+          entryKey: item.key,
+          groupId: item.groupId,
+          start: -1,
+          end: -1,
+        })
+      }
+      for (const range of findExpandedTextMatches(entryContentSearchText(item.entry), query)) {
+        matches.push({
+          kind: 'breakdown',
+          entryKey: item.key,
+          groupId: item.groupId,
+          start: range.start,
+          end: range.end,
+        })
+      }
+    }
+    return matches
+  }, [findQuery, flatEntries, entryContentSearchText])
+
+  const rawFindMatches = useMemo<FindMatch[]>(() => {
+    const query = findQuery.trim()
+    if (!query || rawView === 'off' || !rawText) return []
+    return findExpandedTextMatches(rawText, query).map((range) => ({
+      kind: 'raw' as const,
+      start: range.start,
+      end: range.end,
+    }))
+  }, [findQuery, rawText, rawView])
+
+  const findMatches = rawView === 'off' ? breakdownFindMatches : rawFindMatches
+  const currentMatchIndex = findMatches.length === 0
+    ? 0
+    : Math.min(matchIndex, findMatches.length - 1)
+  const currentMatch = findMatches[currentMatchIndex] ?? null
+
+  const goToMatch = useCallback((nextIndex: number) => {
+    if (findMatches.length === 0) return
+    const wrapped = ((nextIndex % findMatches.length) + findMatches.length) % findMatches.length
+    setMatchIndex(wrapped)
+    const match = findMatches[wrapped]
+    if (match.kind === 'breakdown') {
+      setSelectedEntryKey(match.entryKey)
+      setOpenGroups((prev) => new Set(prev).add(match.groupId))
+    }
+    setMatchNavTick((tick) => tick + 1)
+  }, [findMatches])
+
+  // Ctrl/Cmd+F opens find, mirroring the expanded editor.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'f' || event.key === 'F')) {
+        event.preventDefault()
+        setFindOpen(true)
+        requestAnimationFrame(() => findInputRef.current?.focus())
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Scroll only on explicit find navigation. Scope the lookup to this modal
+  // and move its own scroll container directly; document-level scrollIntoView
+  // is unreliable inside the nested modal/raw-view layout.
+  useEffect(() => {
+    if (!findOpen || !findQuery.trim() || !currentMatch) return
+    const frame = requestAnimationFrame(() => {
+      const body = bodyRef.current
+      const mark = body?.querySelector<HTMLElement>('[data-find-current="true"]')
+      if (!body || !mark) return
+      const bodyRect = body.getBoundingClientRect()
+      const markRect = mark.getBoundingClientRect()
+      const top = body.scrollTop
+        + (markRect.top - bodyRect.top)
+        - ((body.clientHeight - markRect.height) / 2)
+      body.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [matchNavTick, findOpen, findQuery, currentMatch])
+
+  const highlightFindMatches = (text: string): ReactNode => {
+    const query = findQuery.trim()
+    if (!query) return text
+    const ranges = findExpandedTextMatches(text, query)
+    if (ranges.length === 0) return text
+    const nodes: ReactNode[] = []
+    let cursor = 0
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) nodes.push(text.slice(cursor, range.start))
+      const isCurrent = currentMatch?.kind === 'breakdown'
+        && selectedEntryKey === currentMatch.entryKey
+        && currentMatch.start === range.start
+        && currentMatch.end === range.end
+      nodes.push(
+        <mark
+          key={index}
+          className={isCurrent ? styles.findMarkCurrent : styles.findMark}
+          data-find-current={isCurrent ? 'true' : undefined}
+        >
+          {text.slice(range.start, range.end)}
+        </mark>,
+      )
+      cursor = range.end
+    })
+    if (cursor < text.length) nodes.push(text.slice(cursor))
+    return nodes
+  }
+
+  const highlightRawFindMatches = (text: string): ReactNode => {
+    const query = findQuery.trim()
+    if (!query) return text
+    const ranges = findExpandedTextMatches(text, query)
+    if (ranges.length === 0) return text
+
+    const nodes: ReactNode[] = []
+    let cursor = 0
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) nodes.push(text.slice(cursor, range.start))
+      const isCurrent = currentMatch?.kind === 'raw'
+        && currentMatch.start === range.start
+        && currentMatch.end === range.end
+      nodes.push(
+        <mark
+          key={index}
+          className={isCurrent ? styles.findMarkCurrent : styles.findMark}
+          data-find-current={isCurrent ? 'true' : undefined}
+        >
+          {text.slice(range.start, range.end)}
+        </mark>,
+      )
+      cursor = range.end
+    })
+    if (cursor < text.length) nodes.push(text.slice(cursor))
+    return nodes
+  }
+
   const cacheHints = useMemo(
     () => data
       ? getAnthropicBreakdownCacheHints({
@@ -231,6 +413,10 @@ export default function PromptItemizerModal() {
   )
   const nanoGptCacheUsage = useMemo(
     () => data ? getNanoGptCacheUsageSummary(data.provider, data.usage) : null,
+    [data],
+  )
+  const openAiCompatibleCacheUsage = useMemo(
+    () => data ? getOpenAiCompatibleCacheUsageSummary(data.provider, data.usage) : null,
     [data],
   )
   const cacheHintsByKey = useMemo(() => {
@@ -297,9 +483,64 @@ export default function PromptItemizerModal() {
             <CloseButton onClick={closeModal} iconSize={15} />
           </div>
 
-          <div className={styles.body}>
+          <div ref={bodyRef} className={styles.body}>
             {loading && <div className={styles.loading}>{t('loading')}</div>}
             {!loading && !data && <div className={styles.empty}>{t('empty')}</div>}
+            {!loading && data && findOpen && (
+              <div className={styles.findBar}>
+                <Search size={12} className={styles.findBarIcon} />
+                <input
+                  ref={findInputRef}
+                  className={styles.findInput}
+                  value={findQuery}
+                  placeholder={t('findPlaceholder')}
+                  onChange={(e) => {
+                    setFindQuery(e.target.value)
+                    setMatchIndex(0)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      goToMatch(e.shiftKey ? currentMatchIndex - 1 : currentMatchIndex + 1)
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      setFindOpen(false)
+                    }
+                  }}
+                />
+                <span className={styles.findCount}>
+                  {findQuery.trim()
+                    ? findMatches.length > 0
+                      ? `${currentMatchIndex + 1}/${findMatches.length}`
+                      : t('noMatches')
+                    : ''}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<ChevronUp size={12} />}
+                  disabled={findMatches.length === 0}
+                  onClick={() => goToMatch(currentMatchIndex - 1)}
+                  aria-label={t('findPrevious')}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<ChevronDown size={12} />}
+                  disabled={findMatches.length === 0}
+                  onClick={() => goToMatch(currentMatchIndex + 1)}
+                  aria-label={t('findNext')}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<X size={12} />}
+                  onClick={() => setFindOpen(false)}
+                  aria-label={ts('close')}
+                />
+              </div>
+            )}
+
             {!loading && data && rawView === 'off' && (
               <>
                 <StackedBar groups={summaryGroups} total={data.totalTokens} groupLabel={groupLabel} />
@@ -333,6 +574,20 @@ export default function PromptItemizerModal() {
                     )}
                     {nanoGptCacheUsage.cachedTokensOpenAiStyle > 0 && (
                       <span className={styles.cacheSummaryMetric}>{t('cacheCached', { count: nanoGptCacheUsage.cachedTokensOpenAiStyle.toLocaleString() })}</span>
+                    )}
+                  </div>
+                )}
+                {openAiCompatibleCacheUsage && (
+                  <div className={styles.cacheSummary}>
+                    <span>{data.provider === 'openrouter' ? t('openRouterCache') : t('openAiCache')}</span>
+                    {openAiCompatibleCacheUsage.cacheReadInputTokens > 0 && (
+                      <span className={styles.cacheSummaryMetric}>{t('cacheRead', { count: openAiCompatibleCacheUsage.cacheReadInputTokens.toLocaleString() })}</span>
+                    )}
+                    {openAiCompatibleCacheUsage.cacheCreationInputTokens > 0 && (
+                      <span className={styles.cacheSummaryMetric}>{t('cacheWrite', { count: openAiCompatibleCacheUsage.cacheCreationInputTokens.toLocaleString() })}</span>
+                    )}
+                    {openAiCompatibleCacheUsage.cachedTokens > 0 && (
+                      <span className={styles.cacheSummaryMetric}>{t('cacheCached', { count: openAiCompatibleCacheUsage.cachedTokens.toLocaleString() })}</span>
                     )}
                   </div>
                 )}
@@ -414,7 +669,9 @@ export default function PromptItemizerModal() {
                     ) : selectedEntry.entry.type === 'chat_history' && rawLoading ? (
                       <div className={styles.entryInspectorEmpty}>{t('loadingMessages')}</div>
                     ) : selectedEntry.entry.content != null ? (
-                      <pre className={styles.entryInspectorContent}>{selectedEntry.entry.content}</pre>
+                      <pre className={styles.entryInspectorContent}>
+                        {findOpen ? highlightFindMatches(selectedEntry.entry.content) : selectedEntry.entry.content}
+                      </pre>
                     ) : (
                       <div className={styles.entryInspectorEmpty}>
                         {t('tokenCountsOnly')}
@@ -432,7 +689,9 @@ export default function PromptItemizerModal() {
                 {rawLoading && <div className={styles.loading}>{t('reassembling')}</div>}
                 {!rawLoading && rawError && <div className={styles.empty}>{rawError}</div>}
                 {!rawLoading && !rawError && rawData && (
-                  <pre className={styles.rawView}>{rawText}</pre>
+                  <pre className={styles.rawView}>
+                    {findOpen ? highlightRawFindMatches(rawText) : rawText}
+                  </pre>
                 )}
               </>
             )}
@@ -457,6 +716,17 @@ export default function PromptItemizerModal() {
                 </span>
               )}
               <div className={styles.footerSpacer} />
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<Search size={12} />}
+                onClick={() => {
+                  setFindOpen((open) => !open)
+                  requestAnimationFrame(() => findInputRef.current?.focus())
+                }}
+              >
+                {t('find')}
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"

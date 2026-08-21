@@ -301,6 +301,52 @@ describe("recent chats", () => {
     expect(result.data[0].metadata).toEqual({});
   });
 
+  test("flat recent list searches, sorts, and stays one row per chat", () => {
+    seedChat("z-newest", "c1", "Zeta newest", "{}", 300);
+    seedChat("a-middle", "c1", "Alpha middle", "{}", 200);
+    seedChat("debugger", "c2", "Branch #1", "{}", 100);
+
+    const byRecent = listRecentChats("u1", { limit: 10, offset: 0 });
+    expect(byRecent.data.map((chat) => chat.id)).toEqual(["z-newest", "a-middle", "debugger"]);
+
+    const byName = listRecentChats("u1", { limit: 10, offset: 0 }, { sort: "name", direction: "asc" });
+    expect(byName.data.map((chat) => chat.id)).toEqual(["a-middle", "debugger", "z-newest"]);
+
+    const byCreatedDesc = listRecentChats("u1", { limit: 10, offset: 0 }, { sort: "created", direction: "desc" });
+    expect(byCreatedDesc.data.map((chat) => chat.id)).toEqual(["z-newest", "a-middle", "debugger"]);
+
+    const search = listRecentChats("u1", { limit: 10, offset: 0 }, { search: "branch" });
+    expect(search.data.map((chat) => chat.id)).toEqual(["debugger"]);
+    // Search matches character names too, not just chat names.
+    const byCharacter = listRecentChats("u1", { limit: 10, offset: 0 }, { search: "beta" });
+    expect(byCharacter.total).toBe(1);
+  });
+
+  test("flat recent list hides hidden_from_recent chats", () => {
+    seedChat("shown", "c1", "Shown", "{}", 100);
+    seedChat("hidden", "c1", "Hidden", JSON.stringify({ hidden_from_recent: true }), 200);
+
+    const result = listRecentChats("u1", { limit: 10, offset: 0 });
+
+    expect(result.data.map((chat) => chat.id)).toEqual(["shown"]);
+  });
+
+  test("flat recent list enriches rows with message count and preview", () => {
+    seedChat("enriched", "c1", "Enriched", "{}", 100);
+    seedMessage("m1", "enriched", "first message", {}, { index: 0 });
+    seedMessage("m2", "enriched", "last message body", {}, { index: 1 });
+    seedChat("empty", "c2", "Empty", "{}", 50);
+
+    const result = listRecentChats("u1", { limit: 10, offset: 0 });
+
+    const enriched = result.data.find((chat) => chat.id === "enriched");
+    expect(enriched?.message_count).toBe(2);
+    expect(enriched?.last_message_preview).toBe("last message body");
+    const empty = result.data.find((chat) => chat.id === "empty");
+    expect(empty?.message_count).toBe(0);
+    expect(empty?.last_message_preview).toBe("");
+  });
+
   test("groups recent chats without SQLite JSON extraction", () => {
     seedChat("c1-old", "c1", "Alpha old", "{}", 100);
     seedChat("group", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 150);

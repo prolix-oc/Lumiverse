@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 async function readRuntimeStage(): Promise<string> {
   const dockerfile = await Bun.file(join(import.meta.dir, "..", "Dockerfile")).text();
-  const runtimeStage = dockerfile.split(/\nFROM oven\/bun:canary-slim\s*\n/).at(-1);
+  const runtimeStage = dockerfile.split(/\nFROM oven\/bun:[^\s]+\s*\n/).at(-1);
 
   if (!runtimeStage || runtimeStage === dockerfile) {
     throw new Error("Could not locate the final runtime stage in Dockerfile");

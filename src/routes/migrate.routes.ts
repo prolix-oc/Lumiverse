@@ -151,11 +151,11 @@ app.post("/world-books", async (c) => {
   for (const wb of body.world_books) {
     const name = wb.name || "Imported World Book";
     try {
-      const { worldBook, entryCount } = worldBooksSvc.importWorldBookBulk(userId, {
+      const { worldBook, entryCount } = await worldBooksSvc.importWorldBookBulk(userId, {
         name: wb.name,
         description: wb.description,
         entries: wb.entries,
-      }, { signal: c.req.raw.signal });
+      }, { signal: c.req.raw.signal, emitEvent: false });
 
       result.results.push({
         name,
@@ -172,6 +172,13 @@ app.post("/world-books", async (c) => {
       });
       result.summary.failed++;
     }
+  }
+
+  if (result.summary.imported > 0) {
+    worldBooksSvc.emitWorldBookLibraryChanged(userId, {
+      reason: "bulk_migration",
+      imported: result.summary.imported,
+    });
   }
 
   return c.json(result, 201);

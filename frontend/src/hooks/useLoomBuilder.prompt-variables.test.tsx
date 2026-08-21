@@ -166,6 +166,8 @@ interface LoomBuilderTestSurface {
     promptVariables?: PromptVariableValues,
   ): void
   updateBlock(blockId: string, updates: Partial<PromptBlock>): boolean
+  addBlock(block: PromptBlock, index?: number): void
+  movePromptVariable(sourceBlockId: string, variable: PromptVariableDef, targetBlockId: string): boolean
   saveLoomValue(
     blocks: PromptBlock[],
     promptVariables: PromptVariableValues,
@@ -331,6 +333,92 @@ describe('useLoomBuilder prompt-variable structure persistence', () => {
       host.remove()
     }
   })
+  test('moves a variable definition and its value bucket to another block', async () => {
+    // Later tests mutate the shared fixture; restore the pristine shape so
+    // assertions here (and in the tests that follow) see a known baseline.
+    persistedPreset.prompt_order = [chatBlock]
+    persistedPreset.metadata = { promptVariables: { chat: { tone: 'legacy value' } } }
+    // Each persisted write blocks on its own gate; drain chained writes so
+    // nothing leaks into the tests that follow.
+    const drain = async () => {
+      const baseline = events.length
+      for (let i = 0; i < 20; i++) {
+        resolvePersist?.()
+        resolvePersist = null
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+        if (events.length > baseline && events[events.length - 1] === 'registry:refresh') break
+      }
+    }
+    const { host, root } = await renderHook()
+    try {
+      await act(async () => {
+        hookSurface.updateBlock('chat', { variables: [firstVariable, validRenamedVariable] })
+        await drain()
+      })
+      const styleBlock: PromptBlock = {
+        ...chatBlock,
+        id: 'style',
+        name: 'Style',
+        variables: [],
+      }
+      await act(async () => {
+        hookSurface.addBlock(styleBlock)
+        await drain()
+      })
+      updateCalls.length = 0
+
+      // Moving a def with no stored value only relocates the definition.
+      let moved = false
+      await act(async () => {
+        moved = hookSurface.movePromptVariable('chat', validRenamedVariable, 'style')
+        await drain()
+      })
+      expect(moved).toBe(true)
+      expect(updateCalls).toHaveLength(1)
+      const chatAfterVoiceMove = updateCalls[0]?.input.prompt_order?.find((b) => b.id === 'chat')
+      const styleAfterVoiceMove = updateCalls[0]?.input.prompt_order?.find((b) => b.id === 'style')
+      expect(chatAfterVoiceMove?.variables).toEqual([firstVariable])
+      expect(styleAfterVoiceMove?.variables).toEqual([validRenamedVariable])
+      expect(updateCalls[0]?.input.metadata?.promptVariables).toEqual({
+        chat: { tone: 'legacy value' },
+      })
+
+      // Moving a def with a stored value carries the bucket along.
+      updateCalls.length = 0
+      moved = false
+      await act(async () => {
+        moved = hookSurface.movePromptVariable('chat', firstVariable, 'style')
+        await drain()
+      })
+      expect(moved).toBe(true)
+      expect(updateCalls).toHaveLength(1)
+      const chatAfterToneMove = updateCalls[0]?.input.prompt_order?.find((b) => b.id === 'chat')
+      const styleAfterToneMove = updateCalls[0]?.input.prompt_order?.find((b) => b.id === 'style')
+      expect(chatAfterToneMove?.variables).toEqual([])
+      expect(styleAfterToneMove?.variables).toEqual([validRenamedVariable, firstVariable])
+      // The empty source bucket is pruned by marshal-time cleanup.
+      expect(updateCalls[0]?.input.metadata?.promptVariables).toEqual({
+        style: { tone: 'legacy value' },
+      })
+
+      // A target that already defines the name refuses the move.
+      updateCalls.length = 0
+      let rejected = true
+      await act(async () => {
+        rejected = hookSurface.movePromptVariable('chat', firstVariable, 'style')
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(rejected).toBe(false)
+      expect(updateCalls).toHaveLength(0)
+    } finally {
+      unmountRoot(root)
+      host.remove()
+    }
+  })
+
   test('unmounts while persistence is pending before releasing the write gate', async () => {
     const { host, root } = await renderHook()
     let updated = false

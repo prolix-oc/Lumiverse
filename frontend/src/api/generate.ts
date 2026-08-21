@@ -31,6 +31,7 @@ export interface GenerateRequest {
   target_character_id?: string
   regen_feedback?: string
   regen_feedback_position?: 'system' | 'user'
+  regen_feedback_format?: string
   retain_council?: boolean
   /** Dry-run only: reassemble as if this message were absent from history. */
   exclude_message_id?: string

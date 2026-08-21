@@ -21,9 +21,6 @@ async function applyBaseline(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "src", "db", "baseline.sql")).text());
-  db.run(
-    await Bun.file(join(import.meta.dir, "..", "src", "db", "migrations", "088_multiplayer.sql")).text(),
-  );
 }
 
 function makeRoom(strategy: "round_robin" | "freeform"): { chatId: string; room: Room } {

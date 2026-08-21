@@ -65,7 +65,10 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
 
   addImageGenProfile: (profile) => {
     const state = get()
-    const imageGenProfiles = [...state.imageGenProfiles, profile]
+    const existingIndex = state.imageGenProfiles.findIndex((candidate) => candidate.id === profile.id)
+    const imageGenProfiles = existingIndex === -1
+      ? [profile, ...state.imageGenProfiles]
+      : state.imageGenProfiles.map((candidate, index) => index === existingIndex ? profile : candidate)
     const activeImageGenConnectionId = resolveActiveConnectionId(
       imageGenProfiles,
       state.imageGeneration.activeImageGenConnectionId ?? state.activeImageGenConnectionId,
@@ -81,7 +84,10 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
       imageGenProfilesVersion: state.imageGenProfilesVersion + 1,
       activeImageGenConnectionId,
       imageGeneration,
-      connectionsOrder: { ...connectionsOrder, imageGen: [...order, profile.id] },
+      connectionsOrder: {
+        ...connectionsOrder,
+        imageGen: order.includes(profile.id) ? order : [profile.id, ...order],
+      },
     })
     if (activeChanged) {
       if (state.fullSettingsLoaded) {

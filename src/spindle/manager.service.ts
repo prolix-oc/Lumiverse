@@ -843,6 +843,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "world_books",
   "presets",
   "regex_scripts",
+  "regex_scripts_unrestricted",
   "databanks",
   "personas",
   "push_notification",

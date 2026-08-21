@@ -75,3 +75,39 @@ export function paginatedQuery<TRow, TEntity>(
     offset: pagination.offset,
   };
 }
+
+/**
+ * Collect a paginated list to exhaustion by walking offset-forward pages.
+ *
+ * Consumers that treat a list as complete (e.g. the bootstrap payload, which
+ * the client hydrates its stores from) must page past the MAX_LIMIT row cap —
+ * a truncated first page silently hides entries.
+ *
+ * A first-page failure is rethrown for the caller's fallback; once pages are
+ * in hand, a later failure keeps the already-collected rows instead of
+ * discarding them.
+ */
+export function collectAll<T>(
+  fetchPage: (pagination: PaginationParams) => PaginatedResult<T>,
+  pageSize: number = 200
+): PaginatedResult<T> {
+  const data: T[] = [];
+  let offset = 0;
+  for (;;) {
+    let page: PaginatedResult<T>;
+    try {
+      page = fetchPage({ limit: pageSize, offset });
+    } catch (err) {
+      if (data.length === 0) throw err;
+      console.warn(
+        `[pagination] page fetch failed at offset ${offset}; returning ${data.length} already collected`,
+        err
+      );
+      break;
+    }
+    data.push(...page.data);
+    offset += page.data.length;
+    if (page.data.length === 0 || offset >= page.total) break;
+  }
+  return { data, total: data.length, limit: data.length, offset: 0 };
+}

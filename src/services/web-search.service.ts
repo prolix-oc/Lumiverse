@@ -47,6 +47,30 @@ interface SearxngResult {
   score?: number;
 }
 
+interface ExaSearchResult {
+  title?: string;
+  url?: string;
+  text?: string;
+  highlights?: string[];
+  summary?: string;
+}
+
+interface ExaSearchResponse {
+  results?: ExaSearchResult[];
+}
+
+interface TavilySearchResult {
+  title?: string;
+  url?: string;
+  content?: string;
+  raw_content?: string;
+  score?: number;
+}
+
+interface TavilySearchResponse {
+  results?: TavilySearchResult[];
+}
+
 function resolveSearchEndpoint(apiUrl: string): string {
   const parsed = new URL(apiUrl);
   if (!parsed.pathname || parsed.pathname === "/") {
@@ -60,7 +84,7 @@ function clipText(text: string, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
-function normalizeResult(row: SearxngResult): WebSearchResult | null {
+function normalizeSearxngResult(row: SearxngResult): WebSearchResult | null {
   if (!row.url || typeof row.url !== "string") return null;
   const title = typeof row.title === "string" && row.title.trim()
     ? row.title.trim()
@@ -71,6 +95,34 @@ function normalizeResult(row: SearxngResult): WebSearchResult | null {
     url: row.url,
     snippet,
     ...(typeof row.engine === "string" && row.engine ? { engine: row.engine } : {}),
+    ...(typeof row.score === "number" ? { score: row.score } : {}),
+  };
+}
+
+function normalizeExaResult(row: ExaSearchResult): WebSearchResult | null {
+  if (!row.url || typeof row.url !== "string") return null;
+  const title = typeof row.title === "string" && row.title.trim()
+    ? row.title.trim()
+    : row.url;
+  const highlight = Array.isArray(row.highlights)
+    ? row.highlights.find((value): value is string => typeof value === "string" && !!value.trim())
+    : undefined;
+  const summary = typeof row.summary === "string" ? row.summary.trim() : "";
+  const text = typeof row.text === "string" ? row.text.trim() : "";
+  const snippet = highlight || summary || clipText(text, 500);
+  return { title, url: row.url, snippet: snippet.trim() };
+}
+
+function normalizeTavilyResult(row: TavilySearchResult): WebSearchResult | null {
+  if (!row.url || typeof row.url !== "string") return null;
+  const title = typeof row.title === "string" && row.title.trim()
+    ? row.title.trim()
+    : row.url;
+  const snippet = typeof row.content === "string" ? row.content.trim() : "";
+  return {
+    title,
+    url: row.url,
+    snippet,
     ...(typeof row.score === "number" ? { score: row.score } : {}),
   };
 }
@@ -146,9 +198,154 @@ async function fetchSearxngResults(
   const payload = await response.json() as { results?: SearxngResult[] };
   const rows = Array.isArray(payload.results) ? payload.results : [];
   return rows
-    .map(normalizeResult)
+    .map(normalizeSearxngResult)
     .filter(Boolean)
     .slice(0, count) as WebSearchResult[];
+}
+
+async function fetchExaResults(
+  query: string,
+  requestedCount: number,
+  settings: WebSearchSettings,
+  apiKey: string | null,
+  includeContent: boolean,
+): Promise<{ results: WebSearchResult[]; documents: WebSearchDocument[] }> {
+  if (!apiKey) {
+    throw new Error("An Exa API key is required");
+  }
+
+  const count = Math.min(requestedCount, settings.maxResultCount);
+  const response = await safeFetch(settings.apiUrl, {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      type: "auto",
+      numResults: count,
+      ...(includeContent ? {
+        contents: {
+          // Exa limits maxCharacters to 10,000. The final context is still
+          // clipped against Lumiverse's configured per-page limit below.
+          text: { maxCharacters: Math.min(settings.maxCharsPerPage, 10_000) },
+        },
+      } : {}),
+    }),
+    timeoutMs: settings.requestTimeoutMs,
+    maxBytes: 5 * 1024 * 1024,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Exa returned HTTP ${response.status}`);
+  }
+
+  const payload = await response.json() as ExaSearchResponse;
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  const results = rows
+    .map(normalizeExaResult)
+    .filter(Boolean)
+    .slice(0, count) as WebSearchResult[];
+
+  if (!includeContent) {
+    return { results, documents: [] };
+  }
+
+  // Exa extracts content during search, avoiding Lumiverse's follow-up page
+  // scraper. Preserve the existing maxPagesToScrape contract for context.
+  const documents = rows
+    .slice(0, settings.maxPagesToScrape)
+    .map((row): WebSearchDocument | null => {
+      const result = normalizeExaResult(row);
+      if (!result) return null;
+      const content = typeof row.text === "string" && row.text.trim()
+        ? clipText(row.text.trim(), settings.maxCharsPerPage)
+        : undefined;
+      return {
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        ...(content ? { content, contentLength: row.text!.length } : {}),
+      };
+    })
+    .filter(Boolean) as WebSearchDocument[];
+
+  return { results, documents };
+}
+
+async function fetchTavilyResults(
+  query: string,
+  requestedCount: number,
+  settings: WebSearchSettings,
+  apiKey: string | null,
+  includeContent: boolean,
+): Promise<{ results: WebSearchResult[]; documents: WebSearchDocument[] }> {
+  if (!apiKey) {
+    throw new Error("A Tavily API key is required");
+  }
+
+  const count = Math.min(requestedCount, settings.maxResultCount);
+  const response = await safeFetch(settings.apiUrl, {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      max_results: count,
+      // Tavily's balanced, one-credit depth provides ranked snippets while
+      // raw content below replaces Lumiverse's follow-up page scraper.
+      search_depth: "basic",
+      chunks_per_source: 3,
+      include_answer: false,
+      include_raw_content: includeContent ? "text" : false,
+    }),
+    timeoutMs: settings.requestTimeoutMs,
+    maxBytes: 5 * 1024 * 1024,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Tavily returned HTTP ${response.status}`);
+  }
+
+  const payload = await response.json() as TavilySearchResponse;
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  const results = rows
+    .map(normalizeTavilyResult)
+    .filter(Boolean)
+    .slice(0, count) as WebSearchResult[];
+
+  if (!includeContent) {
+    return { results, documents: [] };
+  }
+
+  // Tavily extracts the page during search, avoiding Lumiverse's follow-up
+  // scraper. Fall back to its result snippet when raw content is unavailable.
+  const documents = rows
+    .slice(0, settings.maxPagesToScrape)
+    .map((row): WebSearchDocument | null => {
+      const result = normalizeTavilyResult(row);
+      if (!result) return null;
+      const source = typeof row.raw_content === "string" && row.raw_content.trim()
+        ? row.raw_content.trim()
+        : typeof row.content === "string" && row.content.trim()
+          ? row.content.trim()
+          : undefined;
+      const content = source ? clipText(source, settings.maxCharsPerPage) : undefined;
+      return {
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        ...(content ? { content, contentLength: source!.length } : {}),
+      };
+    })
+    .filter(Boolean) as WebSearchDocument[];
+
+  return { results, documents };
 }
 
 export async function searchWeb(
@@ -158,7 +355,7 @@ export async function searchWeb(
   options?: WebSearchOptions,
 ): Promise<WebSearchResponse> {
   const settings = await getWebSearchSettings(userId);
-  const apiKey = await getWebSearchApiKey(userId);
+  const apiKey = await getWebSearchApiKey(userId, settings.provider);
   return searchWebWithConfig(query, requestedCount, settings, apiKey, options);
 }
 
@@ -179,6 +376,26 @@ export async function searchWebWithConfig(
   }
 
   const count = Math.max(1, Math.min(requestedCount ?? settings.defaultResultCount, settings.maxResultCount));
+  if (settings.provider === "exa") {
+    const exa = await fetchExaResults(trimmedQuery, count, settings, apiKey, options?.scrape !== false);
+    return {
+      query: trimmedQuery,
+      results: exa.results,
+      documents: exa.documents,
+      context: options?.scrape === false ? "" : buildContextBlock(trimmedQuery, exa.documents, settings),
+    };
+  }
+
+  if (settings.provider === "tavily") {
+    const tavily = await fetchTavilyResults(trimmedQuery, count, settings, apiKey, options?.scrape !== false);
+    return {
+      query: trimmedQuery,
+      results: tavily.results,
+      documents: tavily.documents,
+      context: options?.scrape === false ? "" : buildContextBlock(trimmedQuery, tavily.documents, settings),
+    };
+  }
+
   const results = await fetchSearxngResults(trimmedQuery, count, settings, apiKey);
 
   if (options?.scrape === false) {

@@ -6,6 +6,8 @@ export interface LlmTextPart {
   type: "text";
   text: string;
   cache_control?: Record<string, unknown>;
+  /** Opaque Gemini thought signature for this non-tool part. */
+  thought_signature?: string;
 }
 
 export interface LlmImagePart {
@@ -91,6 +93,8 @@ export interface LlmMessage {
    *  Replayed verbatim (entire sequence, unmodified) on the assistant message
    *  to preserve chain-of-thought across tool calls. Opaque to Lumiverse. */
   reasoning_details?: Record<string, unknown>[];
+  /** Opaque Gemini signature on a non-tool response part, replayed when enabled. */
+  thought_signature?: string;
 }
 
 /** Helper: extract the text content from an LlmMessage regardless of format. */
@@ -223,6 +227,8 @@ export interface GenerationResponse {
   /** OpenRouter `reasoning_details` captured this turn, to replay on tool-use
    *  continuations. */
   reasoning_details?: Record<string, unknown>[];
+  /** Optional Gemini signature from a non-tool response part. */
+  thought_signature?: string;
   usage?: GenerationUsage;
 }
 
@@ -239,6 +245,8 @@ export interface StreamChunk {
   /** OpenRouter `reasoning_details`, accumulated across stream chunks and set on
    *  the final chunk alongside tool_calls. */
   reasoning_details?: Record<string, unknown>[];
+  /** Optional Gemini signature from a non-tool response part. */
+  thought_signature?: string;
   usage?: GenerationUsage;
 }
 
@@ -294,6 +302,8 @@ export interface AssemblyContext {
   regenFeedback?: string;
   /** Where to inject regen feedback: 'system' (last system msg) or 'user' (last user msg). */
   regenFeedbackPosition?: "system" | "user";
+  /** Freeform prompt template containing the guarded {{$regenInput}} placeholder. */
+  regenFeedbackFormat?: string;
   /** When true, an extension owns this chat's `target:prompt` regex and the
    *  host skips its own per-message prompt-regex pass. */
   skipPromptRegex?: boolean;
@@ -540,6 +550,13 @@ export interface AssemblyBreakdownEntry {
   firstMessageIndex?: number;
   /** Pre-counted token value (e.g. from sidecar usage stats). Skips local tokenization. */
   preCountedTokens?: number;
+  /**
+   * Alternate content used only for prompt-breakdown tokenization. The normal
+   * `content` remains the fully resolved text shown in inspectors.
+   */
+  tokenCountContent?: string;
+  /** True when this entry's token-count content delegates marker-mode WI to its World Info rows. */
+  attributesWorldInfoMarkerTokens?: boolean;
   /** If true, tokens are displayed but NOT added to the total (e.g. sidecar tokens spent on a separate LLM). */
   excludeFromTotal?: boolean;
   /** Present for prompt blocks injected by Spindle interceptors. */

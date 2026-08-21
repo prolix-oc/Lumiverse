@@ -139,6 +139,77 @@
   gap: 12px;
 }
 
+.thumbnailQueue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.thumbnailQueueHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thumbnailQueueTitle {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.thumbnailQueueCounts {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--lumiverse-text);
+}
+
+.thumbnailQueueTrack {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--lumiverse-border);
+}
+
+.thumbnailQueueFill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #64b5f6;
+  transition: width 0.2s ease;
+}
+
+.thumbnailQueueFillActive {
+  background-image: linear-gradient(
+    90deg,
+    #64b5f6 0%,
+    #90caf9 50%,
+    #64b5f6 100%
+  );
+  background-size: 200% 100%;
+  animation: thumbnailQueueSweep 1.4s linear infinite;
+}
+
+.thumbnailQueueHint {
+  margin: 0;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  color: var(--lumiverse-text-dim);
+}
+
+@keyframes thumbnailQueueSweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+
 .fieldGroup {
   display: flex;
   flex-direction: column;

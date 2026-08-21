@@ -78,17 +78,6 @@ beforeAll(async () => {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "src", "db", "baseline.sql")).text());
-  // Baseline is a 001-065 snapshot; apply later migrations on top (skipping
-  // any change the baseline already absorbed).
-  const migrationsDir = join(import.meta.dir, "..", "src", "db", "migrations");
-  const post065 = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql") && parseInt(f.slice(0, 3), 10) > 65)
-    .sort();
-  for (const file of post065) {
-    try {
-      db.run(await Bun.file(join(migrationsDir, file)).text());
-    } catch { /* baseline already includes this change */ }
-  }
 
   presetId = presetsSvc.createPreset(USER_ID, {
     name: "stop-test-preset",

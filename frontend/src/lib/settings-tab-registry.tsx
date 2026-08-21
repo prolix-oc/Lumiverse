@@ -152,11 +152,11 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     id: 'webSearch',
     shortName: 'Web Search',
     tabName: 'Web Search',
-    tabDescription: 'Configure SearXNG-backed web search for council tools',
+    tabDescription: 'Configure SearXNG, Exa, or Tavily web search for council tools',
     tabIcon: Search,
-    keywords: ['web search', 'searxng', 'search', 'browse', 'internet', 'web', 'council tool'],
+    keywords: ['web search', 'searxng', 'exa', 'search', 'browse', 'internet', 'web', 'council tool'],
     sections: [
-      { key: 'general', titleKey: 'webSearch.title', titleFallback: 'Web Search', keywords: ['web search', 'searxng', 'browse', 'internet', 'council tool'] },
+      { key: 'general', titleKey: 'webSearch.title', titleFallback: 'Web Search', keywords: ['web search', 'searxng', 'exa', 'browse', 'internet', 'council tool'] },
     ],
     component: INLINE_SENTINEL,
   },
@@ -216,7 +216,7 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabIcon: Sliders,
     keywords: ['advanced', 'debug', 'config', 'technical', 'expert', 'context filters', 'reasoning'],
     sections: [
-      { key: 'general', titleKey: 'advanced.title', titleFallback: 'Advanced', keywords: ['advanced', 'image optimization', 'long term memory', 'chunking', 'retrieval', 'query', 'formatting', 'similarity', 'top k', 'context filters', 'reasoning'] },
+      { key: 'general', titleKey: 'advanced.title', titleFallback: 'Advanced', keywords: ['advanced', 'long term memory', 'chunking', 'retrieval', 'query', 'formatting', 'similarity', 'top k', 'context filters', 'reasoning'] },
     ],
     component: INLINE_SENTINEL,
   },
@@ -281,8 +281,11 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabName: 'Operator Panel',
     tabDescription: 'Server management, updates, and restart controls',
     tabIcon: Terminal,
-    keywords: ['operator', 'server', 'restart', 'update', 'git', 'branch', 'logs', 'admin'],
+    keywords: ['operator', 'server', 'restart', 'update', 'git', 'branch', 'logs', 'admin', 'image processing', 'image optimization', 'thumbnails', 'sharp'],
     role: 'owner',
+    sections: [
+      { key: 'imageProcessing', titleKey: 'operator.imageProcessing', titleFallback: 'Image Processing', keywords: ['image processing', 'image optimization', 'thumbnails', 'rebuild thumbnails', 'sharp', 'small tier', 'large tier', 'deferred'] },
+    ],
     component: INLINE_SENTINEL,
   },
   {

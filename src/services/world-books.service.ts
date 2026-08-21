@@ -21,6 +21,7 @@ import {
 } from "./world-book-vector-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { yieldToEventLoop } from "../llm/stream-utils";
 
 /** Canonical stale-entry error. Routes/RPCs can serialize `payload` directly. */
 export class WorldBookEntryConflictError extends Error {
@@ -141,6 +142,15 @@ function emitWorldBookChanged(userId: string, id: string): void {
   const worldBook = getWorldBook(userId, id);
   if (!worldBook) return;
   eventBus.emit(EventType.WORLD_BOOK_CHANGED, { id, worldBook }, userId);
+}
+
+/** Coarse invalidation for bulk workflows that intentionally suppress the
+ * full payload emitted for every individual world book. */
+export function emitWorldBookLibraryChanged(
+  userId: string,
+  payload: { reason: string; imported: number },
+): void {
+  eventBus.emit(EventType.WORLD_BOOK_LIBRARY_CHANGED, payload, userId);
 }
 
 function emitWorldBookDeleted(userId: string, id: string): void {
@@ -834,22 +844,20 @@ function setEntriesPendingReindex(entries: WorldBookEntry[]): void {
 }
 
 function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookEntry, requeue: boolean): void {
-  void (async () => {
-    try {
-      await embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id);
-    } catch (err: unknown) {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    } finally {
-      if (requeue && isWorldBookEntryVectorEligible(entry)) {
-        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
-      }
-    }
-  })();
+  if (requeue && isWorldBookEntryVectorEligible(entry)) {
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+    return;
+  }
+  void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+    console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+  });
 }
 
 function queueReindexForEntries(userId: string, entries: WorldBookEntry[]): void {
   for (const entry of entries) {
-    deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
+    if (isWorldBookEntryVectorEligible(entry)) {
+      vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+    }
   }
 }
 
@@ -958,14 +966,54 @@ export function getWorldBookEntriesSignature(worldBookId: string): { count: numb
   return { count: row.count, maxUpdatedAt: row.maxUpdatedAt };
 }
 
-export function createWorldBook(userId: string, input: CreateWorldBookInput): WorldBook {
+export interface CreateWorldBookOptions {
+  /** Bulk workflows publish one library invalidation after committing. */
+  emitEvent?: boolean;
+}
+
+export function createWorldBook(
+  userId: string,
+  input: CreateWorldBookInput,
+  options: CreateWorldBookOptions = {},
+): WorldBook {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query("INSERT INTO world_books (id, user_id, name, description, folder, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .run(id, userId, input.name, input.description || "", input.folder || "", JSON.stringify(input.metadata || {}), now, now);
-  emitWorldBookChanged(userId, id);
+  if (options.emitEvent !== false) emitWorldBookChanged(userId, id);
   return getWorldBook(userId, id)!;
+}
+
+/** Load SillyTavern migration identities once. This keeps rerun deduplication
+ * linear instead of repeatedly scanning JSON metadata for every source file. */
+export function listSillyTavernWorldBookSourceFilenameIds(userId: string): Map<string, string> {
+  const rows = getDb().query(
+    `SELECT id, json_extract(metadata, '$._lumiverse_source_filename') AS source_filename
+     FROM world_books
+     WHERE user_id = ?
+       AND json_extract(metadata, '$.source') = 'sillytavern_migration'
+       AND json_type(metadata, '$._lumiverse_source_filename') = 'text'
+     ORDER BY updated_at ASC`,
+  ).all(userId) as Array<{ id: string; source_filename: string }>;
+
+  const result = new Map<string, string>();
+  for (const row of rows) result.set(row.source_filename, row.id);
+  return result;
+}
+
+export function listSillyTavernWorldBookNameIds(userId: string): Map<string, string> {
+  const rows = getDb().query(
+    `SELECT id, name
+     FROM world_books
+     WHERE user_id = ?
+       AND json_extract(metadata, '$.source') = 'sillytavern_migration'
+     ORDER BY updated_at ASC`,
+  ).all(userId) as Array<{ id: string; name: string }>;
+
+  const result = new Map<string, string>();
+  for (const row of rows) result.set(row.name, row.id);
+  return result;
 }
 
 export function updateWorldBook(userId: string, id: string, input: UpdateWorldBookInput): WorldBook | null {
@@ -1193,30 +1241,23 @@ export async function deleteAutoManagedCharacterWorldBooks(userId: string, chara
 }
 
 export function getWorldBookVectorSummary(userId: string, worldBookId: string): WorldBookVectorSummary | null {
-  const book = getWorldBook(userId, worldBookId);
-  if (!book) return null;
+  const row = getDb().query(
+    `SELECT
+       COUNT(e.id) AS total,
+       COALESCE(SUM(CASE WHEN e.vectorized = 1 THEN 1 ELSE 0 END), 0) AS enabled,
+       COALESCE(SUM(CASE WHEN length(trim(e.content)) > 0 THEN 1 ELSE 0 END), 0) AS non_empty,
+       COALESCE(SUM(CASE WHEN e.vectorized = 1 AND length(trim(e.content)) > 0 THEN 1 ELSE 0 END), 0) AS enabled_non_empty,
+       COALESCE(SUM(CASE WHEN e.vector_index_status = 'not_enabled' THEN 1 ELSE 0 END), 0) AS not_enabled,
+       COALESCE(SUM(CASE WHEN e.vector_index_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+       COALESCE(SUM(CASE WHEN e.vector_index_status = 'indexed' THEN 1 ELSE 0 END), 0) AS indexed,
+       COALESCE(SUM(CASE WHEN e.vector_index_status = 'error' THEN 1 ELSE 0 END), 0) AS error
+     FROM world_books wb
+     LEFT JOIN world_book_entries e ON e.world_book_id = wb.id
+     WHERE wb.id = ? AND wb.user_id = ?
+     GROUP BY wb.id`,
+  ).get(worldBookId, userId) as WorldBookVectorSummary | null;
 
-  const entries = listEntries(userId, worldBookId);
-  const summary: WorldBookVectorSummary = {
-    total: entries.length,
-    enabled: 0,
-    non_empty: 0,
-    enabled_non_empty: 0,
-    not_enabled: 0,
-    pending: 0,
-    indexed: 0,
-    error: 0,
-  };
-
-  for (const entry of entries) {
-    const hasContent = (entry.content || "").trim().length > 0;
-    if (entry.vectorized) summary.enabled += 1;
-    if (hasContent) summary.non_empty += 1;
-    if (hasContent && entry.vectorized) summary.enabled_non_empty += 1;
-    summary[entry.vector_index_status] += 1;
-  }
-
-  return summary;
+  return row;
 }
 
 export function setWorldBookSemanticActivation(
@@ -2208,6 +2249,10 @@ const IMPORT_DEFAULT_CHUNK_SIZE = 500;
 
 export interface ImportWorldBookOptions {
   signal?: AbortSignal;
+  /** Suppress the full-book websocket event for a surrounding bulk workflow. */
+  emitEvent?: boolean;
+  /** Extra provenance retained on the imported book. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface ImportResult {
@@ -2382,33 +2427,54 @@ export function importWorldBook(
 
 // Bulk import variant that forces vectorization off for every entry. Used by
 // migration endpoints — users opt in to embeddings per-book afterwards.
-export function importWorldBookBulk(
+export async function importWorldBookBulk(
   userId: string,
   payload: any,
   options: ImportWorldBookOptions = {},
-): ImportResult {
+): Promise<ImportResult> {
   const bookName = payload.name || payload.originalName || "Imported World Book";
   const description = payload.description || "";
 
   const worldBook = createWorldBook(userId, {
     name: bookName,
     description,
-    metadata: { source: "import" },
-  });
+    metadata: { source: "import", ...options.metadata },
+  }, { emitEvent: false });
 
   const rawEntries = normalizeImportedEntries(payload.entries);
-  const inputs = rawEntries.map((raw, i) => normalizeImportedEntryInput(raw, i));
+  let entryCount = 0;
+  let aborted = false;
 
-  const result = bulkInsertEntries(worldBook.id, inputs, {
-    forceVectorizedOff: true,
-    signal: options.signal,
-  });
+  // Normalize and commit in bounded slices. Yielding between each slice lets
+  // websocket heartbeats and other requests run even for enormous lorebooks.
+  for (let start = 0; start < rawEntries.length; start += IMPORT_DEFAULT_CHUNK_SIZE) {
+    if (options.signal?.aborted) {
+      aborted = true;
+      break;
+    }
+    const end = Math.min(start + IMPORT_DEFAULT_CHUNK_SIZE, rawEntries.length);
+    const inputs = new Array<CreateWorldBookEntryInput>(end - start);
+    for (let index = start; index < end; index++) {
+      inputs[index - start] = normalizeImportedEntryInput(rawEntries[index], index);
+    }
+    const result = bulkInsertEntries(worldBook.id, inputs, {
+      forceVectorizedOff: true,
+      signal: options.signal,
+      chunkSize: IMPORT_DEFAULT_CHUNK_SIZE,
+    });
+    entryCount += result.insertedIds.length;
+    if (result.aborted) {
+      aborted = true;
+      break;
+    }
+    await yieldToEventLoop();
+  }
 
-  emitWorldBookChanged(userId, worldBook.id);
+  if (options.emitEvent !== false) emitWorldBookChanged(userId, worldBook.id);
   return {
-    worldBook,
-    entryCount: result.insertedIds.length,
-    aborted: result.aborted || undefined,
+    worldBook: getWorldBook(userId, worldBook.id) ?? worldBook,
+    entryCount,
+    aborted: aborted || undefined,
   };
 }
 

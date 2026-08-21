@@ -75,7 +75,7 @@ function getFooterHeight(footerMode: CharacterDisplaySettings['footerMode']): nu
 
 function normalizeDisplaySettings(settings: CharacterDisplaySettings): CharacterDisplaySettings {
   const viewMode: CharacterViewMode = ['grid', 'single', 'list'].includes(settings.viewMode) ? settings.viewMode : 'grid'
-  const defaultSort: CharacterSortField = ['name', 'recent', 'created', 'shuffle'].includes(settings.defaultSort) ? settings.defaultSort : 'recent'
+  const defaultSort: CharacterSortField = ['name', 'recent', 'most_chats', 'created', 'shuffle'].includes(settings.defaultSort) ? settings.defaultSort : 'recent'
   const defaultFilter: CharacterFilterTab = ['characters', 'favorites', 'groups'].includes(settings.defaultFilter) ? settings.defaultFilter : 'characters'
   const density = ['compact', 'balanced', 'large', 'custom'].includes(settings.density) ? settings.density : 'compact'
   const footerMode = ['compact', 'balanced', 'spacious'].includes(settings.footerMode) ? settings.footerMode : 'balanced'
@@ -99,7 +99,7 @@ function normalizeQuery(query: CharacterBrowserStateForDisplay): CharacterBrowse
   const filterTab = query.filterTab
   const viewMode = query.viewMode
 
-  if (filterTab === 'groups' && sortField === 'shuffle') {
+  if (filterTab === 'groups' && (sortField === 'shuffle' || sortField === 'most_chats')) {
     sortField = 'recent'
   }
 

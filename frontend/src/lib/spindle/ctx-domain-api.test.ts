@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import type {
+  Chat,
   ChatSummary,
   ConnectionProfile,
+  GroupedRecentChat,
   Message,
   PaginatedResult,
+  RecentChat,
   WorldBook,
   WorldBookEntry,
 } from '@/types/api'
@@ -95,6 +98,31 @@ function createHarness() {
     updated_at: 1,
   }]
   const entries: WorldBookEntry[] = []
+  const recentChats: RecentChat[] = [{
+    id: 'chat-1',
+    character_id: 'character-1',
+    name: 'Chat',
+    metadata: {},
+    created_at: 1,
+    updated_at: 2,
+    character_name: 'Character',
+    character_avatar_path: null,
+    character_image_id: null,
+    message_count: 3,
+    last_message_preview: 'latest',
+  }]
+  const groupedChats: GroupedRecentChat[] = [{
+    character_id: 'character-1',
+    character_name: 'Character',
+    character_avatar_path: null,
+    character_image_id: null,
+    latest_chat_id: 'chat-1',
+    latest_chat_name: 'Chat',
+    updated_at: 2,
+    chat_count: 1,
+    is_group: false,
+  }]
+  let nextUpdate: Chat = { id: 'chat-1', name: 'Renamed' } as Chat
   const dependencies: FrontendDomainDependencies = {
     store,
     assertActive: () => {
@@ -129,6 +157,21 @@ function createHarness() {
       async getMessages(chatId, options) {
         calls.push(`messages:${chatId}:${String(options?.limit)}`)
         return page
+      },
+      async listRecent(options) {
+        calls.push(`recent:${JSON.stringify(options)}`)
+        return { data: recentChats, total: recentChats.length, limit: options?.limit ?? 0, offset: options?.offset ?? 0 }
+      },
+      async listRecentGrouped(options) {
+        calls.push(`recent-grouped:${JSON.stringify(options)}`)
+        return { data: groupedChats, total: groupedChats.length, limit: options?.limit ?? 0, offset: options?.offset ?? 0 }
+      },
+      async update(chatId, input) {
+        calls.push(`chat-update:${chatId}:${String(input.name ?? '')}`)
+        return nextUpdate
+      },
+      async delete(chatId) {
+        calls.push(`chat-delete:${chatId}`)
       },
     },
     worldBooks: {
@@ -178,6 +221,48 @@ describe('H10 domain API bridge', () => {
     expect(await domain.tokens.countTextBatch(['a', 'b'])).toEqual({ total_tokens: 4 })
     expect(harness.calls).toContain('messages:chat-1:200')
     expect(harness.calls.some((call) => call.includes('userId'))).toBe(false)
+  })
+
+  test('recent chat reads stay free, bounded, and query-shaped', async () => {
+    const harness = createHarness()
+    const domain = createFrontendDomainApi(harness.dependencies)
+
+    const flat = await domain.chats.listRecent({ limit: 500, search: 'alp', sort: 'name', direction: 'asc' })
+    expect(flat.data[0]).toMatchObject({ id: 'chat-1', message_count: 3, last_message_preview: 'latest' })
+    expect(harness.calls).toContain('recent:{"limit":200,"search":"alp","sort":"name","direction":"asc"}')
+    expect(harness.calls.some((call) => call.startsWith('permission:chats:ctx.chats.listRecent'))).toBe(false)
+
+    const grouped = await domain.chats.listRecentGrouped({ limit: 500, sort: 'created', direction: 'desc' })
+    expect(grouped.data[0]!.latest_chat_id).toBe('chat-1')
+    expect(harness.calls).toContain('recent-grouped:{"limit":200,"sort":"created","direction":"desc"}')
+
+    const defaults = await domain.chats.listRecent()
+    expect(harness.calls).toContain('recent:{"limit":50}')
+    expect(defaults.total).toBe(1)
+  })
+
+  test('chat writes are gated on the chats permission and checked after awaits', async () => {
+    const harness = createHarness()
+    const domain = createFrontendDomainApi(harness.dependencies)
+
+    harness.dependencies.requirePermission = (permission) => {
+      if (permission === 'chats') throw new Error('PERMISSION_DENIED:chats')
+    }
+    await expect(domain.chats.update('chat-1', { name: 'Renamed' })).rejects.toThrow('PERMISSION_DENIED:chats')
+    await expect(domain.chats.delete('chat-1')).rejects.toThrow('PERMISSION_DENIED:chats')
+    expect(harness.calls).not.toContain('chat-update:chat-1:Renamed')
+    expect(harness.calls).not.toContain('chat-delete:chat-1')
+
+    harness.dependencies.requirePermission = () => {}
+    await expect(domain.chats.update('chat-1', { name: 'Renamed' })).resolves.toMatchObject({ name: 'Renamed' })
+    expect(harness.calls).toContain('chat-update:chat-1:Renamed')
+
+    let resolveDelete!: () => void
+    harness.dependencies.chats.delete = () => new Promise<void>((resolve) => { resolveDelete = resolve })
+    const pending = domain.chats.delete('chat-1')
+    harness.setActive(false)
+    resolveDelete()
+    await expect(pending).rejects.toThrow('STALE_GENERATION')
   })
 
   test('normalizes bounded message arrays and current chat rows before tokenizing', async () => {

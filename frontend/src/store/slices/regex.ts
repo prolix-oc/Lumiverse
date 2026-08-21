@@ -4,13 +4,26 @@ import { regexApi } from '@/api/regex'
 import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from '@/types/regex'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 
+// The server caps list responses at 1000 rows, so the slice pages to
+// exhaustion. This list drives both the regex panel and the client-side
+// display pipeline — a truncated page would silently hide scripts (module
+// regexes imported from cards stop applying once a user crosses 1000 total).
+const REGEX_LIST_PAGE_SIZE = 1000
+
 export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   regexScripts: [],
   regexEditingId: null,
 
   loadRegexScripts: async (shouldApply = () => true) => {
-    const res = await regexApi.list({ limit: 1000 })
-    if (shouldApply()) set({ regexScripts: res.data })
+    const scripts: RegexScript[] = []
+    let offset = 0
+    for (;;) {
+      const page = await regexApi.list({ limit: REGEX_LIST_PAGE_SIZE, offset })
+      scripts.push(...page.data)
+      offset += page.data.length
+      if (page.data.length === 0 || offset >= page.total) break
+    }
+    if (shouldApply()) set({ regexScripts: scripts })
   },
 
   /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */

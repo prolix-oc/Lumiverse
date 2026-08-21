@@ -14,6 +14,12 @@ export interface InlineCouncilToolResult {
   toolDisplayName: string;
   memberName?: string;
   result: string;
+  /** Mark an executed tool failure for providers that support native tool_result errors. */
+  isError?: boolean;
+  /** Untrusted web context injected separately on the continuation turn. */
+  inlineWebSearchContext?: string;
+  /** True when this was Lumiverse's direct, non-Council web-search tool. */
+  isInlineWebSearch?: boolean;
 }
 
 /**
@@ -75,6 +81,8 @@ export interface InlineToolContinuationOptions {
    * structured assistant turn for replay. Ignored by other providers.
    */
   reasoningDetails?: Record<string, unknown>[];
+  /** Optional Gemini signature for this round's non-tool thought/text part. */
+  thoughtSignature?: string;
 }
 
 /**
@@ -112,6 +120,7 @@ export function buildInlineToolContinuation(
     results,
     thinkingBlocks,
     reasoningDetails,
+    thoughtSignature,
   } = opts;
 
   const legacyContinuation = (): LlmMessage[] => [
@@ -134,7 +143,13 @@ export function buildInlineToolContinuation(
   if (resolvedCalls.length === 0) return legacyContinuation();
 
   const assistantParts: LlmMessagePart[] = [];
-  if (roundContent) assistantParts.push({ type: "text", text: roundContent });
+  if (roundContent) {
+    assistantParts.push({
+      type: "text",
+      text: roundContent,
+      ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
+    });
+  }
   for (const tc of resolvedCalls) {
     assistantParts.push({
       type: "tool_use",
@@ -151,6 +166,7 @@ export function buildInlineToolContinuation(
     type: "tool_result",
     tool_use_id: tc.call_id,
     content: resultsByCallId.get(tc.call_id)!.result || "(empty result)",
+    ...(resultsByCallId.get(tc.call_id)!.isError ? { is_error: true } : {}),
   }));
 
   return [

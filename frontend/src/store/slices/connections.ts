@@ -93,11 +93,11 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       // initiating request's REST response. Either can arrive first, so treat
       // adding an already-known id as an update instead of creating two rows.
       profiles: existingIndex === -1
-        ? [...state.profiles, profile]
+        ? [profile, ...state.profiles]
         : state.profiles.map((candidate, index) => index === existingIndex ? profile : candidate),
       connectionsOrder: {
         ...connectionsOrder,
-        llm: order.includes(profile.id) ? order : [...order, profile.id],
+        llm: order.includes(profile.id) ? order : [profile.id, ...order],
       },
     }
   }),

@@ -305,6 +305,13 @@
   text-decoration: none;
 }
 
+.hfStatus .repoLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 .repoLink:hover {
   text-decoration: underline;
 }

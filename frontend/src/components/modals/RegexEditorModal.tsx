@@ -171,6 +171,7 @@ export default function RegexEditorModal() {
   const [repeatPosition, setRepeatPosition] = useState<RegexRepeatPosition>('end')
   const [repeatRawMatch, setRepeatRawMatch] = useState(false)
   const [trimStrings, setTrimStrings] = useState('')
+  const [sortOrder, setSortOrder] = useState('')
   const [runOnEdit, setRunOnEdit] = useState(false)
   const [description, setDescription] = useState('')
   const [folder, setFolder] = useState('')
@@ -208,6 +209,7 @@ export default function RegexEditorModal() {
       setRepeatPosition(readRepeatPosition(script.metadata, script.replace_string))
       setRepeatRawMatch(script.metadata?.repeat_raw_match === true)
       setTrimStrings(script.trim_strings.join(', '))
+      setSortOrder(script.sort_order != null ? String(script.sort_order) : '')
       setRunOnEdit(script.run_on_edit)
       setDescription(script.description)
       setFolder(script.folder || '')
@@ -281,6 +283,7 @@ export default function RegexEditorModal() {
           repeatRawMatch,
         ),
         trim_strings: trimStrings ? trimStrings.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        sort_order: sortOrder === '' ? 0 : (parseInt(sortOrder, 10) || 0),
         run_on_edit: runOnEdit,
         description,
         folder,
@@ -289,7 +292,7 @@ export default function RegexEditorModal() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message)
     }
-  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, actions, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, moveBehavior, repeatBack, repeatPosition, repeatRawMatch, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal, tr])
+  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, actions, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, moveBehavior, repeatBack, repeatPosition, repeatRawMatch, trimStrings, sortOrder, runOnEdit, description, folder, updateRegexScript, closeModal, tr])
 
   if (!script) return null
 
@@ -909,6 +912,13 @@ export default function RegexEditorModal() {
                     <span className={styles.fieldHint}>{tr('trimHint')}</span>
                   </label>
                   <input className={styles.fieldInput} value={trimStrings} onChange={(e) => setTrimStrings(e.target.value)} placeholder={tr('trimPlaceholder')} />
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>
+                    {tr('sortOrder')}
+                    <span className={styles.fieldHint}>{tr('sortOrderHint')}</span>
+                  </label>
+                  <input className={styles.fieldInput} type="number" step="1" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="0" />
                 </div>
                 <div className={styles.field}>
                   <label className={styles.fieldLabel}>{tr('notes')}</label>

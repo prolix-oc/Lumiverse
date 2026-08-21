@@ -24,6 +24,8 @@ const state = {
     variant: 'v4-bottom-strip',
   },
   profiles: [],
+  user: { id: 'productivity-test-user' } as { id: string } | null,
+  extensions: [{ identifier: 'lumiverse_suite', enabled: true, has_frontend: true }] as Array<Record<string, unknown>>,
   updateProfile: () => undefined,
 }
 
@@ -296,11 +298,22 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).toContain('>Live preview<')
     expect(markup).toContain('>C<')
     expect(markup).toContain('Pinned preview')
+    expect(markup).toContain('Landing page start view')
     expect(markup).toContain('data-density="compact"')
     expect(css).toContain('.homepagePreviewPlaceholder')
     expect(css).toContain('.homepagePreviewCard[data-footer-mode=\'compact\']')
     expect(css).toContain('.homepagePreviewPanelImage')
     expect(css).toContain('@media (max-width: 720px)')
+  })
+
+  test('only offers the device-local start view when Lumiverse Suite is enabled', () => {
+    const originalExtensions = state.extensions
+    state.extensions = []
+
+    const markup = renderToStaticMarkup(<ProductivitySettings />)
+
+    state.extensions = originalExtensions
+    expect(markup).not.toContain('Landing page start view')
   })
 
   test('uses the selected character avatar and metadata in the homepage preview', () => {

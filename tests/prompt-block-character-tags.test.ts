@@ -14,11 +14,6 @@ async function applyBaseline(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "src", "db", "baseline.sql")).text());
-  db.run(
-    await Bun.file(
-      join(import.meta.dir, "..", "src", "db", "migrations", "078_chats_character_id_nullable.sql"),
-    ).text(),
-  );
 }
 
 function makeBlock(overrides: Record<string, any> = {}) {

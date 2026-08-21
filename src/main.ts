@@ -57,6 +57,25 @@ await initVapidKeys();
 const db = initDatabase();
 await runMigrations(db);
 
+const {
+  describeImageProcessingRecovery,
+  getImageProcessingRecovery,
+} = await import("./services/images.service");
+const leftoverThumbnails = getImageProcessingRecovery();
+if (leftoverThumbnails.pending > 0) {
+  console.warn(
+    `[startup] ${describeImageProcessingRecovery(leftoverThumbnails)}. Not auto-started — recover from Operator → Image Processing after changing settings if needed.`,
+  );
+}
+
+// Move legacy plaintext Pollinations application keys into the per-user
+// encrypted secret store before the rest of the application begins serving.
+const { migrateLegacyPollinationsAppKeys } = await import("./services/connections.service");
+const pollinationsKeysMigrated = await migrateLegacyPollinationsAppKeys();
+if (pollinationsKeysMigrated > 0) {
+  console.log(`[startup] Migrated ${pollinationsKeysMigrated} Pollinations application key(s) to encrypted storage.`);
+}
+
 // Chat-head generation state is intentionally ephemeral. Clear any retained
 // in-memory pool state during startup so clients never resurrect stale heads
 // after a restart or hot-reload.
@@ -156,11 +175,6 @@ initSmartctl();
 // Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
 
-// LanceDB startup maintenance: compact fragments, migrate old HNSW_PQ → IVF_PQ (fire-and-forget)
-import("./services/embeddings.service").then(({ runStartupVectorMaintenance }) =>
-  runStartupVectorMaintenance()
-).catch(() => {});
-
 // Import app after database is ready (auth config needs getDb())
 const { default: app, websocket } = await import("./app");
 
@@ -220,6 +234,27 @@ startExtensionUpdateMonitor();
 // Notify runner (if present) that the server is ready
 if (process.env.LUMIVERSE_RUNNER_IPC === "1" && typeof process.send === "function") {
   process.send({ type: "ready", payload: { port: env.port, pid: process.pid } });
+}
+
+// LanceDB compaction and index replacement can monopolize Bun's runtime even
+// when called through an async API. Do not run that native work automatically
+// in the serving process: it can make the already-listening frontend appear
+// hung. Run it in a child after readiness instead; ordinary index repair still
+// happens on demand where it is scoped to the affected vector request.
+const lancedbStartupMaintenanceEnabled = !["0", "false", "no", "off"].includes(
+  (process.env.LUMIVERSE_LANCEDB_STARTUP_MAINTENANCE ?? "").trim().toLowerCase(),
+);
+if (lancedbStartupMaintenanceEnabled) {
+  setTimeout(() => {
+    console.info("[startup] Starting deferred LanceDB maintenance child...");
+    import("./services/lancedb-maintenance-supervisor").then(({ runLanceDbMaintenanceInChild }) =>
+      runLanceDbMaintenanceInChild({ mode: "startup" })
+    ).catch((err) => {
+      console.warn("[embeddings] Deferred startup maintenance failed:", err);
+    });
+  }, 5_000);
+} else {
+  console.info("[startup] Automatic LanceDB startup maintenance is disabled; use an Operator maintenance window to run compaction.");
 }
 
 // Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP

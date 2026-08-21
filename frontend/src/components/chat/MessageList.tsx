@@ -479,7 +479,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const streamingError = useStore((s) => s.streamingError)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
-  const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const displayMode = useStore((s) => s.chatDisplayMode)
   const styleMode = useStore((s) => {
     const claims = s.chatStyleModes[chatId]
     return claims && Object.keys(claims).length > 0 ? 'extension-relaxed' as const : undefined

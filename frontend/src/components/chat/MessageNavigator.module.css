@@ -1,0 +1,135 @@
+.panel {
+  width: 100%;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.header,
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  border-color: var(--lumiverse-border);
+}
+
+.header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.header h2,
+.header p {
+  margin: 0;
+}
+
+.header h2 {
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+}
+
+.header p,
+.footer {
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.list {
+  min-height: 180px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.messageRow {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  text-align: left;
+  border: 0;
+  border-radius: var(--lumiverse-radius, 8px);
+  background: transparent;
+  color: var(--lumiverse-text);
+  cursor: pointer;
+}
+
+.messageRow:hover,
+.messageRow:focus-visible {
+  background: var(--lumiverse-fill-subtle);
+  outline: none;
+}
+
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.rowMeta strong {
+  color: var(--lumiverse-primary);
+}
+
+.rowMeta time {
+  margin-left: auto;
+}
+
+.preview {
+  overflow: hidden;
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--lumiverse-text-muted);
+}
+
+.footer {
+  justify-content: center;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.footer > span {
+  min-width: 150px;
+  text-align: center;
+}
+
+.iconButton {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius, 8px);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border-hover);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (max-width: 600px) {
+  .panel {
+    min-height: 240px;
+  }
+
+  .rowMeta time {
+    display: none;
+  }
+}

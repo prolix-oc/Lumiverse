@@ -130,6 +130,21 @@ function contrastFor(color: string): string {
   return `hsl(${Math.round(h * 360)}, ${contrastS}%, ${contrastL}%)`
 }
 
+/**
+ * Turn the active accent into a near-black, hue-preserving control surface.
+ * This stays deliberately dark in both modes while still following each
+ * mode's resolved palette (including custom primary overrides).
+ */
+function deepAccentSurface(color: string, strength: number): string {
+  const parsed = parseColorToRgb(color)
+  if (!parsed) return 'rgb(12 12 14)'
+  return rgb(
+    Math.round(parsed[0] * strength),
+    Math.round(parsed[1] * strength),
+    Math.round(parsed[2] * strength),
+  )
+}
+
 /** Parse a hex color (#rrggbb or #rgb) to [r, g, b] (0-255). */
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = hex.replace('#', '')
@@ -197,6 +212,9 @@ export function generateThemeVariables(
   vars['--lumiverse-primary-050'] = hsla(h, s, pL, 0.5)
   // Contrast color for icons/text ON a --lumiverse-primary background
   vars['--lumiverse-primary-contrast'] = contrastFor(vars['--lumiverse-primary'])
+  vars['--lumiverse-primary-deep'] = deepAccentSurface(vars['--lumiverse-primary'], 0.18)
+  vars['--lumiverse-primary-deep-hover'] = deepAccentSurface(vars['--lumiverse-primary'], 0.26)
+  vars['--lumiverse-primary-deep-contrast'] = contrastFor(vars['--lumiverse-primary-deep'])
 
   // ── Secondary (neutral gray) ──
   vars['--lumiverse-secondary'] = rgba(128, 128, 128, 0.15)
@@ -402,6 +420,9 @@ export function generateThemeVariables(
       vars['--lumiverse-primary-020'] = hexRgba(primary, 0.2)
       vars['--lumiverse-primary-050'] = hexRgba(primary, 0.5)
       vars['--lumiverse-primary-contrast'] = contrastFor(primary)
+      vars['--lumiverse-primary-deep'] = deepAccentSurface(primary, 0.18)
+      vars['--lumiverse-primary-deep-hover'] = deepAccentSurface(primary, 0.26)
+      vars['--lumiverse-primary-deep-contrast'] = contrastFor(vars['--lumiverse-primary-deep'])
       vars['--lumiverse-prose-dialogue'] = ensureReadable(adjustHex(primary, isDark ? 0.1 : -0.08), isDark)
     }
     if (bc.secondary) {

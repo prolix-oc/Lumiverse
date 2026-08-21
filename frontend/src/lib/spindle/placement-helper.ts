@@ -237,6 +237,8 @@ type H6FloatWidgetOptions = SpindleFloatWidgetOptions & {
 type H6DockPanelOptions = SpindleDockPanelOptions & {
   persistGeometry?: string | false
   respectRequestedEdge?: boolean
+  /** Show the panel title while the dock is collapsed. Defaults to false. */
+  showCollapsedTitle?: boolean
   onGeometryCommit?: (rect: GeometryRect) => void
 }
 
@@ -1182,6 +1184,14 @@ export function createDockPanelHandle(
     }
     return size
   }
+  const handleResizeEndEvent = ((event: Event) => {
+    const detail = (event as CustomEvent<{ panelId?: unknown; size?: unknown }>).detail
+    if (detail?.panelId !== panelId) return
+    if (typeof detail.size !== 'number' || !Number.isFinite(detail.size)) return
+    commitSize(detail.size)
+  }) as EventListener
+  window.addEventListener('spindle:dock-resize-end', handleResizeEndEvent)
+
   const updateSizeBounds = () => {
     const nextSize = clampDockSize(size, minSize, maxSize)
     const changed = nextSize !== size
@@ -1199,6 +1209,7 @@ export function createDockPanelHandle(
     destroyed = true
     if (!registered) disposedDuringRegistration = true
     runCleanupSteps(
+      () => window.removeEventListener('spindle:dock-resize-end', handleResizeEndEvent),
       () => removePlacementRoot(root, unregisterRoot, extensionId, generation),
       () => { if (registered) getStore().unregisterDockPanel(panelId) },
       () => visibilityHandlers.clear(),
@@ -1221,6 +1232,7 @@ export function createDockPanelHandle(
       collapsed: dockOptions.startCollapsed ?? false,
       iconUrl: dockOptions.iconUrl,
       respectRequestedEdge: dockOptions.respectRequestedEdge === true,
+      showCollapsedTitle: dockOptions.showCollapsedTitle === true,
       persistGeometry: dockOptions.persistGeometry,
     } satisfies DockPanelState)
     registered = true

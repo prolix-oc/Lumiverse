@@ -10,7 +10,7 @@ import {
   Edit2, CheckCircle2, Plus,
 } from "lucide-react";
 import { useStore } from "@/store";
-import { memoryCortexApi, type CortexChatSettings, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
+import { memoryCortexApi, type CortexChatSettings, type CortexChunkMessageReference, type CortexConsolidation, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
 import ConfirmationModal from "@/components/shared/ConfirmationModal";
 import CortexLinksTab from "./CortexLinksTab";
 import { EntityEditorModal, RelationEditorModal, RelationCreatorModal, ColorEditorModal } from "./MemoryCortexEditors";
@@ -435,15 +435,9 @@ function EntityCard({
   const lastSeenTs = entity.lastMentionTimestamp ?? entity.lastSeenAt
   const lastSeen = lastSeenTs ? formatRelativeTime(lastSeenTs) : null
 
-  // Blurb shown in the expanded card body. A user-edited entity surfaces its
-  // curated description — the manual edit must win. Otherwise we keep the
-  // original behaviour: prefer the freshest mention excerpt over the
-  // auto-backfilled (first-mention) description. Each side falls back to the
-  // other so the line is never blank.
-  const rawBlurb = entity.userEditedAt
-    ? (entity.description || entity.latestExcerpt)
-    : (entity.latestExcerpt || entity.description);
-  const blurb = (rawBlurb || "")
+  // The auto-generated chunk preview is replaced with the source-message
+  // reference below. Keep only a user-curated description as freeform text.
+  const blurb = (entity.userEditedAt ? entity.description : "")
     .replace(/^\.*\s*\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/i, "")
     .replace(/^\.{3}\s*/, "")
     .replace(/\s*\.{3}$/, "")
@@ -541,6 +535,15 @@ function EntityCard({
           {/* User edits win; otherwise show the latest mention excerpt (see `blurb` above). */}
           {blurb && (
             <p className={styles.entityDescription}>{blurb}</p>
+          )}
+
+          {entity.latestMessageReferences && entity.latestMessageReferences.length > 0 && (
+            <div className={styles.entityField}>
+              <span className={styles.fieldLabel}>{t('memoryCortexPanel.stats.drillLabels.messages')}</span>
+              <div className={styles.tagRow}>
+                <span className={styles.miniTag}>{formatChunkMessageReferences(entity.latestMessageReferences)}</span>
+              </div>
+            </div>
           )}
 
           {entity.aliases.length > 0 && (
@@ -780,6 +783,16 @@ function ColorsView({
 
 type DrillTarget = "chunks" | "entities" | "relations" | "consolidations" | "salience" | null;
 
+function formatChunkMessageReferences(references: CortexChunkMessageReference[]): string {
+  return references
+    .map(({ messageId, messageNumber }) => messageNumber === null ? messageId : `#${messageNumber}`)
+    .join(", ");
+}
+
+function formatConsolidationMessageReferences(consolidation: CortexConsolidation): string {
+  return formatChunkMessageReferences(consolidation.messageReferences) || "—";
+}
+
 function StatsView({
   stats,
   chatId,
@@ -910,11 +923,11 @@ function StatsView({
           <div className={styles.loadingText}>{t('memoryCortexPanel.stats.noRecords')}</div>
         ) : (
           <div className={styles.drillList}>
-            {drill === "chunks" && drillData.map((c: any) => (
+            {drill === "chunks" && drillData.map((c) => (
               <DrillRecord key={c.id} lines={[
                 { label: dl('content'), value: (c.content || "").slice(0, 200) + ((c.content || "").length > 200 ? "..." : "") },
                 { label: dl('tokens'), value: c.token_count },
-                { label: dl('messages'), value: c.message_count },
+                { label: dl('messages'), value: formatChunkMessageReferences(c.messageReferences) },
                 { label: dl('salience'), value: c.salience_score != null ? `${(c.salience_score * 100).toFixed(0)}%` : dl('unscored') },
                 { label: dl('retrieved'), value: c.retrieval_count ? `${c.retrieval_count}x` : dl('never') },
                 { label: dl('vectorized'), value: c.vectorized_at ? dl('yes') : dl('pending') },
@@ -936,15 +949,15 @@ function StatsView({
                   {arcs.length > 0 && (
                     <>
                       <div className={styles.drillSectionHeader}>{dl('storyArcs')}</div>
-                      {arcs.map((c: any) => (
+                      {arcs.map((c: CortexConsolidation) => (
                         <div key={c.id} className={styles.arcRecord}>
                           <div className={styles.arcHeader}>
                             <span className={styles.arcBadge}>{dl('arc')}</span>
                             <span className={styles.arcTitle}>{c.title || dl('arcSummary')}</span>
                           </div>
-                          <div className={styles.arcSummary}>{c.summary || ""}</div>
+                          <ExpandableSummary text={c.summary || ""} className={styles.arcSummary} />
                           <div className={styles.arcMeta}>
-                            <span className={styles.arcMetaItem}><strong>{dl('messages')}</strong> {c.messageRangeStart ?? "?"}–{c.messageRangeEnd ?? "?"}</span>
+                            <span className={styles.arcMetaItem}><strong>{dl('messages')}</strong> {formatConsolidationMessageReferences(c)}</span>
                             <span className={styles.arcMetaItem}><strong>{dl('entitiesCount')}</strong> {(c.entityIds || []).length}</span>
                             <span className={styles.arcMetaItem}><strong>{dl('salience')}</strong> {c.salienceAvg != null ? `${(c.salienceAvg * 100).toFixed(0)}%` : "—"}</span>
                           </div>
@@ -962,13 +975,12 @@ function StatsView({
                   {scenes.length > 0 && (
                     <>
                       {arcs.length > 0 && <div className={styles.drillSectionHeader}>{dl('sceneSummaries')}</div>}
-                      {scenes.map((c: any) => (
+                      {scenes.map((c: CortexConsolidation) => (
                         <DrillRecord key={c.id} lines={[
                           { label: c.title || dl('sceneSummary'), value: "" },
-                          { label: dl('summary'), value: (c.summary || "").slice(0, 250) + ((c.summary || "").length > 250 ? "..." : "") },
-                          { label: dl('messages'), value: `${c.messageRangeStart ?? "?"}–${c.messageRangeEnd ?? "?"}` },
+                          { label: dl('messages'), value: formatConsolidationMessageReferences(c) },
                           { label: dl('salience'), value: c.salienceAvg != null ? `${(c.salienceAvg * 100).toFixed(0)}%` : "—" },
-                        ]} tags={c.emotionalTags || []} />
+                        ]} summary={{ label: dl('summary'), text: c.summary || "" }} tags={c.emotionalTags || []} />
                       ))}
                     </>
                   )}
@@ -1368,9 +1380,11 @@ function RelationDrillRecord({
 function DrillRecord({
   lines,
   tags,
+  summary,
 }: {
   lines: Array<{ label: string; value: string | number }>;
   tags?: string[];
+  summary?: { label: string; text: string };
 }) {
   return (
     <div className={styles.drillRecord}>
@@ -1388,12 +1402,53 @@ function DrillRecord({
           </div>
         ),
       )}
+      {summary && (
+        <div className={styles.drillContentLine}>
+          <span className={styles.drillLineLabel}>{summary.label}</span>
+          <ExpandableSummary text={summary.text} className={styles.drillLineContent} />
+        </div>
+      )}
       {tags && tags.length > 0 && (
         <div className={styles.drillTags}>
           {tags.map((t: string) => (
             <span key={t} className={styles.emotionTag}>{t}</span>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function ExpandableSummary({
+  text,
+  className,
+  previewLength = 250,
+}: {
+  text: string;
+  className?: string;
+  previewLength?: number;
+}) {
+  const { t } = useTranslation('panels');
+  const [expanded, setExpanded] = useState(false);
+  const canExpand = text.length > previewLength;
+  const visibleText = canExpand && !expanded
+    ? `${text.slice(0, previewLength).trimEnd()}…`
+    : text;
+
+  return (
+    <div className={className}>
+      <span>{visibleText}</span>
+      {canExpand && (
+        <button
+          type="button"
+          className={styles.summaryToggle}
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+        >
+          {expanded
+            ? t('memoryCortexPanel.showLess')
+            : t('memoryCortexPanel.readMore')}
+        </button>
       )}
     </div>
   );

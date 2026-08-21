@@ -493,7 +493,7 @@ export async function generateSceneBackground(
     }
 
     if (connection.provider === "comfyui" || connection.provider === "swarmui") {
-      await applyComfyUIWorkflowConfig(
+      await applyActiveComfyUIWorkflowConfig(
         connection,
         params,
         promptResult.prompt,
@@ -879,7 +879,15 @@ function isResolvedSourceImage(value: unknown): value is { data: string; mimeTyp
   );
 }
 
-async function applyComfyUIWorkflowConfig(
+/**
+ * Build the outbound Comfy prompt from the connection's active workflow.
+ *
+ * The workflow library stores the selected workflow in `connection.metadata`,
+ * while older profiles can still carry a serialized workflow in
+ * `default_parameters`. Callers using the integrated workflow must use this
+ * helper so the active library selection is authoritative.
+ */
+export async function applyActiveComfyUIWorkflowConfig(
   connection: ImageGenConnectionProfile,
   params: Record<string, unknown>,
   prompt: string,
@@ -888,10 +896,13 @@ async function applyComfyUIWorkflowConfig(
   useLegacySingleLora: boolean,
   apiKey?: string,
 ): Promise<void> {
-  if (params.workflow && typeof params.workflow === "object") return;
-
   const config = readComfyUIConfig(connection.metadata);
   if (!config) return;
+
+  // `default_parameters` can retain a workflow from older connection
+  // settings. The active saved workflow lives in connection metadata and must
+  // win for Lumiverse's integrated generation path; otherwise that stale
+  // parameter bypasses the workflow the user just selected.
 
   const mappings = config.field_mappings || [];
   const hasPositivePrompt = mappings.some((mapping) => mapping.mappedAs === "positive_prompt");

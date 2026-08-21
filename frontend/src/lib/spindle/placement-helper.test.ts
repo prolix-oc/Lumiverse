@@ -35,14 +35,14 @@ test('placement helper cases pass in an isolated module graph', async () => {
     if (exitCode !== 0) {
       throw new Error(`Isolated placement-helper tests failed with exit code ${exitCode}:\n${summary}`)
     }
-    if (!summaryLines.every((line, index) => line === ['21 pass', '0 fail'][index]) || summaryLines.length !== 2) {
+    if (!summaryLines.every((line, index) => line === ['22 pass', '0 fail'][index]) || summaryLines.length !== 2) {
       throw new Error(`Isolated placement-helper tests reported unexpected counts: ${summaryLines.join(', ')}\n${summary}`)
     }
     expect(timedOut).toBe(false)
     expect(exitCode).toBe(0)
-    expect(summaryLines).toEqual(['21 pass', '0 fail'])
+    expect(summaryLines).toEqual(['22 pass', '0 fail'])
     expect(summary).toMatch(/\b[1-9]\d* expect\(\) calls\b/)
-    expect(summary).toMatch(/Ran 21 tests across 1 file/)
+    expect(summary).toMatch(/Ran 22 tests across 1 file/)
   } finally {
     clearTimeout(watchdog)
   }

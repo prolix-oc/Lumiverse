@@ -55,6 +55,29 @@ describe("GoogleVertexProvider tool calling wire shape", () => {
     });
   });
 
+  test("replays an optional non-tool thought signature only when enabled", () => {
+    const provider = new GoogleVertexProvider();
+    const request = {
+      model: "gemini-3-flash",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "I checked the details.", thought_signature: "TEXT_SIG_A" },
+      ],
+    };
+
+    const enabled = (provider as any).buildBody({
+      ...request,
+      parameters: { _replay_thought_signatures: true },
+    });
+    expect(enabled.contents[1].parts[0]).toEqual({
+      text: "I checked the details.",
+      thoughtSignature: "TEXT_SIG_A",
+    });
+
+    const disabled = (provider as any).buildBody({ ...request, parameters: {} });
+    expect(disabled.contents[1].parts[0].thoughtSignature).toBeUndefined();
+  });
+
   test("tool_result part becomes a functionResponse with output key", () => {
     const provider = new GoogleVertexProvider();
     const body = (provider as any).buildBody({

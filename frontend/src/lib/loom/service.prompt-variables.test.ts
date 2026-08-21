@@ -5,6 +5,7 @@ import {
   reconcilePromptVariableValues,
   resolvePromptBlockPlacements,
   toggleBlockWithCategoryRules,
+  toggleCategoryWithChildren,
   validatePromptVariableSchema,
 } from './service'
 import type {
@@ -382,6 +383,72 @@ describe('Loom prompt-variable schema and value reconciliation', () => {
     const switched = toggleBlockWithCategoryRules(normalized, 'second')
     expect(switched.filter((entry) => entry.group === 'category' && entry.enabled).map((entry) => entry.id))
       .toEqual(['second'])
+  })
+
+  test('blanket-disabling a category turns the marker and children off; re-enabling restores them', () => {
+    const category = { ...block('category'), marker: 'category', categoryMode: 'checkbox' as const }
+    const first = { ...block('first'), group: 'category' }
+    const second = { ...block('second'), group: 'category' }
+    const outside = block('outside')
+
+    const disabled = toggleCategoryWithChildren([category, first, second, outside], 'category')
+    expect(disabled.find((entry) => entry.id === 'category')?.enabled).toBe(false)
+    expect(disabled.filter((entry) => entry.group === 'category').every((entry) => !entry.enabled)).toBe(true)
+    expect(disabled.find((entry) => entry.id === 'outside')?.enabled).toBe(true)
+
+    const reEnabled = toggleCategoryWithChildren(disabled, 'category')
+    expect(reEnabled.find((entry) => entry.id === 'category')?.enabled).toBe(true)
+    expect(reEnabled.filter((entry) => entry.group === 'category').every((entry) => entry.enabled)).toBe(true)
+    expect(reEnabled.find((entry) => entry.id === 'outside')?.enabled).toBe(true)
+    // The snapshot is consumed on restore.
+    expect(reEnabled.find((entry) => entry.id === 'category')?.savedChildEnabled).toBeUndefined()
+  })
+
+  test('blanket re-enable restores a mixed child state instead of enabling everything', () => {
+    const category = { ...block('category'), marker: 'category', categoryMode: 'checkbox' as const }
+    const first = { ...block('first'), group: 'category' }
+    const second = { ...block('second'), group: 'category', enabled: false }
+    const third = { ...block('third'), group: 'category', enabled: false }
+
+    const disabled = toggleCategoryWithChildren([category, first, second, third], 'category')
+    expect(disabled.filter((entry) => entry.group === 'category').every((entry) => !entry.enabled)).toBe(true)
+    expect(disabled.find((entry) => entry.id === 'category')?.savedChildEnabled)
+      .toEqual({ first: true, second: false, third: false })
+
+    const restored = toggleCategoryWithChildren(disabled, 'category')
+    expect(restored.find((entry) => entry.id === 'first')?.enabled).toBe(true)
+    expect(restored.find((entry) => entry.id === 'second')?.enabled).toBe(false)
+    expect(restored.find((entry) => entry.id === 'third')?.enabled).toBe(false)
+  })
+
+  test('blanket re-enabling a radio category still restores exactly one active child', () => {
+    const category = { ...block('category'), marker: 'category', categoryMode: 'radio' as const }
+    const first = { ...block('first'), group: 'category' }
+    const second = { ...block('second'), group: 'category' }
+
+    const disabled = toggleCategoryWithChildren([category, first, second], 'category')
+    expect(disabled.every((entry) => !entry.enabled)).toBe(true)
+
+    const reEnabled = toggleCategoryWithChildren(disabled, 'category')
+    expect(reEnabled.find((entry) => entry.id === 'category')?.enabled).toBe(true)
+    expect(reEnabled.filter((entry) => entry.group === 'category' && entry.enabled).map((entry) => entry.id))
+      .toEqual(['first'])
+  })
+
+  test('the category eye toggle only flips the marker block, never its children', () => {
+    const category = { ...block('category'), marker: 'category', categoryMode: 'checkbox' as const }
+    const first = { ...block('first'), group: 'category' }
+    const second = { ...block('second'), group: 'category', enabled: false }
+
+    const toggled = toggleBlockWithCategoryRules([category, first, second], 'category')
+    expect(toggled.find((entry) => entry.id === 'category')?.enabled).toBe(false)
+    expect(toggled.find((entry) => entry.id === 'first')?.enabled).toBe(true)
+    expect(toggled.find((entry) => entry.id === 'second')?.enabled).toBe(false)
+
+    const toggledBack = toggleBlockWithCategoryRules(toggled, 'category')
+    expect(toggledBack.find((entry) => entry.id === 'category')?.enabled).toBe(true)
+    expect(toggledBack.find((entry) => entry.id === 'first')?.enabled).toBe(true)
+    expect(toggledBack.find((entry) => entry.id === 'second')?.enabled).toBe(false)
   })
 })
 

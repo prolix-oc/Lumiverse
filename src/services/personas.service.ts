@@ -105,6 +105,23 @@ export function createPersona(userId: string, input: CreatePersonaInput): Person
   return persona;
 }
 
+/** Load SillyTavern persona identities once so reruns stay linear. */
+export function listPersonaSourceFilenameIds(userId: string): Map<string, { id: string; name: string }> {
+  const rows = getDb()
+    .query(
+      `SELECT id, name, json_extract(metadata, '$._lumiverse_source_filename') AS source_filename
+       FROM personas
+       WHERE user_id = ?
+         AND json_type(metadata, '$._lumiverse_source_filename') = 'text'
+       ORDER BY updated_at ASC`,
+    )
+    .all(userId) as Array<{ id: string; name: string; source_filename: string }>;
+
+  const result = new Map<string, { id: string; name: string }>();
+  for (const row of rows) result.set(row.source_filename, { id: row.id, name: row.name });
+  return result;
+}
+
 export function updatePersona(userId: string, id: string, input: UpdatePersonaInput): Persona | null {
   const existing = getPersona(userId, id);
   if (!existing) return null;

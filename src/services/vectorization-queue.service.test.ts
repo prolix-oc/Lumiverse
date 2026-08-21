@@ -37,3 +37,28 @@ describe("world-book vectorization queue supersession", () => {
     expect(existing.supersedesIndexed).toBe(true);
   });
 });
+
+describe("world-book vectorization settle window", () => {
+  test("holds recent lorebook jobs until the settle window expires", () => {
+    const now = 10_000;
+    const recent = [job({ queuedAt: now - 200 })];
+    expect(__test__.worldBookJobsHaveSettled(recent, now)).toBe(false);
+    expect(__test__.nextProcessDelayMs(recent, now)).toBe(__test__.WORLD_BOOK_VECTOR_SETTLE_MS - 200);
+  });
+
+  test("releases lorebook jobs after the settle window", () => {
+    const now = 20_000;
+    const settled = [job({ queuedAt: now - __test__.WORLD_BOOK_VECTOR_SETTLE_MS })];
+    expect(__test__.worldBookJobsHaveSettled(settled, now)).toBe(true);
+    expect(__test__.nextProcessDelayMs(settled, now)).toBe(100);
+  });
+
+  test("caps a long typing burst so one Lance write eventually proceeds", () => {
+    const queuedAt = 1;
+    const now = queuedAt + __test__.WORLD_BOOK_VECTOR_MAX_WAIT_MS;
+    const burst = [job({ queuedAt })];
+    expect(__test__.remainingWorldBookSettleMs(queuedAt, now)).toBe(0);
+    expect(__test__.worldBookJobsHaveSettled(burst, now)).toBe(true);
+    expect(__test__.nextProcessDelayMs(burst, now)).toBe(100);
+  });
+});

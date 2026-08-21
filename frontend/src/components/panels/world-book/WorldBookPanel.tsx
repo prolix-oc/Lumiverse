@@ -152,6 +152,8 @@ export default function WorldBookPanel() {
   // Debounce refs
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const bookDescTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const vectorSummaryAbortRef = useRef<AbortController | null>(null)
+  const vectorSummaryBookIdRef = useRef<string | null>(null)
   const panelRootRef = useRef<HTMLDivElement>(null)
   const panelScrollRef = useRef<HTMLDivElement>(null)
   const [paginationContainer, setPaginationContainer] = useState<HTMLDivElement | null>(null)
@@ -215,13 +217,21 @@ export default function WorldBookPanel() {
   }, [activeModal, isVisible, loadBooks])
 
   const loadVectorSummary = useCallback(async (bookId: string) => {
+    vectorSummaryAbortRef.current?.abort()
+    const controller = new AbortController()
+    vectorSummaryAbortRef.current = controller
+    vectorSummaryBookIdRef.current = bookId
     try {
-      const summary = await worldBooksApi.getVectorSummary(bookId)
-      setVectorSummary(summary)
+      const summary = await worldBooksApi.getVectorSummary(bookId, { signal: controller.signal })
+      if (!controller.signal.aborted && vectorSummaryBookIdRef.current === bookId) setVectorSummary(summary)
     } catch {
-      setVectorSummary(null)
+      if (!controller.signal.aborted && vectorSummaryBookIdRef.current === bookId) setVectorSummary(null)
+    } finally {
+      if (vectorSummaryAbortRef.current === controller) vectorSummaryAbortRef.current = null
     }
   }, [])
+
+  useEffect(() => () => vectorSummaryAbortRef.current?.abort(), [])
 
   // Side effects on book selection change (book fields, vector summary, reset UI state)
   useEffect(() => {
@@ -235,6 +245,8 @@ export default function WorldBookPanel() {
       }
       setShowDiagnosticsModal(false)
     } else {
+      vectorSummaryAbortRef.current?.abort()
+      vectorSummaryBookIdRef.current = null
       setVectorSummary(null)
       setShowDiagnosticsModal(false)
     }

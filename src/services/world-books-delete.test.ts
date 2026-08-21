@@ -97,6 +97,7 @@ beforeEach(() => {
     vector_indexed_at INTEGER,
     vector_index_error TEXT,
     extensions TEXT NOT NULL DEFAULT '{}',
+    revision INTEGER NOT NULL DEFAULT 1,
     updated_at INTEGER NOT NULL
   )`);
   vectors = [];

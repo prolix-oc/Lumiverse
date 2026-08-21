@@ -61,6 +61,10 @@ export interface RecentChat {
   character_name: string;
   character_avatar_path: string | null;
   character_image_id: string | null;
+  /** Total messages in the chat; rides along so list UIs avoid per-row fetches. */
+  message_count: number;
+  /** First 280 chars of the newest message, for list previews. */
+  last_message_preview: string;
 }
 
 export interface GroupedRecentChat {

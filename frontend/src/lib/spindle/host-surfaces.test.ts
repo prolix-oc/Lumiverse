@@ -21,6 +21,16 @@ const testStore = {
   drawerTabs: [],
   extensionCommands: [],
   inputBarActions: [],
+  pendingWorldBookEditEntryId: null as string | null,
+  activeModal: null as string | null,
+  modalProps: {} as Record<string, unknown>,
+  setPendingWorldBookEditEntryId(id: string | null) {
+    testStore.pendingWorldBookEditEntryId = id
+  },
+  openModal(id: string, props: Record<string, unknown>) {
+    testStore.activeModal = id
+    testStore.modalProps = props
+  },
 }
 
 mock.module('@/lib/commands', () => ({ COMMANDS }))
@@ -86,6 +96,53 @@ describe('H4 host surface catalog and invocation', () => {
     expect(() => api.invoke({ kind: 'command', id: 'not-in-the-map' })).toThrow('HOST_ACTION_UNMAPPED')
     api.invoke({ kind: 'command', id: 'action-regenerate' })
     expect(calls).toEqual(['action-regenerate'])
+  })
+
+  test('world-book editor invocation requires permission and forwards the entry target', () => {
+    const calls: Array<[string, string | undefined]> = []
+    const denied = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => [],
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
+    })
+    expect(() => denied.invoke(
+      { kind: 'modal', id: 'world_book_editor' },
+      { id: 'book-1', entryId: 'entry-1' },
+    )).toThrow('PERMISSION_DENIED:world_books')
+
+    const allowed = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => ['world_books'],
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
+      runtime: {
+        openWorldBookEditor: (id, entryId) => { calls.push([id, entryId]) },
+      },
+    })
+    allowed.invoke(
+      { kind: 'modal', id: 'world_book_editor' },
+      { id: 'book-1', entryId: 'entry-1' },
+    )
+    expect(calls).toEqual([['book-1', 'entry-1']])
+  })
+
+  test('default world-book action opens the native editor at the requested book and entry', () => {
+    testStore.pendingWorldBookEditEntryId = 'stale-entry'
+    testStore.activeModal = null
+    testStore.modalProps = {}
+    const api = createHostSurfaceAPI({
+      extensionId: 'ext-a',
+      getGrantedPermissions: () => ['world_books'],
+      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
+    })
+
+    api.invoke(
+      { kind: 'modal', id: 'world_book_editor' },
+      { id: 'book-1', entryId: 'entry-1' },
+    )
+
+    expect(testStore.activeModal).toBe('worldBookEditor')
+    expect(testStore.modalProps).toEqual({ bookId: 'book-1' })
+    expect(testStore.pendingWorldBookEditEntryId).toBe('entry-1')
   })
 
   test('self input actions are free, cross-extension actions require app_manipulation, and opt-out is honored', async () => {

@@ -222,6 +222,10 @@ function migratePreset(preset: LoomPreset): LoomPreset {
       block.categoryMode = block.marker === 'category'
         ? coerceCategoryMode(block.categoryMode)
         : null
+      // Blanket-disable snapshots only make sense on category blocks.
+      block.savedChildEnabled = block.marker === 'category' && isRecord(block.savedChildEnabled)
+        ? Object.fromEntries(Object.entries(block.savedChildEnabled).filter((entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean'))
+        : undefined
       if (block.sealedSource === 'lumihub') {
         block.sealed = true
       }
@@ -441,6 +445,51 @@ export function toggleBlockWithCategoryRules(
     if (!categoryGroup.children.some((child) => child.id === block.id)) return block
     return { ...block, enabled: block.id === blockId }
   })
+}
+
+/**
+ * Blanket enable/disable for a category and all of its children — the
+ * distinct category-row control beside the marker's own eye toggle.
+ *
+ * Disabling snapshots every child's enabled state onto the category block
+ * (`savedChildEnabled`, persisted with the preset) and turns the marker and
+ * all children off. Enabling restores that exact snapshot — a mixed
+ * child state comes back mixed — instead of enabling everything
+ * indiscriminately. Children missing from the snapshot (added while the
+ * category was blanket-disabled) keep their current state. The result runs
+ * through category normalization so a radio category still ends with at
+ * most one active child even when the snapshot predates that rule.
+ */
+export function toggleCategoryWithChildren(
+  blocks: PromptBlock[],
+  categoryId: string,
+): PromptBlock[] {
+  const category = blocks.find((block) => block.id === categoryId && block.marker === 'category')
+  if (!category) return blocks
+
+  const group = computeGroups(blocks).find((candidate) => candidate.categoryBlock?.id === categoryId)
+  const childIds = new Set((group?.children ?? []).map((child) => child.id))
+  const disabling = category.enabled
+  const snapshot = category.savedChildEnabled
+
+  const toggled = blocks.map((block) => {
+    if (block.id === categoryId) {
+      return {
+        ...block,
+        enabled: !disabling,
+        // Capture on disable; consume on enable.
+        savedChildEnabled: disabling
+          ? Object.fromEntries((group?.children ?? []).map((child) => [child.id, child.enabled === true]))
+          : undefined,
+      }
+    }
+    if (!childIds.has(block.id)) return block
+    if (disabling) return { ...block, enabled: false }
+    if (!snapshot || !(block.id in snapshot)) return block
+    return { ...block, enabled: snapshot[block.id] === true }
+  })
+
+  return normalizeCategoryBlockState(toggled)
 }
 
 // ============================================================================

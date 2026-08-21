@@ -4,7 +4,7 @@
  * for all existing migration code.
  */
 
-import { existsSync, readdirSync, statSync, readFileSync } from "fs";
+import { access, readdir, stat } from "fs/promises";
 import { join, dirname, basename, extname } from "path";
 import type { FileSystem, FileEntry, FileStat } from "../types";
 
@@ -20,11 +20,16 @@ export class LocalFileSystem implements FileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
-    return existsSync(path);
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async stat(path: string): Promise<FileStat> {
-    const s = statSync(path);
+    const s = await stat(path);
     const birthSec = s.birthtimeMs > 0 ? Math.floor(s.birthtimeMs / 1000) : undefined;
     return {
       isDirectory: s.isDirectory(),
@@ -36,29 +41,22 @@ export class LocalFileSystem implements FileSystem {
   }
 
   async readdir(path: string): Promise<FileEntry[]> {
-    const names = readdirSync(path);
-    const entries: FileEntry[] = [];
-
-    for (const name of names) {
-      try {
-        const full = join(path, name);
-        const s = statSync(full);
-        entries.push({
-          name,
-          isDirectory: s.isDirectory(),
-          isFile: s.isFile(),
-          size: s.size,
-        });
-      } catch {
-        // skip inaccessible entries
-      }
-    }
-
-    return entries;
+    // Dirent metadata is enough for every migration directory scan. Avoiding a
+    // synchronous stat for every child keeps directories with 30K+ cards from
+    // blocking the HTTP/WebSocket event loop for seconds at a time.
+    const entries = await readdir(path, { withFileTypes: true });
+    return entries.map((entry) => ({
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+      isFile: entry.isFile(),
+      // Directory enumeration does not expose size. Call stat() only in flows
+      // that actually need it instead of penalizing every scan.
+      size: 0,
+    }));
   }
 
   async readFile(path: string): Promise<Buffer> {
-    return readFileSync(path);
+    return Buffer.from(await Bun.file(path).arrayBuffer());
   }
 
   async readText(path: string): Promise<string> {

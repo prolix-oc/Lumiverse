@@ -38,7 +38,7 @@ export interface HostActionRuntime {
   runCommand(id: string): void | Promise<void>
   navigate(path: string): void
   setEditingCharacterId(id: string): void
-  openWorldBookEditor(id: string): void
+  openWorldBookEditor(id: string, entryId?: string): void
   invokeInputBarAction(id: string): void | Promise<void>
   invokeExtensionCommand(id: string): void
 }
@@ -153,10 +153,14 @@ export function applyHostAction(
       if (ref.id !== 'character_editor' && ref.id !== 'world_book_editor') {
         throw new Error(`${HOST_ACTION_UNMAPPED}:modal:${ref.id}`)
       }
-      only(params, 'id')
+      if (ref.id === 'world_book_editor') only(params, 'id', 'entryId')
+      else only(params, 'id')
       assertHostId(params.id, 'id')
       if (ref.id === 'character_editor') runtime.setEditingCharacterId(params.id)
-      else if (ref.id === 'world_book_editor') runtime.openWorldBookEditor(params.id)
+      else if (ref.id === 'world_book_editor') {
+        if (params.entryId !== undefined) assertHostId(params.entryId, 'entryId')
+        runtime.openWorldBookEditor(params.id, params.entryId as string | undefined)
+      }
       return
     case 'input_bar_action':
       only(params)

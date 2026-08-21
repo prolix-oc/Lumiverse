@@ -620,6 +620,7 @@ export function HomepageCharacterLibrary() {
           className={styles.select}
         >
           <option value="recent">Recently used</option>
+          <option value="most_chats">Most chats</option>
           <option value="name">Name</option>
           <option value="created">Created</option>
           <option value="shuffle">Discover</option>

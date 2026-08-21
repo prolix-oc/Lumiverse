@@ -311,6 +311,10 @@ describe("PRIVILEGED_PERMISSIONS", () => {
   test("requires explicit approval for app manipulation", () => {
     expect(PRIVILEGED_PERMISSIONS.has("app_manipulation")).toBe(true);
   });
+
+  test("requires explicit approval for unrestricted regex mutation", () => {
+    expect(PRIVILEGED_PERMISSIONS.has("regex_scripts_unrestricted")).toBe(true);
+  });
 });
 
 describe("bunInstallCmd", () => {

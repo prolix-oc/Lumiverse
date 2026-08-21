@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyProviderReasoningOffSwitch, injectReasoningParams } from "./prompt-assembly.service";
+import { applyProviderReasoningOffSwitch, buildParameters, injectReasoningParams } from "./prompt-assembly.service";
 
 describe("applyProviderReasoningOffSwitch", () => {
   test("removes generic reasoning fields for OpenAI-compatible providers", () => {
@@ -138,6 +138,28 @@ describe("injectReasoningParams (OpenAI-compatible)", () => {
   });
 });
 
+describe("buildParameters (Google thought signatures)", () => {
+  test("keeps optional signature replay scoped to enabled Google API reasoning", () => {
+    const params = buildParameters(
+      null,
+      null,
+      { apiReasoning: true, replayThoughtSignatures: true },
+      "google",
+      "gemini-3-flash",
+    );
+    expect(params._replay_thought_signatures).toBe(true);
+
+    const disabled = buildParameters(
+      null,
+      null,
+      { apiReasoning: false, replayThoughtSignatures: true },
+      "google_vertex",
+      "gemini-3-flash",
+    );
+    expect(disabled._replay_thought_signatures).toBeUndefined();
+  });
+});
+
 describe("injectReasoningParams (zai)", () => {
   test("sends thinking and reasoning_effort for GLM-5.2 models", () => {
     const params: Record<string, any> = {};
@@ -156,11 +178,35 @@ describe("injectReasoningParams (zai)", () => {
     expect(xhigh.reasoning_effort).toBe("xhigh");
   });
 
-  test("only sends thinking toggle for GLM-4.x models", () => {
+  test("limits GLM-5.3 to its documented low, high, and max effort levels", () => {
+    for (const effort of ["low", "high", "max"] as const) {
+      const params: Record<string, any> = {};
+      injectReasoningParams(params, "zai", effort, "glm-5.3");
+      expect(params.reasoning_effort).toBe(effort);
+    }
+
+    const unsupported: Record<string, any> = {};
+    injectReasoningParams(unsupported, "zai", "medium", "glm-5.3");
+    expect(unsupported.reasoning_effort).toBe("max");
+  });
+
+  test("uses Z.AI's default clear-thinking behaviour for GLM-4.5+ unless configured", () => {
     const params: Record<string, any> = {};
-    injectReasoningParams(params, "zai", "max", "glm-4.7");
+    injectReasoningParams(params, "zai", "max", "glm-4.5");
     expect(params.thinking).toEqual({ type: "enabled" });
     expect(params.reasoning_effort).toBeUndefined();
+  });
+
+  test("forwards a user-selected clear-thinking value for GLM-4.5+ and GLM-5.x", () => {
+    const glm45: Record<string, any> = {};
+    injectReasoningParams(glm45, "zai", "auto", "glm-4.5", undefined, false);
+    expect(glm45.thinking).toEqual({ type: "enabled", clear_thinking: false });
+    expect(glm45.reasoning_effort).toBeUndefined();
+
+    const glm53: Record<string, any> = {};
+    injectReasoningParams(glm53, "zai", "auto", "glm-5.3", undefined, true);
+    expect(glm53.thinking).toEqual({ type: "enabled", clear_thinking: true });
+    expect(glm53.reasoning_effort).toBe("max");
   });
 
   test("does not override explicit thinking or reasoning_effort", () => {

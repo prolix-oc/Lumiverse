@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { retryWindowsRename } from "./windows-fs-retry";
 
 export const EXTENSION_IDENTIFIER = "lumiverse_suite";
 
@@ -421,10 +422,10 @@ export async function deployLocalExtensions(options: DeployOptions = {}): Promis
     await validateTree(stage, destinationParent);
 
     if (await statExisting(paths.destination)) {
-      await rename(paths.destination, backup);
+      await retryWindowsRename(() => rename(paths.destination, backup));
       movedExisting = true;
     }
-    await rename(stage, paths.destination);
+    await retryWindowsRename(() => rename(stage, paths.destination));
 
     if (movedExisting) await rm(backup, { recursive: true, force: true });
     return paths;
@@ -433,7 +434,7 @@ export async function deployLocalExtensions(options: DeployOptions = {}): Promis
     if (movedExisting) {
       const destinationExists = await statExisting(paths.destination);
       if (!destinationExists) {
-        await rename(backup, paths.destination).catch((rollbackError) => {
+        await retryWindowsRename(() => rename(backup, paths.destination)).catch((rollbackError) => {
           throw new AggregateError([error, rollbackError], "Deployment failed and rollback failed");
         });
       }

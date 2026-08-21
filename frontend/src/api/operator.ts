@@ -1,5 +1,5 @@
 import { get, post, put, del } from './client'
-import type { OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
+import type { ImageThumbnailQueuePayload, OperatorLogEntry, OperatorStatusPayload } from '@/types/ws-events'
 
 export type OperatorStatus = OperatorStatusPayload
 
@@ -41,11 +41,24 @@ export interface ResolvedSharpSettings {
   cacheItems: number
 }
 
+export interface ThumbnailQueueRecovery {
+  pending: number
+  process: number
+  rebuild: number
+}
+
 export interface OperatorSharpStatus {
   settingsKey: string
   configuredSettings: SharpSettings
   effectiveSettings: ResolvedSharpSettings
   defaults: ResolvedSharpSettings
+  thumbnailQueue?: ImageThumbnailQueuePayload
+  thumbnailRecovery?: ThumbnailQueueRecovery
+}
+
+export interface ThumbnailQueueSnapshot {
+  queue: ImageThumbnailQueuePayload
+  recovery: ThumbnailQueueRecovery
 }
 
 export interface DnsSettings {
@@ -300,6 +313,8 @@ export const operatorApi = {
   getDatabase: () => get<OperatorDatabaseStatus>('/operator/database'),
   getSharp: () => get<OperatorSharpStatus>('/operator/sharp'),
   putSharp: (settings: SharpSettings) => put<OperatorSharpStatus>('/operator/sharp', settings),
+  recoverThumbnailQueue: () => post<ThumbnailQueueSnapshot>('/operator/sharp/queue/recover'),
+  discardThumbnailQueue: () => post<ThumbnailQueueSnapshot>('/operator/sharp/queue/discard'),
   getDns: () => get<OperatorDnsStatus>('/operator/dns'),
   putDns: (settings: DnsSettings) => put<OperatorDnsStatus>('/operator/dns', settings),
   getDiskWarning: () => get<OperatorDiskWarningStatus>('/operator/disk-warning'),

@@ -12,6 +12,12 @@ describe('enhanced lorebook smart-search UI contract', () => {
     expect(workspace).toMatch(/constant: queryEntries\.filter[\s\S]*keyword: queryEntries\.filter[\s\S]*vector: queryEntries\.filter/)
   })
 
+  test('cancels a stale complete-book walk when navigation changes', () => {
+    expect(workspace).toContain('entriesAbortRef.current?.abort()')
+    expect(workspace).toContain('listAllEntries(bookId, { signal: controller.signal })')
+    expect(workspace).toContain('if (!controller.signal.aborted) throw error')
+  })
+
   test('clears search and type state when a different book is selected', () => {
     expect(workspace).toMatch(/setSavedAt\(null\)[\s\S]*setEntrySearch\(''\)[\s\S]*setTypeFilter\('all'\)[\s\S]*\[selectedBookId\]/)
   })

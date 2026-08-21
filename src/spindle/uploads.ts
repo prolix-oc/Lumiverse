@@ -17,12 +17,14 @@ export interface SpindleUploadRecord {
 
 const UPLOAD_TTL_MS = 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60_000;
-const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const CHUNKED_MAX_UPLOAD_BYTES = 100 * DEFAULT_MAX_UPLOAD_BYTES;
+export const UPLOAD_READ_CHUNK_BYTES = 16 * 1024 * 1024;
 
 const uploads = new Map<string, SpindleUploadRecord>();
 
-export function getMaxUploadBytes(): number {
-  return MAX_UPLOAD_BYTES;
+export function getMaxUploadBytes(chunkedRead = false): number {
+  return chunkedRead ? CHUNKED_MAX_UPLOAD_BYTES : DEFAULT_MAX_UPLOAD_BYTES;
 }
 
 function dirFor(userId: string, uploadId: string): string {
@@ -76,7 +78,11 @@ export async function appendUpload(
   // Enforce the cap mid-stream so a client can't exceed it by lying about length.
   const cap = new Transform({
     transform(chunk: Buffer, _enc, cb) {
-      if (rec.offset + chunk.length > MAX_UPLOAD_BYTES) {
+      if (rec.offset + chunk.length > rec.declaredSize) {
+        cb(new Error("upload exceeds declared size"));
+        return;
+      }
+      if (rec.offset + chunk.length > CHUNKED_MAX_UPLOAD_BYTES) {
         cb(new Error("upload exceeds size cap"));
         return;
       }
@@ -112,6 +118,20 @@ export async function readUploadBytes(uploadId: string): Promise<Uint8Array> {
   const rec = uploads.get(uploadId);
   if (!rec) throw new Error("upload not found");
   return new Uint8Array(await Bun.file(rec.path).arrayBuffer());
+}
+
+export async function readUploadChunk(uploadId: string, offset: number): Promise<Uint8Array> {
+  const rec = getUpload(uploadId);
+  if (!rec) throw new Error("upload not found");
+  if (rec.offset !== rec.declaredSize) throw new Error("upload is incomplete");
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > rec.declaredSize) {
+    throw new Error("invalid upload offset");
+  }
+  rec.expiresAt = Date.now() + UPLOAD_TTL_MS;
+  const end = Math.min(offset + UPLOAD_READ_CHUNK_BYTES, rec.declaredSize);
+  const data = new Uint8Array(await Bun.file(rec.path).slice(offset, end).arrayBuffer());
+  if (data.byteLength !== end - offset) throw new Error("upload changed while reading");
+  return data;
 }
 
 export function deleteUpload(uploadId: string): void {

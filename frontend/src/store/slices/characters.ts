@@ -98,8 +98,10 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
   },
 
   setSortField: (field) => {
-    set({ sortField: field })
+    const sortDirection = field === 'most_chats' ? 'desc' : get().sortDirection
+    set({ sortField: field, sortDirection })
     settingsApi.put('sortField', field).catch(() => {})
+    if (field === 'most_chats') settingsApi.put('sortDirection', sortDirection).catch(() => {})
   },
 
   toggleSortDirection: () =>

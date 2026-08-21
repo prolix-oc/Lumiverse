@@ -1,7 +1,8 @@
 import { getDb } from "../db/connection";
 
-// Kimi K2 / K2.5 tiktoken pre-tokenization regex. Ported from
-// `tokenization_kimi.py` in moonshotai/Kimi-K2.5. The original uses Java-style
+// Kimi K2 / K2.5 / K3 tiktoken pre-tokenization regex. Ported from
+// `tokenization_kimi.py` in moonshotai/Kimi-K2.5. K3 ships the same regex and
+// BPE vocabulary. The original uses Java-style
 // set intersection `[...&&[^\p{Han}]]` to exclude Han from Latin letter groups;
 // JS regex u flag doesn't support `&&`, so we swap it for a `(?!\p{Script=Han})`
 // negative lookahead before each Latin char. Also `\p{Han}` is non-standard in
@@ -183,6 +184,16 @@ const BUILT_IN_CONFIGS = [
     }),
   },
   {
+    id: "kimi-k3",
+    name: "Moonshot Kimi K3",
+    type: "tiktoken",
+    config: JSON.stringify({
+      url: "https://huggingface.co/moonshotai/Kimi-K3/resolve/main/tiktoken.model",
+      configUrl: "https://huggingface.co/moonshotai/Kimi-K3/resolve/main/tokenizer_config.json",
+      pat_str: KIMI_PAT_STR,
+    }),
+  },
+  {
     id: "deepseek-v4-flash",
     name: "DeepSeek V4 Flash",
     type: "huggingface",
@@ -237,8 +248,9 @@ const BUILT_IN_PATTERNS = [
   // `qwen-?3[-.]5` catches `qwen3.5-*`, `qwen-3.5-*`, `qwen3-5-*`, `qwen-3-5-*`.
   { id: "pat-qwen-3-5", tokenizer_id: "qwen-3-5", pattern: "(?:^|[/:.])qwen-?3[-.]5", priority: 85 },
   { id: "pat-qwen-3", tokenizer_id: "qwen-3", pattern: "(?:^|[/:.])qwen", priority: 80 },
-  // GLM 5.2 before the looser glm-5 / glm-4 patterns.
-  { id: "pat-glm-5-2", tokenizer_id: "glm-5-2", pattern: "(?:^|[/:.])glm-5[-.]?2", priority: 90 },
+  // GLM 5.2/5.3 before the looser glm-5 / glm-4 patterns. GLM 5.3 uses
+  // the same tokenizer as 5.2.
+  { id: "pat-glm-5-2", tokenizer_id: "glm-5-2", pattern: "(?:^|[/:.])glm-5[-.]?[23]", priority: 90 },
   // MiniMax M3 (text / vision / agent variants).
   { id: "pat-minimax-m3", tokenizer_id: "minimax-m3", pattern: "(?:^|[/:.])minimax-?m3", priority: 80 },
   // Xiaomi MiMo-V2.5 family — Pro first so the larger 1T model doesn't fall
@@ -249,6 +261,9 @@ const BUILT_IN_PATTERNS = [
   { id: "pat-gemma-4", tokenizer_id: "gemma-4", pattern: "(?:^|[/:.])gemma-4", priority: 85 },
   // Moonshot Kimi K2.7 Code before the general kimi- pattern.
   { id: "pat-kimi-k2-7-code", tokenizer_id: "kimi-k2-7-code", pattern: "(?:^|[/:.])kimi-?k2[-.]7[-.]?code", priority: 85 },
+  // Kimi K3 before the general kimi- pattern. Its BPE is currently identical
+  // to K2.5, but a dedicated config lets it be refreshed independently.
+  { id: "pat-kimi-k3", tokenizer_id: "kimi-k3", pattern: "(?:^|[/:.])kimi-?k3", priority: 85 },
   // DeepSeek V4 family — Pro first so it doesn't fall through to Flash.
   { id: "pat-deepseek-v4-pro", tokenizer_id: "deepseek-v4-pro", pattern: "(?:^|[/:.])deepseek-?v4[-.]?pro", priority: 85 },
   { id: "pat-deepseek-v4-flash", tokenizer_id: "deepseek-v4-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?flash", priority: 80 },

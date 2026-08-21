@@ -48,7 +48,7 @@ import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
-import { webSearchApi, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
+import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 import type { WorldBookVectorPresetMode, WorldBookVectorSettings } from '@/types/world-book-vector-settings'
@@ -84,6 +84,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { t: ts } = useTranslation('settings')
   const settingsActiveView = useStore((s) => s.settingsActiveView)
+  const setSettingsActiveView = useStore((s) => s.setSettingsActiveView)
   const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
   const settingsTabs = useStore((s) => s.settingsTabs)
@@ -100,19 +101,24 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const handledScrollTargetNonce = useRef<number | null>(null)
   const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
 
+  const selectView = useCallback((view: string) => {
+    setActiveView(view)
+    setSettingsActiveView(view)
+  }, [setSettingsActiveView])
+
   useEffect(() => {
     setActiveView(settingsActiveView || 'display')
   }, [settingsActiveView])
 
   useEffect(() => {
     if (!VIEWS.some((tab) => tab.id === activeView) && VIEWS.length > 0) {
-      setActiveView(VIEWS[0].id)
+      selectView(VIEWS[0].id)
     }
-  }, [VIEWS, activeView])
+  }, [VIEWS, activeView, selectView])
 
   // Open a tab from the in-modal search and remember where to scroll.
   const handleSearchNavigate = (tabId: string, anchorId: string | null) => {
-    setActiveView(tabId)
+    selectView(tabId)
     setScrollTarget({ anchorId, nonce: navNonce.current++ })
   }
 
@@ -151,7 +157,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
     if (extensionId) {
       if (activeView !== 'extensions') {
-        setActiveView('extensions')
+        selectView('extensions')
         return
       }
 
@@ -189,7 +195,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
     handledScrollTargetNonce.current = targetNonce
     setScrollTarget({ anchorId, nonce: targetNonce })
-  }, [activeView, settingsActiveView, settingsScrollTarget])
+  }, [activeView, settingsActiveView, settingsScrollTarget, selectView])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>
@@ -216,7 +222,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   key={tab.id}
                   type="button"
                   className={clsx(styles.navBtn, activeView === tab.id && styles.navBtnActive)}
-                  onClick={() => setActiveView(tab.id)}
+                  onClick={() => selectView(tab.id)}
                 >
                   <Icon size={14} />
                   <span>{translateSettingsField(tab.id, 'shortName', tab.shortName)}</span>
@@ -836,14 +842,14 @@ function CompletionSoundUploader({ disabled, current, onChange, onError, onSucce
 function ChatSettings() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
-  const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const displayMode = useStore((s) => s.chatDisplayMode)
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
-  const enterToSend = useStore((s) => s.chatSheldEnterToSend)
+  const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -852,6 +858,7 @@ function ChatSettings() {
   const regenFeedback = useStore((s) => s.regenFeedback)
   const suppressContextDropWarnings = useStore((s) => s.suppressContextDropWarnings)
   const setSetting = useStore((s) => s.setSetting)
+  const setInputBarEnterToSend = useStore((s) => s.setInputBarEnterToSend)
 
   return (
     <div className={styles.settingsSection}>
@@ -864,7 +871,7 @@ function ChatSettings() {
           <button
             type="button"
             className={clsx(styles.displayModeCard, displayMode === 'minimal' && styles.displayModeCardActive)}
-            onClick={() => setSetting('chatSheldDisplayMode', 'minimal')}
+            onClick={() => setSetting('chatDisplayMode', 'minimal')}
           >
             <div className={styles.previewMinimal}>
               {/* Character message */}
@@ -902,7 +909,7 @@ function ChatSettings() {
           <button
             type="button"
             className={clsx(styles.displayModeCard, displayMode === 'bubble' && styles.displayModeCardActive)}
-            onClick={() => setSetting('chatSheldDisplayMode', 'bubble')}
+            onClick={() => setSetting('chatDisplayMode', 'bubble')}
           >
             <div className={styles.previewBubble}>
               {/* Character bubble message */}
@@ -1101,7 +1108,7 @@ function ChatSettings() {
 
       <Toggle.Checkbox
         checked={enterToSend}
-        onChange={(checked) => setSetting('chatSheldEnterToSend', checked)}
+        onChange={setInputBarEnterToSend}
         label={t('chat.enterToSend')}
       />
 
@@ -1167,6 +1174,19 @@ function ChatSettings() {
             onChange={(checked) => setSetting('regenFeedback', { ...regenFeedback, includePreviousGeneration: checked })}
             label={t('chat.regenIncludePrevious')}
           />
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('chat.regenFormat')}</label>
+            <ExpandableTextarea
+              className={formStyles.textarea}
+              value={regenFeedback.format}
+              onChange={(format) => setSetting('regenFeedback', { ...regenFeedback, format })}
+              placeholder="[OOC: {{$regenInput}}]"
+              rows={4}
+              title={t('chat.regenFormat')}
+            />
+            <p className={styles.helperText}>{t('chat.regenFormatHint')}</p>
+          </div>
         </>
       )}
 
@@ -2114,28 +2134,36 @@ function EmbeddingsSettings() {
     setModelLabels({})
   }, [cfg?.provider, cfg?.api_url])
 
-  const PROVIDER_DEFAULTS: Record<string, { api_url: string }> = {
-    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings' },
-    openai: { api_url: 'https://api.openai.com/v1/embeddings' },
-    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings' },
-    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings' },
-    bananabread: { api_url: 'http://localhost:8008/v1/embeddings' },
-    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings' },
+  const PROVIDER_DEFAULTS: Record<string, { api_url: string; model: string }> = {
+    'openai-compatible': { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openai: { api_url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+    openrouter: { api_url: 'https://openrouter.ai/api/v1/embeddings', model: 'text-embedding-3-small' },
+    electronhub: { api_url: 'https://api.electronhub.top/v1/embeddings', model: 'text-embedding-3-small' },
+    bananabread: { api_url: 'http://localhost:8008/v1/embeddings', model: 'mixedbread-ai/mxbai-embed-large-v1' },
+    nanogpt: { api_url: 'https://nano-gpt.com/api/v1/embeddings', model: 'text-embedding-3-small' },
+    'nvidia-nim': { api_url: 'https://integrate.api.nvidia.com/v1/embeddings', model: 'nvidia/nemotron-3-embed-1b' },
   }
 
   const providerAllowsCustomApiUrl = (provider: EmbeddingConfig['provider']) => {
-    return provider === 'openai-compatible' || provider === 'bananabread'
+    return provider === 'openai-compatible' || provider === 'bananabread' || provider === 'nvidia-nim'
   }
 
   const update = (patch: Partial<EmbeddingConfigWithProfiles>) => {
     setCfg((current) => {
       if (!current) return current
       let nextPatch = patch
+      // Restore the provider's last saved setup instead of carrying over the
+      // preceding provider's model, dimensions, or retrieval tuning.
       if (nextPatch.provider && nextPatch.provider !== current.provider) {
+        const savedProfile = current.provider_profiles?.[nextPatch.provider]
         const defaults = PROVIDER_DEFAULTS[nextPatch.provider]
-        if (defaults) {
-          nextPatch = { ...nextPatch, api_url: defaults.api_url }
-        }
+        nextPatch = savedProfile
+          ? { ...nextPatch, ...savedProfile, provider: nextPatch.provider }
+          : {
+              ...nextPatch,
+              api_url: defaults?.api_url ?? current.api_url,
+              model: defaults?.model ?? current.model,
+            }
       }
       return { ...current, ...nextPatch }
     })
@@ -2545,6 +2573,7 @@ function EmbeddingsSettings() {
                     <option value="electronhub">ElectronHub</option>
                     <option value="bananabread">BananaBread</option>
                     <option value="nanogpt">Nano-GPT</option>
+                    <option value="nvidia-nim">NVIDIA NIM</option>
                   </select>
                 </div>
 
@@ -2574,6 +2603,9 @@ function EmbeddingsSettings() {
                   <span className={styles.helperText}>{t('embeddings.apiUrlPathHint')}</span>
                   {cfg.provider === 'bananabread' && (
                     <span className={styles.helperText}>{t('embeddings.bananabreadHint')}</span>
+                  )}
+                  {cfg.provider === 'nvidia-nim' && (
+                    <span className={styles.helperText}>{t('embeddings.nvidiaNimHint')}</span>
                   )}
                 </div>
               ) : (
@@ -3050,7 +3082,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng'
+  provider: 'searxng' | 'exa' | 'tavily'
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -3060,7 +3092,9 @@ interface WebSearchSettingsState {
   language: string
   safeSearch: 0 | 1 | 2
   engines: string[]
+  inlineToolEnabled: boolean
   hasApiKey: boolean
+  providerProfiles: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
 }
 
 const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
@@ -3075,8 +3109,13 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   language: 'all',
   safeSearch: 1,
   engines: [],
+  inlineToolEnabled: false,
   hasApiKey: false,
+  providerProfiles: {},
 }
+
+const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
+const TAVILY_SEARCH_API_URL = 'https://api.tavily.com/search'
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -3110,7 +3149,7 @@ function WebSearchSettings() {
 
   const buildPayload = (): WebSearchSettingsInput => ({
     enabled: cfg.enabled,
-    provider: 'searxng',
+    provider: cfg.provider,
     apiUrl: cfg.apiUrl,
     requestTimeoutMs: cfg.requestTimeoutMs,
     defaultResultCount: cfg.defaultResultCount,
@@ -3120,6 +3159,7 @@ function WebSearchSettings() {
     language: cfg.language,
     safeSearch: cfg.safeSearch,
     engines: enginesInput.split(',').map((item) => item.trim()).filter(Boolean),
+    inlineToolEnabled: cfg.inlineToolEnabled,
   })
 
   const save = async () => {
@@ -3132,7 +3172,7 @@ function WebSearchSettings() {
         ...payload,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       })
-      setCfg(next)
+      setCfg({ ...WEB_SEARCH_DEFAULTS, ...next })
       setEnginesInput(next.engines.join(', '))
       setApiKey('')
       setSuccess(t('webSearch.saveSuccess'))
@@ -3182,20 +3222,47 @@ function WebSearchSettings() {
         label={t('webSearch.enable')}
       />
 
+      <Toggle.Checkbox
+        checked={cfg.inlineToolEnabled}
+        onChange={(checked) => update({ inlineToolEnabled: checked })}
+        label={t('webSearch.inlineToolEnable')}
+      />
+      <p className={styles.placeholder}>{t('webSearch.inlineToolHint')}</p>
+
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('webSearch.provider')}</label>
-        <select className={styles.select} value={cfg.provider} onChange={() => update({ provider: 'searxng' })}>
+        <select
+          className={styles.select}
+          value={cfg.provider}
+          onChange={(e) => {
+            const provider = e.target.value as WebSearchSettingsState['provider']
+            const saved = cfg.providerProfiles[provider]
+            update(saved
+              ? { ...saved, provider, hasApiKey: saved.hasApiKey ?? false }
+              : {
+                  provider,
+                  apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '',
+                  hasApiKey: false,
+                })
+            setEnginesInput(saved?.engines.join(', ') ?? '')
+            setApiKey('')
+          }}
+        >
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
+          <option value="exa">{t('webSearch.providerExa')}</option>
+          <option value="tavily">{t('webSearch.providerTavily')}</option>
         </select>
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
-        <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.apiUrl')}</label>
+          <input className={styles.select} value={cfg.apiUrl} onChange={(e) => update({ apiUrl: e.target.value })} placeholder={t('webSearch.apiUrlPlaceholder')} />
+        </div>
+      )}
 
       <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : t('webSearch.apiKeyOptional')}</label>
+        <label className={styles.fieldLabel}>{t('webSearch.apiKey')} {cfg.hasApiKey ? t('webSearch.apiKeyConfigured') : cfg.provider === 'searxng' ? t('webSearch.apiKeyOptional') : t('webSearch.apiKeyRequired')}</label>
         <input
           className={styles.select}
           type="password"
@@ -3205,28 +3272,32 @@ function WebSearchSettings() {
         />
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
-        <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
-        <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
-          {t('webSearch.enginesHint')}
-        </span>
-      </div>
+      {cfg.provider === 'searxng' && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>{t('webSearch.engines')}</label>
+          <input className={styles.select} value={enginesInput} onChange={(e) => setEnginesInput(e.target.value)} placeholder={t('webSearch.enginesPlaceholder')} />
+          <span className={styles.placeholder} style={{ marginTop: '2px', fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))' }}>
+            {t('webSearch.enginesHint')}
+          </span>
+        </div>
+      )}
 
-      <div className={styles.drawerRow}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
-          <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+      {cfg.provider === 'searxng' && (
+        <div className={styles.drawerRow}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.language')}</label>
+            <input className={styles.select} value={cfg.language} onChange={(e) => update({ language: e.target.value })} placeholder={t('webSearch.languagePlaceholder')} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
+            <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
+              <option value={0}>{t('webSearch.safeOff')}</option>
+              <option value={1}>{t('webSearch.safeModerate')}</option>
+              <option value={2}>{t('webSearch.safeStrict')}</option>
+            </select>
+          </div>
         </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('webSearch.safeSearch')}</label>
-          <select className={styles.select} value={cfg.safeSearch} onChange={(e) => update({ safeSearch: Number(e.target.value) as 0 | 1 | 2 })}>
-            <option value={0}>{t('webSearch.safeOff')}</option>
-            <option value={1}>{t('webSearch.safeModerate')}</option>
-            <option value={2}>{t('webSearch.safeStrict')}</option>
-          </select>
-        </div>
-      </div>
+      )}
 
       <div className={styles.drawerRow}>
         <div className={styles.field}>
@@ -3282,132 +3353,6 @@ function WebSearchSettings() {
   )
 }
 
-function ImageOptimizationSettings() {
-  const { t } = useTranslation('settings')
-  const thumbnailSettings = useStore((s) => (s as any).thumbnailSettings as { smallSize?: number, largeSize?: number } | undefined)
-  const setSetting = useStore((s) => s.setSetting)
-
-  const smallSize = thumbnailSettings?.smallSize ?? 300
-  const largeSize = thumbnailSettings?.largeSize ?? 700
-
-  const [rebuilding, setRebuilding] = useState(false)
-  const [rebuildProgress, setRebuildProgress] = useState<{ current: number, total: number } | null>(null)
-  const [rebuildStatus, setRebuildStatus] = useState<string | null>(null)
-
-  const update = (patch: { smallSize?: number, largeSize?: number }) => {
-    setSetting('thumbnailSettings', { smallSize, largeSize, ...patch })
-  }
-
-  const formatRebuildParts = (generated: number, skipped: number, failed: number) => {
-    const parts: string[] = []
-    if (generated > 0) parts.push(t('advanced.rebuildGenerated', { count: generated }))
-    if (skipped > 0) parts.push(t('advanced.rebuildSkipped', { count: skipped }))
-    if (failed > 0) parts.push(t('advanced.rebuildFailedCount', { count: failed }))
-    return parts.join(', ')
-  }
-
-  const handleRebuild = async () => {
-    if (rebuilding) return
-    setRebuilding(true)
-    setRebuildStatus(t('advanced.rebuildStarting'))
-    setRebuildProgress(null)
-    try {
-      const result = await imagesApi.rebuildThumbnails({
-        onProgress: (p) => {
-          setRebuildProgress({ current: p.current, total: p.total })
-          const parts = [`${p.current}/${p.total}`]
-          if (p.generated > 0) parts.push(t('advanced.rebuildGenerated', { count: p.generated }))
-          if (p.skipped > 0) parts.push(t('advanced.rebuildSkipped', { count: p.skipped }))
-          if (p.failed > 0) parts.push(t('advanced.rebuildFailedCount', { count: p.failed }))
-          setRebuildStatus(parts.join(' \u2022 '))
-        },
-      })
-      setRebuildStatus(t('advanced.rebuildDone', {
-        summary: formatRebuildParts(result.generated, result.skipped, result.failed),
-      }))
-    } catch (err: any) {
-      setRebuildStatus(t('advanced.rebuildFailed', {
-        error: err.message || t('advanced.rebuildUnknownError'),
-      }))
-    } finally {
-      setRebuilding(false)
-    }
-  }
-
-  const pct = rebuildProgress && rebuildProgress.total > 0
-    ? Math.round((rebuildProgress.current / rebuildProgress.total) * 100)
-    : 0
-
-  return (
-    <>
-      <p className={styles.placeholder}>
-        {t('advanced.imgOptHelper')}
-      </p>
-
-      <div className={styles.field}>
-        <div className={styles.imgOptSliderHeader}>
-          <label className={styles.fieldLabel}>{t('advanced.smallTier')}</label>
-          <span className={styles.imgOptSliderValue}>{smallSize}px</span>
-        </div>
-        <input
-          type="range"
-          className={styles.imgOptSlider}
-          min={100} max={500} step={50}
-          value={smallSize}
-          onChange={(e) => update({ smallSize: Number(e.target.value) })}
-        />
-        <span className={styles.placeholder} style={{ fontSize: 11 }}>
-          {t('advanced.smallTierHint')}
-        </span>
-      </div>
-
-      <div className={styles.field}>
-        <div className={styles.imgOptSliderHeader}>
-          <label className={styles.fieldLabel}>{t('advanced.largeTier')}</label>
-          <span className={styles.imgOptSliderValue}>{largeSize}px</span>
-        </div>
-        <input
-          type="range"
-          className={styles.imgOptSlider}
-          min={400} max={1200} step={50}
-          value={largeSize}
-          onChange={(e) => update({ largeSize: Number(e.target.value) })}
-        />
-        <span className={styles.placeholder} style={{ fontSize: 11 }}>
-          {t('advanced.largeTierHint')}
-        </span>
-      </div>
-
-      <div className={styles.imgOptRebuild}>
-        <div className={styles.field} style={{ flex: 1 }}>
-          <label className={styles.fieldLabel}>{t('advanced.rebuildCache')}</label>
-          <span className={styles.placeholder} style={{ fontSize: 11 }}>
-            {t('advanced.rebuildCacheHint')}
-          </span>
-        </div>
-        <button
-          type="button"
-          className={clsx(styles.segmentedBtn, styles.segmentedBtnActive)}
-          style={{ padding: '6px 16px', whiteSpace: 'nowrap' }}
-          disabled={rebuilding}
-          onClick={handleRebuild}
-        >
-          {rebuilding ? t('advanced.rebuilding') : t('advanced.rebuildThumbnails')}
-        </button>
-      </div>
-      {rebuilding && rebuildProgress && rebuildProgress.total > 0 && (
-        <div style={{ width: '100%', height: 4, borderRadius: 2, background: 'var(--lumiverse-fill-subtle)', overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: 'var(--lumiverse-primary)', transition: 'width 0.2s ease' }} />
-        </div>
-      )}
-      {rebuildStatus && (
-        <span className={styles.placeholder} style={{ fontSize: 11 }}>
-          {rebuildStatus}
-        </span>
-      )}
-    </>
-  )
-}
 
 function AdvancedSettings() {
   const { t } = useTranslation('settings')
@@ -3481,11 +3426,6 @@ function AdvancedSettings() {
   return (
     <div className={styles.settingsSection}>
       <h3 id={sectionAnchorId('advanced', 'general')} className={styles.sectionTitle}>{t('advanced.title')}</h3>
-
-      {/* Image Optimization accordion */}
-      <CollapsibleSection title={t('advanced.imageOptimization')} defaultExpanded={false}>
-        <ImageOptimizationSettings />
-      </CollapsibleSection>
 
       <CollapsibleSection title={t('advanced.spindleLogging')} defaultExpanded={false}>
         <Toggle.Checkbox

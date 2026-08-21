@@ -41,6 +41,17 @@
   color: var(--lumiverse-text-dim);
 }
 
+.bindingBannerChanged {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bindingBannerChanged .bindingBannerHint {
+  flex: 1;
+}
+
 /* ── Quick preset buttons row ── */
 .presetRow {
   display: flex;

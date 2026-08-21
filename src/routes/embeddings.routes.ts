@@ -198,7 +198,15 @@ app.post("/force-reset", requireOwnerStrict, async (c) => {
 app.post("/optimize", requireOwnerStrict, async (c) => {
   try {
     const store = await getActiveVectorStore();
-    await store.optimize(["embeddings", "embeddings_world_books"]);
+    if (store.id === "lancedb") {
+      const { runLanceDbMaintenanceInChild } = await import("../services/lancedb-maintenance-supervisor");
+      await runLanceDbMaintenanceInChild({
+        mode: "optimize",
+        tableNames: ["embeddings", "embeddings_world_books"],
+      });
+    } else {
+      await store.optimize(["embeddings", "embeddings_world_books"]);
+    }
     return c.json({ success: true });
   } catch (err: any) {
     return c.json({ error: err.message || "Optimize failed" }, 500);

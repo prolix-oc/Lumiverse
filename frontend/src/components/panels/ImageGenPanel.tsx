@@ -518,6 +518,16 @@ export default function ImageGenPanel() {
   const [workflowCapabilities, setWorkflowCapabilities] = useState<ComfyUICapabilities | null>(null)
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
+  // Profile refreshes can overlap an explicit workflow activation.  Keep a
+  // monotonically increasing request id so an older read cannot restore the
+  // workflow that was active when that read began.
+  const workflowRequestVersion = useRef(0)
+
+  const applyWorkflowConfig = useCallback((config: ComfyUIWorkflowConfig | null) => {
+    workflowRequestVersion.current += 1
+    setWorkflowConfig(config)
+    setWorkflowLoading(false)
+  }, [])
   const refInputRef = useRef<HTMLInputElement | null>(null)
   const importConfigInputRef = useRef<HTMLInputElement | null>(null)
   const [exportModalOpen, setExportModalOpen] = useState(false)
@@ -559,10 +569,12 @@ export default function ImageGenPanel() {
   }, [isComfyUI, workflowConfig, workflowCapabilities])
 
   const refreshActiveComfyWorkflow = useCallback(async (forceRefresh = false) => {
+    const requestVersion = ++workflowRequestVersion.current
     if (!activeConnection || activeConnection.provider !== 'comfyui') {
       setWorkflowConfig(null)
       setWorkflowCapabilities(null)
       setWorkflowError(null)
+      setWorkflowLoading(false)
       return
     }
 
@@ -573,14 +585,16 @@ export default function ImageGenPanel() {
         imageGenConnectionsApi.getComfyUIWorkflowConfig(activeConnection.id),
         imageGenConnectionsApi.getComfyUICapabilities(activeConnection.id, forceRefresh),
       ])
+      if (requestVersion !== workflowRequestVersion.current) return
       setWorkflowConfig(configResponse.config)
       setWorkflowCapabilities(comfyCapabilities)
     } catch (err: any) {
+      if (requestVersion !== workflowRequestVersion.current) return
       setWorkflowConfig(null)
       setWorkflowCapabilities(null)
       setWorkflowError(err?.message || t('imageGenPanel.failedLoadWorkflow'))
     } finally {
-      setWorkflowLoading(false)
+      if (requestVersion === workflowRequestVersion.current) setWorkflowLoading(false)
     }
   }, [activeConnection, t])
 
@@ -614,18 +628,18 @@ export default function ImageGenPanel() {
   const importComfyWorkflow = useCallback(async (workflow: unknown) => {
     if (!activeConnection) return null
     const response = await imageGenConnectionsApi.importComfyUIWorkflow(activeConnection.id, workflow)
-    setWorkflowConfig(response.config)
+    applyWorkflowConfig(response.config)
     await refreshActiveImageGenConnection()
     return response.config
-  }, [activeConnection, refreshActiveImageGenConnection])
+  }, [activeConnection, applyWorkflowConfig, refreshActiveImageGenConnection])
 
   const updateComfyMappings = useCallback(async (mappings: ComfyUIFieldMapping[]) => {
     if (!activeConnection) return null
     const response = await imageGenConnectionsApi.updateComfyUIWorkflowMappings(activeConnection.id, mappings)
-    setWorkflowConfig(response.config)
+    applyWorkflowConfig(response.config)
     await refreshActiveImageGenConnection()
     return response.config
-  }, [activeConnection, refreshActiveImageGenConnection])
+  }, [activeConnection, applyWorkflowConfig, refreshActiveImageGenConnection])
 
   // Group parameters by their group field
   const paramGroups = useMemo(() => {
@@ -2135,7 +2149,7 @@ export default function ImageGenPanel() {
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}
-          onWorkflowActivated={setWorkflowConfig}
+          onWorkflowActivated={applyWorkflowConfig}
           onConnectionRefresh={refreshActiveImageGenConnection}
           onClose={() => setWorkflowEditorOpen(false)}
         />

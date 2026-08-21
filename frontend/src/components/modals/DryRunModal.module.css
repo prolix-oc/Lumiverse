@@ -585,3 +585,62 @@
     display: none;
   }
 }
+
+
+/* ── Find ── */
+.findBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 7px 8px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.025));
+}
+
+.findBarIcon {
+  flex: 0 0 auto;
+  color: var(--lumiverse-text-muted);
+}
+
+.findInput {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  outline: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font: inherit;
+}
+
+.findInput:focus {
+  border-color: var(--lumiverse-primary-040, rgba(147, 112, 219, 0.4));
+  background: var(--lumiverse-bg-darker, rgba(0, 0, 0, 0.2));
+}
+
+.findCounter {
+  flex: 0 0 auto;
+  min-width: 42px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.findMark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+  color: inherit;
+}
+
+.findMarkCurrent {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--lumiverse-primary-060, rgba(147, 112, 219, 0.6));
+  color: var(--lumiverse-text, #fff);
+  outline: 1px solid var(--lumiverse-primary, #9370db);
+}
