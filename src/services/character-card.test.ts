@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { embedPngTextChunk } from "./character-export.service";
-import { detectCharacterImportFormat, extractCardFromPng, normalizeJannyCharacterInput } from "./character-card.service";
+import {
+  detectCharacterImportFormat,
+  extractCardFromPng,
+  normalizeJannyCharacterInput,
+  resolveInlineAssetReferences,
+} from "./character-card.service";
 
 const ONE_BY_ONE_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==";
 
@@ -47,6 +52,21 @@ describe("normalizeJannyCharacterInput", () => {
       description: "Imported site personality",
       personality: "",
       creator_notes: "Imported site personality",
+    });
+  });
+});
+
+describe("resolveInlineAssetReferences", () => {
+  test("keeps portable gallery URIs while resolving ordinary CharX asset names", () => {
+    const assetMap = new Map([
+      ["assets/other/image/gallery_portable.webp", "local-gallery-image"],
+      ["assets/other/image/expression.webp", "local-expression-image"],
+    ]);
+
+    expect(resolveInlineAssetReferences({
+      first_mes: "![Scene](gallery://portable) ![Smile](expression.webp)",
+    }, assetMap)).toEqual({
+      first_mes: "![Scene](gallery://portable) ![Smile](/api/v1/images/local-expression-image)",
     });
   });
 });

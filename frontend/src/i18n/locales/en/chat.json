@@ -424,7 +424,11 @@
     "ready": "New swipe ready"
   },
   "portrait": {
-    "setChatBackground": "Set as Chat Background"
+    "setChatBackground": "Set as Chat Background",
+    "copyImageReference": "Copy Image Reference",
+    "imageReferenceCopied": "Image reference copied",
+    "imageReferenceCopyFailed": "Failed to copy image reference",
+    "galleryImage": "Gallery image"
   },
   "attachments": {
     "removeImage": "Remove image",

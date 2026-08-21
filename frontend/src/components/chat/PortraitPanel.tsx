@@ -19,6 +19,10 @@ import styles from './PortraitPanel.module.css'
 import clsx from 'clsx'
 import { requestHostIntent } from '@/lib/hostIntents'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { galleryImageMarkdown } from '@/lib/galleryImageReference'
+import { toast } from '@/lib/toast'
+import { Copy } from 'lucide-react'
 
 interface PortraitPanelProps {
   side?: 'left' | 'right'
@@ -102,7 +106,21 @@ function PortraitPanelNative({ side = 'right', mobileDrawer = false, open = fals
     setContextMenu(null)
   }, [activeChatId, setActiveChatWallpaper, setSceneBackground])
 
+  const copyGalleryImageReference = useCallback((item: CharacterGalleryItem) => {
+    const markdown = galleryImageMarkdown(item, t('portrait.galleryImage'))
+    setContextMenu(null)
+    void copyTextToClipboard(markdown)
+      .then(() => toast.success(t('portrait.imageReferenceCopied')))
+      .catch(() => toast.error(t('portrait.imageReferenceCopyFailed')))
+  }, [t])
+
   const contextMenuItems: ContextMenuEntry[] = contextMenu ? [
+    {
+      key: 'copy-image-reference',
+      label: t('portrait.copyImageReference'),
+      icon: <Copy size={14} />,
+      onClick: () => copyGalleryImageReference(contextMenu.item),
+    },
     {
       key: 'set-chat-background',
       label: t('portrait.setChatBackground'),

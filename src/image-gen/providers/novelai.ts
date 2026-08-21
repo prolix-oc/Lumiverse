@@ -91,6 +91,8 @@ export class NovelAIImageProvider implements ImageProvider {
     apiKeyRequired: true,
     modelListStyle: "static",
     staticModels: [
+      { id: "nai-diffusion-5-full", label: "NAI Diffusion V5 (Full)" },
+      { id: "nai-diffusion-5-curated", label: "NAI Diffusion V5 (Curated)" },
       { id: "nai-diffusion-4-5-full", label: "NAI Diffusion V4.5 (Full)" },
       { id: "nai-diffusion-4-5-curated", label: "NAI Diffusion V4.5 (Curated)" },
       { id: "nai-diffusion-4-full", label: "NAI Diffusion V4 (Full)" },
@@ -109,7 +111,7 @@ export class NovelAIImageProvider implements ImageProvider {
       params.negativePrompt ||
       "lowres, artistic error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, blurry, bad anatomy, bad hands, missing fingers, extra digits, fewer digits, text, watermark, username, logo, signature, dithering, halftone, screentone, scan artifacts, multiple views, blank page";
     const seed = params.seed ?? Math.floor(Math.random() * 2147483647);
-    const isV4 = isNovelAIV4Model(model);
+    const usesStructuredPrompts = isNovelAIV4OrLaterModel(model);
 
     const naiParams: any = {
       params_version: 3,
@@ -144,7 +146,7 @@ export class NovelAIImageProvider implements ImageProvider {
     // Character tags from scene analysis (passed through parameters)
     const charTags: Array<{ tags: string }> = params.characterTags || [];
 
-    if (isV4) {
+    if (usesStructuredPrompts) {
       naiParams.autoSmea = params.smea ?? false;
       naiParams.characterPrompts = charTags.map((char) => ({
         prompt: char.tags,
@@ -228,7 +230,10 @@ export class NovelAIImageProvider implements ImageProvider {
 
   async validateKey(apiKey: string, _apiUrl: string): Promise<boolean> {
     try {
-      const res = await fetch("https://api.novelai.net/user/information", {
+      // Validate against the Image API itself. NovelAI documents this as an
+      // authenticated, non-generation endpoint and accepts persistent API
+      // tokens here; the Primary API is not the service this provider uses.
+      const res = await fetch("https://image.novelai.net/user/information", {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
@@ -246,8 +251,8 @@ export class NovelAIImageProvider implements ImageProvider {
 
 // --- Helper functions extracted from image-gen.service.ts ---
 
-function isNovelAIV4Model(model: string): boolean {
-  return model.startsWith("nai-diffusion-4");
+function isNovelAIV4OrLaterModel(model: string): boolean {
+  return model.startsWith("nai-diffusion-4") || model.startsWith("nai-diffusion-5");
 }
 
 // Sanity ceiling on the streamed image payload so a misbehaving upstream can't
@@ -315,26 +320,89 @@ async function extractImageFromResponse(res: Response, signal?: AbortSignal): Pr
   // Strategy 3: MessagePack decode
   let largestBinary: Uint8Array | null = null;
   let largestSize = 0;
+  let streamError: string | null = null;
   try {
     for (const obj of decodeMulti(fullBuffer)) {
-      if (obj instanceof Uint8Array && obj.length > largestSize) {
-        largestBinary = obj;
-        largestSize = obj.length;
-      } else if (obj && typeof obj === "object") {
-        for (const val of Object.values(obj as Record<string, unknown>)) {
-          if (val instanceof Uint8Array && val.length > largestSize) {
-            largestBinary = val;
-            largestSize = val.length;
-          }
-        }
+      streamError ??= findNovelAIStreamError(obj);
+      const binary = findLargestBinary(obj);
+      if (binary && binary.length > largestSize) {
+        largestBinary = binary;
+        largestSize = binary.length;
       }
     }
   } catch {
     // fallthrough
   }
 
+  // NovelAI can report generation failures as a small MessagePack event while
+  // keeping the HTTP response at 200. Surface that upstream message instead of
+  // misreporting the event bytes as an unextractable image.
+  if (streamError) {
+    throw new ProviderRequestError({
+      provider: "NovelAI",
+      operation: "image generate",
+      detail: streamError,
+      retryable: false,
+    });
+  }
+
   if (largestBinary) return `data:image/png;base64,${uint8ToBase64(largestBinary)}`;
   throw new Error(`Could not extract image from ${fullBuffer.length} byte NovelAI response`);
+}
+
+function findLargestBinary(value: unknown, depth = 0): Uint8Array | null {
+  if (value instanceof Uint8Array) return value;
+  if (!value || typeof value !== "object" || depth >= 4) return null;
+
+  let largest: Uint8Array | null = null;
+  const values = Array.isArray(value)
+    ? value
+    : Object.values(value as Record<string, unknown>);
+  for (const child of values) {
+    const candidate = findLargestBinary(child, depth + 1);
+    if (candidate && (!largest || candidate.length > largest.length)) largest = candidate;
+  }
+  return largest;
+}
+
+function findNovelAIStreamError(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== "object" || depth >= 4) return null;
+  const record = value as Record<string, unknown>;
+  const eventType = String(record.event_type ?? record.type ?? record.status ?? "").toLowerCase();
+  const isErrorEvent = eventType === "error" || eventType === "failed" || eventType === "failure";
+
+  const directError = readableErrorValue(record.error);
+  if (directError) return directError;
+
+  if (isErrorEvent) {
+    for (const field of [record.message, record.detail, record.data]) {
+      const detail = readableErrorValue(field);
+      if (detail) return detail;
+    }
+    return "NovelAI returned an error event without a message";
+  }
+
+  for (const field of [record.data, record.event]) {
+    const nested = findNovelAIStreamError(field, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function readableErrorValue(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim().slice(0, 1000);
+  if (value instanceof Uint8Array) {
+    const decoded = new TextDecoder().decode(value).trim();
+    return decoded ? decoded.slice(0, 1000) : null;
+  }
+  if (!value || typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+  for (const field of [record.message, record.detail, record.error]) {
+    const nested = readableErrorValue(field);
+    if (nested) return nested;
+  }
+  return null;
 }
 
 function extractPngFromBuffer(buffer: ArrayBuffer): Uint8Array | null {

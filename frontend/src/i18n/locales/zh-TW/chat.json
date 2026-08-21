@@ -364,7 +364,11 @@
     "next": "下一個變體"
   },
   "portrait": {
-    "setChatBackground": "設為聊天背景"
+    "setChatBackground": "設為聊天背景",
+    "copyImageReference": "複製圖片參照",
+    "imageReferenceCopied": "圖片參照已複製",
+    "imageReferenceCopyFailed": "無法複製圖片參照",
+    "galleryImage": "圖庫圖片"
   },
   "attachments": {
     "removeImage": "移除圖片",

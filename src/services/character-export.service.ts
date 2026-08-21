@@ -4,6 +4,10 @@ import { zipSync } from "fflate";
 import { LANDING_PERSPECTIVE_LAYERS_KEY, getCharacter, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { listGallery } from "./character-gallery.service";
+import {
+  galleryArchiveStem,
+  parseGalleryImageReference,
+} from "../utils/gallery-image-reference";
 import { getImage, getImageFilePath } from "./images.service";
 import { exportWorldBook, getWorldBook } from "./world-books.service";
 import { isNsfwExpressionLabel } from "./character-card.service";
@@ -203,6 +207,7 @@ const INTERNAL_EXTENSION_KEYS = new Set([
   "original_image_id",
   "_lumiverse_source_filename",
   "risu_asset_map",
+  "gallery_reference_sequence",
 ]);
 
 export function buildCCSv3Json(userId: string, character: Character): Record<string, any> {
@@ -500,7 +505,8 @@ export async function exportAsCharx(
     assetTasks.push(async () => {
       const img = await readImageBytes(userId, item.image_id);
       if (img) {
-        entries[`assets/other/image/gallery_${item.id}${img.ext}`] = img.bytes;
+        const token = parseGalleryImageReference(item.reference);
+        entries[`assets/other/image/${galleryArchiveStem(token ?? item.id)}${img.ext}`] = img.bytes;
       }
     });
   }

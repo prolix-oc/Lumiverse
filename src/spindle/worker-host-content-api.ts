@@ -515,7 +515,10 @@ export class WorkerHostContentApi {
 
         const imageBytes = Uint8Array.from(input.data);
         const file = new File([imageBytes.buffer], filename, { type: mimeType });
-        const img = await imagesSvc.uploadImage(resolvedUserId, file, {
+        // Spindle image uploads are ordinary raster writes, so opt into the
+        // bounded/recoverable processing queue directly instead of relying on
+        // uploadImage's media-type dispatch defaults.
+        const img = await imagesSvc.uploadImageDeferred(resolvedUserId, file, {
           owner_extension_identifier: this.manifest.identifier,
           owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
             ? input.owner_character_id.trim()
@@ -592,6 +595,7 @@ export class WorkerHostContentApi {
         const batchResults = await imagesSvc.uploadImages(resolvedUserId, validItems, {
           owner_extension_identifier: this.manifest.identifier,
           concurrency,
+          deferProcessing: true,
         });
 
         const results: Array<{ id?: string; error?: string }> = new Array(items.length);

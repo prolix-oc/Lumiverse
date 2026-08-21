@@ -25,6 +25,7 @@ import { LANDING_PERSPECTIVE_LAYERS_KEY } from "./characters.service";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { galleryReferenceFromArchivePath } from "../utils/gallery-image-reference";
 
 const GALLERY_UPLOAD_CONCURRENCY = 6;
 
@@ -297,7 +298,7 @@ export async function applyCharxModulesAndAssets(
   await mapWithConcurrency(remainingGalleryEntries, GALLERY_UPLOAD_CONCURRENCY, async ({ path, file: gf }) => {
     try {
       const img = await images.uploadImage(userId, gf);
-      gallerySvc.addToGallery(userId, character.id, img.id);
+      gallerySvc.addToGallery(userId, character.id, img.id, undefined, { registerReference: false });
       assetImageMap.set(path, img.id);
     } catch { /* skip individual failures */ }
     galleryCompleted++;
@@ -334,8 +335,9 @@ export async function applyCharxModulesAndAssets(
     }
 
     for (const [archivePath, imageId] of assetImageMap) {
-      const stem = cardSvc.fileStem(archivePath);
-      if (!risuAssetMap[stem]) risuAssetMap[stem] = imageId;
+      const galleryReference = galleryReferenceFromArchivePath(archivePath);
+      const key = galleryReference ?? cardSvc.fileStem(archivePath);
+      if (!risuAssetMap[key]) risuAssetMap[key] = imageId;
     }
     if (Object.keys(risuAssetMap).length > 0) {
       const char = svc.getCharacter(userId, character.id);

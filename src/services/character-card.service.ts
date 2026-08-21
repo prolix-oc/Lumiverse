@@ -912,6 +912,9 @@ export function resolveInlineAssetReferences(
   }
 
   function resolve(src: string): string | undefined {
+    // Portable gallery references must stay in card text. Each CharX install
+    // maps the stable URI to its own local image ID at display time.
+    if (src.startsWith("gallery://")) return undefined;
     return exactLookup.get(src)
       ?? baseLookup.get(src)
       ?? stemLookup.get(fileStem(src));

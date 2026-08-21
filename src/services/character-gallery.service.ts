@@ -1,15 +1,29 @@
 import { getDb } from "../db/connection";
 import { deleteImageIfUnreferenced, uploadImageDeferred } from "./images.service";
-import { getCharacter } from "./characters.service";
+import { getCharacter, updateCharacter } from "./characters.service";
 import type { CharacterGalleryItem } from "../types/character-gallery";
 import { safeFetch } from "../utils/safe-fetch";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import {
+  createCanonicalGalleryImageReference,
+  createGalleryImageReference,
+  findCanonicalGalleryImageReference,
+  findGalleryImageReference,
+  parseCanonicalGalleryImageReference,
+  parseGalleryImageReference,
+} from "../utils/gallery-image-reference";
 
-function rowToGalleryItem(row: any): CharacterGalleryItem {
+const GALLERY_REFERENCE_SEQUENCE_KEY = "gallery_reference_sequence";
+
+function rowToGalleryItem(row: any, assetMap?: unknown): CharacterGalleryItem {
+  const reference = findCanonicalGalleryImageReference(assetMap, row.image_id)
+    ?? findGalleryImageReference(assetMap, row.image_id, row.id)
+    ?? createGalleryImageReference(row.id);
   return {
     id: row.id,
     image_id: row.image_id,
+    reference,
     caption: row.caption ?? "",
     sort_order: row.sort_order ?? 0,
     created_at: row.created_at,
@@ -34,14 +48,91 @@ export function listGallery(
     )
     .all(userId, characterId) as any[];
 
-  return rows.map(rowToGalleryItem);
+  const assetMap = registerGalleryReferences(userId, characterId, rows);
+  return rows.map((row) => rowToGalleryItem(row, assetMap));
+}
+
+function replaceGalleryReferences(
+  value: string,
+  replacements: Map<string, string>,
+): string {
+  let next = value;
+  for (const [from, to] of replacements) next = next.split(from).join(to);
+  return next;
+}
+
+function registerGalleryReferences(
+  userId: string,
+  characterId: string,
+  items: Array<Pick<CharacterGalleryItem, "id" | "image_id">>,
+): Record<string, string> {
+  if (items.length === 0) return {};
+  const character = getCharacter(userId, characterId);
+  if (!character) return {};
+  const current = character.extensions?.risu_asset_map;
+  const assetMap: Record<string, string> = current && typeof current === "object" && !Array.isArray(current)
+    ? { ...current }
+    : {};
+  let changed = false;
+  const storedSequence = Number.isSafeInteger(character.extensions?.[GALLERY_REFERENCE_SEQUENCE_KEY])
+    ? Math.max(0, character.extensions[GALLERY_REFERENCE_SEQUENCE_KEY])
+    : 0;
+  let sequence = storedSequence;
+  for (const reference of Object.keys(assetMap)) {
+    sequence = Math.max(sequence, parseCanonicalGalleryImageReference(reference) ?? 0);
+  }
+  if (sequence !== storedSequence) changed = true;
+  const replacements = new Map<string, string>();
+  for (const item of items) {
+    let reference = findCanonicalGalleryImageReference(assetMap, item.image_id);
+    if (!reference) {
+      reference = createCanonicalGalleryImageReference(++sequence);
+      assetMap[reference] = item.image_id;
+      changed = true;
+    }
+    const legacyReference = createGalleryImageReference(item.id);
+    if (legacyReference !== reference) replacements.set(legacyReference, reference);
+  }
+  if (changed) {
+    const replace = (value: string) => replaceGalleryReferences(value, replacements);
+    const updates: Parameters<typeof updateCharacter>[2] = {
+      extensions: {
+        ...(character.extensions || {}),
+        risu_asset_map: assetMap,
+        [GALLERY_REFERENCE_SEQUENCE_KEY]: sequence,
+      },
+    };
+    const textFields = [
+      "first_mes",
+      "description",
+      "personality",
+      "scenario",
+      "mes_example",
+      "system_prompt",
+      "post_history_instructions",
+      "creator_notes",
+    ] as const;
+    for (const field of textFields) {
+      const currentValue = character[field] || "";
+      const nextValue = replace(currentValue);
+      if (nextValue !== currentValue) updates[field] = nextValue;
+    }
+    const alternateGreetings = character.alternate_greetings || [];
+    const nextAlternateGreetings = alternateGreetings.map(replace);
+    if (nextAlternateGreetings.some((value, index) => value !== alternateGreetings[index])) {
+      updates.alternate_greetings = nextAlternateGreetings;
+    }
+    updateCharacter(userId, characterId, updates);
+  }
+  return assetMap;
 }
 
 export function addToGallery(
   userId: string,
   characterId: string,
   imageId: string,
-  caption?: string
+  caption?: string,
+  options: { registerReference?: boolean } = {},
 ): CharacterGalleryItem {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -53,13 +144,13 @@ export function addToGallery(
     )
     .run(id, userId, characterId, imageId, caption ?? "", 0, now);
 
+  if (options.registerReference !== false) {
+    registerGalleryReferences(userId, characterId, [{ id, image_id: imageId }]);
+  }
   return getGalleryItem(userId, id)!;
 }
 
-/**
- * Lightweight insert used by background flows (image-gen auto-link) that do
- * not need the resulting row read back. Saves a JOIN read on the hot path.
- */
+/** Insert used by background flows (image-gen auto-link) that do not need the resulting row. */
 export function linkImageToGallery(
   userId: string,
   characterId: string,
@@ -74,16 +165,18 @@ export function linkImageToGallery(
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(id, userId, characterId, imageId, caption ?? "", 0, now);
+  registerGalleryReferences(userId, characterId, [{ id, image_id: imageId }]);
 }
 
 export async function uploadToGallery(
   userId: string,
   characterId: string,
   file: File,
-  caption?: string
+  caption?: string,
+  options: { registerReference?: boolean } = {},
 ): Promise<CharacterGalleryItem> {
   const image = await uploadImageDeferred(userId, file, { owner_character_id: characterId });
-  return addToGallery(userId, characterId, image.id, caption);
+  return addToGallery(userId, characterId, image.id, caption, options);
 }
 
 export interface BulkGallerySkippedFile {
@@ -119,7 +212,7 @@ export async function uploadBulkToGallery(
       userId,
     );
     try {
-      const item = await uploadToGallery(userId, characterId, files[i]);
+      const item = await uploadToGallery(userId, characterId, files[i], undefined, { registerReference: false });
       items.push(item);
     } catch (err: any) {
       skipped.push({
@@ -129,16 +222,46 @@ export async function uploadBulkToGallery(
     }
   }
 
+  const assetMap = registerGalleryReferences(userId, characterId, items);
+  for (const item of items) {
+    item.reference = findCanonicalGalleryImageReference(assetMap, item.image_id)
+      ?? item.reference;
+  }
+
   return { items, skipped };
 }
 
 export function removeFromGallery(userId: string, itemId: string): boolean {
+  const row = getDb()
+    .query("SELECT character_id, image_id FROM character_gallery WHERE id = ? AND user_id = ?")
+    .get(itemId, userId) as { character_id: string; image_id: string } | null;
   const item = getGalleryItem(userId, itemId);
-  if (!item) return false;
+  if (!item || !row) return false;
   const result = getDb()
     .query("DELETE FROM character_gallery WHERE id = ? AND user_id = ?")
     .run(itemId, userId);
-  if (result.changes > 0) deleteImageIfUnreferenced(userId, item.image_id);
+  if (result.changes > 0) {
+    const stillInGallery = getDb()
+      .query("SELECT 1 AS found FROM character_gallery WHERE user_id = ? AND character_id = ? AND image_id = ? LIMIT 1")
+      .get(userId, row.character_id, row.image_id);
+    if (!stillInGallery) {
+      const character = getCharacter(userId, row.character_id);
+      const current = character?.extensions?.risu_asset_map;
+      if (character && current && typeof current === "object" && !Array.isArray(current)) {
+        const assetMap = Object.fromEntries(
+          Object.entries(current).filter(([reference, imageId]) =>
+            imageId !== row.image_id || !parseGalleryImageReference(reference)
+          ),
+        );
+        if (Object.keys(assetMap).length !== Object.keys(current).length) {
+          updateCharacter(userId, row.character_id, {
+            extensions: { ...(character.extensions || {}), risu_asset_map: assetMap },
+          });
+        }
+      }
+    }
+    deleteImageIfUnreferenced(userId, item.image_id);
+  }
   return result.changes > 0;
 }
 
@@ -170,7 +293,14 @@ function getGalleryItem(
     )
     .get(itemId, userId) as any;
 
-  return row ? rowToGalleryItem(row) : null;
+  if (!row) return null;
+  const characterId = getDb()
+    .query("SELECT character_id FROM character_gallery WHERE id = ? AND user_id = ?")
+    .get(itemId, userId) as { character_id: string } | null;
+  const assetMap = characterId
+    ? getCharacter(userId, characterId.character_id)?.extensions?.risu_asset_map
+    : undefined;
+  return rowToGalleryItem(row, assetMap);
 }
 
 // ── Image extraction from character data ──

@@ -364,7 +364,11 @@
     "next": "Swipe suivant"
   },
   "portrait": {
-    "setChatBackground": "Définir comme Chat Arrière-plan"
+    "setChatBackground": "Définir comme Chat Arrière-plan",
+    "copyImageReference": "Copier la référence de l’image",
+    "imageReferenceCopied": "Référence d’image copiée",
+    "imageReferenceCopyFailed": "Impossible de copier la référence de l’image",
+    "galleryImage": "Image de la galerie"
   },
   "attachments": {
     "removeImage": "Supprimer l'image",

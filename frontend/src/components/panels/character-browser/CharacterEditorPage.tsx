@@ -64,6 +64,8 @@ import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { galleryImageMarkdown } from '@/lib/galleryImageReference'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { Button } from '@/components/shared/FormComponents'
@@ -718,7 +720,21 @@ export default function CharacterEditorPage() {
     }
   }, [activeChatId, setActiveChatWallpaper, setSceneBackground, t])
 
+  const copyGalleryImageReference = useCallback((item: CharacterGalleryItem) => {
+    const markdown = galleryImageMarkdown(item, t('characterEditor.galleryImage'))
+    setGalleryContextMenu(null)
+    void copyTextToClipboard(markdown)
+      .then(() => toast.success(t('characterEditor.imageReferenceCopied')))
+      .catch(() => toast.error(t('characterEditor.imageReferenceCopyFailed')))
+  }, [t])
+
   const galleryContextMenuItems: ContextMenuEntry[] = galleryContextMenu ? [
+    {
+      key: 'copy-image-reference',
+      label: t('characterEditor.copyImageReference'),
+      icon: <Copy size={14} />,
+      onClick: () => copyGalleryImageReference(galleryContextMenu.item),
+    },
     {
       key: 'set-chat-background',
       label: t('characterEditor.setAsChatBackground'),

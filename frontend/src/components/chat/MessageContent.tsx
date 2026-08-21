@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
 import { processMarkdownInHtmlIsland } from './htmlIslandMarkdown'
+import { resolveGalleryImageId } from '@/lib/galleryImageReference'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
@@ -1376,6 +1377,8 @@ function assetStem(name: string): string {
 
 /** Look up an asset reference in the map — tries exact, then stem. Handles embeded:// URIs. */
 function resolveAssetId(src: string, assetMap: Record<string, string>): string | undefined {
+  const galleryImageId = resolveGalleryImageId(src, assetMap)
+  if (galleryImageId) return galleryImageId
   // Strip Risu embeded:// prefix
   const cleaned = src.startsWith('embeded://') ? src.slice('embeded://'.length) : src
   return assetMap[cleaned] ?? assetMap[assetStem(cleaned)]

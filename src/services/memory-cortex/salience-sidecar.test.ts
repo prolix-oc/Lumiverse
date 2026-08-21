@@ -90,6 +90,36 @@ describe("parseToolCallResults", () => {
 });
 
 describe("extractBatchWithSidecar", () => {
+  test("ignores sparse tool-call entries from a provider", async () => {
+    const result = await extractBatchWithSidecar([
+      { index: 0, content: "Mara found the missing map." },
+    ], async () => ({
+      content: "",
+      tool_calls: [
+        undefined as never,
+        {
+          name: "analyze_passage_batch",
+          args: {
+            results: [{
+              index: 0,
+              importance: 5,
+              emotional_tones: [],
+              narrative_flags: [],
+              key_facts: [],
+              entities_present: [],
+              relationships_shown: [],
+              status_changes: [],
+              color_attributions: [],
+              discovered_aliases: [],
+            }],
+          },
+        },
+      ],
+    }), "sidecar-test");
+
+    expect(result[0]?.score).toBe(0.5);
+  });
+
   test("uses one structured batch tool call and maps results by passage index", async () => {
     let toolNames: string[] = [];
     const result = await extractBatchWithSidecar([

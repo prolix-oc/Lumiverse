@@ -259,10 +259,22 @@ describe("user-data import bounded extraction", () => {
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(
-      getDb().query("SELECT id, content FROM world_book_entries ORDER BY id").all(),
+      getDb()
+        .query("SELECT id, content, exclude_greeting, revision FROM world_book_entries ORDER BY id")
+        .all(),
     ).toEqual([
-      { id: "22222222-2222-2222-2222-222222222222", content: "first" },
-      { id: "33333333-3333-3333-3333-333333333333", content: "second" },
+      {
+        id: "22222222-2222-2222-2222-222222222222",
+        content: "first",
+        exclude_greeting: 0,
+        revision: 1,
+      },
+      {
+        id: "33333333-3333-3333-3333-333333333333",
+        content: "second",
+        exclude_greeting: 0,
+        revision: 1,
+      },
     ]);
   });
 

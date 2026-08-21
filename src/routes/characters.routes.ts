@@ -70,6 +70,7 @@ const LOCAL_CHARACTER_EXTENSION_KEYS = new Set([
   "avatar_crop_image_id",
   "original_image_id",
   "risu_asset_map",
+  "gallery_reference_sequence",
   "landing_perspective_layers",
   "ttsVoice",
 ]);

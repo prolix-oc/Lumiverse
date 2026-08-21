@@ -372,7 +372,11 @@
     "next": "下一个变体"
   },
   "portrait": {
-    "setChatBackground": "设为聊天背景"
+    "setChatBackground": "设为聊天背景",
+    "copyImageReference": "复制图像引用",
+    "imageReferenceCopied": "图像引用已复制",
+    "imageReferenceCopyFailed": "无法复制图像引用",
+    "galleryImage": "图库图像"
   },
   "attachments": {
     "removeImage": "移除图片",

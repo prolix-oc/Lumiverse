@@ -290,8 +290,14 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
 
           if (finishReason) {
             // Emit accumulated tool calls on the finish chunk
+            // A few OpenAI-compatible proxies emit non-contiguous tool-call
+            // indexes (for example, their only call is indexed at 1). Arrays
+            // retain those holes through `.map()`, leaking `undefined` calls
+            // to consumers. Emit a dense array ordered by the provider index.
             const toolCalls: ToolCallResult[] | undefined = toolCallBuffer.length > 0
-              ? toolCallBuffer.map(tc => ({ name: tc.name, args: JSON.parse(tc.argsJson || "{}"), call_id: tc.id || crypto.randomUUID() }))
+              ? toolCallBuffer
+                  .filter((tc): tc is { id: string; name: string; argsJson: string } => !!tc)
+                  .map(tc => ({ name: tc.name, args: JSON.parse(tc.argsJson || "{}"), call_id: tc.id || crypto.randomUUID() }))
               : undefined;
             yield {
               token: content || "",

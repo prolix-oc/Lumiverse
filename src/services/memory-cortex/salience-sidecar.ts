@@ -461,6 +461,9 @@ export function parseToolCallResults(
   let gradedHeuristics: SidecarGradedHeuristics | undefined;
 
   for (const call of toolCalls) {
+    // Sidecar providers are external and occasionally return sparse tool-call
+    // arrays. Ignore malformed entries rather than failing the whole passage.
+    if (!call || typeof call.name !== "string" || !call.args || typeof call.args !== "object") continue;
     const args = call.args as any;
     switch (call.name) {
       case "score_salience":
@@ -1066,7 +1069,12 @@ export async function extractBatchWithSidecar(
     });
     const responseMs = Date.now() - sentAt;
 
-    const batchToolCall = response.tool_calls?.find((call) => call.name === TOOL_ANALYZE_PASSAGE_BATCH.name);
+    // Be defensive here as this is the boundary for provider-normalized data.
+    // A malformed/sparse entry should simply be treated as no batch tool call,
+    // allowing the existing text and per-chunk fallbacks to recover.
+    const batchToolCall = response.tool_calls?.find(
+      (call) => !!call && call.name === TOOL_ANALYZE_PASSAGE_BATCH.name,
+    );
     const toolResults = batchToolCall?.args?.results;
     const parsed = Array.isArray(toolResults) ? toolResults : extractJsonArray(response.content);
     const byIndex = new Map<number, any>();

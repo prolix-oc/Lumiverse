@@ -1755,8 +1755,9 @@ async function applySettingsTable(
 /**
  * Apply one NDJSON table from staging into the live SQLite database using
  * INSERT OR IGNORE. Filters row columns to match the live schema (so an
- * imported row from a newer/older Lumiverse still applies cleanly) and
- * forces user_id to the importing user.
+ * imported row from a newer/older Lumiverse still applies cleanly), omits
+ * absent columns so the current schema can supply their defaults, and forces
+ * user_id to the importing user.
  *
  * The `settings` table is special-cased to `applySettingsTable` above so
  * container-style settings (`imageGeneration`, etc.) deep-merge instead of
@@ -1789,22 +1790,45 @@ async function applyTable(
 
   const db = getDb();
   let batch: Record<string, any>[] = [];
+  const inserts = new Map<string, { columns: string[]; statement: ReturnType<typeof db.prepare> }>();
 
-  const colList = columns.map(ident).join(", ");
-  const placeholders = columns.map(() => "?").join(", ");
-  const insert = db.prepare(`INSERT OR IGNORE INTO ${ident(table)} (${colList}) VALUES (${placeholders})`);
+  const getInsert = (row: Record<string, any>) => {
+    // Preserve live-column order so rows with the same shape share a prepared
+    // statement even when their JSON properties arrived in a different order.
+    const presentColumns = columns.filter((column) =>
+      Object.prototype.hasOwnProperty.call(row, column)
+    );
+    const key = presentColumns.join("\0");
+    const cached = inserts.get(key);
+    if (cached) return cached;
+    if (presentColumns.length === 0) return null;
+    const colList = presentColumns.map(ident).join(", ");
+    const placeholders = presentColumns.map(() => "?").join(", ");
+    const prepared = {
+      columns: presentColumns,
+      statement: db.prepare(
+        `INSERT OR IGNORE INTO ${ident(table)} (${colList}) VALUES (${placeholders})`,
+      ),
+    };
+    inserts.set(key, prepared);
+    return prepared;
+  };
 
   const commitBatch = () => {
     if (batch.length === 0) return;
     const txn = db.transaction((rows: Record<string, any>[]) => {
       for (const row of rows) {
-        const values = columns.map((c) => {
+        const insert = getInsert(row);
+        if (!insert) {
+          skipped++;
+          continue;
+        }
+        const values = insert.columns.map((c) => {
           const v = row[c];
-          if (v === undefined) return null;
           if (typeof v === "boolean") return v ? 1 : 0;
           return v;
         });
-        const res = insert.run(...values);
+        const res = insert.statement.run(...values);
         if (res.changes > 0) imported++;
         else skipped++;
       }

@@ -520,10 +520,15 @@
 
 /* ── HTML Islands (Shadow DOM isolated content) ── */
 .htmlIsland {
+  /* Visual effects such as shadows, transforms, and decorative elements do
+     not affect layout. Reserve room for that bleed so adjacent prose does not
+     crowd the island, while keeping the host itself unclipped. */
+  --html-island-visual-bleed: 12px;
   display: flow-root;
   position: relative;
   max-width: 100%;
   margin: 8px 0;
+  padding-block: var(--html-island-visual-bleed);
   border-radius: var(--lcs-radius-sm);
   /* Shadows and transforms contribute visual overflow, not layout bounds.
      Clipping the shadow host therefore cuts them off at the island rectangle. */

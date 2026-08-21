@@ -364,7 +364,11 @@
     "next": "Scorri successivo"
   },
   "portrait": {
-    "setChatBackground": "Imposta come sfondo chat"
+    "setChatBackground": "Imposta come sfondo chat",
+    "copyImageReference": "Copia riferimento immagine",
+    "imageReferenceCopied": "Riferimento immagine copiato",
+    "imageReferenceCopyFailed": "Impossibile copiare il riferimento immagine",
+    "galleryImage": "Immagine della galleria"
   },
   "attachments": {
     "removeImage": "Rimuovi immagine",
