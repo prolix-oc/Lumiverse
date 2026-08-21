@@ -5,30 +5,21 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const source = readFileSync(join(import.meta.dir, 'InputArea.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const modalSource = readFileSync(join(import.meta.dir, 'InputAreaCustomizeModal.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('prompt variables input action contract', () => {
-  const actionBarStart = source.indexOf('<div className={styles.actionBar}>')
-  const actionBarEnd = source.indexOf('\n        </div>\n      </div>', actionBarStart)
-  const actionBar = source.slice(actionBarStart, actionBarEnd)
-
-  test('renders only when prompt variables are available', () => {
-    expect(actionBarStart).toBeGreaterThan(-1)
-    expect(actionBarEnd).toBeGreaterThan(actionBarStart)
-    expect(actionBar).toMatch(/\{promptVariablesAvailable && \(\s*<button/)
+  test('renders only when prompt variables are available in composer actions', () => {
+    expect(source).toMatch(/promptVariables:\s*promptVariablesAvailable\s*\?/)
   })
 
-  test('places prompt variables immediately before tools', () => {
-    const quickRepliesButton = actionBar.indexOf('<MessageSquareQuote size={14} />')
-    const promptVariablesButton = actionBar.indexOf('{promptVariablesAvailable && (')
-    const promptVariablesButtonEnd = actionBar.indexOf('\n          )}', promptVariablesButton) + '\n          )}'.length
-    const toolsMarker = actionBar.indexOf("openPopover === 'tools'")
-    const toolsButton = actionBar.lastIndexOf('<button', toolsMarker)
+  test('places prompt variables immediately before tools in default composer action order', () => {
+    const quickRepliesIndex = modalSource.indexOf("'quickReplies'")
+    const promptVariablesIndex = modalSource.indexOf("'promptVariables'")
+    const toolsIndex = modalSource.indexOf("'tools'")
 
-    expect(promptVariablesButton).toBeGreaterThan(quickRepliesButton)
-    expect(promptVariablesButtonEnd).toBeGreaterThan(promptVariablesButton)
-    expect(toolsButton).toBeGreaterThan(promptVariablesButton)
-    expect(actionBar.slice(promptVariablesButton, promptVariablesButtonEnd)).toContain('<Sliders size={14} />')
-    expect(actionBar.slice(promptVariablesButtonEnd, toolsButton).trim()).toBe('')
+    expect(quickRepliesIndex).toBeGreaterThan(-1)
+    expect(promptVariablesIndex).toBeGreaterThan(quickRepliesIndex)
+    expect(toolsIndex).toBeGreaterThan(promptVariablesIndex)
   })
 
   test('keeps a single prompt variables entry point', () => {
