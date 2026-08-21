@@ -147,6 +147,7 @@ let hookSurface: Surface
 const mountedRoots = new Set<Root>()
 
 function Harness({ message }: { message: Message }) {
+  // eslint-disable-next-line react-compiler/react-compiler
   hookSurface = useMessageCard(message, 'chat-1')
   return null
 }
