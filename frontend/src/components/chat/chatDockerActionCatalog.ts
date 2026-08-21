@@ -1,11 +1,14 @@
 import type { ComponentType } from 'react'
 import {
+  ArrowUp,
   BrainCircuit,
   FolderOpen,
+  List,
   ListChecks,
   Plus,
   Settings2,
   Sliders,
+  SlidersHorizontal,
   StickyNote,
   UserPlus,
   UsersRound,
@@ -24,6 +27,9 @@ export const CHAT_DOCKER_ACTION_IDS = [
   'chat.authors-note',
   'chat.recompile-memories',
   'chat.select-messages',
+  'chat.scroll-to-top',
+  'chat.browse-messages',
+  'chat.customize-composer',
 ] as const
 
 export type ChatDockerActionId = (typeof CHAT_DOCKER_ACTION_IDS)[number]
@@ -56,6 +62,9 @@ export interface ChatDockerActionOwners {
   openGroupChatCreator?: () => void
   openModal?: (id: string, payload?: unknown) => void
   warmMemories?: (chatId: string) => void | Promise<void>
+  navigateToOldestMessage?: () => void | Promise<void>
+  openMessageNavigator?: () => void
+  openComposerCustomize?: () => void
   runCommand?: (id: string) => void | Promise<void>
   findCommand?: (id: string) => ChatDockerCommandOwner | undefined
   navigate?: (path: string) => void
@@ -274,6 +283,44 @@ export function buildChatDockerActionCatalog(
         if (!hasChat) return
         const state = useStore.getState()
         state.setMessageSelectMode(!state.messageSelectMode)
+      },
+    },
+    {
+      id: 'chat.scroll-to-top',
+      label: 'Go to oldest message',
+      description: 'Navigate to the oldest message in this chat.',
+      keywords: ['scroll', 'top', 'oldest', 'first', 'message', 'arrow-up'],
+      icon: ArrowUp,
+      disabled: !hasChat,
+      hidden: false,
+      run: () => {
+        if (!hasChat) return
+        void owners.navigateToOldestMessage?.()
+      },
+    },
+    {
+      id: 'chat.browse-messages',
+      label: 'Browse messages',
+      description: 'Open the message navigator to browse and search messages.',
+      keywords: ['browse', 'messages', 'navigator', 'list', 'jump'],
+      icon: List,
+      disabled: !hasChat,
+      hidden: false,
+      run: () => {
+        if (!hasChat) return
+        owners.openMessageNavigator?.()
+      },
+    },
+    {
+      id: 'chat.customize-composer',
+      label: 'Customize composer',
+      description: 'Open the composer action bar customizer.',
+      keywords: ['customize', 'composer', 'action-bar', 'gear', 'sliders'],
+      icon: SlidersHorizontal,
+      disabled: !owners.openComposerCustomize,
+      hidden: false,
+      run: () => {
+        owners.openComposerCustomize?.()
       },
     },
   ]

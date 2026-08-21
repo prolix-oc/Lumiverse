@@ -50,6 +50,20 @@ export function isShowNativeSelectMessages(settings: {
   return settings?.showNativeSelectMessages !== false
 }
 
+/** Native ChatView ArrowUp (Go to oldest message) stays unless the user explicitly turns it off. */
+export function isShowNativeScrollToTop(settings: {
+  showNativeScrollToTop?: unknown
+} | null | undefined): boolean {
+  return settings?.showNativeScrollToTop !== false
+}
+
+/** Native ChatView List (Browse messages) stays unless the user explicitly turns it off. */
+export function isShowNativeBrowseMessages(settings: {
+  showNativeBrowseMessages?: unknown
+} | null | undefined): boolean {
+  return settings?.showNativeBrowseMessages !== false
+}
+
 export function isOpaqueToolbarBackdrop(settings: {
   opaqueToolbarBackdrop?: unknown
 } | null | undefined): boolean {

@@ -281,6 +281,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const { actionById: qtActionById } = useQuickToolbarActions()
   const messageSelectMode = useStore((s) => s.messageSelectMode)
   const enableToolbarIconReorder = useStore((state) => readProductivityFlag(state, 'enableToolbarIconReorder'))
+  const showComposerCustomizeGear = useStore((state) => readProductivityFlag(state, 'showComposerCustomizeGear'))
+  const hasLumiverseSuite = useStore((state) => ((state as { extensions?: unknown[] }).extensions ?? []).some((extension) => {
+    const candidate = extension as { identifier?: unknown; enabled?: unknown; has_frontend?: unknown }
+    return candidate.identifier === 'lumiverse_suite' && candidate.enabled === true && candidate.has_frontend === true
+  }))
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const openPopoverRef = useRef(openPopover)
   useEffect(() => {
@@ -2568,6 +2573,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       openChatSettings,
       openGroupChatCreator,
       warmMemories,
+      openComposerCustomize: () => setCustomizeOpen(true),
       promptVariablesLoading,
       memoryCortexAvailable: true,
       memoryCortexInFlight,
@@ -3400,17 +3406,19 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               }}
             >
               <span data-spindle-mount="chat_actions" data-spindle-scope={`chat:${chatId}:actions`} style={{ display: 'contents' }} />
-              <button
-                type="button"
-                className={clsx(styles.actionBtn, styles.composerCustomizeGear, customizeOpen && styles.actionBtnActive)}
-                onClick={() => setCustomizeOpen(true)}
-                title="Customize composer"
-                aria-label="Customize composer"
-                aria-expanded={customizeOpen}
-                data-composer-pinned="customize"
-              >
-                <SlidersHorizontal size={14} />
-              </button>
+              {hasLumiverseSuite && showComposerCustomizeGear && (
+                <button
+                  type="button"
+                  className={clsx(styles.actionBtn, styles.composerCustomizeGear, customizeOpen && styles.actionBtnActive)}
+                  onClick={() => setCustomizeOpen(true)}
+                  title="Customize composer"
+                  aria-label="Customize composer"
+                  aria-expanded={customizeOpen}
+                  data-composer-pinned="customize"
+                >
+                  <SlidersHorizontal size={14} />
+                </button>
+              )}
             </ComposerActionBarLive>
             <div
               data-spindle-mount="chat_toolbar"

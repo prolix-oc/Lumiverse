@@ -25,6 +25,10 @@ const FLAG_COPY: Record<ProductivityFeatureFlag, { title: string; description: s
     title: 'Drag to reorder toolbar icons',
     description: 'Hold an icon on the live toolbar to reorder. Turn off to keep clicks only.',
   },
+  showComposerCustomizeGear: {
+    title: 'Customize composer gear',
+    description: 'Show the gear button on the chat composer bar to customize and reorder composer icons (requires LumiVerse Suite).',
+  },
 }
 
 const TAB_LOCATION_OPTIONS = [
@@ -43,8 +47,9 @@ export default function ProductivityFeatureToggles() {
   const showCortexSecondaryUi = useStore((state) => readProductivityFlag(state, 'showCortexSecondaryUi'))
   const showEditAndSend = useStore((state) => readProductivityFlag(state, 'showEditAndSend'))
   const enableToolbarIconReorder = useStore((state) => readProductivityFlag(state, 'enableToolbarIconReorder'))
+  const showComposerCustomizeGear = useStore((state) => readProductivityFlag(state, 'showComposerCustomizeGear'))
   const productivityTabPosition = useStore((state) => (state as any).productivityTabPosition ?? 'after-display')
-  const flags = { showEmbeddingFallbackUi, showCortexSecondaryUi, showEditAndSend, enableToolbarIconReorder }
+  const flags = { showEmbeddingFallbackUi, showCortexSecondaryUi, showEditAndSend, enableToolbarIconReorder, showComposerCustomizeGear }
   const setFlag = (key: ProductivityFeatureFlag, value: boolean) => {
     useStore.setState({ [key]: value } as Record<ProductivityFeatureFlag, boolean>)
     persistKey(key, value, 'user-interaction')

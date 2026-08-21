@@ -57,6 +57,8 @@ import {
   isAutoFitToolbarBounds,
   isFillTopDockWidth,
   isOpaqueToolbarBackdrop,
+  isShowNativeBrowseMessages,
+  isShowNativeScrollToTop,
   isShowNativeSelectMessages,
   isV2IconOnly,
   QUICK_TOOLBAR_CHILD_FLEX,
@@ -1446,6 +1448,26 @@ function QuickToolbarNative() {
                     onChange={(event) => updateSettings({ showNativeSelectMessages: event.target.checked } as Partial<typeof settings>)}
                   />
                   <span>Show select-messages on chat top bar</span>
+                </label>
+                <label htmlFor="quick-show-native-scroll-to-top" className={styles.toggleRow}>
+                  <input
+                    id="quick-show-native-scroll-to-top"
+                    aria-label="Show go to oldest message on chat top bar"
+                    type="checkbox"
+                    checked={isShowNativeScrollToTop(settings)}
+                    onChange={(event) => updateSettings({ showNativeScrollToTop: event.target.checked } as Partial<typeof settings>)}
+                  />
+                  <span>Show go to oldest message on chat top bar</span>
+                </label>
+                <label htmlFor="quick-show-native-browse-messages" className={styles.toggleRow}>
+                  <input
+                    id="quick-show-native-browse-messages"
+                    aria-label="Show browse messages on chat top bar"
+                    type="checkbox"
+                    checked={isShowNativeBrowseMessages(settings)}
+                    onChange={(event) => updateSettings({ showNativeBrowseMessages: event.target.checked } as Partial<typeof settings>)}
+                  />
+                  <span>Show browse messages on chat top bar</span>
                 </label>
               </>
             )}

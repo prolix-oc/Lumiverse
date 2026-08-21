@@ -22,7 +22,16 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { Toggle } from '@/components/shared/Toggle'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { filterActionIds, filterActions } from '@/lib/toolbarActionSearch'
-import { isAutoFitToolbarBounds, isFillTopDockWidth, isOpaqueToolbarBackdrop, isShowNativeSelectMessages, isV2IconOnly, readQuickToolbarPlacement } from './quickToolbarDock'
+import {
+  isAutoFitToolbarBounds,
+  isFillTopDockWidth,
+  isOpaqueToolbarBackdrop,
+  isShowNativeBrowseMessages,
+  isShowNativeScrollToTop,
+  isShowNativeSelectMessages,
+  isV2IconOnly,
+  readQuickToolbarPlacement,
+} from './quickToolbarDock'
 import { nextToolbarIconOrder } from './toolbarPointerHold'
 import { useQuickToolbarActions, type ToolbarAction } from './useQuickToolbarActions'
 import styles from './QuickToolbarCustomizeModal.module.css'
@@ -359,14 +368,32 @@ export default function QuickToolbarCustomizeModal({ onClose }: QuickToolbarCust
               />
             </div>
             {readQuickToolbarPlacement(settings) === 'chat_top_dock' && (
-              <div className={styles.switchRow}>
-                <span>Show select-messages on chat top bar</span>
-                <Toggle.Switch
-                  checked={isShowNativeSelectMessages(settings)}
-                  onChange={(showNativeSelectMessages) => updateSettings({ showNativeSelectMessages } as typeof settings)}
-                  aria-label="Show select-messages on chat top bar"
-                />
-              </div>
+              <>
+                <div className={styles.switchRow}>
+                  <span>Show select-messages on chat top bar</span>
+                  <Toggle.Switch
+                    checked={isShowNativeSelectMessages(settings)}
+                    onChange={(showNativeSelectMessages) => updateSettings({ showNativeSelectMessages } as typeof settings)}
+                    aria-label="Show select-messages on chat top bar"
+                  />
+                </div>
+                <div className={styles.switchRow}>
+                  <span>Show go to oldest message on chat top bar</span>
+                  <Toggle.Switch
+                    checked={isShowNativeScrollToTop(settings)}
+                    onChange={(showNativeScrollToTop) => updateSettings({ showNativeScrollToTop } as typeof settings)}
+                    aria-label="Show go to oldest message on chat top bar"
+                  />
+                </div>
+                <div className={styles.switchRow}>
+                  <span>Show browse messages on chat top bar</span>
+                  <Toggle.Switch
+                    checked={isShowNativeBrowseMessages(settings)}
+                    onChange={(showNativeBrowseMessages) => updateSettings({ showNativeBrowseMessages } as typeof settings)}
+                    aria-label="Show browse messages on chat top bar"
+                  />
+                </div>
+              </>
             )}
             <div className={styles.switchRow}>
               <span>Opaque toolbar backdrop</span>

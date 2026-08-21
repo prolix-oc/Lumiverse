@@ -37,7 +37,13 @@ import PortraitPanel from './PortraitPanel'
 import ExpressionDisplay from './expressions/ExpressionDisplay'
 import FloatingAvatarViewer from './FloatingAvatarViewer'
 import { QuickToolbar } from '../quick-toolbar/QuickToolbar'
-import { isShowNativeSelectMessages, readQuickToolbarPlacement } from '../quick-toolbar/quickToolbarDock'
+import {
+  isShowNativeBrowseMessages,
+  isShowNativeScrollToTop,
+  isShowNativeSelectMessages,
+  readQuickToolbarPlacement,
+} from '../quick-toolbar/quickToolbarDock'
+import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import { keepDockEnabledWhenFloating } from '@/lib/uiProductivityDefaults'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -333,6 +339,13 @@ export default function ChatView() {
       requestId: Date.now(),
     })
   }, [chatId, messageEditDraft, resumeMessageEdit, totalChatLength])
+
+  useEffect(() => {
+    return registerChatDockerActionOwners({
+      navigateToOldestMessage,
+      openMessageNavigator: () => setMessageNavigatorOpen(true),
+    })
+  }, [navigateToOldestMessage])
 
   useEffect(() => {
     const handleFindShortcut = (event: KeyboardEvent) => {
@@ -1169,7 +1182,7 @@ export default function ChatView() {
                   <ListChecks size={14} />
                 </button>
               )}
-              {totalChatLength > 1 && (
+              {isShowNativeScrollToTop(quickToolbarSettings) && totalChatLength > 1 && (
                 <button
                   type="button"
                   className={styles.toolbarBtn}
@@ -1183,7 +1196,7 @@ export default function ChatView() {
                     : <ArrowUp size={14} />}
                 </button>
               )}
-              {totalChatLength > 0 && (
+              {isShowNativeBrowseMessages(quickToolbarSettings) && totalChatLength > 0 && (
                 <button
                   type="button"
                   className={styles.toolbarBtn}

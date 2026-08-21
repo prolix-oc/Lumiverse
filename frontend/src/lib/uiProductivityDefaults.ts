@@ -157,6 +157,8 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   fillTopDockWidth: boolean
   hideInChatTopDock: boolean
   showNativeSelectMessages: boolean
+  showNativeScrollToTop: boolean
+  showNativeBrowseMessages: boolean
   opaqueToolbarBackdrop: boolean
   backdropColor: string
 } = {
@@ -220,6 +222,8 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   // Off by default. Dock-chrome hide only — floating placement is unaffected.
   hideInChatTopDock: false,
   showNativeSelectMessages: true,
+  showNativeScrollToTop: true,
+  showNativeBrowseMessages: true,
   opaqueToolbarBackdrop: false,
   backdropColor: DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR,
   cardWidth: 0,
@@ -434,6 +438,7 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   showCortexSecondaryUi: true,
   showEditAndSend: true,
   enableToolbarIconReorder: true,
+  showComposerCustomizeGear: true,
   productivityTabPosition: 'after-display',
 })
 

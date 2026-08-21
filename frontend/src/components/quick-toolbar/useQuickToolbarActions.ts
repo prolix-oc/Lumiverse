@@ -95,8 +95,15 @@ const EXTENSION_QUICK_TOOLBAR_ACTION_IDS = new Set([
   EXTENSION_CONNECTIONS_PICKER_ACTION_ID,
 ])
 
+const NON_DEFAULT_DOCKER_IDS = new Set<string>([
+  'chat.select-messages',
+  'chat.scroll-to-top',
+  'chat.browse-messages',
+  'chat.customize-composer',
+])
+
 /** Ids from the confirmed toolbar designs, used when nothing has been customised. */
-export const DESIGN_DEFAULT_IDS = CHAT_DOCKER_ACTION_IDS.filter((id) => id !== 'chat.select-messages')
+export const DESIGN_DEFAULT_IDS = CHAT_DOCKER_ACTION_IDS.filter((id) => !NON_DEFAULT_DOCKER_IDS.has(id))
 /** The previous built-in defaults. Treated as "untouched" so they upgrade cleanly. */
 const PREVIOUS_DESIGN_DEFAULT_IDS = ['profile', 'connections', 'council', 'lorebook', 'presets', 'settings']
 const PREVIOUS_SUITE_DEFAULT_IDS = [

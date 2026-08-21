@@ -22,7 +22,16 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { DESIGN_DEFAULT_IDS, useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
-import { isAutoFitToolbarBounds, isFillTopDockWidth, isOpaqueToolbarBackdrop, isShowNativeSelectMessages, isV2IconOnly, readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
+import {
+  isAutoFitToolbarBounds,
+  isFillTopDockWidth,
+  isOpaqueToolbarBackdrop,
+  isShowNativeBrowseMessages,
+  isShowNativeScrollToTop,
+  isShowNativeSelectMessages,
+  isV2IconOnly,
+  readQuickToolbarPlacement,
+} from '@/components/quick-toolbar/quickToolbarDock'
 import { keepDockEnabledWhenFloating } from '@/lib/uiProductivityDefaults'
 import { canMoveWithinFiltered, filterActionIds, moveWithinFiltered } from '@/lib/toolbarActionSearch'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
@@ -377,7 +386,11 @@ export default function ProductivitySettings() {
             : 'Stretch across window top'}
         />
         {readQuickToolbarPlacement(quick) === 'chat_top_dock' && (
-          <CheckField className={styles.quickToolbarCheck} id="quick-show-native-select-messages" label="Show select-messages on chat top bar" checked={isShowNativeSelectMessages(quick)} onChange={(showNativeSelectMessages) => update('quickToolbarSettings', { showNativeSelectMessages })} hint="Keep the native ListChecks button on the chat top bar." />
+          <>
+            <CheckField className={styles.quickToolbarCheck} id="quick-show-native-select-messages" label="Show select-messages on chat top bar" checked={isShowNativeSelectMessages(quick)} onChange={(showNativeSelectMessages) => update('quickToolbarSettings', { showNativeSelectMessages })} hint="Keep the native ListChecks button on the chat top bar." />
+            <CheckField className={styles.quickToolbarCheck} id="quick-show-native-scroll-to-top" label="Show go to oldest message on chat top bar" checked={isShowNativeScrollToTop(quick)} onChange={(showNativeScrollToTop) => update('quickToolbarSettings', { showNativeScrollToTop })} hint="Keep the native ArrowUp button on the chat top bar." />
+            <CheckField className={styles.quickToolbarCheck} id="quick-show-native-browse-messages" label="Show browse messages on chat top bar" checked={isShowNativeBrowseMessages(quick)} onChange={(showNativeBrowseMessages) => update('quickToolbarSettings', { showNativeBrowseMessages })} hint="Keep the native List button on the chat top bar." />
+          </>
         )}
         <CheckField className={styles.quickToolbarCheck} id="quick-opaque-toolbar-backdrop" label="Opaque toolbar backdrop" checked={isOpaqueToolbarBackdrop(quick)} onChange={(opaqueToolbarBackdrop) => update('quickToolbarSettings', { opaqueToolbarBackdrop })} hint="Paint a solid plate behind the Quick Toolbar so chat text does not show through." />
         <Field id="quick-toolbar-backdrop-color" label="Toolbar backdrop color"><input id="quick-toolbar-backdrop-color" type="color" value={normalizeColor(quick.backdropColor, DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR)} onChange={(event) => update('quickToolbarSettings', { backdropColor: normalizeColor(event.target.value, DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR) })} aria-label="Toolbar backdrop color" /></Field>

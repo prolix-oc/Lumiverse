@@ -562,6 +562,10 @@ export interface QuickToolbarSettings {
   fillTopDockWidth?: boolean
   /** Native ChatView ListChecks. Default on (`!== false`). */
   showNativeSelectMessages?: boolean
+  /** Native ChatView ArrowUp (Go to oldest message). Default on (`!== false`). */
+  showNativeScrollToTop?: boolean
+  /** Native ChatView List (Browse messages). Default on (`!== false`). */
+  showNativeBrowseMessages?: boolean
   /** Paint a solid backdrop behind the toolbar when enabled. */
   opaqueToolbarBackdrop?: boolean
   /** Optional solid backdrop color for the opaque toolbar plate. */

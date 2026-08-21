@@ -3,6 +3,7 @@ export const PRODUCTIVITY_FEATURE_FLAGS = [
   'showCortexSecondaryUi',
   'showEditAndSend',
   'enableToolbarIconReorder',
+  'showComposerCustomizeGear',
 ] as const
 
 export type ProductivityFeatureFlag = typeof PRODUCTIVITY_FEATURE_FLAGS[number]
