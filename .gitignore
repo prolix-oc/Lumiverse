@@ -76,7 +76,6 @@ frontend/.dist-backup-*/
 *.md
 !developer-docs/**/*.md
 !user-docs/**/*.md
-!.planning/**/*.md
 
 !LICENSE.md
 !README.md
