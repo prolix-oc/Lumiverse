@@ -4,6 +4,7 @@ export interface MessageListScrollAdjustmentInput {
   itemEnd: number
   scrollOffset: number
   scrollDirection: 'forward' | 'backward' | null
+  isScrolling?: boolean
   hasMeasuredSize: boolean
   isPinned: boolean
   isStreamingTail: boolean
@@ -18,6 +19,7 @@ export function shouldAdjustMessageListScrollOnResize({
   itemEnd,
   scrollOffset,
   scrollDirection,
+  isScrolling = false,
   hasMeasuredSize,
   isPinned,
   isStreamingTail,
@@ -72,5 +74,11 @@ export function shouldAdjustMessageListScrollOnResize({
     return true
   }
 
-  return itemStart < scrollOffset && (!hasMeasuredSize || scrollDirection !== 'backward')
+  // scrollDirection records the last direction and can remain "backward"
+  // after the gesture has settled. Suppress measured-row correction only while
+  // upward scrolling is active; a later resize above the viewport must preserve
+  // the visible anchor.
+  return itemStart < scrollOffset && (
+    !hasMeasuredSize || scrollDirection !== 'backward' || !isScrolling
+  )
 }
