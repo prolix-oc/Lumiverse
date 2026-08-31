@@ -31,7 +31,7 @@ import { adapterImageInput } from "../services/weaver/visual/provider-adapter";
 import { resolveExpressionVariant, composeExpressionPrompts } from "../services/weaver/visual/expressions";
 import * as expressionsSvc from "../services/expressions.service";
 import { getCharacter, setCharacterAvatarFromImage } from "../services/characters.service";
-import { getConnection, imageGenConnectionSecretKey } from "../services/image-gen-connections.service";
+import { getUsableConnection, imageGenConnectionSecretKey } from "../services/image-gen-connections.service";
 import { getImageGenSettings } from "../services/image-gen.service";
 import * as imagesSvc from "../services/images.service";
 import * as secretsSvc from "../services/secrets.service";
@@ -994,7 +994,7 @@ app.post("/sessions/:id/visual/generate", async (c) => {
   const character = getCharacter(userId, session.character_id);
   if (!character) return c.json({ error: "Character not found" }, 404);
 
-  const connection = getConnection(userId, body.connection_id);
+  const connection = getUsableConnection(userId, body.connection_id);
   if (!connection) return c.json({ error: "Image connection not found" }, 404);
 
   let sourceImage: { data: string; mimeType: string } | undefined;
@@ -1076,7 +1076,7 @@ app.get("/sessions/:id/visual/image-input", (c) => {
   if (!session) return c.json({ error: "Session not found" }, 404);
   const connectionId = c.req.query("connection_id");
   if (!connectionId) return c.json({ error: "Choose an image connection." }, 400);
-  const connection = getConnection(userId, connectionId);
+  const connection = getUsableConnection(userId, connectionId);
   if (!connection) return c.json({ error: "Image connection not found" }, 404);
 
   const adapter = getVisualProviderAdapter(connection.provider as Parameters<typeof getVisualProviderAdapter>[0]);

@@ -35,7 +35,7 @@ function summarizeComfyWorkflowLibrary(library: ComfyUIWorkflowLibrary) {
 }
 
 function getComfyCapableConnection(userId: string, connectionId: string) {
-  const connection = svc.getConnection(userId, connectionId);
+  const connection = svc.getUsableConnection(userId, connectionId);
   if (!connection) return { connection: null, error: "Connection not found", status: 404 as const };
   if (!isComfyCapableConnection(connection.provider)) {
     return { connection: null, error: "Connection does not support ComfyUI workflows", status: 400 as const };
@@ -149,7 +149,7 @@ app.post("/:id/comfyui/workflow/import", async (c) => {
     return c.json({ error: "workflow is required" }, 400);
   }
 
-  const connection = svc.getConnection(userId, connectionId);
+  const connection = svc.getUsableConnection(userId, connectionId);
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   if (!isComfyCapableConnection(connection.provider)) {
     return c.json({ error: "Connection does not support ComfyUI workflows" }, 400);
@@ -190,7 +190,7 @@ app.post("/:id/comfyui/workflow/import", async (c) => {
 
 app.get("/:id/comfyui/workflow", async (c) => {
   const userId = c.get("userId");
-  const connection = svc.getConnection(userId, c.req.param("id"));
+  const connection = svc.getUsableConnection(userId, c.req.param("id"));
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   if (!isComfyCapableConnection(connection.provider)) {
     return c.json({ error: "Connection does not support ComfyUI workflows" }, 400);
@@ -214,7 +214,7 @@ app.put("/:id/comfyui/workflow/mappings", async (c) => {
     return c.json({ error: "mappings must be an array" }, 400);
   }
 
-  const connection = svc.getConnection(userId, connectionId);
+  const connection = svc.getUsableConnection(userId, connectionId);
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   if (!isComfyCapableConnection(connection.provider)) {
     return c.json({ error: "Connection does not support ComfyUI workflows" }, 400);
@@ -343,7 +343,7 @@ app.delete("/:id/comfyui/workflows/:workflowId", async (c) => {
 
 app.get("/:id/comfyui/capabilities", async (c) => {
   const userId = c.get("userId");
-  const connection = svc.getConnection(userId, c.req.param("id"));
+  const connection = svc.getUsableConnection(userId, c.req.param("id"));
   if (!connection) return c.json({ error: "Connection not found" }, 404);
   if (!isComfyCapableConnection(connection.provider)) {
     return c.json({ error: "Connection does not support ComfyUI workflows" }, 400);

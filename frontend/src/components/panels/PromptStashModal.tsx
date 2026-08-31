@@ -4,15 +4,15 @@ import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import styles from './PromptStashModal.module.css'
+import { applyPresetAuthorityResult, presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
 
 interface PromptStashModalProps {
   isOpen: boolean
   onClose: () => void
   onSelect: (entry: StashedPromptBlock) => void
-  onUnstash?: (entry: StashedPromptBlock) => void
 }
 
-export function PromptStashModal({ isOpen, onClose, onSelect, onUnstash }: PromptStashModalProps) {
+export function PromptStashModal({ isOpen, onClose, onSelect }: PromptStashModalProps) {
   const [entries, setEntries] = useState<StashedPromptBlock[]>([])
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -45,16 +45,25 @@ export function PromptStashModal({ isOpen, onClose, onSelect, onUnstash }: Promp
 
   const unStash = useCallback(async (entry: StashedPromptBlock) => {
     setRemovingId(entry.id)
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
     try {
-      await presetsApi.removeFromStash(entry.id)
+      const result = await presetsApi.removeFromStash(entry.id)
+      applyPresetAuthorityResult(result, scopeEpoch, (draft) => ({
+        ...draft,
+        blocks: draft.blocks.map((block) => {
+          if (block.stashId !== entry.id) return block
+          const { stashId: _stashId, ...unlinked } = block
+          return unlinked
+        }),
+      }))
+      if (presetSaveCoordinator.getScopeEpoch() !== scopeEpoch) return
       setEntries((current) => current.filter((candidate) => candidate.id !== entry.id))
-      onUnstash?.(entry)
     } catch {
       setError('Unable to un-stash this prompt block.')
     } finally {
       setRemovingId(null)
     }
-  }, [onUnstash])
+  }, [])
 
   return (
     <ModalShell isOpen={isOpen} onClose={onClose} maxWidth={620} className={styles.modal}>

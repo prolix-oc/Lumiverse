@@ -1,6 +1,6 @@
 import type { PaginatedResult } from "../types/pagination";
 import * as secretsSvc from "./secrets.service";
-
+import { sanitizeConnectionMetadata } from "./connection-authority";
 interface ApiKeyProfile {
   id: string;
   has_api_key: boolean;
@@ -19,9 +19,12 @@ export async function withReadableApiKeyStatus<T extends ApiKeyProfile>(
   profile: T,
   secretKey: (id: string) => string,
 ): Promise<ReconciledApiKeyProfile<T>> {
-  if (!profile.has_api_key) return profile;
-  const readable = !!(await secretsSvc.getSecretForStatus(userId, secretKey(profile.id)));
-  return readable ? profile : { ...profile, has_api_key: false };
+  const publicProfile = "metadata" in profile && profile.metadata && typeof profile.metadata === "object"
+    ? { ...profile, metadata: sanitizeConnectionMetadata(profile.metadata as Record<string, unknown>) } as T
+    : profile;
+  if (!publicProfile.has_api_key) return publicProfile;
+  const readable = !!(await secretsSvc.getSecretForStatus(userId, secretKey(publicProfile.id)));
+  return readable ? publicProfile : { ...publicProfile, has_api_key: false };
 }
 
 export async function withReadableApiKeyStatuses<T extends ApiKeyProfile>(

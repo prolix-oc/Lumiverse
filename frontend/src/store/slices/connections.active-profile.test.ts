@@ -56,6 +56,8 @@ function profile(id: string, extras: Partial<ConnectionProfile> = {}): Connectio
     preset_id: null,
     is_default: false,
     has_api_key: false,
+    review_required: false,
+    review_code: null,
     metadata: {},
     created_at: 1,
     updated_at: 1,
@@ -111,6 +113,15 @@ describe('connections activeProfileId persistence', () => {
     expect(app.profiles).toEqual([])
     app.setProfiles([profile('cold-profile'), profile('other')])
     expect(app.activeProfileId).toBe('cold-profile')
+  })
+
+  test('invalidates a pending cold-start profile when its refreshed row requires review', () => {
+    const app = store()
+    app.hydrateStartupSettings({ activeProfileId: 'needs-review' })
+    expect(app.activeProfileId).toBe('needs-review')
+
+    app.setProfiles([profile('needs-review', { review_required: true, review_code: 'import_review' })])
+    expect(app.activeProfileId).toBeNull()
   })
 
   test('persists user_selection, deletion, and invalidation but not reconcile reasons', () => {

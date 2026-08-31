@@ -121,6 +121,25 @@
   --lumiverse-btn-icon-xs: 22px;
   --lumiverse-btn-tab: 32px;
 
+  /* Interaction and spacing scale */
+  --lumiverse-control-min: 44px;
+  --lumiverse-space-1: 4px;
+  --lumiverse-space-2: 8px;
+  --lumiverse-space-3: 12px;
+  --lumiverse-space-4: 16px;
+  --lumiverse-space-5: 24px;
+  --lumiverse-space-6: 32px;
+  --lumiverse-agent-run-sheet-width: 560px;
+  --lumiverse-z-agent-run: 10005;
+  --lumiverse-focus-ring: 0 0 0 3px var(--lumiverse-primary-020);
+
+  /* Type scale */
+  --lumiverse-type-xs: calc(11px * var(--lumiverse-font-scale, 1));
+  --lumiverse-type-sm: calc(12px * var(--lumiverse-font-scale, 1));
+  --lumiverse-type-md: calc(13px * var(--lumiverse-font-scale, 1));
+  --lumiverse-type-lg: calc(15px * var(--lumiverse-font-scale, 1));
+  --lumiverse-type-xl: calc(20px * var(--lumiverse-font-scale, 1));
+
   /* Typography */
   --lumiverse-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --lumiverse-font-mono: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;

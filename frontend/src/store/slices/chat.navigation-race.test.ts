@@ -169,4 +169,21 @@ describe('chat navigation during streaming', () => {
       jest.useRealTimers()
     }
   })
+
+  test('canonical FAILED replaces only the exact optimistic stopped request', () => {
+    const state = createStore()
+    state.beginGenerationRequest('chat-1', {
+      generationType: 'normal',
+      requestAuthorityId: 'authority-1',
+    })
+    expect(state.acceptGenerationRequest('chat-1', 'generation-1', 'authority-1', 'working')).toBe(true)
+    state.stopGenerationRequest('chat-1')
+    expect(state.generationRequests['chat-1']?.status).toBe('stopped')
+
+    expect(state.settleGenerationRequest('chat-1', 'error', 'generation-1', 'authority-1')).toBe(true)
+    expect(state.generationRequests['chat-1']?.status).toBe('error')
+    expect(state.settleGenerationRequest('chat-1', 'stopped', 'generation-1', 'authority-1')).toBe(false)
+    expect(state.generationRequests['chat-1']?.status).toBe('error')
+    expect(state.settleGenerationRequest('chat-1', 'error', 'generation-other', 'authority-1')).toBe(false)
+  })
 })

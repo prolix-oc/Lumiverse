@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import {
+  CLIENT_ONLY_EVENTS,
   EventType,
   type EventMessage,
   type ProviderRegistryAction,
@@ -60,6 +61,8 @@ class EventBus {
   // peers, since publishToRoom/Feed deliver only to local WS topic subscribers.
   private roomBroadcastListeners = new Set<(roomId: string, event: EventType, payload: any) => void>();
   private listeners = new Map<EventType, Set<Listener>>();
+  /** Trusted server-side observers for browser-only projection events. */
+  private internalListeners = new Map<EventType, Set<Listener>>();
   private pendingListenerDispatches: Array<() => void> = [];
   private listenerDispatchTimer: ReturnType<typeof setTimeout> | null = null;
   private bufferedEvents: BufferedEvent[] | null = null;
@@ -76,12 +79,13 @@ class EventBus {
   withBufferedEvents<T>(callback: () => T): BufferedEventRun<T> {
     const parent = this.bufferedEvents;
     const buffer = parent ?? [];
+    const startLength = buffer.length;
     this.bufferedEvents = buffer;
     try {
       const value = callback();
       return { value, events: parent ? [] : buffer.slice() };
     } catch (error) {
-      if (!parent) buffer.length = 0;
+      buffer.length = startLength;
       throw error;
     } finally {
       this.bufferedEvents = parent;
@@ -295,6 +299,10 @@ class EventBus {
   }
 
   publishToRoom(roomId: string, event: EventType, payload: any = {}): void {
+    // Agentic projections are owner-scoped browser events, never multiplayer
+    // room data. Keep this guard beside the room publish boundary as defense
+    // in depth for future fan-out lists.
+    if (CLIENT_ONLY_EVENTS[event] === true) return;
     if (this.server) {
       const message: EventMessage = { event, payload, timestamp: Date.now() };
       this.server.publish(getRoomTopic(roomId), JSON.stringify(message));
@@ -307,6 +315,7 @@ class EventBus {
    * re-broadcast chat/generation events without double-delivering to the host.
    */
   publishToRoomFeed(roomId: string, event: EventType, payload: any = {}): void {
+    if (CLIENT_ONLY_EVENTS[event] === true) return;
     if (this.server) {
       const message: EventMessage = { event, payload, timestamp: Date.now() };
       this.server.publish(getRoomFeedTopic(roomId), JSON.stringify(message));
@@ -368,12 +377,32 @@ class EventBus {
     }
   }
 
-  on(event: EventType, listener: Listener): () => void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
+  private addListener(
+    target: Map<EventType, Set<Listener>>,
+    event: EventType,
+    listener: Listener,
+  ): () => void {
+    if (!target.has(event)) {
+      target.set(event, new Set());
     }
-    this.listeners.get(event)!.add(listener);
-    return () => this.listeners.get(event)?.delete(listener);
+    target.get(event)!.add(listener);
+    return () => target.get(event)?.delete(listener);
+  }
+
+  on(event: EventType, listener: Listener): () => void {
+    // Client-only projections are deliberately not available through the
+    // generic listener surface used by Spindle subscriptions.
+    if (CLIENT_ONLY_EVENTS[event] === true) return () => {};
+    return this.addListener(this.listeners, event, listener);
+  }
+
+  /**
+   * Register a trusted server-side observer. This is intentionally separate
+   * from `on`: browser-only projections may be observed by projection/outbox
+   * tests and recovery code without becoming extension callbacks.
+   */
+  onInternal(event: EventType, listener: Listener): () => void {
+    return this.addListener(this.internalListeners, event, listener);
   }
 
   private flushListenerDispatches(): void {
@@ -396,10 +425,14 @@ class EventBus {
     payload: any = {},
     userId?: string,
     options?: { topic?: string },
-  ): void {
+  ): boolean {
+    const clientOnly = CLIENT_ONLY_EVENTS[event] === true;
+    // A projection without an authenticated owner must never fall back to the
+    // system topic, even when a caller supplies a custom topic.
+    if (clientOnly && !userId) return false;
     if (this.bufferedEvents) {
       this.bufferedEvents.push({ event, payload, userId, options });
-      return;
+      return false;
     }
     const message: EventMessage = {
       event,
@@ -409,16 +442,30 @@ class EventBus {
     };
 
     const json = JSON.stringify(message);
+    let subscriberCount = 0;
 
     // Use Bun's native pub/sub for WebSocket delivery — single native call
     // instead of iterating over JS Maps and calling ws.send() per-socket.
     if (this.server) {
-      const topic = options?.topic || (userId ? getUserTopic(userId) : "system");
-      this.server.publish(topic, json);
+      // Client-only projections are always owner-scoped; ignore topic
+      // overrides so they cannot be redirected to `system` or a room feed.
+      const topic = clientOnly
+        ? getUserTopic(userId!)
+        : options?.topic || (userId ? getUserTopic(userId) : "system");
+      const published = this.server.publish(topic, json);
+      subscriberCount = typeof published === "number"
+        ? Math.max(0, Math.floor(published))
+        : userId ? this.getUserSubscriberCount(userId) : 0;
+    } else if (userId) {
+      // Tests and embedders may not install a Bun server. The authenticated
+      // client registry still gives a conservative acceptance result.
+      subscriberCount = this.getUserSubscriberCount(userId);
     }
 
-    // Fire in-process listeners asynchronously so extension worker IPC
-    // doesn't block the streaming hot path.
+    // Fire trusted in-process listeners asynchronously so server-side
+    // bookkeeping does not block the streaming hot path. Client-only
+    // projections have no entries in `listeners`; only `onInternal` observers
+    // receive them after the browser publish above.
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
       for (const listener of eventListeners) {
@@ -431,6 +478,19 @@ class EventBus {
         });
       }
     }
+    const internalEventListeners = this.internalListeners.get(event);
+    if (internalEventListeners) {
+      for (const listener of internalEventListeners) {
+        this.scheduleListenerDispatch(() => {
+          try {
+            listener(message);
+          } catch (err) {
+            console.error(`Event listener error for ${event}:`, err);
+          }
+        });
+      }
+    }
+    return subscriberCount > 0;
   }
 
   // ─── User Visibility ─────────────────────────────────────────────────
@@ -520,6 +580,13 @@ class EventBus {
     if (!this.userAllHiddenSince.has(userId)) {
       this.userAllHiddenSince.set(userId, Date.now());
     }
+  }
+  getUserSubscriberCount(userId: string): number {
+    let count = 0;
+    for (const connectedUserId of this.clientToUser.values()) {
+      if (connectedUserId === userId) count += 1;
+    }
+    return count;
   }
 
   get clientCount(): number {

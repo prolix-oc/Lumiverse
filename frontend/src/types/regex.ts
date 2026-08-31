@@ -69,7 +69,9 @@ export interface RegexScript {
   folder: string
   pack_id?: string | null
   preset_id?: string | null
+  character_id?: string | null
   owner_extension_identifier?: string | null
+  validation_error_code?: string | null
   metadata: Record<string, any>
   created_at: number
   updated_at: number

@@ -106,6 +106,13 @@ describe("Loom prompt behavior", () => {
         messages: [message({ is_user: true, content: "A real user turn" })],
       }),
     ).toBe(false);
+    expect(
+      shouldInjectEmptySendNudge({
+        generationType: "normal",
+        messages: assistantEnding,
+        sourceUserMessageIds: ["current-user-row"],
+      }),
+    ).toBe(false);
   });
 
   test("uses group nudges only for a concrete targeted group member", () => {

@@ -1,4 +1,14 @@
 import type { MacroEnv } from "../macros/types";
+import type { AgentRuntimeOwner } from "../services/agent-runtime.service";
+import type { ResolvedConcreteConnectionV1 } from "../services/connections.service";
+import type { AgentConfigV2 } from "../types/agents";
+import type { AgentToolSnapshot } from "../types/agents";
+import type { WorldBook } from "../types/world-book";
+
+import type { PrecomputedWorldInfoVectorEntries } from "../services/prompt-assembly.service";
+import type { LoomPromptInspectionV1 } from "../types/agent-cognition";
+
+export type { ProviderCapabilities, ToolContinuationMode } from "./param-schema";
 
 // --- Multi-part content types (for multimodal messages) ---
 
@@ -70,6 +80,12 @@ export interface LlmThinkingBlock {
   signature?: string;
   /** Opaque encrypted payload for `redacted_thinking` blocks — replay unmodified. */
   data?: string;
+  /**
+   * Internal cloneable provenance: this carrier's thinking text was exposed
+   * as visible output because the request disabled thinking. Providers must
+   * omit it from native wire blocks and validate it as the literal `true`.
+   */
+  display_suppressed?: true;
 }
 
 export interface LlmMessage {
@@ -178,7 +194,98 @@ export interface GenerationRequest {
   tools?: ToolDefinition[];
   /** Optional abort signal — when fired, cancels the in-flight HTTP request. */
   signal?: AbortSignal;
+  /** Receive-boundary cap selected by the root/child runtime frame. */
+  receiveLimitBytes?: number;
+  /** Host-owned tool policy; provider parameters cannot override it. */
+  toolMode?: "ordinary" | "required" | "finalization";
+  /**
+   * Provider-native continuation state. This is owned by the active loop frame,
+   * must never be copied into an LlmMessage or persisted, and is cleared after
+   * the request/frame reaches a terminal state.
+   */
+  providerTransientCarrier?: ProviderTransientCarrier;
 }
+
+export type ResponsesOutputTextAnnotation = Readonly<Record<string, unknown>>;
+export type ResponsesOutputTextLogprob = Readonly<Record<string, unknown>>;
+
+export interface ResponsesOutputTextPart {
+  readonly type: "output_text";
+  readonly text: string;
+  /**
+   * Provider-owned output metadata is retained only in the transient
+   * Responses continuation carrier. It must never be persisted or rendered.
+   */
+  readonly annotations?: readonly ResponsesOutputTextAnnotation[] | null;
+  readonly logprobs?: readonly ResponsesOutputTextLogprob[] | null;
+}
+
+export interface ResponsesRefusalPart {
+  readonly type: "refusal";
+  readonly refusal: string;
+}
+
+export type ResponsesMessageContentPart =
+  | ResponsesOutputTextPart
+  | ResponsesRefusalPart;
+
+export interface ResponsesMessageOutputItem {
+  readonly type: "message";
+  readonly id: string;
+  readonly role: "assistant";
+  readonly status?: string;
+  readonly content: readonly ResponsesMessageContentPart[];
+}
+
+export interface ResponsesReasoningSummaryPart {
+  readonly type: "summary_text";
+  readonly text: string;
+}
+
+export interface ResponsesReasoningOutputItem {
+  readonly type: "reasoning";
+  readonly id: string;
+  readonly status?: string;
+  readonly summary: readonly ResponsesReasoningSummaryPart[];
+  readonly encrypted_content?: string;
+}
+
+export interface ResponsesFunctionCallOutputItem {
+  readonly type: "function_call";
+  readonly id: string;
+  readonly call_id: string;
+  readonly name: string;
+  readonly arguments: string;
+  readonly status?: string;
+}
+
+export type ResponsesOutputItem =
+  | ResponsesMessageOutputItem
+  | ResponsesReasoningOutputItem
+  | ResponsesFunctionCallOutputItem;
+
+export interface ResponsesFunctionCallOutput {
+  readonly type: "function_call_output";
+  readonly call_id: string;
+  readonly output: string;
+}
+/** Bounded host-authored text appended to an ordered Responses continuation. */
+export interface ResponsesInputMessageItem {
+  readonly type: "message";
+  readonly role: "user" | "assistant" | "system";
+  readonly content: string;
+}
+
+/** Closed, in-memory-only provider continuation carriers. */
+export type ProviderTransientCarrier = {
+  readonly kind: "openai_responses";
+  /** Exact chronology across provider output and host input items. */
+  readonly items: readonly (
+    | ResponsesOutputItem
+    | ResponsesFunctionCallOutput
+    | ResponsesInputMessageItem
+  )[];
+};
 
 export interface ToolDefinition {
   name: string;
@@ -227,6 +334,11 @@ export interface GenerationResponse {
   /** OpenRouter `reasoning_details` captured this turn, to replay on tool-use
    *  continuations. */
   reasoning_details?: Record<string, unknown>[];
+  /**
+   * Frame-private provider state. It is intentionally not part of LlmMessage
+   * and must never reach persistence, logs, error payloads, or activity DTOs.
+   */
+  providerTransientCarrier?: ProviderTransientCarrier;
   /** Optional Gemini signature from a non-tool response part. */
   thought_signature?: string;
   usage?: GenerationUsage;
@@ -245,6 +357,8 @@ export interface StreamChunk {
   /** OpenRouter `reasoning_details`, accumulated across stream chunks and set on
    *  the final chunk alongside tool_calls. */
   reasoning_details?: Record<string, unknown>[];
+  /** Frame-private provider state; never persisted or rendered. */
+  providerTransientCarrier?: ProviderTransientCarrier;
   /** Optional Gemini signature from a non-tool response part. */
   thought_signature?: string;
   usage?: GenerationUsage;
@@ -256,15 +370,29 @@ export type GenerationType = 'normal' | 'continue' | 'regenerate' | 'swipe' | 'i
 
 export type ImpersonateMode = 'prompts' | 'oneliner' | 'sovereign_hand';
 
+/** The authenticated prompt surface for one assembly; callers must provide it explicitly. */
+export type AssemblySurfaceV1 = "RESPONSE" | "WORK";
+
 export interface AssemblyContext {
   userId: string;
+  /** Pre-resolved authenticated account name used when no persona is selected. */
+  userName?: string;
+  generationId: string;
+  dryRun: boolean;
   chatId: string;
+  /** Host-authenticated surface; every assembly caller must set this explicitly. */
+  assemblySurface: AssemblySurfaceV1;
   connectionId?: string;
   presetId?: string;
   /** Internal transient preset used by assembly-only callers. Never persisted. */
   presetOverride?: import("../types/preset").Preset;
   /** Skip per-chat/character/connection preset-profile block overrides. */
   skipPresetProfileBinding?: boolean;
+  /** Immutable effective preset/profile binding admitted before async sidecar work. */
+  effectivePresetSnapshot?: {
+    preset: import("../types/preset").Preset | null;
+    binding: import("../types/preset-profile").PresetProfileBinding | null;
+  };
   /** Whether macro handlers may commit side effects. Defaults to true. */
   macroCommit?: boolean;
   /** When true, bypass preset-profile preset selection and use presetId directly. */
@@ -279,6 +407,8 @@ export interface AssemblyContext {
   impersonateInput?: string;
   /** Exact input-bar draft snapshot captured when this generation started. */
   userInput?: string;
+  /** Persisted user rows that started this normal generation. Identity only. */
+  sourceUserMessageIds?: readonly string[];
   /** For regenerate: exclude this message from chat history (it has a blank swipe). */
   excludeMessageId?: string;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
@@ -295,9 +425,10 @@ export interface AssemblyContext {
   councilNamedResults?: Record<string, string>;
   /** Prior retained council deliberations formatted as a historical baseline block. */
   councilHistoricalDeliberationBlock?: string;
-  /** Pre-computed vector-activated world info entries from the generation pipeline.
-   *  When provided, assembly reuses these instead of re-running vector retrieval. */
-  precomputedVectorEntries?: import("../services/prompt-assembly.service").VectorActivatedEntry[];
+  /** Pre-computed vector-activated World Info from the generation pipeline.
+   *  Assembly reuses it only when its immutable source fingerprint matches the
+   *  current native World Info snapshot. */
+  precomputedVectorEntries?: PrecomputedWorldInfoVectorEntries;
   /** User-provided feedback text for regeneration guidance. */
   regenFeedback?: string;
   /** Where to inject regen feedback: 'system' (last system msg) or 'user' (last user msg). */
@@ -310,6 +441,13 @@ export interface AssemblyContext {
   /** Pre-fetched data to avoid redundant DB calls during assembly.
    *  When provided, assembly reads from this instead of querying DB. */
   prefetched?: PrefetchedData;
+  /** Main-process-only bounded child/tool runtime. Never structured-cloned. */
+  agentRuntimeOwner?: AgentRuntimeOwner;
+  /** Main-process factory created only after assembly resolves the frozen concrete identity. */
+  createAgentRuntimeOwner?: (
+    config: AgentConfigV2,
+    rootConnection: ResolvedConcreteConnectionV1 | null,
+  ) => AgentRuntimeOwner;
   /** Optional abort signal. When fired, in-flight embedding requests
    *  (WI vector retrieval) are cancelled and assembly short-circuits with
    *  an AbortError so the caller can unwind cleanly. */
@@ -337,6 +475,7 @@ export interface PrefetchedData {
     worldBookIds: string[];
     bookSourceMap: Map<string, import("../services/world-info-sources.service").BookSource>;
     bookNameMap: Map<string, string>;
+    bookMap: Map<string, WorldBook>;
   };
   /** Group chat members, batch-loaded. */
   groupCharacters?: Map<string, import("../types/character").Character>;
@@ -467,6 +606,10 @@ export interface ContextClipStats {
 }
 
 export interface AssemblyResult {
+  /** Surface used to build this provider message set. */
+  assemblySurface: AssemblySurfaceV1;
+  /** Owner-only Loom policy/context inspection, including Response omissions. */
+  loomPromptInspection?: LoomPromptInspectionV1;
   messages: LlmMessage[];
   breakdown: AssemblyBreakdownEntry[];
   parameters: Record<string, any>;

@@ -1226,7 +1226,7 @@ async function doLoadFrontendExtension(
         throw new Error('TOKEN_MODEL_REQUIRED: sidecar token counting requires an explicit model')
       }
       const state = useStore.getState()
-      const activeProfile = state.profiles.find((profile) => profile.id === state.activeProfileId)
+      const activeProfile = state.profiles.find((profile) => profile.id === state.activeProfileId && profile.review_required !== true)
       const model = activeProfile?.model?.trim()
       if (!model) throw new Error('TOKEN_MODEL_REQUIRED: no active model is configured')
       return model

@@ -57,5 +57,5 @@ try {
     },
   });
 } finally {
-  shutdownRegexSandbox();
+  await shutdownRegexSandbox();
 }

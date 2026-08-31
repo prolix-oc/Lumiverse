@@ -1,7 +1,13 @@
+import { regexApi } from '@/api/regex'
+import {
+  applyPresetAuthorityResult,
+  presetSaveCoordinator,
+} from '@/lib/loom/preset-save-coordinator'
 export interface RegexImportResult {
   imported: number
   skipped: number
   errors: string[]
+  presetAuthorityChanged?: boolean
 }
 
 type ImportPayload = (payload: unknown) => Promise<RegexImportResult>
@@ -17,6 +23,15 @@ function getImportErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+export async function importRegexPayloadWithAuthority(
+  payload: unknown,
+  activePresetId: string | null,
+) {
+  const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+  const result = await regexApi.importScripts(payload, activePresetId)
+  applyPresetAuthorityResult(result, scopeEpoch)
+  return result
+}
 /**
  * Parse and import every selected file in a deterministic order. Files are
  * submitted separately so top-level import options (such as folders) remain
@@ -42,6 +57,7 @@ export async function importRegexFiles(
       const result = await importPayload(payload)
       batchResult.imported += result.imported
       batchResult.skipped += result.skipped
+      if (result.presetAuthorityChanged) batchResult.presetAuthorityChanged = true
       batchResult.errors.push(...result.errors.map((error) => `${file.name}: ${error}`))
     } catch (error) {
       batchResult.errors.push(`${file.name}: ${getImportErrorMessage(error, messages.importFailed)}`)

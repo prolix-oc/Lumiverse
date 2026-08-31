@@ -1,3 +1,5 @@
+import type { AgentActivityEvent } from "../types/agents";
+
 export enum EventType {
   // Connection
   CONNECTED = "CONNECTED",
@@ -23,6 +25,9 @@ export enum EventType {
   GENERATION_ACKNOWLEDGED = "GENERATION_ACKNOWLEDGED",
   GENERATION_IN_PROGRESS = "GENERATION_IN_PROGRESS",
   GENERATION_PHASE_CHANGED = "GENERATION_PHASE_CHANGED",
+  GENERATION_AGENT_ACTIVITY = "GENERATION_AGENT_ACTIVITY",
+  /** Closed status-only Agentic run projection handoff. */
+  AGENT_RUN_CHANGED = "AGENT_RUN_CHANGED",
   // Deferred post-generation bookkeeping (tokenCount / TTFT / TPS) finished and
   // was persisted. Emitted after GENERATION_ENDED so the detail pill + hover
   // tooltip can fill in without a reload — the terminal event stays cheap.
@@ -236,6 +241,17 @@ export enum EventType {
   /** Host-only: a fresh remote invite code (auto-rolled after one is redeemed). */
   ROOM_INVITE_CODE = "ROOM_INVITE_CODE",
 }
+/**
+ * Events whose payload is a browser-facing projection rather than an extension
+ * event. The EventBus still publishes these on the authenticated user topic,
+ * but generic in-process listeners (including Spindle subscriptions) cannot
+ * register for them.
+ */
+export const CLIENT_ONLY_EVENTS: Readonly<Partial<Record<EventType, true>>> = Object.freeze({
+  [EventType.AGENT_RUN_CHANGED]: true,
+});
+
+export type GenerationAgentActivityPayload = AgentActivityEvent;
 
 export type ProviderRegistryChangeAction = "add" | "remove" | "change";
 export type ProviderRegistryAction = ProviderRegistryChangeAction | "snapshot";

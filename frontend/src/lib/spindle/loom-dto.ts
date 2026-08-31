@@ -29,10 +29,11 @@ type UnknownRecord = Record<string, unknown>
 
 /**
  * Block fields owned by the host app that the public Loom DTO deliberately
- * rejects: prompt-variable placement bindings, stash linkage, and LumiHub seal metadata.
- * Host components (the production block editor) emit them on every save, so
- * anything crossing the extension boundary must strip them first — the
- * trusted preset-editor adapter keeps its own copy and merges them back.
+ * rejects: prompt-variable placement bindings, stash linkage, LumiHub seal
+ * metadata, and agent-runtime block revisions. These host-owned fields may be
+ * present on persisted blocks, so anything crossing the extension boundary
+ * must strip them first — the trusted preset-editor adapter keeps its own copy
+ * and merges them back.
  */
 export const HOST_ONLY_BLOCK_FIELDS = [
   'stashId',
@@ -44,6 +45,7 @@ export const HOST_ONLY_BLOCK_FIELDS = [
   'sealedOriginPresetId',
   'sealedOriginVersion',
   'sealedSha256',
+  'revision',
 ] as const
 
 const LOOM_BLOCK_KEYS: Record<string, true> = {

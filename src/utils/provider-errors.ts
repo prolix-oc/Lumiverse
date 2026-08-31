@@ -1,3 +1,11 @@
+import {
+  closeConnection,
+  normalizeProviderReceiveLimit,
+  ProviderProtocolError,
+  ProviderResponseTooLargeError,
+  readWithAbort,
+} from "../llm/stream-utils";
+
 export interface ParsedProviderErrorBody {
   code?: string;
   detail?: string;
@@ -186,6 +194,60 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
   return { detail: truncateDetail(stripHtml(trimmed) || trimmed) };
 }
 
+const DEFAULT_PROVIDER_ERROR_BODY_BYTES = 16 * 1024;
+function resolveBoundedReadArguments(
+  signalOrMaxBytes: AbortSignal | number | undefined,
+  maxBytes: number | undefined,
+): { signal?: AbortSignal; maxBytes: number } {
+  const signal = typeof signalOrMaxBytes === "number" ? undefined : signalOrMaxBytes;
+  const requestedMaxBytes =
+    typeof signalOrMaxBytes === "number"
+      ? signalOrMaxBytes
+      : maxBytes ?? DEFAULT_PROVIDER_ERROR_BODY_BYTES;
+  return {
+    signal,
+    maxBytes: normalizeProviderReceiveLimit(requestedMaxBytes, "maxBytes"),
+  };
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
+function parseContentLength(res: Response, maxBytes: number): number {
+  const raw = res.headers?.get?.("content-length")?.trim();
+  if (!raw || !/^\d+$/.test(raw)) {
+    throw new ProviderProtocolError(
+      "Provider response body has no trustworthy content-length",
+    );
+  }
+  const contentLength = Number(raw);
+  if (!Number.isSafeInteger(contentLength)) {
+    throw new ProviderProtocolError(
+      "Provider response content-length is not a safe integer",
+    );
+  }
+  if (contentLength > maxBytes) {
+    throw new ProviderResponseTooLargeError(
+      `Provider response exceeded ${maxBytes} bytes`,
+      maxBytes,
+      contentLength,
+    );
+  }
+  return contentLength;
+}
+
+async function readBodylessText(
+  res: Response,
+  signal: AbortSignal | undefined,
+  maxBytes: number,
+): Promise<string> {
+  if (signal?.aborted) throw abortReason(signal);
+  parseContentLength(res, maxBytes);
+  throw new ProviderProtocolError(
+    "Provider error body is not incrementally readable",
+  );
+}
 /**
  * Read at most `maxBytes` of a Response body as text. Discards anything past
  * the cap and cancels the underlying stream so we don't keep slurping huge
@@ -194,41 +256,59 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
  * Important: cancels the reader explicitly to release the HTTP connection —
  * relying on GC alone leaves the socket pinned, which has previously surfaced
  * as Bun HTTPThread misbehaviour on large/slow error responses.
+ *
+ * The second argument accepts the legacy numeric cap or the caller's abort
+ * signal; the third argument is the cap when a signal is supplied.
  */
-export async function readBoundedText(res: Response, maxBytes = 16 * 1024): Promise<string> {
+export async function readBoundedText(
+  res: Response,
+  signalOrMaxBytes?: AbortSignal | number,
+  maxBytes?: number,
+): Promise<string> {
+  const resolved = resolveBoundedReadArguments(signalOrMaxBytes, maxBytes);
+  const signal = resolved.signal;
+  const cap = resolved.maxBytes;
   if (!res.body) {
-    try {
-      const text = await res.text();
-      return text.length > maxBytes ? `${text.slice(0, maxBytes)}…[truncated]` : text;
-    } catch {
-      return "";
-    }
+    return readBodylessText(res, signal, cap);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let total = 0;
   let truncated = false;
+  let readToEnd = false;
   try {
-    while (total < maxBytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        const overshoot = total - maxBytes;
-        const keep = value.byteLength - overshoot;
-        buffer += decoder.decode(value.subarray(0, Math.max(0, keep)), { stream: false });
+    while (true) {
+      const { done, value } = await readWithAbort(reader, signal);
+      if (signal?.aborted) throw abortReason(signal);
+      if (done) {
+        readToEnd = true;
+        break;
+      }
+      if (!value || value.byteLength === 0) continue;
+      if (total >= cap) {
         truncated = true;
         break;
       }
+      const nextTotal = total + value.byteLength;
+      if (nextTotal > cap) {
+        const keep = cap - total;
+        buffer += decoder.decode(value.subarray(0, keep), { stream: false });
+        total = cap;
+        truncated = true;
+        break;
+      }
+      total = nextTotal;
       buffer += decoder.decode(value, { stream: true });
     }
     if (!truncated) buffer += decoder.decode();
-  } catch {
-    // Swallow — we only need a best-effort error body. The caller still has
-    // res.status / res.statusText for context.
+  } catch (error) {
+    if (signal?.aborted) throw abortReason(signal);
+    // Error responses are best effort; the caller still has res.status and
+    // res.statusText for context when an upstream body read fails.
   } finally {
     await reader.cancel().catch(() => {});
+    if (!readToEnd) closeConnection(res);
   }
   return truncated ? `${buffer}…[truncated]` : buffer;
 }
@@ -237,8 +317,14 @@ export function isRetryableProviderStatus(status: number | undefined): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || (status !== undefined && status >= 500);
 }
 
-export async function throwProviderResponseError(provider: string, operation: string, res: Response): Promise<never> {
-  const rawBody = await readBoundedText(res);
+export async function throwProviderResponseError(
+  provider: string,
+  operation: string,
+  res: Response,
+  signal?: AbortSignal,
+  maxBytes?: number,
+): Promise<never> {
+  const rawBody = await readBoundedText(res, signal, maxBytes);
   const parsed = parseProviderErrorBody(rawBody);
   throw new ProviderRequestError({
     provider,

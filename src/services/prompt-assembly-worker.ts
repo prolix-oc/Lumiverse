@@ -3,6 +3,15 @@ import type { MacroDefinition, MacroEnv, MacroHandler } from "../macros/types";
 import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
+import {
+  DEFAULT_ISOLATE_MAX_FRAME_BYTES,
+  decodeLengthPrefixedJson,
+  encodeLengthPrefixedJson,
+  isIsolateRequestEnvelopeV1,
+  makeErrorEnvelopeV1,
+  makeResultEnvelopeV1,
+  normalizeIsolateMaxFrameBytes,
+} from "./isolate-protocol";
 
 // Mark this isolate as the assembly worker so assemblePrompt can skip work that
 // only makes sense in the main process — notably the deferred cortex warm task,
@@ -11,13 +20,16 @@ import { initDatabase } from "../db/connection";
 // before any assemblePrompt() call.
 (globalThis as { __LUMIVERSE_ASSEMBLY_WORKER?: boolean }).__LUMIVERSE_ASSEMBLY_WORKER = true;
 
-type AssembleRequest = {
+export type AssembleRequest = {
   type: "assemble";
   requestId: string;
-  ctx: Omit<AssemblyContext, "signal" | "prefetched">;
+  ctx: Omit<
+    AssemblyContext,
+    "signal" | "prefetched" | "agentRuntimeOwner" | "createAgentRuntimeOwner"
+  >;
 };
 
-type WorkerResponse =
+export type WorkerResponse =
   | { type: "result"; requestId: string; result: AssemblyResult }
   | { type: "error"; requestId: string; error: string; name?: string; stack?: string };
 
@@ -75,7 +87,22 @@ function sanitizeAssemblyResult(result: AssemblyResult): AssemblyResult {
   };
 }
 
-async function handleAssemble(message: AssembleRequest): Promise<void> {
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as { code?: unknown; failureCode?: unknown };
+  return typeof candidate.code === "string"
+    ? candidate.code
+    : typeof candidate.failureCode === "string"
+      ? candidate.failureCode
+      : undefined;
+}
+
+export async function runAssemblyRequest(
+  ctx: Omit<
+    AssemblyContext,
+    "signal" | "prefetched" | "agentRuntimeOwner" | "createAgentRuntimeOwner"
+  >,
+): Promise<AssemblyResult> {
   await ensureInitialized();
 
   const [{ prefetchAssemblyData }, { assemblePrompt }] = await Promise.all([
@@ -83,27 +110,50 @@ async function handleAssemble(message: AssembleRequest): Promise<void> {
     import("./prompt-assembly.service"),
   ]);
 
-  const prefetched = await prefetchAssemblyData(message.ctx);
-  const result = await assemblePrompt({ ...message.ctx, prefetched });
-
-  postMessage({
-    type: "result",
-    requestId: message.requestId,
-    result: sanitizeAssemblyResult(result),
-  } satisfies WorkerResponse);
+  const prefetched = await prefetchAssemblyData(ctx);
+  const result = await assemblePrompt({ ...ctx, prefetched });
+  return sanitizeAssemblyResult(result);
 }
 
-self.onmessage = (event: MessageEvent<AssembleRequest>) => {
-  const message = event.data;
-  if (!message || message.type !== "assemble") return;
+async function handleRequest(message: unknown): Promise<void> {
+  const request = decodeLengthPrefixedJson<unknown>(
+    message as Uint8Array | ArrayBuffer,
+    workerMaxFrameBytes,
+  );
+  if (!isIsolateRequestEnvelopeV1(request) || request.operation !== "assemble_prompt") {
+    throw new Error("Malformed isolate assembly request envelope");
+  }
+  try {
+    const result = await runAssemblyRequest(request.payload as AssembleRequest["ctx"]);
+    postMessage(encodeLengthPrefixedJson(
+      makeResultEnvelopeV1(request.requestId, result),
+      workerMaxFrameBytes,
+    ));
+  } catch (error) {
+    postMessage(encodeLengthPrefixedJson(
+      makeErrorEnvelopeV1(request.requestId, error, errorCode(error)),
+      workerMaxFrameBytes,
+    ));
+  }
+}
 
-  handleAssemble(message).catch((err: any) => {
-    postMessage({
-      type: "error",
-      requestId: message.requestId,
-      error: err?.message || String(err),
-      name: err?.name,
-      stack: err?.stack,
-    } satisfies WorkerResponse);
-  });
-};
+const configuredFrameBytes = Number(
+  typeof location !== "undefined"
+    ? new URL(location.href).searchParams.get("maxFrameBytes")
+    : process.env.LUMIVERSE_ISOLATE_MAX_FRAME_BYTES,
+);
+const workerMaxFrameBytes = normalizeIsolateMaxFrameBytes(
+  Number.isFinite(configuredFrameBytes) && configuredFrameBytes > 0
+    ? configuredFrameBytes
+    : DEFAULT_ISOLATE_MAX_FRAME_BYTES,
+);
+
+const workerGlobal = typeof self !== "undefined" && typeof (self as unknown as { postMessage?: unknown }).postMessage === "function"
+  ? self
+  : null;
+
+if (workerGlobal) {
+  workerGlobal.onmessage = (event: MessageEvent<unknown>) => {
+    void handleRequest(event.data);
+  };
+}

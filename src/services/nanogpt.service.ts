@@ -92,7 +92,7 @@ export async function completeOAuth(
   let created = false;
 
   if (connectionId) {
-    const conn = connSvc.getConnection(userId, connectionId);
+    const conn = connSvc.getUsableConnection(userId, connectionId);
     if (!conn) throw new Error("Connection not found");
     if (conn.provider !== "nanogpt") throw new Error("Connection is not a NanoGPT profile");
   }
@@ -132,6 +132,6 @@ export async function completeOAuth(
   await connSvc.setConnectionApiKey(userId, connectionId, apiKey);
   pendingOAuth.delete(sessionToken);
 
-  const profile = connSvc.getConnection(userId, connectionId)!;
-  return { success: true, connection_id: connectionId, created, profile };
+  const profile = connSvc.getUsableConnection(userId, connectionId)!;
+  return { success: true, connection_id: connectionId, created, profile: connSvc.toPublicConnection(profile) };
 }

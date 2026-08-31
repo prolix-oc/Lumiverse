@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore, type ComponentType } from 'react'
 import { Columns2, Maximize2, Settings, Waypoints, Zap } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { createDynamicExtensionIcon } from '@/components/icons/DynamicExtensionIcon'
 import {
   buildChatDockerActionCatalog,
@@ -163,9 +164,16 @@ export function quickToolbarInputActionIcon(action: QuickToolbarInputAction): To
 }
 
 /** Keep first-party suite names stable even while an older extension instance is still registered. */
-export function quickToolbarInputActionLabel(action: Pick<InputBarActionState, 'contributionId' | 'label'>): string {
-  if (action.contributionId === EXTENSION_HALF_LOREBOOK_ACTION_ID) return 'Half-Screen Lorebook Editor'
-  if (action.contributionId === EXTENSION_ENHANCED_LOREBOOK_ACTION_ID) return 'Full-Screen Lorebook Editor'
+export function quickToolbarInputActionLabel(
+  action: Pick<InputBarActionState, 'contributionId' | 'label'>,
+  translate?: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (action.contributionId === EXTENSION_HALF_LOREBOOK_ACTION_ID) {
+    return translate?.('quickToolbar.halfScreenLorebook') ?? 'quickToolbar.halfScreenLorebook'
+  }
+  if (action.contributionId === EXTENSION_ENHANCED_LOREBOOK_ACTION_ID) {
+    return translate?.('quickToolbar.fullScreenLorebook') ?? 'quickToolbar.fullScreenLorebook'
+  }
   return action.label
 }
 
@@ -175,6 +183,7 @@ export function quickToolbarInputActionLabel(action: Pick<InputBarActionState, '
  * immediately reflected in the others.
  */
 export function useQuickToolbarActions() {
+  const { t } = useTranslation('chat')
   const settings = useStore((s) => s.quickToolbarSettings)
   const userRole = useStore((s) => s.user?.role)
   const extensionDrawerTabs = useStore((s) => s.drawerTabs)
@@ -187,11 +196,11 @@ export function useQuickToolbarActions() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
   const messageSelectMode = useStore((s) => s.messageSelectMode)
   const openModal = useStore((s) => s.openModal)
-  // The snapshot is a *value*, not just a re-render trigger. ChatView registers
-  // `navigateToOldestMessage` / `openMessageNavigator` in an effect, i.e. after
+  // The snapshot is a value, not just a re-render trigger. ChatView registers
+  // navigateToOldestMessage / openMessageNavigator in an effect, i.e. after
   // the toolbar in the same commit has already rendered — so a catalog memo that
   // read the owners imperatively kept the empty registration forever and
-  // rendered chat actions whose `run` did nothing.
+  // rendered chat actions whose run did nothing.
   const chatDockerActionOwners = useSyncExternalStore(
     subscribeChatDockerActionOwners,
     getChatDockerActionOwners,
@@ -239,7 +248,7 @@ export function useQuickToolbarActions() {
     }
   }, [closeDrawer, closeSettings, openDrawer, openSettings, setDrawerTab])
 
-  const actionCatalog = useMemo(() => {
+  const actionCatalog = useMemo<ToolbarAction[]>(() => {
     const enabledDrawerTabs = filterEnabledFrontendContributions(extensionDrawerTabs, extensions)
     const enabledExtensionCommands = filterEnabledFrontendContributions(extensionCommands, extensions)
     const enabledInputBarActions = filterEnabledFrontendContributions(inputBarActions, extensions)
@@ -279,7 +288,7 @@ export function useQuickToolbarActions() {
       // per-command sentence for the palette all along; this just stops
       // discarding it. The old string survives only as an empty-value guard for
       // extension-supplied commands, which are untrusted input.
-      description: command.description || 'Run this command.',
+      description: command.description || t('quickToolbar.commandDescription'),
       keywords: command.keywords,
       icon: command.icon,
       surface: { kind: 'command' },
@@ -297,10 +306,10 @@ export function useQuickToolbarActions() {
           // actions instead persist their contributor ids, so their quick-toolbar
           // visibility/order survives extension reloads and can be defaulted.
           id: quickToolbarInputActionId(action),
-          label: quickToolbarInputActionLabel(action),
+          label: quickToolbarInputActionLabel(action, t),
           // `subtitle` is the extension's own one-liner; the fallback still names the
           // extension, so two actions from different extensions never read alike.
-          description: action.subtitle || `Input bar action from the ${action.extensionName} extension.`,
+          description: action.subtitle || t('quickToolbar.extensionDescription', { extensionName: action.extensionName }),
           keywords: ['extension', 'input action', action.extensionName, action.extensionId],
           icon: quickToolbarInputActionIcon(action),
           surface: { kind: 'command' } as const,
@@ -320,6 +329,7 @@ export function useQuickToolbarActions() {
         openModal: owners.openModal ?? openModal,
         navigate: router.navigate,
       },
+      translate: t,
       scope: {
         activeCharacterId,
         activeChatId,
@@ -333,7 +343,7 @@ export function useQuickToolbarActions() {
     }).map((action) => ({
       id: action.id,
       label: action.id === 'chat.select-messages' && messageSelectMode
-        ? 'Exit selection mode'
+        ? t('chatDocker.selectMessages.exitLabel')
         : action.label,
       description: action.description,
       keywords: action.keywords,
@@ -348,8 +358,8 @@ export function useQuickToolbarActions() {
       ...chatDockerActions,
       {
         id: 'settings',
-        label: 'Settings',
-        description: 'Open productivity settings.',
+        label: t('quickToolbar.settings'),
+        description: t('quickToolbar.settingsDescription'),
         keywords: ['settings', 'preferences', 'options', 'config', 'productivity', 'toolbar'],
         icon: Settings,
         surface: { kind: 'settings', view: SETTINGS_ROOT_VIEW },
@@ -377,11 +387,12 @@ export function useQuickToolbarActions() {
     messageSelectMode,
     openModal,
     runSurface,
+    t,
     userRole,
   ])
 
-  const actionById = useMemo(
-    () => new Map(actionCatalog.map((action) => [action.id, action])),
+  const actionById = useMemo<Map<string, ToolbarAction>>(
+    () => new Map(actionCatalog.map((action): [string, ToolbarAction] => [action.id, action])),
     [actionCatalog],
   )
 

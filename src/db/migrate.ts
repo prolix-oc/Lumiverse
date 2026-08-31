@@ -1,5 +1,16 @@
 import { Database } from "bun:sqlite";
-import { readdirSync, existsSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { healCorruptDatabase } from "./maintenance";
 
@@ -128,9 +139,315 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "110_illarin_delivery_receipts.sql",
   "111_generation_outbox_connection_id.sql",
   "112_weaver_session_taste.sql",
+  "113_agent_activity_runs.sql",
+  "114_regex_validation.sql",
+  "115_user_data_import_integrity.sql",
+  "116_agent_config_v2.sql",
+  "117_agent_turn_workspace.sql",
+  "118_agent_run_projection.sql",
+  "119_ticket_consumption_strict.sql",
+  "120_agent_run_projection_outbox.sql",
+  "121_archive_digest_constraints.sql",
+  "122_ticket_consumption_account_delete.sql",
+  "123_image_public_provenance.sql",
+  "124_user_data_import_projection_pending.sql",
+  "125_work_alpha1_workspace.sql",
+  "126_work_alpha1_inspection.sql",
+  "127_agent_runtime_repair_acknowledgements.sql",
+  "128_persistent_workspace_session_revision.sql",
+  "129_agent_inspection_source_retention.sql",
+  "130_cognition_task_provenance.sql",
+  "131_persistent_workspace_session_detach.sql",
+  "132_persistent_workspace_chat_detach.sql",
+  "133_agent_run_resync_snapshots.sql",
+  "134_bounded_resync_and_portable_artifacts.sql",
+  "135_agent_work_segments.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);
+
+/** The first migration in the PR #277 schema bundle. */
+export const PRE_BUNDLE_MIGRATION_NUMBER = 113;
+/** Deterministic, adjacent recovery copy retained across later migration runs. */
+export const PRE_BUNDLE_BACKUP_SUFFIX = ".pre-bundle-113.sqlite";
+
+type MigrationProof = {
+  hasMigrationsTable: boolean;
+  migrationNames: string[];
+  schemaVersion: number;
+  userVersion: number;
+  applicationId: number;
+  pageSize: number;
+};
+
+function isMemoryDatabase(db: Database): boolean {
+  const filename = db.filename.trim().toLowerCase();
+  return (
+    filename.length === 0
+    || filename === ":memory:"
+    || filename.startsWith("file::memory:")
+    || filename.includes("mode=memory")
+  );
+}
+
+/**
+ * Return the recovery path without exposing it in errors or logs. URI-style
+ * database names are intentionally rejected: the application opens its
+ * persistent database through a normal data-directory path, and treating an
+ * unknown URI as a filesystem path would make the backup guarantee ambiguous.
+ */
+export function getPreBundleBackupPath(db: Database): string | null {
+  if (isMemoryDatabase(db)) return null;
+  if (db.filename.trim().toLowerCase().startsWith("file:")) {
+    throw new Error("persistent database URI is unsupported for pre-bundle backup");
+  }
+  return `${db.filename}${PRE_BUNDLE_BACKUP_SUFFIX}`;
+}
+
+function migrationNumber(name: string): number | null {
+  const match = /^(\d+)_/.exec(name);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+function readPragmaInteger(db: Database, pragma: "schema_version" | "user_version" | "application_id" | "page_size"): number {
+  const row = db.query(`PRAGMA ${pragma}`).get() as Record<string, unknown> | null;
+  const value = row ? Object.values(row)[0] : null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`SQLite PRAGMA ${pragma} did not return a valid integer`);
+  }
+  return value;
+}
+
+function readMigrationProof(db: Database): MigrationProof {
+  const table = db
+    .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+    .get();
+  const migrationNames = table
+    ? (db.query("SELECT name FROM _migrations ORDER BY id ASC").all() as Array<{ name: unknown }>).map((row) => {
+        if (typeof row.name !== "string" || row.name.length === 0) {
+          throw new Error("SQLite migration metadata contains an invalid name");
+        }
+        return row.name;
+      })
+    : [];
+
+  return {
+    hasMigrationsTable: !!table,
+    migrationNames,
+    schemaVersion: readPragmaInteger(db, "schema_version"),
+    userVersion: readPragmaInteger(db, "user_version"),
+    applicationId: readPragmaInteger(db, "application_id"),
+    pageSize: readPragmaInteger(db, "page_size"),
+  };
+}
+
+function assertIntegrity(db: Database, label: "source" | "backup"): void {
+  const rows = db.query("PRAGMA integrity_check").all() as Array<Record<string, unknown>>;
+  const results = rows.map((row) => String(Object.values(row)[0] ?? ""));
+  if (results.length !== 1 || results[0] !== "ok") {
+    throw new Error(`SQLite ${label} integrity check failed`);
+  }
+}
+
+function assertStrictlyPreBundle(proof: MigrationProof, label: "source" | "backup"): void {
+  const crossing = proof.migrationNames.find((name) => {
+    const number = migrationNumber(name);
+    return number !== null && number >= PRE_BUNDLE_MIGRATION_NUMBER;
+  });
+  if (crossing) {
+    throw new Error(`SQLite ${label} has crossed the pre-bundle migration boundary`);
+  }
+}
+
+function assertMatchingProof(source: MigrationProof, backup: MigrationProof): void {
+  if (
+    source.hasMigrationsTable !== backup.hasMigrationsTable
+    // VACUUM INTO legitimately increments SQLite's schema cookie in the
+    // destination, so schemaVersion is validated as part of each proof but
+    // is not an identity key between source and backup.
+    || source.userVersion !== backup.userVersion
+    || source.applicationId !== backup.applicationId
+    || source.pageSize !== backup.pageSize
+    || source.migrationNames.join("\u0000") !== backup.migrationNames.join("\u0000")
+  ) {
+    throw new Error("pre-bundle backup does not match the source schema identity");
+  }
+}
+
+function validateBackup(backupPath: string, sourceProof: MigrationProof): void {
+  let backup: Database | null = null;
+  try {
+    const backupStats = lstatSync(backupPath);
+    if (backupStats.isSymbolicLink() || !backupStats.isFile()) {
+      throw new Error("pre-bundle backup must be a regular file");
+    }
+    backup = new Database(backupPath, { readonly: true });
+    assertIntegrity(backup, "backup");
+    const backupProof = readMigrationProof(backup);
+    assertStrictlyPreBundle(backupProof, "backup");
+    assertMatchingProof(sourceProof, backupProof);
+  } catch (error: unknown) {
+    if (readErrorProperty(error, "message") === "pre-bundle backup does not match the source schema identity") {
+      throw error;
+    }
+    // Do not leak the data-directory or backup path through startup errors.
+    throw new Error("pre-bundle backup validation failed; startup aborted");
+  } finally {
+    backup?.close();
+  }
+}
+
+function syncFile(path: string): void {
+  const fd = openSync(path, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readErrorProperty(error: unknown, property: "code" | "message"): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = property === "code"
+    ? ("code" in error ? error.code : undefined)
+    : ("message" in error ? error.message : undefined);
+  return typeof value === "string" ? value : undefined;
+}
+
+function syncDirectory(path: string): void {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    fsyncSync(fd);
+  } catch (error: unknown) {
+    // Windows does not expose directory handles that can be fsync'd. The
+    // flushed backup file plus atomic no-replace link is its equivalent.
+    const code = readErrorProperty(error, "code");
+    const unsupportedOnWindows =
+      process.platform === "win32"
+      && (code === "EPERM" || code === "EISDIR" || code === "EINVAL" || code === "ENOTSUP");
+    if (!unsupportedOnWindows) throw error;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+function sqliteStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function installBackupNoReplace(tempPath: string, backupPath: string, directory: string): void {
+  try {
+    // A hard-link install is atomic and cannot replace an existing path.
+    // Both paths are adjacent, so this does not cross filesystems.
+    linkSync(tempPath, backupPath);
+  } catch (error: unknown) {
+    if (readErrorProperty(error, "code") !== "EEXIST") throw error;
+    unlinkSync(tempPath);
+    return;
+  }
+  unlinkSync(tempPath);
+  syncDirectory(directory);
+}
+
+function createPreBundleBackup(db: Database, backupPath: string, sourceProof: MigrationProof): void {
+  const directory = dirname(backupPath);
+  const tempPath = `${backupPath}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    // VACUUM INTO uses SQLite's backup machinery and includes committed pages
+    // from a WAL without copying the live database/WAL files by hand.
+    db.run(`VACUUM INTO ${sqliteStringLiteral(tempPath)}`);
+    syncFile(tempPath);
+
+    // Validate before installation, then validate the no-replace destination
+    // again below. A partially written or malformed backup is never retained.
+    validateBackup(tempPath, sourceProof);
+    installBackupNoReplace(tempPath, backupPath, directory);
+    validateBackup(backupPath, sourceProof);
+  } catch (error: unknown) {
+    try {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+    } catch {
+      // Preserve the original failure; startup remains fail-closed.
+    }
+    if (readErrorProperty(error, "message") === "pre-bundle backup does not match the source schema identity") {
+      throw error;
+    }
+    throw new Error("pre-bundle SQLite backup failed; startup aborted");
+  }
+}
+
+function migrationFileAlreadyRecorded(file: string, applied: ReadonlySet<string>, appliedBaseNames: ReadonlySet<string>): boolean {
+  return applied.has(file) || appliedBaseNames.has(file.replace(/^\d+_/, ""));
+}
+
+/**
+ * Ensure a durable recovery point exists before the first PR #277 migration.
+ * This runs before _migrations is created or any baseline/migration SQL is
+ * executed. In-memory databases intentionally have no recovery file.
+ */
+export function ensurePreBundleBackup(db: Database, migrationsDir: string): void {
+  const backupPath = getPreBundleBackupPath(db);
+  if (!backupPath) return;
+
+  const files = readdirSync(migrationsDir)
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+  const bundleFiles = files.filter((file) => {
+    const number = migrationNumber(file);
+    return number !== null && number >= PRE_BUNDLE_MIGRATION_NUMBER;
+  });
+  if (bundleFiles.length === 0) return;
+
+  const migrationTable = db
+    .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+    .get();
+  if (!migrationTable) {
+    const existingSchema = db
+      .query("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
+      .get();
+    // A brand-new persistent database has no user schema to protect; its
+    // baseline bootstrap creates the post-bundle schema from scratch.
+    if (!existingSchema) return;
+  }
+
+  const applied = new Set<string>();
+  if (migrationTable) {
+    for (const row of db.query("SELECT name FROM _migrations ORDER BY id ASC").all() as Array<{ name: unknown }>) {
+      if (typeof row.name !== "string" || row.name.length === 0) {
+        throw new Error("SQLite migration metadata contains an invalid name");
+      }
+      applied.add(row.name);
+    }
+  }
+  const appliedBaseNames = new Set([...applied].map((name) => name.replace(/^\d+_/, "")));
+  const hasBundleWork = bundleFiles.some((file) => !migrationFileAlreadyRecorded(file, applied, appliedBaseNames));
+  if (!hasBundleWork) return;
+
+  if (applied.size === 0) {
+    const existingUserSchema = db
+      .query("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name <> '_migrations' LIMIT 1")
+      .get();
+    if (!existingUserSchema) return;
+  }
+  assertIntegrity(db, "source");
+  const sourceProof = readMigrationProof(db);
+  // The bundle has already been crossed; later migrations do not need another
+  // pre-bundle snapshot, and an existing recovery point must remain untouched.
+  if (sourceProof.migrationNames.some((name) => {
+    const number = migrationNumber(name);
+    return number !== null && number >= PRE_BUNDLE_MIGRATION_NUMBER;
+  })) return;
+  assertStrictlyPreBundle(sourceProof, "source");
+
+  if (existsSync(backupPath)) {
+    validateBackup(backupPath, sourceProof);
+    return;
+  }
+  createPreBundleBackup(db, backupPath, sourceProof);
+}
 
 function isInsideGitRepo(startPath: string): boolean {
   let current = startPath;
@@ -200,10 +517,10 @@ function repairDreamWeaverBaselineDrift(db: Database): void {
 }
 
 // The shipped baseline.sql was regenerated from a DB that already had
-// migrations 072, 075, and 076 applied, so their schema changes are
-// present after baseline bootstrap. Returns true when the migration's
-// effect is already in place and the runner should record it as applied
-// without re-running.
+// migrations 072, 075, and 076 applied, and includes the persistent workspace
+// session revision introduced by migration 128. Returns true when the
+// migration's effect is already in place and the runner should record it as
+// applied without re-running.
 function isBaselineDriftAlreadyApplied(db: Database, file: string): boolean {
   if (file === "072_world_books_folder.sql") {
     const columns = db.query("PRAGMA table_info('world_books')").all() as Array<{ name: string }>;
@@ -222,6 +539,10 @@ function isBaselineDriftAlreadyApplied(db: Database, file: string): boolean {
     const characterId = columns.find((column) => column.name === "character_id");
     return !!characterId && characterId.notnull === 0;
   }
+  if (file === "128_persistent_workspace_session_revision.sql") {
+    const columns = db.query("PRAGMA table_info('persistent_workspace_turn_sessions')").all() as Array<{ name: string }>;
+    return columns.some((column) => column.name === "revision");
+  }
   return false;
 }
 
@@ -235,6 +556,9 @@ const FOREIGN_KEYS_OFF_MIGRATIONS = new Set([
   // Table rebuild (drop + recreate) of extension_grants, which carries a child
   // FK into extensions with ON DELETE CASCADE.
   "104_extension_grants_scoped_unique.sql",
+  // Persistent workspace detach rebuilds its session table while retaining
+  // the canonical child ownership edges.
+  "131_persistent_workspace_session_detach.sql",
 ]);
 
 function applyMigrationWithForeignKeysOff(db: Database, file: string, sql: string): void {
@@ -259,6 +583,8 @@ function applyMigrationWithForeignKeysOff(db: Database, file: string, sql: strin
 
 export async function runMigrations(db: Database, migrationsDir?: string): Promise<void> {
   const dir = migrationsDir || join(import.meta.dir, "migrations");
+  // This must precede _migrations creation and every baseline/migration write.
+  ensurePreBundleBackup(db, dir);
 
   try {
     db.run(`

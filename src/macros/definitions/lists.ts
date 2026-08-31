@@ -53,7 +53,7 @@ export function registerListMacros(): void {
       if (out.length >= MAX_LIST_ITEMS) {
         ctx.warn(`{{range}} capped at ${MAX_LIST_ITEMS} items`);
       }
-      return out.join(", ");
+      return ctx.budget.join(out.map(String), ", ");
     },
   });
 
@@ -154,7 +154,7 @@ export function registerListMacros(): void {
       const hasEnd = ctx.args[2] !== undefined && ctx.args[2] !== "";
       const end = hasEnd ? parseInt(ctx.args[2], 10) : NaN;
       const out = hasEnd && !isNaN(end) ? items.slice(s, end) : items.slice(s);
-      return formatList(out);
+      return formatList(out, ctx.budget);
     },
   });
 
@@ -171,7 +171,7 @@ export function registerListMacros(): void {
     handler: (ctx) => {
       const items = parseList(ctx.args[0] ?? "");
       const n = parseInt(ctx.args[1], 10) || 0;
-      return formatList(n >= 0 ? items.slice(0, n) : items.slice(n));
+      return formatList(n >= 0 ? items.slice(0, n) : items.slice(n), ctx.budget);
     },
   });
 
@@ -197,7 +197,7 @@ export function registerListMacros(): void {
         allNumeric ? (a, b) => Number(a) - Number(b) : (a, b) => a.localeCompare(b),
       );
       if (dir === "desc" || dir === "descending" || dir === "reverse") sorted.reverse();
-      return formatList(sorted);
+      return formatList(sorted, ctx.budget);
     },
   });
 
@@ -209,7 +209,7 @@ export function registerListMacros(): void {
     returnType: "string",
     args: [{ name: "list", description: "Comma-separated list" }],
     aliases: ["dedupe", "distinct"],
-    handler: (ctx) => formatList([...new Set(parseList(ctx.args[0] ?? ""))]),
+    handler: (ctx) => formatList([...new Set(parseList(ctx.args[0] ?? ""))], ctx.budget),
   });
 
   registry.registerMacro({
@@ -220,7 +220,7 @@ export function registerListMacros(): void {
     returnType: "string",
     args: [{ name: "list", description: "Comma-separated list" }],
     aliases: ["reverse_list"],
-    handler: (ctx) => formatList(parseList(ctx.args[0] ?? "").reverse()),
+    handler: (ctx) => formatList(parseList(ctx.args[0] ?? "").reverse(), ctx.budget),
   });
 
   registry.registerMacro({
@@ -238,7 +238,7 @@ export function registerListMacros(): void {
         const j = Math.floor(Math.random() * (i + 1));
         [items[i], items[j]] = [items[j], items[i]];
       }
-      return formatList(items);
+      return formatList(items, ctx.budget);
     },
   });
 

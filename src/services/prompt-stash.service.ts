@@ -3,7 +3,9 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Preset, PromptBlock } from "../types/preset";
 import * as settingsSvc from "./settings.service";
-
+import { getPresetAgentConfig, quarantineAgentConfigForPresetRevisionWithDb } from "./agent-config-portability.service";
+import { sameJsonValue } from "../utils/json-value";
+import { withUserDataMutationSync } from "./user-data/snapshot";
 const STASH_SETTING_KEY = "loomPromptStash";
 const MAX_STASH_ENTRIES = 500;
 
@@ -52,7 +54,7 @@ function payloadFromBlock(block: PromptBlock): StashBlockPayload {
 }
 
 function samePayload(left: StashBlockPayload, right: StashBlockPayload): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return sameJsonValue(left, right);
 }
 
 export function listPromptStash(userId: string): StashedPromptBlock[] {
@@ -85,42 +87,62 @@ export function addPromptBlockToStash(
  * block. The blocks remain in their presets, retaining their local visibility
  * and placement, so un-stashing never discards prompt content.
  */
-export function removePromptBlockFromStash(userId: string, stashId: string): boolean {
-  const entries = readStash(userId);
-  if (!entries.some((entry) => entry.id === stashId)) return false;
-  const remaining = entries.filter((entry) => entry.id !== stashId);
-  const db = getDb();
-  const rows = db.query("SELECT id, prompt_order FROM presets WHERE user_id = ?").all(userId) as Array<{ id: string; prompt_order: string }>;
-  const changedPresetIds: string[] = [];
-  const update = db.query(
-    "UPDATE presets SET prompt_order = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?",
-  );
-  const now = Math.floor(Date.now() / 1000);
-  const transaction = db.transaction(() => {
-    for (const row of rows) {
-      let blocks: PromptBlock[];
-      try { blocks = JSON.parse(row.prompt_order); } catch { continue; }
-      if (!Array.isArray(blocks)) continue;
-      let didChange = false;
-      const next = blocks.map((block) => {
-        if (block?.stashId !== stashId) return block;
-        didChange = true;
-        const { stashId: _stashId, ...unlinked } = block;
-        return unlinked;
-      });
-      if (!didChange) continue;
-      update.run(JSON.stringify(next), now, row.id, userId);
-      changedPresetIds.push(row.id);
-    }
-  });
-  transaction();
-  settingsSvc.putSetting(userId, STASH_SETTING_KEY, remaining);
-  emitPresetChanges(userId, changedPresetIds);
-  return true;
+export interface PromptStashRemovalResult {
+  removed: boolean;
+  presetAuthorityChanged: boolean;
+  presetAuthorities: Preset[];
 }
 
-function emitPresetChanges(userId: string, presetIds: string[]): void {
+export function removePromptBlockFromStash(userId: string, stashId: string): PromptStashRemovalResult {
+  return withUserDataMutationSync(userId, () => {
+    const entries = readStash(userId);
+    if (!entries.some((entry) => entry.id === stashId)) {
+      return { removed: false, presetAuthorityChanged: false, presetAuthorities: [] };
+    }
+    const remaining = entries.filter((entry) => entry.id !== stashId);
+    const db = getDb();
+    const changedPresetIds = db.transaction(() => {
+      const rows = db.query("SELECT id, prompt_order, cache_revision FROM presets WHERE user_id = ?").all(userId) as Array<{ id: string; prompt_order: string; cache_revision: number }>;
+      const changedIds: string[] = [];
+      const update = db.query(
+        "UPDATE presets SET prompt_order = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?",
+      );
+      const now = Math.floor(Date.now() / 1000);
+      for (const row of rows) {
+        let blocks: PromptBlock[];
+        try { blocks = JSON.parse(row.prompt_order); } catch { continue; }
+        if (!Array.isArray(blocks)) continue;
+        let didChange = false;
+        const next = blocks.map((block) => {
+          if (block?.stashId !== stashId) return block;
+          didChange = true;
+          const { stashId: _stashId, ...unlinked } = block;
+          return unlinked;
+        });
+        if (!didChange) continue;
+        update.run(JSON.stringify(next), now, row.id, userId);
+        quarantineAgentConfigForPresetRevisionWithDb(db, userId, row.id, row.cache_revision + 1, next);
+        changedIds.push(row.id);
+      }
+      db.query(
+        `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(STASH_SETTING_KEY, JSON.stringify(remaining), userId, now);
+      return changedIds;
+    })();
+    eventBus.emit(EventType.SETTINGS_UPDATED, { key: STASH_SETTING_KEY, value: remaining }, userId);
+    const presetAuthorities = emitPresetChanges(userId, changedPresetIds);
+    return {
+      removed: true,
+      presetAuthorityChanged: presetAuthorities.length > 0,
+      presetAuthorities,
+    };
+  });
+}
+
+function emitPresetChanges(userId: string, presetIds: string[]): Preset[] {
   const db = getDb();
+  const presets: Preset[] = [];
   for (const presetId of presetIds) {
     const row = db.query("SELECT * FROM presets WHERE id = ? AND user_id = ?").get(presetId, userId) as any;
     if (!row) continue;
@@ -130,8 +152,16 @@ function emitPresetChanges(userId: string, presetIds: string[]): void {
       prompts: JSON.parse(row.prompts), metadata: JSON.parse(row.metadata),
       cache_revision: row.cache_revision ?? 0, created_at: row.created_at, updated_at: row.updated_at,
     };
+    const projection = getPresetAgentConfig(userId, presetId);
+    if (projection) {
+      preset.agent_config = projection.config;
+      preset.agent_config_revision = projection.configRevision;
+      preset.agent_config_review = projection.review;
+    }
+    presets.push(preset);
     eventBus.emit(EventType.PRESET_CHANGED, { id: presetId, preset }, userId);
   }
+  return presets;
 }
 
 /** Create a new local block from a stash entry. Visibility and grouping stay local. */
@@ -202,7 +232,7 @@ export function syncStashedBlocksAcrossPresets(userId: string, excludedPresetId:
   const entries = new Map(readStash(userId).map((entry) => [entry.id, entry]));
   const wanted = new Set(stashIds);
   const db = getDb();
-  const rows = db.query("SELECT id, prompt_order FROM presets WHERE user_id = ? AND id != ?").all(userId, excludedPresetId) as Array<{ id: string; prompt_order: string }>;
+  const rows = db.query("SELECT id, prompt_order, cache_revision FROM presets WHERE user_id = ? AND id != ?").all(userId, excludedPresetId) as Array<{ id: string; prompt_order: string; cache_revision: number }>;
   const changedPresetIds: string[] = [];
   const update = db.query(
     "UPDATE presets SET prompt_order = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?",
@@ -225,6 +255,7 @@ export function syncStashedBlocksAcrossPresets(userId: string, excludedPresetId:
       });
       if (!didChange) continue;
       update.run(JSON.stringify(next), now, row.id, userId);
+      quarantineAgentConfigForPresetRevisionWithDb(db, userId, row.id, row.cache_revision + 1, next);
       changedPresetIds.push(row.id);
     }
   });

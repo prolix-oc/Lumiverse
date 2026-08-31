@@ -6,6 +6,8 @@ export interface Chat {
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  /** Monotonic revision of chat metadata/message membership used by turns. */
+  generation_revision?: number;
 }
 
 export interface CreateChatInput {

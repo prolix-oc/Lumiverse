@@ -191,3 +191,100 @@
   .avatar:nth-child(n+7) { display: none; }
   .overflow { display: flex; }
 }
+
+/* WORK Council is an advisory receipt, not the event-driven Response Council. */
+.wrapper[data-kind="work-council"] {
+  inline-size: max-content;
+  max-inline-size: calc(100% - var(--lumiverse-space-6));
+  animation: none;
+}
+
+.indicator[data-kind="work-council"] {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: var(--lumiverse-space-2) var(--lumiverse-space-3);
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--lumiverse-space-1) var(--lumiverse-space-2);
+  border-color: var(--lumiverse-warning-050);
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-bg-elevated);
+  box-shadow: none;
+}
+
+.indicator[data-kind="work-council"]::before {
+  content: none;
+}
+
+.indicator[data-kind="work-council"] .label {
+  color: var(--lumiverse-text-muted);
+  font-family: var(--lumiverse-font-family);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.indicator[data-kind="work-council"] .label:first-child {
+  color: var(--lumiverse-warning);
+}
+
+.wrapper[data-kind="work-council"][data-state="accepted"] .indicator {
+  border-color: var(--lumiverse-success-050);
+}
+
+.wrapper[data-kind="work-council"][data-state="accepted"] .label:first-child {
+  color: var(--lumiverse-success);
+}
+
+.wrapper[data-kind="work-council"][data-state="failed"] .indicator {
+  border-color: var(--lumiverse-danger-050);
+}
+
+.wrapper[data-kind="work-council"][data-state="failed"] .label:first-child {
+  color: var(--lumiverse-danger);
+}
+
+.wrapper[data-kind="work-council"][data-state="omitted"] .indicator {
+  border-color: var(--lumiverse-border-hover);
+}
+
+.wrapper[data-kind="work-council"][data-state="omitted"] .label:first-child {
+  color: var(--lumiverse-text-muted);
+}
+
+@media (max-width: 480px) {
+  .wrapper[data-kind="work-council"] {
+    max-inline-size: calc(100% - var(--lumiverse-space-4));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrapper,
+  .fadingOut,
+  .indicator::before,
+  .loading,
+  .avatar,
+  .overflow,
+  .completeIcon {
+    animation: none;
+    transition: none;
+  }
+
+  .wrapper {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+
+  .fadingOut {
+    opacity: 0;
+  }
+
+  .indicator::before {
+    opacity: 0;
+  }
+
+  .avatar {
+    opacity: 1;
+    transform: none;
+  }
+}

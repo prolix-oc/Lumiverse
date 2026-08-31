@@ -24,7 +24,6 @@ import * as charactersSvc from "./characters.service";
 import * as generateSvc from "./generate.service";
 import * as poolSvc from "./generation-pool.service";
 import * as connectionsSvc from "./connections.service";
-import * as settingsSvc from "./settings.service";
 import * as worldBooksSvc from "./world-books.service";
 import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 import {

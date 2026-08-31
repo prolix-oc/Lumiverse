@@ -9,6 +9,11 @@
  */
 import { join } from "node:path";
 import { bunCmd } from "../utils/bun-cmd";
+import {
+  admitLanceExternalMaintenanceOwner,
+  pauseLanceDbForExternalMaintenance,
+  refreshLanceDbAfterExternalMaintenance,
+} from "./vector-store/providers/lancedb";
 
 export type LanceDbMaintenanceMode = "startup" | "optimize";
 
@@ -17,19 +22,64 @@ export interface LanceDbMaintenanceOptions {
   tableNames?: string[];
 }
 
-let activeMaintenance: Promise<void> | null = null;
+const MAINTENANCE_TERM_GRACE_MS = 2_000;
+type MaintenanceChild = ReturnType<typeof Bun.spawn>;
+type ActiveMaintenance = {
+  promise: Promise<void>;
+  child: MaintenanceChild | null;
+  retired: boolean;
+  retirePromise: Promise<void> | null;
+};
+let activeMaintenance: ActiveMaintenance | null = null;
+let maintenanceShutdown = false;
 
 export function isLanceDbMaintenanceRunning(): boolean {
   return activeMaintenance !== null;
 }
 
 export function runLanceDbMaintenanceInChild(options: LanceDbMaintenanceOptions): Promise<void> {
-  if (activeMaintenance) return activeMaintenance;
+  if (activeMaintenance) return activeMaintenance.promise;
+  if (maintenanceShutdown) {
+    return Promise.reject(new DOMException("LanceDB maintenance is shutting down", "AbortError"));
+  }
 
-  activeMaintenance = run(options).finally(() => {
-    activeMaintenance = null;
+  const job: ActiveMaintenance = {
+    promise: Promise.resolve(),
+    child: null,
+    retired: false,
+    retirePromise: null,
+  };
+  job.promise = run(options, job).finally(() => {
+    if (activeMaintenance === job) activeMaintenance = null;
   });
-  return activeMaintenance;
+  activeMaintenance = job;
+  return job.promise;
+}
+
+async function retireMaintenance(job: ActiveMaintenance): Promise<void> {
+  if (job.retirePromise) return job.retirePromise;
+  job.retired = true;
+  job.retirePromise = (async () => {
+    const child = job.child;
+    if (!child) return;
+    child.kill("SIGTERM");
+    const exited = child.exited.then(() => true, () => true);
+    const graceful = await Promise.race([
+      exited,
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), MAINTENANCE_TERM_GRACE_MS)),
+    ]);
+    if (!graceful) child.kill("SIGKILL");
+    await child.exited.catch(() => undefined);
+  })();
+  return job.retirePromise;
+}
+
+export async function stopLanceDbMaintenanceSupervisor(): Promise<void> {
+  maintenanceShutdown = true;
+  const job = activeMaintenance;
+  if (!job) return;
+  await retireMaintenance(job);
+  await job.promise.catch(() => undefined);
 }
 
 function maintenanceCommand(runtimePath: string): string[] {
@@ -38,41 +88,53 @@ function maintenanceCommand(runtimePath: string): string[] {
   return process.env.LUMIVERSE_BUN_METHOD ? bunCmd(runtimePath) : [process.execPath, runtimePath];
 }
 
-async function run({ mode, tableNames }: LanceDbMaintenanceOptions): Promise<void> {
-  // This dynamic import deliberately happens after the HTTP listener is live.
-  // It only installs the serving process's local gate; all native maintenance
-  // work stays in the child below.
-  const {
-    pauseLanceDbForExternalMaintenance,
-    refreshLanceDbAfterExternalMaintenance,
-  } = await import("./vector-store/providers/lancedb");
-  const releaseServingGate = await pauseLanceDbForExternalMaintenance();
-  const runtimePath = join(import.meta.dir, "lancedb-maintenance-subprocess.ts");
+async function run(
+  { mode, tableNames }: LanceDbMaintenanceOptions,
+  job: ActiveMaintenance,
+): Promise<void> {
+  const admission = admitLanceExternalMaintenanceOwner();
+  admission.setRetirement(() => retireMaintenance(job));
+  const servingGate = { release: null as (() => void) | null };
 
   try {
-    console.info(`[embeddings] Launching LanceDB ${mode} maintenance child process...`);
-    const child = Bun.spawn({
-      cmd: maintenanceCommand(runtimePath),
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        LUMIVERSE_LANCEDB_MAINTENANCE_CHILD: "1",
-        LUMIVERSE_LANCEDB_MAINTENANCE_MODE: mode,
-        ...(tableNames?.length ? { LUMIVERSE_LANCEDB_MAINTENANCE_TABLES: tableNames.join(",") } : {}),
-      },
-      stdin: "ignore",
-      stdout: "inherit",
-      stderr: "inherit",
+    await admission.run(async () => {
+      if (job.retired || admission.signal.aborted) {
+        throw admission.signal.reason ?? new DOMException("LanceDB maintenance retired", "AbortError");
+      }
+      servingGate.release = await pauseLanceDbForExternalMaintenance();
+      if (job.retired || admission.signal.aborted) {
+        throw admission.signal.reason ?? new DOMException("LanceDB maintenance retired", "AbortError");
+      }
+      const runtimePath = join(import.meta.dir, "lancedb-maintenance-subprocess.ts");
+      console.info(`[embeddings] Launching LanceDB ${mode} maintenance child process...`);
+      const child = Bun.spawn({
+        cmd: maintenanceCommand(runtimePath),
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          LUMIVERSE_LANCEDB_MAINTENANCE_CHILD: "1",
+          LUMIVERSE_LANCEDB_MAINTENANCE_MODE: mode,
+          ...(tableNames?.length ? { LUMIVERSE_LANCEDB_MAINTENANCE_TABLES: tableNames.join(",") } : {}),
+        },
+        stdin: "ignore",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      job.child = child;
+      if (job.retired || admission.signal.aborted) await retireMaintenance(job);
+      const exitCode = await child.exited;
+      job.child = null;
+      if (job.retired || admission.signal.aborted) {
+        throw admission.signal.reason ?? new DOMException("LanceDB maintenance retired", "AbortError");
+      }
+      if (exitCode !== 0) {
+        throw new Error(`LanceDB ${mode} maintenance child exited with code ${exitCode}`);
+      }
+      console.info(`[embeddings] LanceDB ${mode} maintenance child completed.`);
+      await refreshLanceDbAfterExternalMaintenance();
     });
-    const exitCode = await child.exited;
-    if (exitCode !== 0) {
-      throw new Error(`LanceDB ${mode} maintenance child exited with code ${exitCode}`);
-    }
-    console.info(`[embeddings] LanceDB ${mode} maintenance child completed.`);
   } finally {
-    // The child may have committed a new manifest even if it ultimately
-    // reports failure. Never let the serving process retain stale handles.
-    refreshLanceDbAfterExternalMaintenance();
-    releaseServingGate();
+    servingGate.release?.();
+    admission.release();
   }
 }

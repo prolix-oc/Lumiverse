@@ -6,6 +6,7 @@ import {
   throwProviderResponseError,
   ProviderRequestError,
 } from "./provider-errors";
+import { PROVIDER_STREAM_LIMITS } from "../llm/stream-utils";
 
 describe("describeTransportError", () => {
   test("explains Bun socket disconnects without exposing verbose fetch guidance", () => {
@@ -101,7 +102,88 @@ describe("readBoundedText", () => {
     const text = await readBoundedText(res, 1024);
     expect(text).toBe("short error");
   });
+  test("keeps an error body at the exact byte cap", async () => {
+    const body = "X".repeat(32);
+    await expect(readBoundedText(new Response(body), 32)).resolves.toBe(body);
+  });
+
+  test("detects cap plus one when the extra byte arrives in a later chunk", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("X".repeat(32)));
+        controller.enqueue(encoder.encode("Y"));
+        controller.close();
+      },
+    }));
+    const text = await readBoundedText(response, 32);
+    expect(text).toBe(`${"X".repeat(32)}…[truncated]`);
+  });
+
+  test("truncates an error body at cap plus one without accumulating the rest", async () => {
+    const body = "X".repeat(33);
+    const text = await readBoundedText(new Response(body), 32);
+    expect(text.startsWith("X".repeat(32))).toBe(true);
+    expect(text.endsWith("…[truncated]")).toBe(true);
+  });
+  test("clamps a caller error-body limit above the provider response ceiling", async () => {
+    const host = PROVIDER_STREAM_LIMITS.maxResponseBytes;
+    const response = {
+      body: null,
+      headers: new Headers({ "content-length": String(host + 1) }),
+      text: async () => "unreachable",
+    } as unknown as Response;
+    await expect(readBoundedText(response, host + 1)).rejects.toMatchObject({
+      code: "provider_response_too_large",
+      limit: host,
+    });
+  });
+
+  test("honors the caller abort signal while reading an error body", async () => {
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start() {
+        // Keep the first read pending until the caller aborts.
+      },
+    }));
+    const controller = new AbortController();
+    const pending = readBoundedText(response, controller.signal, 1024);
+    controller.abort(new DOMException("Stopped", "AbortError"));
+    await expect(pending).rejects.toThrow("Stopped");
+  });
+
+  test("fails closed before reading exact or understated bodyless error text", async () => {
+    for (const [contentLength, body] of [["2", "{}"], ["2", "{}{}"]] as const) {
+      let reads = 0;
+      const response = {
+        body: null,
+        headers: new Headers({ "content-length": contentLength }),
+        text: async () => {
+          reads += 1;
+          return body;
+        },
+      } as unknown as Response;
+      await expect(readBoundedText(response, 3)).rejects.toBeInstanceOf(Error);
+      expect(reads).toBe(0);
+    }
+  });
+
+  test("honors an already-aborted signal without reading a bodyless error", async () => {
+    let reads = 0;
+    const controller = new AbortController();
+    controller.abort(new DOMException("Stopped", "AbortError"));
+    const response = {
+      body: null,
+      headers: new Headers({ "content-length": "2" }),
+      text: async () => {
+        reads += 1;
+        return "{}";
+      },
+    } as unknown as Response;
+    await expect(readBoundedText(response, controller.signal, 2)).rejects.toThrow("Stopped");
+    expect(reads).toBe(0);
+  });
 });
+
 
 describe("throwProviderResponseError", () => {
   test("never embeds raw HTML body in the thrown error message", async () => {

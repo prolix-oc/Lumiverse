@@ -8,6 +8,7 @@ import {
   regexReplaceSandboxed,
   RegexTimeoutError,
 } from "../../utils/regex-sandbox";
+import { REGEX_LIMITS_V1, utf8ByteLength } from "../../utils/regex-limits";
 
 const REGEX_REF_TIMEOUT_MS = 500;
 
@@ -58,40 +59,60 @@ export function registerRegexRefMacros(): void {
       try {
         let result: string;
         let findRegex = script.find_regex;
-
         if (script.substitute_macros !== "none") {
-          findRegex = (await evaluate(findRegex, ctx.env, registry)).text;
+          findRegex = (await evaluate(findRegex, ctx.env, registry, { budget: ctx.budget })).text;
         }
 
         if (script.substitute_macros === "raw") {
-          // "raw" mode: substitute capture groups BEFORE macro resolution
-          // so $1, $2, etc. are available inside macro arguments. Match
-          // interpolation runs in the regex sandbox so a malicious script
-          // pattern can't freeze the assembly thread and large capture arrays
-          // never need to cross the worker boundary.
+          // "raw" mode: substitute capture groups BEFORE macro resolution.
           const matches = await regexCaptureReplacementsSandboxed(
             findRegex,
             script.flags,
             text,
             script.replace_string,
             REGEX_REF_TIMEOUT_MS,
+            {
+              maxMatches: REGEX_LIMITS_V1.maxMatchCount,
+              maxExpansionBytes: Math.max(
+                0,
+                ctx.budget.limits.maxCumulativeExpansionBytes - ctx.budget.cumulativeExpansionBytes,
+              ),
+              maxOutputBytes: ctx.budget.limits.maxOutputBytes,
+              maxOperationBytes: ctx.budget.limits.maxOperationBytes,
+            },
           );
 
           if (matches.length > 0) {
-            const replacements = await Promise.all(
-              matches.map(async ({ replacement }) => {
-                return (await evaluate(replacement, ctx.env, registry)).text;
-              }),
-            );
-            let out = "";
+            const replacements: string[] = [];
+            let outputBytes = utf8ByteLength(text);
             let lastIdx = 0;
-            for (let i = 0; i < matches.length; i++) {
-              out += text.slice(lastIdx, matches[i].index);
-              out += replacements[i];
-              lastIdx = matches[i].index + matches[i].matchLength;
+            for (const match of matches) {
+              ctx.budget.checkAbort();
+              ctx.budget.accountExpansion(match.replacement);
+              const replacement = (await evaluate(
+                match.replacement,
+                ctx.env,
+                registry,
+                { budget: ctx.budget },
+              )).text;
+              const replacementBytes = utf8ByteLength(replacement);
+              outputBytes += replacementBytes - utf8ByteLength(
+                text.slice(match.index, match.index + match.matchLength),
+              );
+              ctx.budget.preflightOutput(outputBytes);
+              replacements.push(replacement);
+              lastIdx = match.index + match.matchLength;
             }
-            out += text.slice(lastIdx);
-            result = out;
+            const parts: string[] = [];
+            lastIdx = 0;
+            for (let i = 0; i < matches.length; i += 1) {
+              const match = matches[i]!;
+              parts.push(text.slice(lastIdx, match.index), replacements[i]!);
+              lastIdx = match.index + match.matchLength;
+            }
+            parts.push(text.slice(lastIdx));
+            ctx.budget.preflightOutput(outputBytes);
+            result = parts.join("");
           } else {
             result = text;
           }
@@ -102,9 +123,18 @@ export function registerRegexRefMacros(): void {
             text,
             script.replace_string,
             REGEX_REF_TIMEOUT_MS,
+            {
+              maxMatches: REGEX_LIMITS_V1.maxMatchCount,
+              maxExpansionBytes: Math.max(
+                0,
+                ctx.budget.limits.maxCumulativeExpansionBytes - ctx.budget.cumulativeExpansionBytes,
+              ),
+              maxOutputBytes: ctx.budget.limits.maxOutputBytes,
+              maxOperationBytes: ctx.budget.limits.maxOperationBytes,
+            },
           );
           result = substituted !== text
-            ? (await evaluate(substituted, ctx.env, registry)).text
+            ? (await evaluate(substituted, ctx.env, registry, { budget: ctx.budget })).text
             : substituted;
         } else {
           // "none", "find", or "escaped" mode
@@ -113,7 +143,7 @@ export function registerRegexRefMacros(): void {
             script.substitute_macros !== "none"
             && script.substitute_macros !== "find"
           ) {
-            const resolved = (await evaluate(replaceString, ctx.env, registry)).text;
+            const resolved = (await evaluate(replaceString, ctx.env, registry, { budget: ctx.budget })).text;
             replaceString = script.substitute_macros === "escaped"
               ? resolved.replace(/\$/g, "$$$$")
               : resolved;
@@ -124,16 +154,32 @@ export function registerRegexRefMacros(): void {
             text,
             replaceString,
             REGEX_REF_TIMEOUT_MS,
+            {
+              maxMatches: REGEX_LIMITS_V1.maxMatchCount,
+              maxExpansionBytes: Math.max(
+                0,
+                ctx.budget.limits.maxCumulativeExpansionBytes - ctx.budget.cumulativeExpansionBytes,
+              ),
+              maxOutputBytes: ctx.budget.limits.maxOutputBytes,
+              maxOperationBytes: ctx.budget.limits.maxOperationBytes,
+            },
           );
         }
 
-        // Apply trim_strings
-        if (script.trim_strings.length > 0) {
-          for (const trim of script.trim_strings) {
-            while (result.includes(trim)) {
-              result = result.replaceAll(trim, "");
-            }
+        // Apply bounded literal trims. Empty tokens are rejected instead of
+        // entering an unbounded no-progress loop.
+        if (script.trim_strings.length > REGEX_LIMITS_V1.maxTrimStrings) {
+          throw new Error("regexInstalled: trim string count exceeded");
+        }
+        for (const trim of script.trim_strings) {
+          ctx.budget.checkAbort();
+          ctx.budget.reserveTrimString();
+          if (trim.length === 0) throw new Error("regexInstalled: trim string is empty");
+          if (utf8ByteLength(trim) > REGEX_LIMITS_V1.maxTrimStringBytes) {
+            throw new Error("regexInstalled: trim string is too large");
           }
+          result = result.replaceAll(trim, "");
+          ctx.budget.preflightOutput(result);
         }
 
         return result;

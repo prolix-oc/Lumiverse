@@ -1,11 +1,46 @@
 import { describe, expect, test } from 'bun:test'
+import { createDefaultAgentConfigV2 } from '@/lib/loom/agenticRuntime'
 import { createBlock, createNewLoomPreset, marshalUpdate } from '@/lib/loom/service'
+import type { LoomPreset } from '@/lib/loom/types'
 import { applyPresetEditorDraft, toPresetEditorDraft } from './preset-editor-adapter'
 import type { SpindlePresetEditorDraft } from './preset-editor-types'
+
+const SEALED_ORIGIN_PRESET_ID = 'sealed-origin'
+const SEALED_ORIGIN_VERSION = 'v1'
+const FIRST_SEALED_SHA256 = 'a'.repeat(64)
+const SECOND_SEALED_SHA256 = 'b'.repeat(64)
+
+function attachPortableSealedDescriptor(preset: LoomPreset): void {
+  const blocks = preset.blocks
+    .filter((block) => block.sealedSource === 'lumihub')
+    .map((block) => {
+      if (!block.sealedKey || !block.sealedSha256) throw new Error('Invalid sealed test fixture')
+      return { key: block.sealedKey, sha256: block.sealedSha256 }
+    })
+  preset.portableSealedPreset = {
+    hubPresetId: SEALED_ORIGIN_PRESET_ID,
+    hubPresetVersion: SEALED_ORIGIN_VERSION,
+    blocks,
+  }
+}
 
 describe('preset editor draft adapter', () => {
   test('applies extension metadata while retaining native preset fields', () => {
     const current = createNewLoomPreset('Original', 'Native description')
+    const runtimeConfig = createDefaultAgentConfigV2()
+    current.agentConfig = runtimeConfig
+    current.agentConfigRevision = 7
+    current.agentConfigReview = {
+      state: 'ready',
+      revision: 7,
+      reasonCode: null,
+      unresolvedSlotIds: [],
+      staleSlotIds: [],
+      acknowledged: true,
+      items: [],
+    }
+    current.agentSlotBindings = { writer: 'connection-1' }
+    current.agentTaskTemplates = [{ id: 'draft-response', required: true, label: 'Draft response' }]
     const draft = toPresetEditorDraft(current)
     draft.metadata.fixture_extension = { mode: 'multi' }
     draft.blocks[0].content = 'Updated by extension'
@@ -14,6 +49,11 @@ describe('preset editor draft adapter', () => {
     const raw = marshalUpdate(next)
     expect(next.description).toBe('Native description')
     expect(next.blocks[0].content).toBe('Updated by extension')
+    expect(next.agentConfig).toEqual(runtimeConfig)
+    expect(next.agentConfigRevision).toBe(7)
+    expect(next.agentConfigReview).toEqual(current.agentConfigReview)
+    expect(next.agentSlotBindings).toEqual({ writer: 'connection-1' })
+    expect(next.agentTaskTemplates).toEqual(current.agentTaskTemplates)
     expect(raw.metadata?.fixture_extension).toEqual({ mode: 'multi' })
   })
 
@@ -50,6 +90,18 @@ describe('preset editor draft adapter', () => {
 
     const next = applyPresetEditorDraft(current, draft)
     expect(next.blocks[0]?.placementBinding).toEqual(block.placementBinding)
+  })
+
+  test('projects agent-runtime block revisions out of the public draft and restores them on save', () => {
+    const current = createNewLoomPreset('Agent-runtime revision source')
+    current.blocks[0] = { ...current.blocks[0]!, revision: 3 }
+
+    const draft = toPresetEditorDraft(current)
+
+    expect(Object.hasOwn(draft.blocks[0]!, 'revision')).toBe(false)
+
+    const next = applyPresetEditorDraft(current, draft)
+    expect(next.blocks[0]?.revision).toBe(3)
   })
 
   test('accepts published drafts without promptVariables and reconciles current values', () => {
@@ -89,17 +141,17 @@ describe('preset editor draft adapter', () => {
       sealed: true,
       sealedKey: 'hub-key-first',
       sealedSource: 'lumihub',
-      sealedOriginPresetId: 'origin-first',
-      sealedOriginVersion: 'v3-first',
-      sealedSha256: 'sha256:first',
+      sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+      sealedOriginVersion: SEALED_ORIGIN_VERSION,
+      sealedSha256: FIRST_SEALED_SHA256,
     }
     const secondSealedFields = {
       sealed: true,
       sealedKey: 'hub-key-second',
       sealedSource: 'lumihub',
-      sealedOriginPresetId: 'origin-second',
-      sealedOriginVersion: 'v4-second',
-      sealedSha256: 'sha256:second',
+      sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+      sealedOriginVersion: SEALED_ORIGIN_VERSION,
+      sealedSha256: SECOND_SEALED_SHA256,
     }
     const forgedSealedFields = {
       sealed: true,
@@ -113,6 +165,7 @@ describe('preset editor draft adapter', () => {
       { ...current.blocks[0]!, id: 'sealed-first', name: 'Shared', ...firstSealedFields },
       { ...current.blocks[0]!, id: 'sealed-second', name: 'Shared', ...secondSealedFields },
     ]
+    attachPortableSealedDescriptor(current)
 
     const draft = toPresetEditorDraft(current)
     const firstDraftBlock = draft.blocks[0]!
@@ -337,7 +390,6 @@ describe('preset editor draft adapter', () => {
     }
   })
 
-
   test('allows unrelated native edits beside unchanged legacy duplicate IDs but rejects new duplicates', () => {
     const current = createNewLoomPreset('Legacy native edit source')
     const base = current.blocks[0]!
@@ -345,18 +397,19 @@ describe('preset editor draft adapter', () => {
       ['sealed', true],
       ['sealedKey', 'first-key'],
       ['sealedSource', 'lumihub'],
-      ['sealedOriginPresetId', 'first-origin'],
-      ['sealedOriginVersion', 'v1'],
-      ['sealedSha256', 'first-sha'],
+      ['sealedOriginPresetId', SEALED_ORIGIN_PRESET_ID],
+      ['sealedOriginVersion', SEALED_ORIGIN_VERSION],
+      ['sealedSha256', FIRST_SEALED_SHA256],
     ] as const
     current.blocks = [
       Object.assign({ ...base, id: 'legacy-id', name: 'Legacy first' }, Object.fromEntries(privateFields)),
       Object.assign({ ...base, id: 'legacy-id', name: 'Legacy second' }, Object.fromEntries(privateFields.map(([key, value]) => [
         key,
-        key === 'sealedKey' ? 'second-key' : key === 'sealedOriginPresetId' ? 'second-origin' : key === 'sealedOriginVersion' ? 'v2' : key === 'sealedSha256' ? 'second-sha' : value,
+        key === 'sealedKey' ? 'second-key' : key === 'sealedSha256' ? SECOND_SEALED_SHA256 : value,
       ]))),
       { ...base, id: 'native-id', name: 'Native block' },
     ]
+    attachPortableSealedDescriptor(current)
     const nativeDraft = toPresetEditorDraft(current)
     nativeDraft.blocks[2]!.name = 'Native edit'
 
@@ -379,17 +432,17 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'first-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'first-origin',
-        sealedOriginVersion: 'v1',
-        sealedSha256: 'first-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: FIRST_SEALED_SHA256,
       },
       {
         sealed: true,
         sealedKey: 'second-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'second-origin',
-        sealedOriginVersion: 'v2',
-        sealedSha256: 'second-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: SECOND_SEALED_SHA256,
       },
     ])
 
@@ -413,9 +466,9 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'first-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'first-origin',
-        sealedOriginVersion: 'v1',
-        sealedSha256: 'first-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: FIRST_SEALED_SHA256,
       },
       {
         ...base,
@@ -429,11 +482,12 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'second-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'second-origin',
-        sealedOriginVersion: 'v2',
-        sealedSha256: 'second-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: SECOND_SEALED_SHA256,
       },
     ]
+    attachPortableSealedDescriptor(current)
     const before = structuredClone(current)
     const cases: Array<{
       label: string
@@ -511,9 +565,9 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'first-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'first-origin',
-        sealedOriginVersion: 'v1',
-        sealedSha256: 'first-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: FIRST_SEALED_SHA256,
       },
       {
         ...base,
@@ -522,11 +576,12 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'second-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'second-origin',
-        sealedOriginVersion: 'v2',
-        sealedSha256: 'second-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: SECOND_SEALED_SHA256,
       },
     ]
+    attachPortableSealedDescriptor(current)
     const draft = toPresetEditorDraft(current)
     draft.name = 'Legacy duplicate metadata update'
 
@@ -534,6 +589,7 @@ describe('preset editor draft adapter', () => {
     const persistedBlocks = marshalUpdate(next).prompt_order!
 
     expect(next.name).toBe('Legacy duplicate metadata update')
+    expect(next.portableSealedPreset).toEqual(current.portableSealedPreset)
     expect(persistedBlocks.map((block) => block.id)).toEqual(['legacy-block', 'legacy-block'])
     expect(persistedBlocks.map((block) => block.variables?.map((variable) => ({
       id: variable.id,
@@ -552,10 +608,10 @@ describe('preset editor draft adapter', () => {
     ])
     expect(Reflect.get(persistedBlocks[0]!, 'sealedKey')).toBe('first-key')
     expect(Reflect.get(persistedBlocks[1]!, 'sealedKey')).toBe('second-key')
-    expect(Reflect.get(persistedBlocks[0]!, 'sealedOriginPresetId')).toBe('first-origin')
-    expect(Reflect.get(persistedBlocks[1]!, 'sealedOriginPresetId')).toBe('second-origin')
-    expect(Reflect.get(persistedBlocks[0]!, 'sealedSha256')).toBe('first-sha')
-    expect(Reflect.get(persistedBlocks[1]!, 'sealedSha256')).toBe('second-sha')
+    expect(Reflect.get(persistedBlocks[0]!, 'sealedOriginPresetId')).toBe(SEALED_ORIGIN_PRESET_ID)
+    expect(Reflect.get(persistedBlocks[1]!, 'sealedOriginPresetId')).toBe(SEALED_ORIGIN_PRESET_ID)
+    expect(Reflect.get(persistedBlocks[0]!, 'sealedSha256')).toBe(FIRST_SEALED_SHA256)
+    expect(Reflect.get(persistedBlocks[1]!, 'sealedSha256')).toBe(SECOND_SEALED_SHA256)
   })
 
   test('rejects a newly invalid variable identity graph from a clean preset', () => {
@@ -724,9 +780,9 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'first-sealed-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'first-origin',
-        sealedOriginVersion: 'v1',
-        sealedSha256: 'first-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: FIRST_SEALED_SHA256,
       },
       { ...base, id: 'unrelated', name: 'Unrelated block', content: 'Unrelated content' },
       {
@@ -738,11 +794,12 @@ describe('preset editor draft adapter', () => {
         sealed: true,
         sealedKey: 'second-sealed-key',
         sealedSource: 'lumihub',
-        sealedOriginPresetId: 'second-origin',
-        sealedOriginVersion: 'v2',
-        sealedSha256: 'second-sha',
+        sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+        sealedOriginVersion: SEALED_ORIGIN_VERSION,
+        sealedSha256: SECOND_SEALED_SHA256,
       },
     ]
+    attachPortableSealedDescriptor(current)
     const cases = [
       {
         label: 'unrelated block added',
@@ -793,17 +850,17 @@ describe('preset editor draft adapter', () => {
           sealed: true,
           sealedKey: 'first-sealed-key',
           sealedSource: 'lumihub',
-          sealedOriginPresetId: 'first-origin',
-          sealedOriginVersion: 'v1',
-          sealedSha256: 'first-sha',
+          sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+          sealedOriginVersion: SEALED_ORIGIN_VERSION,
+          sealedSha256: FIRST_SEALED_SHA256,
         },
         {
           sealed: true,
           sealedKey: 'second-sealed-key',
           sealedSource: 'lumihub',
-          sealedOriginPresetId: 'second-origin',
-          sealedOriginVersion: 'v2',
-          sealedSha256: 'second-sha',
+          sealedOriginPresetId: SEALED_ORIGIN_PRESET_ID,
+          sealedOriginVersion: SEALED_ORIGIN_VERSION,
+          sealedSha256: SECOND_SEALED_SHA256,
         },
       ])
       expect(persistedLegacyBlocks.map((block) => block.variables?.map((variable) => ({

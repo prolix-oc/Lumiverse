@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { computeUserDataSourceDigest, getUserDataProjectionStamp, hasPendingUserVectorProjection, withUserDataProjection, withUserDataProjectionMutation } from "./user-data/snapshot";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import type {
@@ -50,12 +51,12 @@ import {
   cosineSimilarity,
   distanceFromSimilarity,
   eq,
-  idsIn,
   inSet,
   mmrSelect,
   notInSet,
   ownerScope,
   ownersScope,
+  isFiniteVector,
   reciprocalRankFusion,
   rowId,
   sourceIdsIn,
@@ -263,6 +264,9 @@ function resolveAbortError(signal: AbortSignal | undefined, fallbackMessage = "A
     if (signal.reason != null) return new Error(String(signal.reason));
   }
   return new DOMException(fallbackMessage, "AbortError");
+}
+function assertSignalActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw resolveAbortError(signal);
 }
 
 export type EmbeddingProvider =
@@ -1283,7 +1287,9 @@ async function replaceChatChunkEmbeddingRows(
   userId: string,
   targets: Array<{ chatId: string; chunkId: string }>,
   rows: EmbeddingRow[],
+  signal?: AbortSignal,
 ): Promise<void> {
+  assertSignalActive(signal);
   if (targets.length > 0) {
     const chunkIdsByChat = new Map<string, string[]>();
     for (const target of targets) {
@@ -1292,14 +1298,18 @@ async function replaceChatChunkEmbeddingRows(
       else chunkIdsByChat.set(target.chatId, [target.chunkId]);
     }
     for (const [chatId, chunkIds] of chunkIdsByChat) {
+      assertSignalActive(signal);
       await deleteStoreRows("embeddings", andFilter([
         ownerScope(userId, "chat_chunk", chatId),
         inSet("source_id", Array.from(new Set(chunkIds))),
-      ]));
+      ]), signal);
+      assertSignalActive(signal);
     }
   }
   if (rows.length > 0) {
-    await upsertStoreRows("embeddings", rows);
+    assertSignalActive(signal);
+    await upsertStoreRows("embeddings", rows, signal);
+    assertSignalActive(signal);
   }
 }
 
@@ -1620,26 +1630,167 @@ async function tryRecoverVaultChunkEmbeddingWithAutoSplit(
   };
 }
 
-async function deleteStoreRows(collection: CollectionName, filter: VectorFilter): Promise<void> {
-  const store = await getActiveVectorStore();
-  await store.deleteByFilter(collection, filter);
+function vectorFilterUserId(filter: VectorFilter): string | null {
+  if (filter.op === "eq" && filter.field === "user_id" && typeof filter.value === "string") return filter.value;
+  if (filter.op !== "and") return null;
+  const userIds = filter.clauses.map(vectorFilterUserId).filter((value): value is string => value !== null);
+  return userIds.length > 0 && userIds.every((value) => value === userIds[0]) ? userIds[0]! : null;
 }
 
-async function upsertStoreRows(collection: CollectionName, rows: EmbeddingRow[]): Promise<void> {
+async function deleteStoreRows(
+  collection: CollectionName,
+  filter: VectorFilter,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertSignalActive(signal);
+  const userId = vectorFilterUserId(filter);
+  if (!userId) throw new Error("vector deletion must be scoped to one user");
+  await withUserDataProjectionMutation(userId, async () => {
+    const store = await getActiveVectorStore();
+    assertSignalActive(signal);
+    await store.deleteByFilter(collection, filter, signal);
+    assertSignalActive(signal);
+  });
+}
+const MAX_STORED_VECTOR_DIMENSION = 16_384;
+const MAX_STORED_VECTOR_ID_BYTES = 4 * 1024;
+const MAX_STORED_VECTOR_ROW_BYTES = 8 * 1024 * 1024;
+const MAX_STORED_VECTOR_BATCH_BYTES = 4 * 1024 * 1024;
+
+function assertSafeEmbeddingRows(collection: CollectionName, rows: readonly EmbeddingRow[]): void {
+  const seenIds = new Set<string>();
   if (rows.length === 0) return;
-  const store = await getActiveVectorStore();
-  await store.upsert(collection, rows);
+  const tenant = rows[0]?.user_id;
+  const dimension = rows[0]?.vector?.length;
+  if (
+    typeof tenant !== "string"
+    || tenant.length === 0
+    || Buffer.byteLength(tenant, "utf8") > MAX_STORED_VECTOR_ID_BYTES
+  ) {
+    throw new Error("vector row tenant is malformed");
+  }
+  for (const row of rows) {
+    if (
+      typeof row.id !== "string"
+      || typeof row.user_id !== "string"
+      || row.user_id !== tenant
+      || typeof row.source_type !== "string"
+      || typeof row.source_id !== "string"
+      || typeof row.owner_id !== "string"
+      || row.source_id.length === 0
+      || row.owner_id.length === 0
+      || Buffer.byteLength(row.id, "utf8") > MAX_STORED_VECTOR_ID_BYTES
+      || Buffer.byteLength(row.source_id, "utf8") > MAX_STORED_VECTOR_ID_BYTES
+      || Buffer.byteLength(row.owner_id, "utf8") > MAX_STORED_VECTOR_ID_BYTES
+    ) {
+      throw new Error("vector row identity is malformed");
+    }
+    if (!["chat_chunk", "world_book_entry", "vault_chunk", "databank"].includes(row.source_type)) {
+      throw new Error(`unsupported vector source type: ${row.source_type}`);
+    }
+    const expectedCollection = row.source_type === "world_book_entry"
+      ? "embeddings_world_books"
+      : "embeddings";
+    if (collection !== expectedCollection) {
+      throw new Error("vector row is in the wrong collection");
+    }
+    const expectedId = rowId(row.user_id, row.source_type, row.source_id, row.chunk_index);
+    if (seenIds.has(row.id)) throw new Error("duplicate vector row ID");
+    seenIds.add(row.id);
+    if (row.id !== expectedId) throw new Error("vector row ID is not tenant-scoped");
+    if (!Number.isSafeInteger(row.chunk_index) || row.chunk_index < 0 || row.chunk_index > MAX_STORED_VECTOR_DIMENSION) {
+      throw new Error("vector chunk index is out of range");
+    }
+    if (
+      !Array.isArray(row.vector)
+      || row.vector.length === 0
+      || row.vector.length > MAX_STORED_VECTOR_DIMENSION
+      || !isFiniteVector(row.vector)
+    ) {
+      throw new Error("vector dimension or elements are invalid");
+    }
+    if (dimension === undefined || row.vector.length !== dimension) {
+      throw new Error("vector batch dimensions do not match");
+    }
+  }
+}
+async function upsertStoreRows(
+  collection: CollectionName,
+  rows: EmbeddingRow[],
+  signal?: AbortSignal,
+): Promise<void> {
+  assertSignalActive(signal);
+  if (rows.length === 0) return;
+  assertSafeEmbeddingRows(collection, rows);
+  const userId = rows[0]!.user_id;
+  // Individual writes are serialized with exports but never publish
+  // projection coverage. A complete high-level operation owns the single
+  // coverage publication after its final batch succeeds.
+  await withUserDataProjectionMutation(userId, async () => {
+    const store = await getActiveVectorStore();
+    assertSignalActive(signal);
+    await store.upsert(collection, rows);
+    assertSignalActive(signal);
+  });
 }
 
-async function scheduleStoreOptimize(reason: "general" | "chat_chunk" | "world_book" = "general"): Promise<void> {
+/**
+ * Run one complete per-user vector projection. Coverage is published exactly
+ * once, by the barrier, only when the operation succeeded, the canonical
+ * source is byte-identical to the digest observed before the first batch, and
+ * no vector-relevant row is still awaiting embedding. Anything else leaves the
+ * previous (or missing) coverage in place so an export reports
+ * `rebuild_required` instead of shipping a partial dump as stable.
+ */
+async function withCompleteUserProjection<T>(
+  userId: string,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const stamp = getUserDataProjectionStamp(userId);
+  const sourceDigest = computeUserDataSourceDigest(getDb(), userId);
+  return withUserDataProjection(userId, stamp.sourceEpoch, sourceDigest, operation, {
+    verifySourceDigest: () => computeUserDataSourceDigest(getDb(), userId),
+    isProjectionComplete: () => !hasPendingUserVectorProjection(getDb(), userId),
+  });
+}
+
+export async function restoreArchivedVectorRows(
+  userId: string,
+  collection: CollectionName,
+  rows: VectorRow[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  if (rows.some((row) => row.user_id !== userId)) {
+    throw new Error("archived vector batch is not owned by the importing user");
+  }
+  let batchBytes = 0;
+  for (const row of rows) {
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+    if (rowBytes > MAX_STORED_VECTOR_ROW_BYTES || batchBytes > MAX_STORED_VECTOR_BATCH_BYTES - rowBytes) {
+      throw new Error("archived vector batch exceeds byte cap");
+    }
+    batchBytes += rowBytes;
+  }
+  await upsertStoreRows(collection, rows);
+  return rows.length;
+}
+
+async function scheduleStoreOptimize(
+  reason: "general" | "chat_chunk" | "world_book" = "general",
+  signal?: AbortSignal,
+): Promise<void> {
+  assertSignalActive(signal);
   const store = await getActiveVectorStore();
+  assertSignalActive(signal);
   if (store.capabilities.supportsOptimize) {
-    scheduleOptimize(reason);
+    scheduleOptimize(reason, signal);
     return;
   }
   if (store.capabilities.requiresExplicitFlush) {
     const collections: CollectionName[] = reason === "world_book" ? ["embeddings_world_books"] : ["embeddings"];
-    await store.optimize(collections);
+    assertSignalActive(signal);
+    await store.optimize(collections, signal);
+    assertSignalActive(signal);
   }
 }
 
@@ -3308,13 +3459,17 @@ async function withWorldBookEntryVectorCommitLocks<T>(
   }
 }
 
-async function deleteWorldBookEntryRowsUnlocked(userId: string, entryIds: string[]): Promise<void> {
+async function deleteWorldBookEntryRowsUnlocked(
+  userId: string,
+  entryIds: string[],
+  signal?: AbortSignal,
+): Promise<void> {
   if (entryIds.length === 0) return;
   await deleteStoreRows("embeddings_world_books", andFilter([
     eq("user_id", userId),
     eq("source_type", "world_book_entry"),
     inSet("source_id", entryIds),
-  ]));
+  ]), signal);
 }
 
 async function deleteWorldBookRowsUnlocked(userId: string, worldBookIds: string[]): Promise<void> {
@@ -3326,6 +3481,12 @@ async function deleteWorldBookRowsUnlocked(userId: string, worldBookIds: string[
   ]));
 }
 
+function sourceDeleteSucceeded(result: unknown): boolean {
+  if (typeof result === "boolean") return result;
+  if (Array.isArray(result)) return result.length > 0;
+  return true;
+}
+
 async function coordinateWorldBookVectorAndSourceDelete<T>(
   userId: string,
   lockEntryIds: string[],
@@ -3333,8 +3494,11 @@ async function coordinateWorldBookVectorAndSourceDelete<T>(
   deleteSource: () => T | Promise<T>,
 ): Promise<T> {
   return withWorldBookEntryVectorCommitLocks(userId, lockEntryIds, async () => {
-    await deleteVectors();
-    return await deleteSource();
+    // The source CAS is the authority. If it rejects or throws, leave vectors
+    // untouched so a stale delete cannot erase data owned by the winning write.
+    const result = await deleteSource();
+    if (sourceDeleteSucceeded(result)) await deleteVectors();
+    return result;
   });
 }
 
@@ -3563,8 +3727,8 @@ interface WorldBookVectorCommitDependencies {
     settingsFingerprint: string,
     configFingerprint: string,
   ) => Promise<WorldBookEntry[]>;
-  deleteRows: (userId: string, entryIds: string[]) => Promise<void>;
-  upsertRows: (rows: EmbeddingRow[]) => Promise<void>;
+  deleteRows: (userId: string, entryIds: string[], signal?: AbortSignal) => Promise<void>;
+  upsertRows: (rows: EmbeddingRow[], signal?: AbortSignal) => Promise<void>;
   markIndexedIfCurrent: (userId: string, entries: WorldBookEntry[], indexedAt: number) => Promise<string[]> | string[];
 }
 
@@ -3576,7 +3740,7 @@ interface WorldBookVectorCommitResult {
 const defaultWorldBookVectorCommitDependencies: WorldBookVectorCommitDependencies = {
   filterCurrent: filterCurrentWorldBookEntriesForWrite,
   deleteRows: deleteWorldBookEntryRowsUnlocked,
-  upsertRows: (rows) => upsertStoreRows("embeddings_world_books", rows),
+  upsertRows: (rows, signal) => upsertStoreRows("embeddings_world_books", rows, signal),
   markIndexedIfCurrent: (userId, entries, indexedAt) =>
     updateWorldBookEntriesVectorStateIfCurrent(userId, entries, "indexed", indexedAt, null),
 };
@@ -3588,12 +3752,15 @@ async function commitWorldBookVectorWritesIfCurrent(
   configFingerprint: string,
   indexedAt: number,
   dependencies: WorldBookVectorCommitDependencies = defaultWorldBookVectorCommitDependencies,
+  signal?: AbortSignal,
 ): Promise<WorldBookVectorCommitResult> {
+  assertSignalActive(signal);
   const writesByEntryId = new Map(writes.map((write) => [write.entry.id, write] as const));
   const requestedIds = Array.from(writesByEntryId.keys());
   if (requestedIds.length === 0) return { indexedIds: [], staleIds: [] };
 
   return withWorldBookEntryVectorCommitLocks(userId, requestedIds, async () => {
+    assertSignalActive(signal);
     const requestedEntries = Array.from(writesByEntryId.values()).map((write) => write.entry);
     const stableBeforeWrite = await dependencies.filterCurrent(
       userId,
@@ -3601,14 +3768,18 @@ async function commitWorldBookVectorWritesIfCurrent(
       settingsFingerprint,
       configFingerprint,
     );
+    assertSignalActive(signal);
     const stableBeforeIds = new Set(stableBeforeWrite.map((entry) => entry.id));
     const staleIds = requestedIds.filter((entryId) => !stableBeforeIds.has(entryId));
     if (stableBeforeWrite.length === 0) return { indexedIds: [], staleIds };
 
     const rows = stableBeforeWrite.flatMap((entry) => writesByEntryId.get(entry.id)?.rows ?? []);
     const writtenIds = stableBeforeWrite.map((entry) => entry.id);
-    await dependencies.deleteRows(userId, writtenIds);
-    await dependencies.upsertRows(rows);
+    assertSignalActive(signal);
+    await dependencies.deleteRows(userId, writtenIds, signal);
+    assertSignalActive(signal);
+    await dependencies.upsertRows(rows, signal);
+    assertSignalActive(signal);
 
     const stableAfterWrite = await dependencies.filterCurrent(
       userId,
@@ -3616,11 +3787,15 @@ async function commitWorldBookVectorWritesIfCurrent(
       settingsFingerprint,
       configFingerprint,
     );
+    assertSignalActive(signal);
     const indexedIds = await dependencies.markIndexedIfCurrent(userId, stableAfterWrite, indexedAt);
+    assertSignalActive(signal);
     const indexedIdSet = new Set(indexedIds);
     const staleAfterWrite = writtenIds.filter((entryId) => !indexedIdSet.has(entryId));
     if (staleAfterWrite.length > 0) {
-      await dependencies.deleteRows(userId, staleAfterWrite);
+      assertSignalActive(signal);
+      await dependencies.deleteRows(userId, staleAfterWrite, signal);
+      assertSignalActive(signal);
       staleIds.push(...staleAfterWrite);
     }
 
@@ -3649,6 +3824,7 @@ export const __test__ = {
   coordinateWorldBookVectorAndSourceDelete,
   updateWorldBookEntriesVectorStateIfCurrent,
   withWorldBookEntryVectorCommitLocks,
+  assertSafeEmbeddingRows,
 };
 
 export async function markWorldBookEntriesVectorErrorIfCurrent(
@@ -3736,8 +3912,10 @@ export async function reindexWorldBookEntries(
     optimizeAfter?: boolean;
     rebuildVectorIndex?: boolean;
     onProgress?: (progress: WorldBookReindexProgress) => void;
+    signal?: AbortSignal;
   }
 ) : Promise<WorldBookReindexResult> {
+  assertSignalActive(options?.signal);
   const batchSize = Math.max(1, Math.min(options?.batchSize ?? 50, 200));
   const force = options?.force ?? false;
   const optimizeAfter = options?.optimizeAfter ?? true;
@@ -3782,7 +3960,9 @@ export async function reindexWorldBookEntries(
   progress.eligible = toIndex.length;
 
   for (const entry of notEnabled) {
+    assertSignalActive(options?.signal);
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
+    assertSignalActive(options?.signal);
     updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
     progress.removed += 1;
     progress.current += 1;
@@ -3790,7 +3970,9 @@ export async function reindexWorldBookEntries(
   }
 
   for (const entry of disabledOrEmpty) {
+    assertSignalActive(options?.signal);
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
+    assertSignalActive(options?.signal);
     updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
     progress.removed += 1;
     progress.current += 1;
@@ -3803,10 +3985,13 @@ export async function reindexWorldBookEntries(
   }
 
   const cfg = await getEmbeddingConfig(userId);
+  assertSignalActive(options?.signal);
   const configFingerprint = getWorldBookVectorWriteFingerprint(cfg);
   if (!cfg.enabled || !cfg.vectorize_world_books) {
     for (const entry of toIndex) {
+      assertSignalActive(options?.signal);
       await deleteWorldBookEntryEmbeddings(userId, entry.id);
+      assertSignalActive(options?.signal);
       updateWorldBookEntryVectorState(entry.id, "not_enabled", null, null);
       progress.removed += 1;
       progress.current += 1;
@@ -3814,8 +3999,9 @@ export async function reindexWorldBookEntries(
     }
     return progress;
   }
-
+  assertSignalActive(options?.signal);
   await ensureWorldBookVectorVersion(userId);
+  assertSignalActive(options?.signal);
   const worldBookSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: cfg.retrieval_top_k,
   });
@@ -3829,7 +4015,9 @@ export async function reindexWorldBookEntries(
   progress.eligible = entryGroups.length;
 
   for (const group of emptiedEntries) {
+    assertSignalActive(options?.signal);
     await deleteWorldBookEntryEmbeddings(userId, group.entry.id);
+    assertSignalActive(options?.signal);
     updateWorldBookEntryVectorState(group.entry.id, "not_enabled", null, null);
     progress.removed += 1;
     progress.current += 1;
@@ -3840,10 +4028,12 @@ export async function reindexWorldBookEntries(
     groups: Array<{ entry: WorldBookEntry; chunks: Array<{ chunkIndex: number; content: string; searchText: string; chunkCount: number }> }>,
     currentSize: number,
   ): Promise<void> => {
+    assertSignalActive(options?.signal);
     if (groups.length === 0) return;
     const payloads = groups.flatMap((group) => group.chunks.map((chunk) => ({ entry: group.entry, chunk })));
     try {
-      const vectors = await cachedEmbedTexts(userId, payloads.map((payload) => payload.chunk.searchText));
+      const vectors = await cachedEmbedTexts(userId, payloads.map((payload) => payload.chunk.searchText), { signal: options?.signal });
+      assertSignalActive(options?.signal);
       const now = Math.floor(Date.now() / 1000);
       const vectorSlices = new Map<string, number[][]>();
       let offset = 0;
@@ -3852,13 +4042,14 @@ export async function reindexWorldBookEntries(
         vectorSlices.set(group.entry.id, slice);
         offset += group.chunks.length;
       }
-
+      assertSignalActive(options?.signal);
       const stableEntries = await filterCurrentWorldBookEntriesForWrite(
         userId,
         groups.map((group) => group.entry),
         settingsFingerprint,
         configFingerprint,
       );
+      assertSignalActive(options?.signal);
       const stableIds = new Set(stableEntries.map((entry) => entry.id));
       const stableGroups = groups.filter((group) => stableIds.has(group.entry.id));
       if (stableGroups.length === 0) {
@@ -3891,7 +4082,10 @@ export async function reindexWorldBookEntries(
         settingsFingerprint,
         configFingerprint,
         now,
+        undefined,
+        options?.signal,
       );
+      assertSignalActive(options?.signal);
       if (commit.staleIds.length > 0) {
         console.info(
           "[embeddings] Discarded %d stale world-book vector commit%s after write validation",
@@ -3903,6 +4097,7 @@ export async function reindexWorldBookEntries(
       progress.current += groups.length;
       emitProgress();
     } catch (err) {
+      assertSignalActive(options?.signal);
       const error = err instanceof Error ? err : new Error(String(err));
       if (isRetryableBatchError(error) && currentSize > 1) {
         const half = Math.max(1, Math.floor(currentSize / 2));
@@ -3915,6 +4110,7 @@ export async function reindexWorldBookEntries(
         return;
       }
       console.warn("[embeddings] Batch embedding failed:", error);
+      assertSignalActive(options?.signal);
       const failed = await markWorldBookEntriesVectorErrorIfCurrent(
         userId,
         groups.map((group) => group.entry),
@@ -3922,6 +4118,7 @@ export async function reindexWorldBookEntries(
         settingsFingerprint,
         configFingerprint,
       );
+      assertSignalActive(options?.signal);
       progress.failed += failed;
       progress.current += groups.length;
       emitProgress();
@@ -3929,7 +4126,9 @@ export async function reindexWorldBookEntries(
   };
 
   for (let i = 0; i < entryGroups.length; i += batchSize) {
+    assertSignalActive(options?.signal);
     await processGroupBatch(entryGroups.slice(i, i + batchSize), batchSize);
+    assertSignalActive(options?.signal);
   }
 
   // Compact all fragments into fewer files, prune old versions, and optionally
@@ -3937,14 +4136,20 @@ export async function reindexWorldBookEntries(
   // so a burst of edited entries does not repeatedly rewrite a large index.
   if (optimizeAfter) {
     try {
+      assertSignalActive(options?.signal);
       const store = await getActiveVectorStore();
+      assertSignalActive(options?.signal);
       if (rebuildVectorIndex) getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
-      await store.optimize(["embeddings_world_books"]);
+      await store.optimize(["embeddings_world_books"], options?.signal);
+      assertSignalActive(options?.signal);
     } catch (err) {
+      assertSignalActive(options?.signal);
       console.warn("[embeddings] Post-reindex optimize failed:", err);
     }
   } else {
+    assertSignalActive(options?.signal);
     await scheduleStoreOptimize("world_book");
+    assertSignalActive(options?.signal);
   }
 
   return progress;
@@ -4416,17 +4621,21 @@ export async function deleteChatChunkEmbeddings(
   userId: string,
   chatId: string,
   chunkIds?: string | string[],
+  signal?: AbortSignal,
 ): Promise<void> {
+  assertSignalActive(signal);
   const idList = chunkIds === undefined
     ? null
     : (Array.isArray(chunkIds) ? chunkIds : [chunkIds]);
   if (idList && idList.length === 0) return;
-
+  assertSignalActive(signal);
   await deleteStoreRows("embeddings", andFilter([
     ownerScope(userId, "chat_chunk", chatId),
     idList ? inSet("source_id", idList) : null,
-  ]));
-  await scheduleStoreOptimize("chat_chunk");
+  ]), signal);
+  assertSignalActive(signal);
+  await scheduleStoreOptimize("chat_chunk", signal);
+  assertSignalActive(signal);
 }
 
 /**
@@ -4447,19 +4656,24 @@ export async function reconcileChatChunkEmbeddings(
   userId: string,
   chatId: string,
   validChunkIds: Iterable<string>,
+  signal?: AbortSignal,
 ): Promise<number> {
+  assertSignalActive(signal);
   const valid = new Set(validChunkIds);
   if (valid.size === 0) return 0;
 
   const store = await getActiveVectorStore();
+  assertSignalActive(signal);
   const rows = await store.getRowsByFilter("embeddings", ownerScope(userId, "chat_chunk", chatId));
+  assertSignalActive(signal);
 
   const orphanIds = Array.from(
     new Set((rows as any[]).map((r) => String(r.source_id)).filter((id) => !valid.has(id))),
   );
   if (orphanIds.length === 0) return 0;
-
-  await deleteChatChunkEmbeddings(userId, chatId, orphanIds);
+  assertSignalActive(signal);
+  await deleteChatChunkEmbeddings(userId, chatId, orphanIds, signal);
+  assertSignalActive(signal);
   console.info(`[embeddings] Reconciled chat ${chatId.split("-")[0]}…: removed ${orphanIds.length} orphaned chunk vector(s)`);
   return orphanIds.length;
 }
@@ -4469,27 +4683,31 @@ export async function syncChatChunkEmbedding(
   chatId: string,
   chunkId: string,
   content: string,
-  metadata?: Record<string, any>
+  metadata?: Record<string, any>,
+  signal?: AbortSignal,
 ): Promise<void> {
+  assertSignalActive(signal);
   const cfg = await getEmbeddingConfig(userId);
+  assertSignalActive(signal);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) {
-    await deleteChatChunkEmbeddings(userId, chatId, chunkId);
-    return;
-  }
-  
-  const text = content.trim();
-  if (!text) {
-    await deleteChatChunkEmbeddings(userId, chatId, chunkId);
+    await deleteChatChunkEmbeddings(userId, chatId, chunkId, signal);
     return;
   }
 
+  const text = content.trim();
+  if (!text) {
+    await deleteChatChunkEmbeddings(userId, chatId, chunkId, signal);
+    return;
+  }
+
+  assertSignalActive(signal);
   const baseMetadata = {
     chunkId,
     messageIds: loadChatChunkMessageIds(chunkId),
     ...(metadata || {}),
   };
-  const leaves = await embedChatChunkContentLeaves(userId, text);
-  if (leaves.length === 0) return;
+  const leaves = await embedChatChunkContentLeaves(userId, text, undefined, { signal });
+  assertSignalActive(signal);
   const rows = buildChatChunkEmbeddingRows(
     userId,
     chatId,
@@ -4497,14 +4715,17 @@ export async function syncChatChunkEmbedding(
     text,
     leaves,
     baseMetadata,
+    Math.floor(Date.now() / 1000),
   );
-  await replaceChatChunkEmbeddingRows(userId, [{ chatId, chunkId }], rows);
+  await replaceChatChunkEmbeddingRows(userId, [{ chatId, chunkId }], rows, signal);
+  assertSignalActive(signal);
 
   console.info(
     `[embeddings] Vectorized chat chunk ${chunkId} for chat ${chatId}${rows.length > 1 ? ` (${rows.length} split rows)` : ""}`,
   );
 
-  await scheduleStoreOptimize("chat_chunk");
+  await scheduleStoreOptimize("chat_chunk", signal);
+  assertSignalActive(signal);
 }
 
 /**
@@ -4515,9 +4736,11 @@ export async function syncChatChunkEmbedding(
 export async function batchUpsertChunkVectors(
   userId: string,
   chunks: Array<{ chatId: string; chunkId: string; vector: number[]; content: string; metadata?: Record<string, any> }>,
+  signal?: AbortSignal,
 ): Promise<void> {
+  assertSignalActive(signal);
   if (chunks.length === 0) return;
-
+  return withCompleteUserProjection(userId, async () => {
   const now = Math.floor(Date.now() / 1000);
   const rows: EmbeddingRow[] = chunks.flatMap((c) => buildChatChunkEmbeddingRows(
     userId,
@@ -4528,20 +4751,31 @@ export async function batchUpsertChunkVectors(
     { chunkId: c.chunkId, ...(c.metadata || {}) },
     now,
   ));
-
+  assertSignalActive(signal);
   await replaceChatChunkEmbeddingRows(
     userId,
     chunks.map((chunk) => ({ chatId: chunk.chatId, chunkId: chunk.chunkId })),
     rows,
+    signal,
   );
-
+  assertSignalActive(signal);
   console.info(`[embeddings] Batch-vectorized ${rows.length} chat chunk(s)`);
-  await scheduleStoreOptimize("chat_chunk");
+  assertSignalActive(signal);
+  await scheduleStoreOptimize("chat_chunk", signal);
+  assertSignalActive(signal);
+  });
 }
 
-async function getExistingChatChunks(userId: string, chatId: string): Promise<Record<string, string>> {
+async function getExistingChatChunks(
+  userId: string,
+  chatId: string,
+  signal?: AbortSignal,
+): Promise<Record<string, string>> {
+  assertSignalActive(signal);
   const store = await getActiveVectorStore();
+  assertSignalActive(signal);
   const rows = await store.getRowsByFilter("embeddings", ownerScope(userId, "chat_chunk", chatId));
+  assertSignalActive(signal);
   const map: Record<string, string> = {};
   for (const r of rows) {
     const meta = parseChatChunkEmbeddingMetadata(r.metadata_json);
@@ -4555,23 +4789,24 @@ async function getExistingChatChunks(userId: string, chatId: string): Promise<Re
 export async function reindexChatMessages(
   userId: string,
   chatId: string,
-  chunks: Array<{ chunkId: string; content: string; metadata?: Record<string, any> }>
+  chunks: Array<{ chunkId: string; content: string; metadata?: Record<string, any> }>,
+  signal?: AbortSignal,
 ): Promise<void> {
+  assertSignalActive(signal);
+  return withCompleteUserProjection(userId, async () => {
+  assertSignalActive(signal);
   const cfg = await getEmbeddingConfig(userId);
+  assertSignalActive(signal);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) {
-    // If disabled, just ensure it's wiped
-    await deleteChatChunkEmbeddings(userId, chatId);
+    await deleteChatChunkEmbeddings(userId, chatId, undefined, signal);
     return;
   }
 
   const validChunks = chunks.filter(c => c.content.trim().length > 0);
-  
-  // Smart Diffing: Query LanceDB for the chunks we already know about.
-  const existingChunks = await getExistingChatChunks(userId, chatId);
+  const existingChunks = await getExistingChatChunks(userId, chatId, signal);
   const chunksToUpsert: Array<{ chunkId: string; content: string; metadata?: Record<string, any> }> = [];
   const validChunkIds = new Set<string>();
 
-  // 1. Find chunks that are entirely new OR have changed content.
   for (const chunk of validChunks) {
     validChunkIds.add(chunk.chunkId);
     const existingContentHash = existingChunks[chunk.chunkId];
@@ -4580,17 +4815,14 @@ export async function reindexChatMessages(
     }
   }
 
-  // 2. Find "orphaned" chunks.
   const chunksToDelete: string[] = [];
   for (const existingId of Object.keys(existingChunks)) {
-    if (!validChunkIds.has(existingId)) {
-      chunksToDelete.push(existingId);
-    }
+    if (!validChunkIds.has(existingId)) chunksToDelete.push(existingId);
   }
 
-  // Delete orphaned chunks in a single call (the helper accepts a string[]).
   if (chunksToDelete.length > 0) {
-    await deleteChatChunkEmbeddings(userId, chatId, chunksToDelete);
+    await deleteChatChunkEmbeddings(userId, chatId, chunksToDelete, signal);
+    assertSignalActive(signal);
   }
 
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
@@ -4600,6 +4832,7 @@ export async function reindexChatMessages(
     batchSize,
     (c) => c.content.trim(),
     async (batch, _texts, vectors) => {
+      assertSignalActive(signal);
       const now = Math.floor(Date.now() / 1000);
       const rows: EmbeddingRow[] = batch.flatMap((c, idx) => buildChatChunkEmbeddingRows(
         userId,
@@ -4610,14 +4843,16 @@ export async function reindexChatMessages(
         { chunkId: c.chunkId, ...(c.metadata || {}) },
         now,
       ));
-
       await replaceChatChunkEmbeddingRows(
         userId,
         batch.map((chunk) => ({ chatId, chunkId: chunk.chunkId })),
         rows,
+        signal,
       );
+      assertSignalActive(signal);
     },
     async (failedBatch, err) => {
+      assertSignalActive(signal);
       if (failedBatch.length === 1) {
         const [failed] = failedBatch;
         const recovered = await tryRecoverChatChunkEmbeddingWithAutoSplit(
@@ -4627,19 +4862,25 @@ export async function reindexChatMessages(
           failed.content,
           err,
           { chunkId: failed.chunkId, ...(failed.metadata || {}) },
+          undefined,
+          { signal },
         );
+        assertSignalActive(signal);
         if (recovered.recovered) return;
       }
       console.warn("[embeddings] Batch chat embedding failed:", err);
     },
-    { label: "chat memory" },
+    { label: "chat memory", signal },
   );
+  assertSignalActive(signal);
 
   if (chunksToDelete.length > 0 || chunksToUpsert.length > 0) {
     console.info(`[embeddings] Synced chat memory for ${chatId.split('-')[0]}... (+${chunksToUpsert.length} updated, -${chunksToDelete.length} removed)`);
   }
 
-  await scheduleStoreOptimize("chat_chunk");
+  await scheduleStoreOptimize("chat_chunk", signal);
+  assertSignalActive(signal);
+  });
 }
 
 export async function searchChatChunks(
@@ -4928,7 +5169,7 @@ export async function copyChunksToVault(
   chunkIdMap: Map<string, string>,
 ): Promise<{ copied: number }> {
   if (chunkIdMap.size === 0) return { copied: 0 };
-
+  return withCompleteUserProjection(userId, async () => {
   const sourceIds = [...chunkIdMap.keys()];
   const now = Math.floor(Date.now() / 1000);
   let copied = 0;
@@ -4979,6 +5220,7 @@ export async function copyChunksToVault(
 
   if (copied > 0) await scheduleStoreOptimize();
   return { copied };
+  });
 }
 
 /**
@@ -4992,7 +5234,7 @@ export async function rebuildVaultEmbeddings(
   chunks: Array<{ vaultChunkId: string; content: string }>,
 ): Promise<{ embedded: number }> {
   if (chunks.length === 0) return { embedded: 0 };
-
+  return withCompleteUserProjection(userId, async () => {
   const cfg = await getEmbeddingConfig(userId);
   if (!cfg.enabled) return { embedded: 0 };
 
@@ -5066,6 +5308,7 @@ export async function rebuildVaultEmbeddings(
 
   if (embeddedChunkIds.size > 0) await scheduleStoreOptimize();
   return { embedded: embeddedChunkIds.size };
+  });
 }
 
 /**
@@ -5134,7 +5377,7 @@ export async function batchUpsertDatabankVectors(
   chunks: Array<{ chatId: string; chunkId: string; vector: number[]; content: string; metadata?: Record<string, any> }>,
 ): Promise<void> {
   if (chunks.length === 0) return;
-
+  return withCompleteUserProjection(userId, async () => {
   const now = Math.floor(Date.now() / 1000);
   const rows: EmbeddingRow[] = chunks.map((c) => ({
     id: rowId(userId, "databank", c.chunkId, 0),
@@ -5153,6 +5396,7 @@ export async function batchUpsertDatabankVectors(
 
   console.info(`[embeddings] Batch-vectorized ${rows.length} databank chunk(s)`);
   await scheduleStoreOptimize();
+  });
 }
 
 /**
@@ -5174,10 +5418,12 @@ export async function deleteDatabankEmbeddings(
  */
 export async function deleteDatabankChunksByIds(userId: string, chunkIds: string[]): Promise<void> {
   if (chunkIds.length === 0) return;
-  const store = await getActiveVectorStore();
-  const ids = chunkIds.map((id) => rowId(userId, "databank", id, 0));
-  for (let i = 0; i < ids.length; i += 500) {
-    await store.deleteByIds("embeddings", ids.slice(i, i + 500));
+  for (let i = 0; i < chunkIds.length; i += 500) {
+    await deleteStoreRows("embeddings", andFilter([
+      eq("user_id", userId),
+      eq("source_type", "databank"),
+      inSet("source_id", chunkIds.slice(i, i + 500)),
+    ]));
   }
   await scheduleStoreOptimize();
 }
@@ -5196,44 +5442,76 @@ export async function moveDatabankChunkVectorsToOwner(
   newOwnerId: string,
 ): Promise<void> {
   if (chunkIds.length === 0) return;
+  return withCompleteUserProjection(userId, async () => {
+  if (
+    typeof newOwnerId !== "string"
+    || newOwnerId.length === 0
+    || !getDb().query("SELECT 1 FROM databanks WHERE id = ? AND user_id = ?").get(newOwnerId, userId)
+  ) {
+    throw new Error("databank vector target is not owned by the user");
+  }
+  if (chunkIds.length > MAX_SOURCE_FILTER_IDS || chunkIds.some((id) => (
+    typeof id !== "string"
+    || id.length === 0
+    || Buffer.byteLength(id, "utf8") > MAX_STORED_VECTOR_ID_BYTES
+  ))) {
+    throw new Error("databank vector chunk IDs exceed the bounded move contract");
+  }
+  const db = getDb();
 
   const store = await getActiveVectorStore();
   const BATCH = 500;
   for (let i = 0; i < chunkIds.length; i += BATCH) {
     const batch = chunkIds.slice(i, i + BATCH);
-    const ids = batch.map((id) => rowId(userId, "databank", id, 0));
-    const existing = await store.getRowsByFilter("embeddings", idsIn(ids));
+    const canonicalIds = new Set(
+      (db.query(
+        `SELECT id FROM databank_chunks
+           WHERE user_id = ? AND databank_id = ?
+             AND id IN (${batch.map(() => "?").join(",")})`,
+      ).all(userId, newOwnerId, ...batch) as Array<{ id: string }>).map((row) => row.id),
+    );
+    if (canonicalIds.size !== batch.length || batch.some((id) => !canonicalIds.has(id))) {
+      throw new Error("databank vector chunk is not owned by the target databank");
+    }
+    const existing = await store.getRowsByFilter("embeddings", andFilter([
+      eq("user_id", userId),
+      eq("source_type", "databank"),
+      inSet("source_id", batch),
+    ]));
     if (existing.length === 0) continue;
 
     const now = Math.floor(Date.now() / 1000);
     const updated: EmbeddingRow[] = existing.map((row) => {
-        let meta: Record<string, unknown> = {};
-        try {
-          const raw = typeof row.metadata_json === "string" ? row.metadata_json : JSON.stringify(row.metadata_json ?? {});
-          meta = JSON.parse(raw || "{}");
-        } catch {
-          meta = {};
-        }
-        meta.databankId = newOwnerId;
+      let meta: Record<string, unknown> = {};
+      try {
+        const raw = typeof row.metadata_json === "string"
+          ? row.metadata_json
+          : JSON.stringify(row.metadata_json ?? {});
+        meta = JSON.parse(raw || "{}");
+      } catch {
+        meta = {};
+      }
+      meta.databankId = newOwnerId;
 
-        return {
-          id: String(row.id),
-          user_id: String(row.user_id),
-          source_type: String(row.source_type),
-          source_id: String(row.source_id),
-          owner_id: newOwnerId,
-          chunk_index: Number(row.chunk_index ?? 0),
-          content: String(row.content || ""),
-          vector: row.vector,
-          metadata_json: JSON.stringify(meta),
-          updated_at: now,
-        };
-      }).filter((r) => r.vector.length > 0);
+      return {
+        id: String(row.id),
+        user_id: String(row.user_id),
+        source_type: String(row.source_type),
+        source_id: String(row.source_id),
+        owner_id: newOwnerId,
+        chunk_index: Number(row.chunk_index ?? 0),
+        content: String(row.content || ""),
+        vector: row.vector,
+        metadata_json: JSON.stringify(meta),
+        updated_at: now,
+      };
+    }).filter((r) => Array.isArray(r.vector) && r.vector.length > 0);
 
     if (updated.length === 0) continue;
-    await store.upsert("embeddings", updated);
+    await upsertStoreRows("embeddings", updated);
   }
   await scheduleStoreOptimize();
+  });
 }
 
 /**

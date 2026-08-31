@@ -1,7 +1,8 @@
-import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect, useDeferredValue, type ReactNode, Fragment } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect, useDeferredValue, useId, type ReactNode, Fragment } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
+import { scheduleLowPriorityTask } from '@/lib/low-priority-task'
 
 import {
   DndContext,
@@ -67,14 +68,31 @@ import clsx from 'clsx'
 import ExpandedTextEditor, { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { GuideViewer } from '@/components/shared/GuideViewer'
+import {
+  canMovePromptVariableBetweenOccurrences,
+  decodeLoomBlockOccurrence,
+  encodeLoomBlockOccurrence,
+  remapCategorySnapshotsForReorder,
+  getLoomBlockAtOccurrence,
+  useLoomBuilder,
+  type LoomBlockOccurrence,
+  type LoomBlockReorderEntry,
+} from '@/hooks/useLoomBuilder'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
-import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { presetsApi, type StashedPromptBlock } from '@/api/presets'
 import { imagesApi } from '@/api/images'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
 import { getEffectivePromptVariableValues } from '@/hooks/preset-profile-prompt-variables'
-import { computeGroups, createBlock, createMarkerBlock, getRemotePresetOrigin, resolvePromptBlockPlacements } from '@/lib/loom/service'
+import {
+  computeGroups,
+  createBlock,
+  createMarkerBlock,
+  getPortablePresetErrorCode,
+  getRemotePresetOrigin,
+  resolvePromptBlockPlacements,
+  unmarshalPreset,
+} from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
   PROMPT_TEMPLATES,
@@ -101,10 +119,15 @@ import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { useLongPress } from '@/hooks/useLongPress'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
+import {
+  registerActiveLoomPresetSelectionBlocker,
+  type ActiveLoomPresetSelectionBlockerRegistration,
+} from '@/lib/loom/preset-selection-coordinator'
 import SpindlePresetEditorTabContent from '@/components/spindle/SpindlePresetEditorTabContent'
 import SpindlePresetEditorToolbarItem from '@/components/spindle/SpindlePresetEditorToolbarItem'
 import { applyPresetEditorDraft, toPresetEditorDraft } from '@/lib/spindle/preset-editor-adapter'
 import { setPresetEditorController, syncPresetEditorState } from '@/lib/spindle/preset-editor-helper'
+import AgenticRuntimePanel from './AgenticRuntimePanel'
 import s from './LoomBuilder.module.css'
 
 function useLb() {
@@ -112,6 +135,11 @@ function useLb() {
 }
 
 // ============================================================================
+const OUTER_EDITOR_TAB_PREFIX = 'loom-builder'
+
+function outerEditorDomId(kind: 'tab' | 'panel', tabId: string): string {
+  return `${OUTER_EDITOR_TAB_PREFIX}-${kind}-${encodeURIComponent(tabId)}`
+}
 // HELPERS
 // ============================================================================
 
@@ -147,8 +175,8 @@ function parseRootDropId(id: unknown) {
   return Number.isFinite(index) ? index : null
 }
 
-function rootDropId(index: number, appendCategoryId?: string) {
-  return `${ROOT_DROP_PREFIX}${index}${appendCategoryId ? `:category:${appendCategoryId}` : ''}`
+function rootDropId(index: number, appendCategoryOccurrenceId?: string) {
+  return `${ROOT_DROP_PREFIX}${index}${appendCategoryOccurrenceId ? `:category:${appendCategoryOccurrenceId}` : ''}`
 }
 
 function hasExplicitGroup(block: PromptBlock) {
@@ -198,25 +226,25 @@ function inferGroupAtIndex(blocks: PromptBlock[], index: number) {
   return null
 }
 
-function getCategoryEndIndex(blocks: PromptBlock[], categoryId: string) {
-  const categoryIndex = blocks.findIndex((block) => block.id === categoryId)
-  if (categoryIndex === -1) return -1
+function getCategoryEndIndex(blocks: PromptBlock[], target: LoomBlockOccurrence) {
+  const category = getLoomBlockAtOccurrence(blocks, target)
+  if (!category || category.marker !== 'category') return -1
 
-  let endIndex = categoryIndex + 1
+  let endIndex = target.promptOrder + 1
   while (endIndex < blocks.length) {
     const block = blocks[endIndex]
     if (block.marker === 'category') break
-    if (hasExplicitGroup(block) && blockGroup(block) !== categoryId) break
+    if (hasExplicitGroup(block) && blockGroup(block) !== category.id) break
     endIndex += 1
   }
   return endIndex
 }
 
-function parseRootDropCategoryId(id: unknown) {
+function parseRootDropCategoryId(id: unknown): LoomBlockOccurrence | null {
   if (typeof id !== 'string' || !id.startsWith(ROOT_DROP_PREFIX)) return null
   const marker = ':category:'
   const markerIndex = id.indexOf(marker)
-  return markerIndex === -1 ? null : id.slice(markerIndex + marker.length) || null
+  return markerIndex === -1 ? null : decodeLoomBlockOccurrence(id.slice(markerIndex + marker.length))
 }
 
 function RootDropSlot({ id, active, appendArmed }: { id: string; active: boolean; appendArmed?: boolean }) {
@@ -246,22 +274,23 @@ function RootDropSlot({ id, active, appendArmed }: { id: string; active: boolean
 
 interface SortableCategoryItemProps {
   block: PromptBlock
+  occurrence: LoomBlockOccurrence
   isCollapsed: boolean
   onToggleCollapse: () => void
-  onEdit: (block: PromptBlock) => void
-  onDelete: (id: string) => void
-  onToggle: (id: string) => void
+  onEdit: (target: LoomBlockOccurrence) => void
+  onDelete: (target: LoomBlockOccurrence) => void
+  onToggle: (target: LoomBlockOccurrence) => void
   /** Blanket enable/disable of the category and all of its children. */
-  onToggleChildren: (id: string) => void
+  onToggleChildren: (target: LoomBlockOccurrence) => void
   childCount: number
   dragDisabled?: boolean
 }
 
 function SortableCategoryItem({
-  block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, onToggleChildren, childCount, dragDisabled = false,
+  block, occurrence, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, onToggleChildren, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { t } = useLb()
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: encodeLoomBlockOccurrence(occurrence), disabled: dragDisabled })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isDisabled = !block.enabled
   const displayName = block.name.replace(/^\u2501\s*/, '')
@@ -296,16 +325,16 @@ function SortableCategoryItem({
           )}
         </span>
       </div>
-      <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('category.disable') : t('category.enable')}>
+      <Button size="icon-sm" variant="ghost" onClick={() => onToggle(occurrence)} title={block.enabled ? t('category.disable') : t('category.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
-      <Button size="icon-sm" variant="ghost" onClick={() => onToggleChildren(block.id)} title={block.enabled ? t('category.disableAll') : t('category.enableAll')}>
+      <Button size="icon-sm" variant="ghost" onClick={() => onToggleChildren(occurrence)} title={block.enabled ? t('category.disableAll') : t('category.enableAll')}>
         <Layers size={14} />
       </Button>
-      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={t('category.rename')}>
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(occurrence)} title={t('category.rename')}>
         <Edit2 size={14} />
       </Button>
-      <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={t('category.deleteCategory')}>
+      <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(occurrence)} title={t('category.deleteCategory')}>
         <Trash2 size={14} />
       </Button>
     </div>
@@ -318,19 +347,20 @@ function SortableCategoryItem({
 
 interface SortableBlockItemProps {
   block: PromptBlock
+  occurrence: LoomBlockOccurrence
   effectiveRole?: PromptBlock['role']
-  onEdit: (block: PromptBlock) => void
-  onDelete: (id: string) => void
-  onToggle: (id: string) => void
-  onStash?: (block: PromptBlock) => void
+  onEdit: (target: LoomBlockOccurrence) => void
+  onDelete: (target: LoomBlockOccurrence) => void
+  onToggle: (target: LoomBlockOccurrence) => void
+  onStash?: (target: LoomBlockOccurrence, block: PromptBlock) => void
   indented: boolean
   dragDisabled?: boolean
 }
 
-function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, onStash, indented, dragDisabled = false }: SortableBlockItemProps) {
+function SortableBlockItem({ block, occurrence, effectiveRole, onEdit, onDelete, onToggle, onStash, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: encodeLoomBlockOccurrence(occurrence), disabled: dragDisabled })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
@@ -379,19 +409,19 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, o
           </span>
         )}
       </span>
-      <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('block.disable') : t('block.enable')}>
+      <Button size="icon-sm" variant="ghost" onClick={() => onToggle(occurrence)} title={block.enabled ? t('block.disable') : t('block.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
       {!isMarker && !block.stashId && onStash && (
-        <Button size="icon-sm" variant="ghost" onClick={() => onStash(block)} title={t('actions.addToStash')}>
+        <Button size="icon-sm" variant="ghost" onClick={() => onStash(occurrence, block)} title={t('actions.addToStash')}>
           <Archive size={14} />
         </Button>
       )}
-      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(block)} title={tc('actions.edit')}>
+      <Button size="icon-sm" variant="ghost" onClick={() => onEdit(occurrence)} title={tc('actions.edit')}>
         <Edit2 size={14} />
       </Button>
       {!block.isLocked && (
-        <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(block.id)} title={tc('actions.delete')}>
+        <Button size="icon-sm" variant="danger-ghost" onClick={() => onDelete(occurrence)} title={tc('actions.delete')}>
           <Trash2 size={14} />
         </Button>
       )}
@@ -549,6 +579,7 @@ function TrustedMacroPreviewControls({
 
 interface BlockEditorProps {
   block: PromptBlock
+  blockOccurrence: LoomBlockOccurrence
   blocks: PromptBlock[]
   promptVariables: PromptVariableValues
   onSave: (updates: Partial<PromptBlock>) => boolean | void
@@ -560,7 +591,7 @@ interface BlockEditorProps {
   trustedHostFeatures?: boolean
   /** Preset-level move: relocates a variable def (and its value bucket) to
    * another block. Returns false when the move was rejected. */
-  onMoveVariable?: (sourceBlockId: string, variable: PromptVariableDef, targetBlockId: string) => boolean
+  onMoveVariable?: (source: LoomBlockOccurrence, variable: PromptVariableDef, target: LoomBlockOccurrence) => boolean
 }
 
 function cleanPlacementBinding(
@@ -594,6 +625,7 @@ function cleanPlacementBinding(
 
 export function BlockEditor({
   block,
+  blockOccurrence,
   blocks,
   promptVariables,
   onSave,
@@ -608,6 +640,7 @@ export function BlockEditor({
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { injectionTriggerTypes, injectionTriggerLabel } = useLoomOptionLabels()
+  const fieldIdPrefix = useId()
   const isInstalledLumiHubSealed = trustedHostFeatures && block.sealedSource === 'lumihub'
   const [name, setName] = useState(block.name)
   const [role, setRole] = useState<PromptBlock['role']>(block.role || 'system')
@@ -736,14 +769,14 @@ export function BlockEditor({
         <div className={s.form}>
           {validationError && <div role="alert" className={s.jsonError}>{validationError}</div>}
           <div className={s.formGroup}>
-            <label className={s.label}>{t('blockEditor.name')}</label>
-            <input className={s.input} value={name} onChange={e => setName(e.target.value)} placeholder={t('blockEditor.namePlaceholder')} />
+            <label className={s.label} htmlFor={`${fieldIdPrefix}-name`}>{t('blockEditor.name')}</label>
+            <input id={`${fieldIdPrefix}-name`} className={s.input} value={name} onChange={e => setName(e.target.value)} placeholder={t('blockEditor.namePlaceholder')} />
           </div>
 
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
             <div className={s.formGroup} style={{ flex: 1, minWidth: '120px' }}>
-              <label className={s.label}>{t('blockEditor.role')}</label>
-              <select className={s.select} value={role} onChange={e => setRole(e.target.value as PromptBlock['role'])}>
+              <label className={s.label} htmlFor={`${fieldIdPrefix}-role`}>{t('blockEditor.role')}</label>
+              <select id={`${fieldIdPrefix}-role`} className={s.select} value={role} onChange={e => setRole(e.target.value as PromptBlock['role'])}>
                 {position !== 'post_history' && <option value="system">{t('blockEditor.roles.system')}</option>}
                 <option value="user">{t('blockEditor.roles.user')}</option>
                 <option value="assistant">{t('blockEditor.roles.assistant')}</option>
@@ -753,8 +786,8 @@ export function BlockEditor({
             </div>
             {role !== 'user_append' && role !== 'assistant_append' && (
               <div className={s.formGroup} style={{ flex: 1, minWidth: '140px' }}>
-                <label className={s.label}>{t('blockEditor.position')}</label>
-                <select className={s.select} value={position} onChange={e => handlePositionChange(e.target.value)}>
+                <label className={s.label} htmlFor={`${fieldIdPrefix}-position`}>{t('blockEditor.position')}</label>
+                <select id={`${fieldIdPrefix}-position`} className={s.select} value={position} onChange={e => handlePositionChange(e.target.value)}>
                   <option value="pre_history">{t('blockEditor.positions.pre_history')}</option>
                   <option value="post_history">{t('blockEditor.positions.post_history')}</option>
                   <option value="in_history">{t('blockEditor.positions.in_history')}</option>
@@ -763,8 +796,8 @@ export function BlockEditor({
             )}
             {(position === 'in_history' || role === 'user_append' || role === 'assistant_append') && (
               <div className={s.formGroup} style={{ width: '100px' }}>
-                <label className={s.label}>{t('blockEditor.depth')}</label>
-                <NumberStepper value={depth} min={0} onChange={(v) => setDepth(v ?? 0)} />
+                <label className={s.label} htmlFor={`${fieldIdPrefix}-depth`}>{t('blockEditor.depth')}</label>
+                <NumberStepper inputId={`${fieldIdPrefix}-depth`} value={depth} min={0} onChange={(v) => setDepth(v ?? 0)} />
               </div>
             )}
             {(role === 'user_append' || role === 'assistant_append') && (
@@ -776,7 +809,7 @@ export function BlockEditor({
 
           <div className={s.formGroup}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label className={s.label}>{t('blockEditor.content')}</label>
+              <label className={s.label} htmlFor={`${fieldIdPrefix}-content`}>{t('blockEditor.content')}</label>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button className={clsx(s.btn, s.btnSmall)} onClick={() => { if (!showMacros) refreshMacros?.(); setShowMacros(!showMacros) }} type="button">
                   <Hash size={12} /> {showMacros ? t('blockEditor.hideMacros') : t('blockEditor.insertMacro')}
@@ -791,23 +824,23 @@ export function BlockEditor({
                 <div className={s.macroSearch}>
                   <div className={s.macroSearchInner}>
                     <Search size={12} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
-                    <input className={s.macroSearchInput} placeholder={t('blockEditor.searchMacros')} value={macroSearch} onChange={e => setMacroSearch(e.target.value)} />
+                    <input className={s.macroSearchInput} aria-label={t('blockEditor.searchMacros')} placeholder={t('blockEditor.searchMacros')} value={macroSearch} onChange={e => setMacroSearch(e.target.value)} />
                   </div>
                 </div>
-                {filteredMacros.map(group => (
-                  <div key={group.category} className={s.macroGroup}>
-                    <div className={s.macroGroupTitle}>{group.category}</div>
+                {filteredMacros.map((group, groupIndex) => (
+                  <div key={group.category} className={s.macroGroup} aria-labelledby={`${fieldIdPrefix}-macro-group-${groupIndex}`}>
+                    <div id={`${fieldIdPrefix}-macro-group-${groupIndex}`} className={s.macroGroupTitle}>{group.category}</div>
                     {group.macros.map(macro => (
-                      <div key={macro.syntax} className={s.macroItem} onClick={() => insertMacro(macro.syntax)}>
+                      <button type="button" key={macro.syntax} className={s.macroItem} onClick={() => insertMacro(macro.syntax)}>
                         <span className={s.macroSyntax}>{macro.syntax}</span>
                         <span className={s.macroDesc}>{macro.description}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ))}
               </div>
             )}
-            <textarea ref={textareaRef} className={s.textarea} value={content} onChange={e => setContent(e.target.value)} placeholder={t('blockEditor.contentPlaceholder')} />
+            <textarea id={`${fieldIdPrefix}-content`} ref={textareaRef} className={s.textarea} value={content} onChange={e => setContent(e.target.value)} placeholder={t('blockEditor.contentPlaceholder')} />
             {trustedHostFeatures && (
               <TrustedMacroPreviewControls
                 blockId={block.id}
@@ -849,8 +882,9 @@ export function BlockEditor({
                 <div className={s.sealedBlockBody}>
                   <p className={s.sealedBlockText}>{t(isInstalledLumiHubSealed ? 'blockEditor.sealedBlockInstalledHint' : 'blockEditor.sealedBlockHint')}</p>
                   <div className={s.formGroup}>
-                    <label className={s.label}>{t('blockEditor.sealedBlockKey')}</label>
+                    <label className={s.label} htmlFor={`${fieldIdPrefix}-sealed-key`}>{t('blockEditor.sealedBlockKey')}</label>
                     <input
+                      id={`${fieldIdPrefix}-sealed-key`}
                       className={s.input}
                       value={sealedKey}
                       onChange={e => setSealedKey(filterSealedBlockKeyInput(e.target.value))}
@@ -876,8 +910,9 @@ export function BlockEditor({
 
           {block.marker === 'category' && (
             <div className={s.formGroup}>
-              <label className={s.label}>{t('blockEditor.categoryMode')}</label>
+              <label className={s.label} htmlFor={`${fieldIdPrefix}-category-mode`}>{t('blockEditor.categoryMode')}</label>
               <select
+                id={`${fieldIdPrefix}-category-mode`}
                 className={s.select}
                 value={categoryMode || ''}
                 onChange={e => setCategoryMode((e.target.value || null) as PromptBlock['categoryMode'])}
@@ -892,8 +927,8 @@ export function BlockEditor({
             </div>
           )}
 
-          <div className={s.formGroup}>
-            <label className={s.label}>{t('blockEditor.injectionTriggers')}</label>
+          <fieldset className={clsx(s.formGroup, s.editorFieldset)}>
+            <legend className={s.label}>{t('blockEditor.injectionTriggers')}</legend>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               {injectionTriggerTypes.map(trigger => (
                 <label key={trigger.value} className={clsx(s.triggerLabel, injectionTrigger.includes(trigger.value) ? s.triggerLabelActive : s.triggerLabelInactive)}>
@@ -907,10 +942,10 @@ export function BlockEditor({
                 ? t('blockEditor.triggersNone')
                 : t('blockEditor.triggersActive', { list: injectionTrigger.map(injectionTriggerLabel).join(', ') })}
             </span>
-          </div>
+          </fieldset>
 
           <div className={s.formGroup}>
-            <label className={s.label}>{t('blockEditor.characterTagTrigger')}</label>
+            <label className={s.label} htmlFor={`${fieldIdPrefix}-character-tags`}>{t('blockEditor.characterTagTrigger')}</label>
             <div className={s.tagTriggerField}>
               {characterTagTrigger.map((tag) => (
                 <span key={tag} className={s.tagTriggerChip}>
@@ -919,14 +954,16 @@ export function BlockEditor({
                     type="button"
                     className={s.tagTriggerChipRemove}
                     onClick={() => removeCharacterTagTrigger(tag)}
+                    aria-label={`${tc('actions.delete')}: ${tag}`}
                     title={tc('actions.delete')}
                   >
-                    <X size={10} />
+                    <X size={10} aria-hidden="true" />
                   </button>
                 </span>
               ))}
               <div className={s.tagTriggerDraftRow}>
                 <input
+                  id={`${fieldIdPrefix}-character-tags`}
                   className={s.tagTriggerDraftInput}
                   value={characterTagDraft}
                   onChange={(e) => setCharacterTagDraft(e.target.value)}
@@ -943,8 +980,9 @@ export function BlockEditor({
                   className={s.tagTriggerDraftAdd}
                   onClick={commitCharacterTagDraft}
                   disabled={!characterTagDraft.trim()}
+                  aria-label={`${tc('actions.add')}: ${t('blockEditor.characterTagTrigger')}`}
                 >
-                  <Plus size={12} />
+                  <Plus size={12} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -963,18 +1001,26 @@ export function BlockEditor({
             fallbackPlacement={{ role, position, depth }}
             onPlacementBindingChange={setPlacementBinding}
             moveTargets={blocks
-              .filter((candidate) => candidate.id !== block.id)
-              .map((candidate) => {
+              .map((candidate, promptOrder) => ({
+                candidate,
+                occurrence: { blockId: candidate.id, promptOrder },
+              }))
+              .filter(({ occurrence }) => (
+                canMovePromptVariableBetweenOccurrences(blockOccurrence, occurrence)
+              ))
+              .map(({ candidate, occurrence }) => {
+                const group = computeGroups(blocks).find((entry) => (
+                  entry.categoryBlock === candidate || entry.children.includes(candidate)
+                ))
+                const category = group?.categoryBlock
                 const isCategory = candidate.marker === 'category'
-                const category = isCategory
-                  ? candidate
-                  : candidate.group
-                    ? blocks.find((entry) => entry.id === candidate.group && entry.marker === 'category')
-                    : undefined
                 return {
-                  id: candidate.id,
+                  id: encodeLoomBlockOccurrence(occurrence),
                   name: candidate.name || candidate.id,
-                  categoryId: category?.id ?? null,
+                  categoryId: category ? encodeLoomBlockOccurrence({
+                    blockId: category.id,
+                    promptOrder: blocks.indexOf(category),
+                  }) : null,
                   categoryName: category?.name || null,
                   isCategory,
                   variableNames: (candidate.variables ?? [])
@@ -982,13 +1028,14 @@ export function BlockEditor({
                     .filter(Boolean),
                 }
               })}
-            onMoveToBlock={onMoveVariable ? (variableId, targetBlockId) => {
+            onMoveToBlock={onMoveVariable ? (variableId, encodedTarget) => {
               const moving = variables.find((variable) => variable.id === variableId)
-              if (!moving) return
+              const target = decodeLoomBlockOccurrence(encodedTarget)
+              if (!moving || !target) return
               // Move the in-editor version of the def (it may carry unsaved
               // edits) and drop it from the local list so a later Save of
               // this block doesn't resurrect it.
-              if (onMoveVariable(block.id, moving, targetBlockId)) {
+              if (onMoveVariable(blockOccurrence, moving, target)) {
                 setVariables((current) => current.filter((variable) => variable.id !== variableId))
               }
             } : undefined}
@@ -1039,34 +1086,34 @@ export function ControlledLoomBlockEditor({
 }: ControlledLoomBlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
+  const [editingBlockTarget, setEditingBlockTarget] = useState<LoomBlockOccurrence | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
-  const editingBlock = editingBlockId
-    ? blocks.find((block) => block.id === editingBlockId) ?? null
+  const editingBlock = editingBlockTarget
+    ? getLoomBlockAtOccurrence(blocks, editingBlockTarget)
     : null
-  const effectiveRoles = useMemo(() => new Map(
-    resolvePromptBlockPlacements(blocks, promptVariables)
-      .map((block) => [block.id, block.role] as const),
-  ), [blocks, promptVariables])
+  const effectiveBlocks = useMemo(
+    () => resolvePromptBlockPlacements(blocks, promptVariables),
+    [blocks, promptVariables],
+  )
 
   useEffect(() => {
-    if (editingBlockId && !blocks.some((block) => block.id === editingBlockId)) {
-      setEditingBlockId(null)
+    if (editingBlockTarget && !getLoomBlockAtOccurrence(blocks, editingBlockTarget)) {
+      setEditingBlockTarget(null)
     }
-  }, [blocks, editingBlockId])
+  }, [blocks, editingBlockTarget])
 
-  if (editingBlock && !readOnly) {
+  if (editingBlock && editingBlockTarget && !readOnly) {
     return (
       <BlockEditor
-        key={JSON.stringify(editingBlock)}
+        key={`${encodeLoomBlockOccurrence(editingBlockTarget)}:${JSON.stringify(editingBlock)}`}
         block={editingBlock}
+        blockOccurrence={editingBlockTarget}
         blocks={blocks}
         promptVariables={promptVariables}
         validationError={validationError}
         onSave={(updates) => {
-          const nextBlocks = blocks.map((block) => (
-            block.id === editingBlock.id ? { ...block, ...updates } : block
-          ))
+          const nextBlocks = [...blocks]
+          nextBlocks[editingBlockTarget.promptOrder] = { ...editingBlock, ...updates }
           const callbackBlocks = structuredClone(nextBlocks)
           let callbackResult: unknown = undefined
           try {
@@ -1080,11 +1127,11 @@ export function ControlledLoomBlockEditor({
             return
           }
           setValidationError(null)
-          setEditingBlockId(null)
+          setEditingBlockTarget(null)
         }}
         onBack={() => {
           setValidationError(null)
-          setEditingBlockId(null)
+          setEditingBlockTarget(null)
         }}
         availableMacros={availableMacros}
         refreshMacros={refreshMacros}
@@ -1103,38 +1150,42 @@ export function ControlledLoomBlockEditor({
         <div className={s.blockList}>
           {blocks.length === 0 ? (
             <div className={s.empty}>{t('empty.noBlocksTitle')}</div>
-          ) : blocks.map((block) => (
-            <div key={block.id} className={clsx(s.item, !block.enabled && s.itemDisabled)}>
-              <div className={s.blockContent}>
-                <div className={s.blockNameRow}>
-                  <span className={s.blockName}>{block.name}</span>
+          ) : blocks.map((block, promptOrder) => {
+            const effectiveRole = effectiveBlocks[promptOrder]?.role ?? block.role
+            const occurrence = { blockId: block.id, promptOrder }
+            return (
+              <div key={encodeLoomBlockOccurrence(occurrence)} className={clsx(s.item, !block.enabled && s.itemDisabled)}>
+                <div className={s.blockContent}>
+                  <div className={s.blockNameRow}>
+                    <span className={s.blockName}>{block.name}</span>
+                  </div>
+                  {block.content && (
+                    <span className={s.blockPreview}>
+                      {block.content.slice(0, 100)}{block.content.length > 100 ? '…' : ''}
+                    </span>
+                  )}
                 </div>
-                {block.content && (
-                  <span className={s.blockPreview}>
-                    {block.content.slice(0, 100)}{block.content.length > 100 ? '…' : ''}
+                <span className={s.blockMetaRow}>
+                  <span className={clsx(s.badge, ROLE_BADGES[effectiveRole] || s.badgeSystem)}>
+                    {ROLE_DISPLAY_LABELS[effectiveRole] || effectiveRole}
                   </span>
+                </span>
+                {!readOnly && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setValidationError(null)
+                      setEditingBlockTarget(occurrence)
+                    }}
+                    title={tc('actions.edit')}
+                  >
+                    <Edit2 size={14} />
+                  </Button>
                 )}
               </div>
-              <span className={s.blockMetaRow}>
-                <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
-                  {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
-                </span>
-              </span>
-              {!readOnly && (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setValidationError(null)
-                    setEditingBlockId(block.id)
-                  }}
-                  title={tc('actions.edit')}
-                >
-                  <Edit2 size={14} />
-                </Button>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>
@@ -1154,8 +1205,8 @@ interface PresetSelectorProps {
   onRename: (id: string, name: string) => void
   onDuplicate: (id: string, name: string) => void
   onDelete: (id: string) => void
-  onBulkDelete: (ids: string[]) => Promise<string[]>
-  onBulkExport: (ids: string[]) => Promise<number>
+  onBulkDelete: (ids: string[]) => Promise<string[] | null>
+  onBulkExport: (ids: string[]) => Promise<number | null>
   onImport: (type: string) => void
   onExport: (id: string) => void
   onExportLegacy: () => void
@@ -1277,6 +1328,7 @@ function PresetSelector({ registry, activePresetId, activePresetName, onSelect, 
     setBulkActionPending(true)
     try {
       const count = await onBulkExport(ids)
+      if (count === null) return
       toast.success(t('toast.bulkExportStarted', { count }))
     } catch (error: any) {
       toast.error(error?.body?.error || error?.message || t('toast.bulkExportFailed'))
@@ -1290,6 +1342,7 @@ function PresetSelector({ registry, activePresetId, activePresetName, onSelect, 
     setBulkActionPending(true)
     try {
       const deleted = await onBulkDelete(bulkDeleteIds)
+      if (deleted === null) return
       const deletedSet = new Set(deleted)
       setSelectedPresetIds((current) => new Set([...current].filter((id) => !deletedSet.has(id))))
       setBulkDeleteIds(null)
@@ -2167,13 +2220,14 @@ function ContextMeter() {
   const pct = max > 0 ? ((total / max) * 100).toFixed(1) : null
 
   return (
-    <div
-      className={s.contextMeter}
-      style={{ cursor: 'pointer' }}
+    <button
+      type="button"
+      className={clsx(s.contextMeter, s.contextMeterButton)}
       onClick={() => openModal('promptItemizer', { messageId })}
       title={t('context.breakdownTitle')}
+      aria-label={`${t('context.breakdownTitle')}: ${total.toLocaleString()}${max > 0 ? ` / ${max.toLocaleString()} (${pct}%)` : ` ${t('tokens')}`}`}
     >
-      <div className={s.contextBar}>
+      <div className={s.contextBar} aria-hidden="true">
         {groups.map((g) => {
           const segPct = total > 0 ? (g.tokens / total) * 100 : 0
           if (segPct < 1) return null
@@ -2189,7 +2243,7 @@ function ContextMeter() {
       <span className={s.contextLabel}>
         {total.toLocaleString()}{max > 0 ? ` / ${max.toLocaleString()} (${pct}%)` : t('tokens')}
       </span>
-    </div>
+    </button>
   )
 }
 
@@ -2219,6 +2273,8 @@ function LoomBuilderNative({
     createPreset,
     selectPreset,
     saveBlocks,
+    saveAgenticRuntime,
+    reloadActivePreset,
     deletePreset,
     bulkDeletePresets,
     bulkExportPresets,
@@ -2277,7 +2333,15 @@ function LoomBuilderNative({
     const savedToProfile = await saveActivePromptVariableValues(values)
     if (!savedToProfile) await savePresetPromptVariableValues(values)
   }, [activePreset?.id, isResolved, resolvedPresetId, saveActivePromptVariableValues, savePresetPromptVariableValues])
+  const reloadPromptVariableValues = useCallback(async (): Promise<PromptVariableValues> => {
+    const latest = await reloadActivePreset()
+    return unmarshalPreset(latest.preset).promptVariables
+  }, [reloadActivePreset])
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
+  const outerEditorTabIds = useMemo(
+    () => ['preset', 'agentic-runtime', ...presetEditorTabs.map((tab) => tab.id)],
+    [presetEditorTabs],
+  )
   const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
   const activePresetRef = useRef(activePreset)
@@ -2363,19 +2427,23 @@ function LoomBuilderNative({
     activeChatId,
     activePersonaId,
     activeCharacterId,
-    activeProfileId,
-    activePreset?.id,
     applyRuntimeBlockProfile,
   ])
 
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [activePresetEditorTab, setActivePresetEditorTab] = useState('preset')
   const [guideOpen, setGuideOpen] = useState(false)
-  const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
+  const [agenticRuntimeDirty, setAgenticRuntimeDirty] = useState(false)
+  const agenticRuntimeDirtyRef = useRef(false)
+  const blockPresetChangeForDirtyAgenticRuntimeRef = useRef<() => boolean>(() => false)
+  const presetSelectionBlockerRef = useRef<ActiveLoomPresetSelectionBlockerRegistration | null>(null)
+  const cleanPresetSelectionReleaseRef = useRef<string | null>(null)
+  const loomBuilderMountedRef = useRef(true)
+  const [editingBlockTarget, setEditingBlockTarget] = useState<LoomBlockOccurrence | null>(null)
   const [blockValidationError, setBlockValidationError] = useState<string | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<LoomBlockOccurrence | null>(null)
   const [confirmDeletePresetId, setConfirmDeletePresetId] = useState<string | null>(null)
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
@@ -2387,6 +2455,17 @@ function LoomBuilderNative({
   const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<string | null>(null)
   const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<string | null>(null)
 
+  const editingBlock = editingBlockTarget
+    ? getLoomBlockAtOccurrence(activePreset?.blocks ?? [], editingBlockTarget)
+    : null
+
+  useEffect(() => {
+    if (editingBlockTarget && !editingBlock) {
+      setEditingBlockTarget(null)
+      setView('list')
+    }
+  }, [editingBlock, editingBlockTarget])
+
   useEffect(() => {
     setShowPromptVariablesModal(false)
   }, [
@@ -2395,6 +2474,8 @@ function LoomBuilderNative({
     presetProfiles.activeCharacterId,
     presetProfiles.activeProfileId,
   ])
+  const outerEditorTabRefs = useRef(new Map<string, HTMLButtonElement>())
+  const editorTabChangeRef = useRef<(tabId: string) => boolean>(() => false)
 
   const activePresetEditorTabRef = useRef(activePresetEditorTab)
   const updatePresetDraftRef = useRef(updatePresetDraft)
@@ -2403,6 +2484,19 @@ function LoomBuilderNative({
   useEffect(() => { activePresetEditorTabRef.current = activePresetEditorTab }, [activePresetEditorTab])
   useEffect(() => { updatePresetDraftRef.current = updatePresetDraft }, [updatePresetDraft])
   useEffect(() => { flushPresetDraftRef.current = flushPresetDraft }, [flushPresetDraft])
+  const presetEditorBridgeFailureLoggedRef = useRef(false)
+  const safeToPresetEditorDraft = useCallback((preset: LoomPreset) => {
+    try {
+      return toPresetEditorDraft(preset)
+    } catch (error) {
+      if (!presetEditorBridgeFailureLoggedRef.current) {
+        presetEditorBridgeFailureLoggedRef.current = true
+        console.error('[Loom] Preset editor bridge unavailable', error)
+      }
+      return null
+    }
+  }, [])
+
 
   useEffect(() => {
     setPresetEditorController({
@@ -2416,28 +2510,31 @@ function LoomBuilderNative({
             preset: null,
           }
         }
+        const draft = safeToPresetEditorDraft(preset)
+        if (!draft) {
+          return {
+            open: false,
+            presetId: null,
+            activeTabId: activePresetEditorTabRef.current,
+            preset: null,
+          }
+        }
         return {
           open: true,
           presetId: preset.id,
           activeTabId: activePresetEditorTabRef.current,
-          preset: toPresetEditorDraft(preset),
+          preset: draft,
         }
       },
-      getPromptVariableValues: () => {
-        const preset = activePresetRef.current
-        return preset && preset.id === __contextMeterStore.getState().activeLoomPresetId
-          ? preset.promptVariables
-          : {}
-      },
       setActiveTab: (tabId) => {
-        setView('list')
-        setEditingBlock(null)
-        setActivePresetEditorTab(tabId)
+        editorTabChangeRef.current(tabId)
       },
       updatePreset: (mutator, immediate) => {
-        updatePresetDraftRef.current((current) => (
-          applyPresetEditorDraft(current, mutator(toPresetEditorDraft(current)))
-        ), immediate)
+        updatePresetDraftRef.current((current) => {
+          const draft = safeToPresetEditorDraft(current)
+          if (!draft) return current
+          return applyPresetEditorDraft(current, mutator(draft))
+        }, immediate)
       },
       flush: () => flushPresetDraftRef.current(),
     })
@@ -2454,19 +2551,30 @@ function LoomBuilderNative({
       }, {})
       return
     }
+    const draft = safeToPresetEditorDraft(activePreset)
+    if (!draft) {
+      syncPresetEditorState({
+        open: false,
+        presetId: null,
+        activeTabId: activePresetEditorTab,
+        preset: null,
+      }, {})
+      return
+    }
     syncPresetEditorState({
       open: true,
       presetId: activePreset.id,
       activeTabId: activePresetEditorTab,
-      preset: toPresetEditorDraft(activePreset),
+      preset: draft,
     }, activePreset.promptVariables)
-  }, [activePreset, activePresetEditorTab, activePresetId])
+  }, [activePreset, activePresetEditorTab, activePresetId, safeToPresetEditorDraft])
 
   useEffect(() => {
     if (activePresetEditorTab === 'preset') return
+    if (activePresetEditorTab === 'agentic-runtime' && activePreset) return
     if (presetEditorTabs.some((tab) => tab.id === activePresetEditorTab)) return
-    setActivePresetEditorTab('preset')
-  }, [activePresetEditorTab, presetEditorTabs])
+    editorTabChangeRef.current('preset')
+  }, [activePreset, activePresetEditorTab, presetEditorTabs])
 
   const activePresetExtensionTab = useMemo(
   () =>
@@ -2475,9 +2583,133 @@ function LoomBuilderNative({
     ) ?? null,
   [presetEditorTabs, activePresetEditorTab],
 )
-useEffect(() => {
-  setGuideOpen(false)
-}, [activePresetEditorTab])
+
+
+  const blockPresetChangeForDirtyAgenticRuntime = useCallback(() => {
+    if (!agenticRuntimeDirty) return false
+    setView('list')
+    setEditingBlockTarget(null)
+    setActivePresetEditorTab('agentic-runtime')
+    addToast({
+      type: 'warning',
+      message: lb('agenticRuntime.navigation.saveBeforePresetAction'),
+    })
+    return true
+  }, [addToast, agenticRuntimeDirty, lb])
+  blockPresetChangeForDirtyAgenticRuntimeRef.current = blockPresetChangeForDirtyAgenticRuntime
+  const handleEditorTabChange = useCallback((tabId: string): boolean => {
+    if (tabId === activePresetEditorTab) return true
+    if (!outerEditorTabIds.includes(tabId)) return false
+    if (tabId === 'agentic-runtime' && !activePreset) return false
+    if (tabId !== 'agentic-runtime' && blockPresetChangeForDirtyAgenticRuntime()) return false
+    setView('list')
+    setEditingBlockTarget(null)
+    setActivePresetEditorTab(tabId)
+    return true
+  }, [
+    activePreset,
+    activePresetEditorTab,
+    blockPresetChangeForDirtyAgenticRuntime,
+    outerEditorTabIds,
+  ])
+  editorTabChangeRef.current = handleEditorTabChange
+
+  const handleEditorTabKeyDown = useCallback((
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    tabId: string,
+  ) => {
+    const navigableTabIds = outerEditorTabIds.filter((id) => id !== 'agentic-runtime' || !!activePreset)
+    const currentIndex = navigableTabIds.indexOf(tabId)
+    if (currentIndex < 0) return
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % navigableTabIds.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (currentIndex - 1 + navigableTabIds.length) % navigableTabIds.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = navigableTabIds.length - 1
+    }
+    if (nextIndex === null) return
+    event.preventDefault()
+    const nextTabId = navigableTabIds[nextIndex]
+    if (!nextTabId || !handleEditorTabChange(nextTabId)) return
+    outerEditorTabRefs.current.get(nextTabId)?.focus()
+  }, [activePreset, handleEditorTabChange, outerEditorTabIds])
+
+  useLayoutEffect(() => {
+    loomBuilderMountedRef.current = true
+    return () => {
+      loomBuilderMountedRef.current = false
+      cleanPresetSelectionReleaseRef.current = null
+      const blocker = presetSelectionBlockerRef.current
+      presetSelectionBlockerRef.current = null
+      blocker?.cancel()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const ownerPresetId = activePreset?.id ?? null
+    if (!agenticRuntimeDirty || !ownerPresetId) return
+    const blocker = registerActiveLoomPresetSelectionBlocker((presetId) => (
+      presetId !== ownerPresetId
+        && blockPresetChangeForDirtyAgenticRuntimeRef.current()
+    ))
+    presetSelectionBlockerRef.current = blocker
+    return () => {
+      if (presetSelectionBlockerRef.current !== blocker) return
+      presetSelectionBlockerRef.current = null
+      cleanPresetSelectionReleaseRef.current = null
+      blocker.cancel()
+    }
+  }, [activePreset?.id, agenticRuntimeDirty])
+  const handleSaveAgenticRuntime = useCallback(async (
+    ...args: Parameters<typeof saveAgenticRuntime>
+  ) => {
+    const result = await saveAgenticRuntime(...args)
+    if (activePresetRef.current?.id === result.editor.presetId) {
+      cleanPresetSelectionReleaseRef.current = result.editor.presetId
+    }
+    return result
+  }, [saveAgenticRuntime])
+  const handleReloadActivePreset = useCallback(async () => {
+    const result = await reloadActivePreset()
+    if (activePresetRef.current?.id === result.editor.presetId) {
+      cleanPresetSelectionReleaseRef.current = result.editor.presetId
+    }
+    return result
+  }, [reloadActivePreset])
+  const handleAgenticRuntimeDirtyChange = useCallback((dirty: boolean) => {
+    agenticRuntimeDirtyRef.current = dirty
+    setAgenticRuntimeDirty(dirty)
+    if (dirty) return
+    const cleanPresetId = cleanPresetSelectionReleaseRef.current
+    if (!cleanPresetId) return
+    scheduleLowPriorityTask(() => {
+      if (
+        !loomBuilderMountedRef.current
+        || agenticRuntimeDirtyRef.current
+        || cleanPresetSelectionReleaseRef.current !== cleanPresetId
+        || activePresetRef.current?.id !== cleanPresetId
+      ) return
+      cleanPresetSelectionReleaseRef.current = null
+      const blocker = presetSelectionBlockerRef.current
+      presetSelectionBlockerRef.current = null
+      blocker?.release()
+    }, { label: 'release Loom preset selection blocker' })
+  }, [])
+  useEffect(() => {
+    if (!agenticRuntimeDirty || typeof window === 'undefined') return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [agenticRuntimeDirty])
+  useEffect(() => {
+    setGuideOpen(false)
+  }, [activePresetEditorTab])
 
   const configurableVariableCount = useMemo(() => {
     return (activePreset?.blocks ?? []).reduce((count, b) => {
@@ -2517,17 +2749,20 @@ useEffect(() => {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  const groups = useMemo(() => computeGroups(activePreset?.blocks), [activePreset?.blocks])
-  const effectiveRoles = useMemo(() => new Map(
-    resolvePromptBlockPlacements(
-      activePreset?.blocks ?? [],
-      activePreset?.promptVariables ?? {},
-    ).map((block) => [block.id, block.role] as const),
+  const promptOrderBlocks = activePreset?.blocks ?? []
+  const groups = useMemo(() => computeGroups(promptOrderBlocks), [activePreset?.blocks])
+  const blockOccurrences = useMemo(() => new Map(
+    promptOrderBlocks.map((block, promptOrder) => [block, { blockId: block.id, promptOrder }] as const),
+  ), [activePreset?.blocks])
+  const effectiveBlocks = useMemo(() => resolvePromptBlockPlacements(
+    promptOrderBlocks,
+    activePreset?.promptVariables ?? {},
   ), [activePreset?.blocks, activePreset?.promptVariables])
   const categoryIds = useMemo(
-    () => (activePreset?.blocks ?? [])
-      .filter((block) => block.marker === 'category')
-      .map((block) => block.id),
+    () => promptOrderBlocks
+      .map((block, promptOrder) => ({ block, promptOrder }))
+      .filter(({ block }) => block.marker === 'category')
+      .map(({ block, promptOrder }) => encodeLoomBlockOccurrence({ blockId: block.id, promptOrder })),
     [activePreset?.blocks],
   )
   const allCategoriesCollapsed = categoryIds.length > 0
@@ -2538,12 +2773,13 @@ useEffect(() => {
     [deferredTrimmedSearchQuery],
   )
 
-  const searchableBlockText = useMemo(() => {
-    const entries = (activePreset?.blocks ?? [])
-      .filter((block) => block.marker !== 'category')
-      .map((block) => [block.id, `${block.name}\n${block.content || ''}`.toLowerCase()] as const)
-    return new Map(entries)
-  }, [activePreset?.blocks])
+  const searchableBlockText = useMemo(() => new Map(promptOrderBlocks
+    .map((block, promptOrder) => ({ block, promptOrder }))
+    .filter(({ block }) => block.marker !== 'category')
+    .map(({ block, promptOrder }) => [
+      encodeLoomBlockOccurrence({ blockId: block.id, promptOrder }),
+      `${block.name}\n${block.content || ''}`.toLowerCase(),
+    ] as const)), [activePreset?.blocks])
 
   const isSearchActive = searchTokens.length > 0
 
@@ -2554,12 +2790,15 @@ useEffect(() => {
       .map((group) => ({
         ...group,
         children: group.children.filter((block) => {
-          const searchableText = searchableBlockText.get(block.id) ?? ''
+          const target = blockOccurrences.get(block)
+          const searchableText = target
+            ? searchableBlockText.get(encodeLoomBlockOccurrence(target)) ?? ''
+            : ''
           return searchTokens.every((token) => searchableText.includes(token))
         }),
       }))
       .filter((group) => group.children.length > 0)
-  }, [groups, isSearchActive, searchableBlockText, searchTokens])
+  }, [blockOccurrences, groups, isSearchActive, searchableBlockText, searchTokens])
 
   const searchMatchCount = useMemo(
     () => displayedGroups.reduce((count, group) => count + group.children.length, 0),
@@ -2602,28 +2841,34 @@ useEffect(() => {
 
   const visibleBlockIds = useMemo(() => {
     const ids: string[] = []
+    const appendOccurrence = (block: PromptBlock) => {
+      const target = blockOccurrences.get(block)
+      if (target) ids.push(encodeLoomBlockOccurrence(target))
+    }
     for (const group of displayedGroups) {
       if (group.categoryBlock) {
-        ids.push(group.categoryBlock.id)
-        if (isSearchActive || !collapsedCategories.has(group.categoryBlock.id)) {
-          for (const child of group.children) ids.push(child.id)
+        const categoryTarget = blockOccurrences.get(group.categoryBlock)
+        const categoryId = categoryTarget ? encodeLoomBlockOccurrence(categoryTarget) : null
+        appendOccurrence(group.categoryBlock)
+        if (isSearchActive || !categoryId || !collapsedCategories.has(categoryId)) {
+          for (const child of group.children) appendOccurrence(child)
         }
       } else {
-        for (const child of group.children) ids.push(child.id)
+        for (const child of group.children) appendOccurrence(child)
       }
     }
     return ids
-  }, [displayedGroups, collapsedCategories, isSearchActive])
+  }, [blockOccurrences, displayedGroups, collapsedCategories, isSearchActive])
 
   const activeDraggedBlock = useMemo(() => {
-    if (!activeDragId) return null
-    return activePreset?.blocks.find((block) => block.id === activeDragId) ?? null
+    const target = decodeLoomBlockOccurrence(activeDragId)
+    return target ? getLoomBlockAtOccurrence(promptOrderBlocks, target) : null
   }, [activeDragId, activePreset?.blocks])
 
   const rootDropIndexAfterGroup = useCallback((group: CategoryGroup) => {
     const blocks = activePreset?.blocks ?? []
     if (group.categoryBlock) {
-      const categoryIndex = blocks.findIndex((block) => block.id === group.categoryBlock!.id)
+      const categoryIndex = blocks.indexOf(group.categoryBlock)
       if (categoryIndex === -1) return blocks.length
       let endIndex = categoryIndex + 1
       while (endIndex < blocks.length) {
@@ -2636,7 +2881,7 @@ useEffect(() => {
     }
 
     const childIndexes = group.children
-      .map((child) => blocks.findIndex((block) => block.id === child.id))
+      .map((child) => blocks.indexOf(child))
       .filter((index) => index >= 0)
     return childIndexes.length > 0 ? Math.max(...childIndexes) + 1 : blocks.length
   }, [activePreset?.blocks])
@@ -2691,71 +2936,97 @@ useEffect(() => {
     if (!over || active.id === over.id || !activePreset) return
 
     const blocks = activePreset.blocks
-    const draggedBlock = blocks.find(b => b.id === active.id)
-    if (!draggedBlock) return
+    const draggedTarget = decodeLoomBlockOccurrence(active.id)
+    const draggedBlock = draggedTarget ? getLoomBlockAtOccurrence(blocks, draggedTarget) : null
+    if (!draggedTarget || !draggedBlock) return
+    const reorderedEntries: LoomBlockReorderEntry[] = blocks.map((block, promptOrder) => ({
+      block,
+      source: { blockId: block.id, promptOrder },
+    }))
+    const saveReorderedBlocks = (entries: LoomBlockReorderEntry[]) => {
+      saveBlocks(remapCategorySnapshotsForReorder(blocks, entries))
+    }
     const rootDropIndex = parseRootDropId(over.id)
-    const armedAppendCategoryId = armedAppendRootDropId === over.id ? parseRootDropCategoryId(over.id) : null
+    const armedAppendCategory = armedAppendRootDropId === over.id ? parseRootDropCategoryId(over.id) : null
 
     if (draggedBlock.marker === 'category') {
-      const catIdx = blocks.findIndex(b => b.id === active.id)
+      const catIdx = draggedTarget.promptOrder
       let endIdx = blocks.length
       for (let i = catIdx + 1; i < blocks.length; i++) {
         if (blocks[i].marker === 'category') { endIdx = i; break }
         if (hasExplicitGroup(blocks[i]) && blockGroup(blocks[i]) !== draggedBlock.id) { endIdx = i; break }
       }
-      const group = blocks.slice(catIdx, endIdx)
-      const remaining = [...blocks.slice(0, catIdx), ...blocks.slice(endIdx)]
+      const group = reorderedEntries.slice(catIdx, endIdx)
+      const remaining = [...reorderedEntries.slice(0, catIdx), ...reorderedEntries.slice(endIdx)]
+      const overTarget = decodeLoomBlockOccurrence(over.id)
+      const overBlock = overTarget ? getLoomBlockAtOccurrence(blocks, overTarget) : null
       const overIdx = rootDropIndex == null
-        ? remaining.findIndex(b => b.id === over.id)
+        ? overBlock && overTarget
+          ? remaining.findIndex((entry) => (
+              entry.source?.promptOrder === overTarget.promptOrder
+              && entry.source.blockId === overTarget.blockId
+            ))
+          : -1
         : Math.max(0, Math.min(remaining.length, rootDropIndex > catIdx ? rootDropIndex - group.length : rootDropIndex))
       if (overIdx === -1) return
       remaining.splice(overIdx, 0, ...group)
-      saveBlocks(remaining)
-    } else {
-      const oldIndex = blocks.findIndex(b => b.id === active.id)
-      if (oldIndex === -1) return
-
-      if (armedAppendCategoryId) {
-        const endIndex = getCategoryEndIndex(blocks, armedAppendCategoryId)
-        if (endIndex === -1) return
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = Math.max(0, Math.min(nextBlocks.length, endIndex > oldIndex ? endIndex - 1 : endIndex))
-        nextBlocks.splice(insertAt, 0, { ...moved, group: armedAppendCategoryId })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      if (rootDropIndex != null) {
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = Math.max(0, Math.min(nextBlocks.length, rootDropIndex > oldIndex ? rootDropIndex - 1 : rootDropIndex))
-        nextBlocks.splice(insertAt, 0, { ...moved, group: null })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      const newIndex = blocks.findIndex(b => b.id === over.id)
-      if (newIndex === -1) return
-      if (blocks[newIndex].marker === 'category') {
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = newIndex > oldIndex ? newIndex : newIndex + 1
-        nextBlocks.splice(insertAt, 0, { ...moved, group: blocks[newIndex].id })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      const movedGroup = inferGroupAtIndex(blocks, newIndex)
-      const reordered = arrayMove(blocks, oldIndex, newIndex)
-      saveBlocks(reordered.map(block => block.id === draggedBlock.id ? { ...block, group: movedGroup } : block))
+      saveReorderedBlocks(remaining)
+      return
     }
+
+    const oldIndex = draggedTarget.promptOrder
+    if (armedAppendCategory) {
+      const category = getLoomBlockAtOccurrence(blocks, armedAppendCategory)
+      const endIndex = getCategoryEndIndex(blocks, armedAppendCategory)
+      if (!category || endIndex === -1) return
+      const nextBlocks = [...reorderedEntries]
+      const [moved] = nextBlocks.splice(oldIndex, 1)
+      if (!moved) return
+      const insertAt = Math.max(0, Math.min(nextBlocks.length, endIndex > oldIndex ? endIndex - 1 : endIndex))
+      nextBlocks.splice(insertAt, 0, { ...moved, block: { ...moved.block, group: category.id } })
+      saveReorderedBlocks(nextBlocks)
+      return
+    }
+
+    if (rootDropIndex != null) {
+      const nextBlocks = [...reorderedEntries]
+      const [moved] = nextBlocks.splice(oldIndex, 1)
+      if (!moved) return
+      const insertAt = Math.max(0, Math.min(nextBlocks.length, rootDropIndex > oldIndex ? rootDropIndex - 1 : rootDropIndex))
+      nextBlocks.splice(insertAt, 0, { ...moved, block: { ...moved.block, group: null } })
+      saveReorderedBlocks(nextBlocks)
+      return
+    }
+
+    const overTarget = decodeLoomBlockOccurrence(over.id)
+    const overBlock = overTarget ? getLoomBlockAtOccurrence(blocks, overTarget) : null
+    if (!overTarget || !overBlock) return
+    const newIndex = overTarget.promptOrder
+    if (overBlock.marker === 'category') {
+      const nextBlocks = [...reorderedEntries]
+      const [moved] = nextBlocks.splice(oldIndex, 1)
+      if (!moved) return
+      const insertAt = newIndex > oldIndex ? newIndex : newIndex + 1
+      nextBlocks.splice(insertAt, 0, { ...moved, block: { ...moved.block, group: overBlock.id } })
+      saveReorderedBlocks(nextBlocks)
+      return
+    }
+
+    const movedGroup = inferGroupAtIndex(blocks, newIndex)
+    const reordered = arrayMove(reorderedEntries, oldIndex, newIndex)
+    const moved = reordered[newIndex]
+    if (!moved) return
+    reordered[newIndex] = { ...moved, block: { ...moved.block, group: movedGroup } }
+    saveReorderedBlocks(reordered)
   }, [activePreset, armedAppendRootDropId, saveBlocks])
 
   const handleDragOver = useCallback((event: any) => {
-    const activeBlock = activePreset?.blocks.find((block) => block.id === event.active?.id)
-    const appendCategoryId = parseRootDropCategoryId(event.over?.id)
-    setHoveredAppendRootDropId(appendCategoryId && activeBlock?.marker !== 'category' ? event.over.id : null)
+    const activeTarget = decodeLoomBlockOccurrence(event.active?.id)
+    const activeBlock = activeTarget
+      ? getLoomBlockAtOccurrence(activePreset?.blocks ?? [], activeTarget)
+      : null
+    const appendCategory = parseRootDropCategoryId(event.over?.id)
+    setHoveredAppendRootDropId(appendCategory && activeBlock?.marker !== 'category' ? event.over.id : null)
   }, [activePreset?.blocks])
 
   const handleDragCancel = useCallback(() => {
@@ -2763,25 +3034,24 @@ useEffect(() => {
     setHoveredAppendRootDropId(null)
     setArmedAppendRootDropId(null)
   }, [])
-
-  const handleEdit = useCallback((block: PromptBlock) => {
+  const handleEdit = useCallback((target: LoomBlockOccurrence) => {
     setBlockValidationError(null)
-    setEditingBlock(block)
+    setEditingBlockTarget(target)
     setView('edit')
   }, [])
 
   const handleEditSave = useCallback((updates: Partial<PromptBlock>): boolean => {
-    if (!editingBlock) return false
-    const accepted = updateBlock(editingBlock.id, updates)
+    if (!editingBlockTarget || !editingBlock) return false
+    const accepted = updateBlock(editingBlockTarget, updates)
     if (!accepted) {
       setBlockValidationError(lb('blockEditor.validationFailed'))
       return false
     }
     setBlockValidationError(null)
     setView('list')
-    setEditingBlock(null)
+    setEditingBlockTarget(null)
     return true
-  }, [editingBlock, lb, updateBlock])
+  }, [editingBlock, editingBlockTarget, lb, updateBlock])
 
   const handleAddTemplate = useCallback((template: { name: string; content: string; role: string }) => {
     addBlock(createBlock({ name: template.name, content: template.content, role: template.role as PromptBlock['role'] }))
@@ -2792,19 +3062,10 @@ useEffect(() => {
     addBlock(createBlock({ ...entry.block, stashId: entry.id }))
   }, [addBlock])
 
-  const handleUnstash = useCallback((entry: StashedPromptBlock) => {
-    if (!activePreset) return
-    saveBlocks(activePreset.blocks.map((block) => {
-      if (block.stashId !== entry.id) return block
-      const { stashId: _stashId, ...unlinked } = block
-      return unlinked
-    }))
-  }, [activePreset, saveBlocks])
-
-  const handleAddToStash = useCallback(async (block: PromptBlock) => {
+  const handleAddToStash = useCallback(async (target: LoomBlockOccurrence, block: PromptBlock) => {
     try {
       const entry = await presetsApi.addToStash(block, activePreset?.id)
-      updateBlock(block.id, { stashId: entry.id })
+      updateBlock(target, { stashId: entry.id })
       addToast({ type: 'success', message: lb('actions.addedToStash') })
     } catch {
       addToast({ type: 'error', message: lb('actions.stashFailed') })
@@ -2820,33 +3081,61 @@ useEffect(() => {
     setMarkerMenuOpen(false)
   }, [addBlock])
 
-  const handleDelete = useCallback((blockId: string) => {
-    setConfirmDelete(blockId)
+  const handleDelete = useCallback((target: LoomBlockOccurrence) => {
+    setConfirmDelete(target)
   }, [])
 
   const confirmDeleteBlock = useCallback(() => {
     if (confirmDelete) {
-      removeBlock(confirmDelete)
+      void removeBlock(confirmDelete)
       setConfirmDelete(null)
     }
   }, [confirmDelete, removeBlock])
 
+  const handleSelectPreset = useCallback((presetId: string | null) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    selectPreset(presetId)
+  }, [blockPresetChangeForDirtyAgenticRuntime, selectPreset])
+
+  const handleCreatePreset = useCallback((name: string) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    void createPreset(name)
+  }, [blockPresetChangeForDirtyAgenticRuntime, createPreset])
+
   const handleRenamePreset = useCallback(async (presetId: string, newName: string) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
     await renamePreset(presetId, newName)
-  }, [renamePreset])
+  }, [blockPresetChangeForDirtyAgenticRuntime, renamePreset])
 
   const handleDuplicatePreset = useCallback(async (presetId: string, presetName: string) => {
-    await duplicatePreset(presetId, `${presetName}${lb('preset.copySuffix')}`)
-  }, [duplicatePreset, lb])
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    await duplicatePreset(presetId, presetName + lb('preset.copySuffix'))
+  }, [blockPresetChangeForDirtyAgenticRuntime, duplicatePreset, lb])
+
+  const handleBulkDeletePresets = useCallback(async (presetIds: string[]) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return null
+    return bulkDeletePresets(presetIds)
+  }, [blockPresetChangeForDirtyAgenticRuntime, bulkDeletePresets])
+
+  const handleBulkExportPresets = useCallback(async (presetIds: string[]) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return null
+    return bulkExportPresets(presetIds)
+  }, [blockPresetChangeForDirtyAgenticRuntime, bulkExportPresets])
+
+  const handleRequestDeletePreset = useCallback((presetId: string) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    setConfirmDeletePresetId(presetId)
+  }, [blockPresetChangeForDirtyAgenticRuntime])
 
   const handleDeletePreset = useCallback(async () => {
-    if (!confirmDeletePresetId) return
+    if (!confirmDeletePresetId || blockPresetChangeForDirtyAgenticRuntime()) return
     const presetId = confirmDeletePresetId
     setConfirmDeletePresetId(null)
     await deletePreset(presetId)
-  }, [confirmDeletePresetId, deletePreset])
+  }, [blockPresetChangeForDirtyAgenticRuntime, confirmDeletePresetId, deletePreset])
 
   const handleExport = useCallback(async (presetId: string) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
     try {
       const data = await exportInternal(presetId)
       if (!data) return
@@ -2857,32 +3146,54 @@ useEffect(() => {
       a.download = `${data.name || 'loom-preset'}.json`
       a.click()
       URL.revokeObjectURL(url)
-    } catch (err: any) {
-      toast.error(err.body?.error || err.message || lb('toast.exportFailed'))
+    } catch (err: unknown) {
+      const code = getPortablePresetErrorCode(err)
+      toast.error(lb(`toast.portableErrors.${code}`), {
+        title: lb('toast.presetImportTitle'),
+      })
     }
-  }, [exportInternal, lb])
+  }, [blockPresetChangeForDirtyAgenticRuntime, exportInternal, lb])
+
+  const handleRequestLegacyExport = useCallback(() => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    setShowLegacyExportConfirm(true)
+  }, [blockPresetChangeForDirtyAgenticRuntime])
 
   const handleExportLegacy = useCallback(() => {
-    const data = exportLegacy()
-    if (!data) return
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${(data as any).name || 'preset'}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-    setShowLegacyExportConfirm(false)
-  }, [exportLegacy])
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
+    try {
+      const data = exportLegacy()
+      if (!data) return
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const dataRecord = data as Record<string, unknown>
+      a.download = `${typeof dataRecord.name === 'string' ? dataRecord.name : 'preset'}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      setShowLegacyExportConfirm(false)
+    } catch (err: unknown) {
+      const code = getPortablePresetErrorCode(err)
+      toast.error(lb(`toast.portableErrors.${code}`), {
+        title: lb('toast.presetImportTitle'),
+      })
+    }
+  }, [blockPresetChangeForDirtyAgenticRuntime, exportLegacy, lb])
 
   const handleImport = useCallback((type: string) => {
+    if (blockPresetChangeForDirtyAgenticRuntime()) return
     importTypeRef.current = type
     fileInputRef.current?.click()
-  }, [])
+  }, [blockPresetChangeForDirtyAgenticRuntime])
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (blockPresetChangeForDirtyAgenticRuntime()) {
+      e.target.value = ''
+      return
+    }
     try {
       const text = await file.text()
       const json = JSON.parse(text)
@@ -2891,11 +3202,14 @@ useEffect(() => {
       } else {
         await importFromFile(json, file.name)
       }
-    } catch (err) {
-      console.error('[LoomBuilder] Import failed:', err)
+    } catch (err: unknown) {
+      const code = getPortablePresetErrorCode(err)
+      toast.error(lb(`toast.portableErrors.${code}`), {
+        title: lb('toast.presetImportTitle'),
+      })
     }
     e.target.value = ''
-  }, [importFromFile, importFromST])
+  }, [blockPresetChangeForDirtyAgenticRuntime, importFromFile, importFromST, lb])
 
   const presetEditorToolbar = presetEditorToolbarItems.some((item) => item.visible) ? (
     <div className={s.extensionToolbar}>
@@ -2906,7 +3220,7 @@ useEffect(() => {
   ) : null
 
   // Edit view
-  if (activePresetEditorTab === 'preset' && view === 'edit' && editingBlock) {
+  if (activePresetEditorTab === 'preset' && view === 'edit' && editingBlockTarget && editingBlock) {
     return (
       <>
         {presetEditorToolbar}
@@ -2915,6 +3229,7 @@ useEffect(() => {
         <span data-spindle-mount="loom_builder_inspector" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:inspector`} style={{ display: 'contents' }} />
         <BlockEditor
           block={editingBlock}
+          blockOccurrence={editingBlockTarget}
           blocks={activePreset?.blocks ?? []}
           promptVariables={activePreset?.promptVariables ?? {}}
           validationError={blockValidationError}
@@ -2922,7 +3237,7 @@ useEffect(() => {
           onBack={() => {
             setBlockValidationError(null)
             setView('list')
-            setEditingBlock(null)
+            setEditingBlockTarget(null)
           }}
           availableMacros={availableMacros}
           refreshMacros={refreshMacros}
@@ -2944,16 +3259,16 @@ useEffect(() => {
             registry={registry}
             activePresetId={activePresetId}
             activePresetName={activePreset?.name ?? null}
-            onSelect={selectPreset}
-            onCreate={createPreset}
+            onSelect={handleSelectPreset}
+            onCreate={handleCreatePreset}
             onRename={handleRenamePreset}
             onDuplicate={handleDuplicatePreset}
-            onDelete={setConfirmDeletePresetId}
-            onBulkDelete={bulkDeletePresets}
-            onBulkExport={bulkExportPresets}
+            onDelete={handleRequestDeletePreset}
+            onBulkDelete={handleBulkDeletePresets}
+            onBulkExport={handleBulkExportPresets}
             onImport={handleImport}
             onExport={handleExport}
-            onExportLegacy={() => setShowLegacyExportConfirm(true)}
+            onExportLegacy={handleRequestLegacyExport}
           />
           <div className={s.toolbarActions}>
             <button
@@ -3020,70 +3335,132 @@ useEffect(() => {
         {presetEditorToolbar}
         <span data-spindle-mount="preset_editor_toolbar" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:preset-toolbar`} style={{ display: 'contents' }} />
 
-        {presetEditorTabs.length > 0 && (
-          <div className={s.extensionTabRow}>
-            <div
-              className={s.extensionTabBar}
-              role="tablist"
-              aria-label={lb('editorTabs.ariaLabel')}
-            >
+        <div
+          className={s.extensionTabRow}
+        >
+          <div
+            className={s.extensionTabBar}
+            role="tablist"
+            aria-label={lb('editorTabs.ariaLabel')}
+            aria-orientation="horizontal"
+          >
             <button
+              ref={(element) => {
+                if (element) outerEditorTabRefs.current.set('preset', element)
+                else outerEditorTabRefs.current.delete('preset')
+              }}
               type="button"
               role="tab"
+              id={outerEditorDomId('tab', 'preset')}
+              aria-controls={outerEditorDomId('panel', 'preset')}
               aria-selected={activePresetEditorTab === 'preset'}
+              tabIndex={activePresetEditorTab === 'preset' ? 0 : -1}
               className={clsx(
-              s.extensionTab,
-              activePresetEditorTab === 'preset' &&
-              s.extensionTabActive,
-            )}
-              onClick={() => setActivePresetEditorTab('preset')}
-          >
-             {lb('editorTabs.preset')}
-          </button>
-
-          {presetEditorTabs.map((tab) => (
+                s.extensionTab,
+                activePresetEditorTab === 'preset' && s.extensionTabActive,
+              )}
+              onClick={() => handleEditorTabChange('preset')}
+              onKeyDown={(event) => handleEditorTabKeyDown(event, 'preset')}
+            >
+              {lb('editorTabs.preset')}
+            </button>
             <button
-              key={tab.id}
+              ref={(element) => {
+                if (element) outerEditorTabRefs.current.set('agentic-runtime', element)
+                else outerEditorTabRefs.current.delete('agentic-runtime')
+              }}
               type="button"
               role="tab"
-              aria-selected={activePresetEditorTab === tab.id}
+              id={outerEditorDomId('tab', 'agentic-runtime')}
+              aria-controls={outerEditorDomId('panel', 'agentic-runtime')}
+              aria-selected={activePresetEditorTab === 'agentic-runtime'}
+              tabIndex={activePresetEditorTab === 'agentic-runtime' ? 0 : -1}
               className={clsx(
-              s.extensionTab,
-              activePresetEditorTab === tab.id &&
-              s.extensionTabActive,
-          )}
-             onClick={() => setActivePresetEditorTab(tab.id)}
+                s.extensionTab,
+                activePresetEditorTab === 'agentic-runtime' && s.extensionTabActive,
+              )}
+              onClick={() => handleEditorTabChange('agentic-runtime')}
+              onKeyDown={(event) => handleEditorTabKeyDown(event, 'agentic-runtime')}
+              disabled={!activePreset}
             >
-              {tab.title}
+              {lb('editorTabs.agenticRuntime')}
             </button>
-          ))}
-            <span data-spindle-mount="preset_editor_tab" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:preset-tab`} style={{ display: 'contents' }} />
-      </div>
+            {presetEditorTabs.map((tab) => (
+              <button
+                ref={(element) => {
+                  if (element) outerEditorTabRefs.current.set(tab.id, element)
+                  else outerEditorTabRefs.current.delete(tab.id)
+                }}
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={outerEditorDomId('tab', tab.id)}
+                aria-controls={outerEditorDomId('panel', tab.id)}
+                aria-selected={activePresetEditorTab === tab.id}
+                tabIndex={activePresetEditorTab === tab.id ? 0 : -1}
+                className={clsx(
+                  s.extensionTab,
+                  activePresetEditorTab === tab.id && s.extensionTabActive,
+                )}
+                onClick={() => handleEditorTabChange(tab.id)}
+                onKeyDown={(event) => handleEditorTabKeyDown(event, tab.id)}
+              >
+                {tab.title}
+              </button>
+            ))}
+            <span
+              data-spindle-mount="preset_editor_tab"
+              data-spindle-scope={'loom:' + (activePreset?.id ?? activePresetId ?? 'none') + ':preset-tab'}
+              style={{ display: 'contents' }}
+            />
+          </div>
 
-        {activePresetExtensionTab?.guide && (
-          <button
-            type="button"
-            className={s.extensionGuideButton}
-            onClick={() => setGuideOpen(true)}
-            aria-label={`Open guide for ${activePresetExtensionTab.title}`}
-            title="Open guide"
-          >
-            <CircleHelp size={15} strokeWidth={1.7} />
-          </button>
+          {activePresetExtensionTab?.guide && (
+            <button
+              type="button"
+              className={s.extensionGuideButton}
+              onClick={() => setGuideOpen(true)}
+              aria-label={`Open guide for ${activePresetExtensionTab.title}`}
+              title="Open guide"
+            >
+              <CircleHelp size={15} strokeWidth={1.7} />
+            </button>
+          )}
+        </div>
+      {presetEditorTabs.map((tab) => (
+        <div
+          key={tab.id}
+          className={s.extensionTabContent}
+          role="tabpanel"
+          id={outerEditorDomId('panel', tab.id)}
+          aria-labelledby={outerEditorDomId('tab', tab.id)}
+          tabIndex={0}
+          hidden={activePresetEditorTab !== tab.id}
+        >
+          {activePresetEditorTab === tab.id && (
+            <SpindlePresetEditorTabContent tab={tab} />
+          )}
+        </div>
+      ))}
+
+      <div
+        className={s.agentsTabContent}
+        role="tabpanel"
+        id={outerEditorDomId('panel', 'agentic-runtime')}
+        aria-labelledby={outerEditorDomId('tab', 'agentic-runtime')}
+        tabIndex={0}
+        hidden={!activePreset || activePresetEditorTab !== 'agentic-runtime'}
+      >
+        {activePreset && (
+          <AgenticRuntimePanel
+            key={activePreset.id}
+            preset={activePreset}
+            onSave={handleSaveAgenticRuntime}
+            onReload={handleReloadActivePreset}
+            onDirtyChange={handleAgenticRuntimeDirtyChange}
+          />
         )}
       </div>
-    )}
-
-      {activePresetExtensionTab && (
-      <div
-        className={s.extensionTabContent}
-        role="tabpanel"
-      >
-        <SpindlePresetEditorTabContent
-          tab={activePresetExtensionTab}
-        />
-      </div>
-    )}
 
     {activePresetExtensionTab?.guide && (
   <GuideViewer
@@ -3097,7 +3474,14 @@ useEffect(() => {
   />
 )}
 
-      <div style={{ display: activePresetEditorTab === 'preset' ? 'contents' : 'none' }}>
+      <div
+        role="tabpanel"
+        id={outerEditorDomId('panel', 'preset')}
+        aria-labelledby={outerEditorDomId('tab', 'preset')}
+        tabIndex={0}
+        hidden={activePresetEditorTab !== 'preset'}
+        style={{ display: activePresetEditorTab === 'preset' ? 'contents' : 'none' }}
+      >
 
       {/* Connection profile */}
       {activePreset && connectionProfile && (() => {
@@ -3380,43 +3764,64 @@ useEffect(() => {
             >
               <SortableContext items={visibleBlockIds} strategy={verticalListSortingStrategy}>
                 <RootDropSlot id={rootDropId(0)} active={!!activeDragId && !isSearchActive} />
-                {displayedGroups.map(group => (
-                  <Fragment key={group.categoryBlock?.id || group.children[0]?.id || 'ungrouped'}>
-                    {group.categoryBlock && (
-                      <SortableCategoryItem
-                        block={group.categoryBlock}
-                        isCollapsed={isSearchActive ? false : collapsedCategories.has(group.categoryBlock.id)}
-                        onToggleCollapse={isSearchActive ? () => {} : () => toggleCollapse(group.categoryBlock!.id)}
-                        onEdit={handleEdit}
-                        onDelete={handleDelete}
-                        onToggle={toggleBlock}
-                        onToggleChildren={toggleCategoryChildren}
-                        childCount={group.children.length}
-                        dragDisabled={isSearchActive}
-                      />
-                    )}
-                    {(!group.categoryBlock || isSearchActive || !collapsedCategories.has(group.categoryBlock.id)) &&
-                      group.children.map(block => (
-                        <SortableBlockItem
-                          key={block.id}
-                          block={block}
-                          effectiveRole={effectiveRoles.get(block.id)}
+                {displayedGroups.map((group) => {
+                  const categoryTarget = group.categoryBlock
+                    ? blockOccurrences.get(group.categoryBlock) ?? null
+                    : null
+                  const categoryOccurrenceId = categoryTarget
+                    ? encodeLoomBlockOccurrence(categoryTarget)
+                    : null
+                  const firstChildTarget = group.children[0]
+                    ? blockOccurrences.get(group.children[0]) ?? null
+                    : null
+                  const groupKey = categoryOccurrenceId
+                    ?? (firstChildTarget ? encodeLoomBlockOccurrence(firstChildTarget) : `ungrouped:${rootDropIndexAfterGroup(group)}`)
+                  const categoryCollapsed = !!categoryOccurrenceId && collapsedCategories.has(categoryOccurrenceId)
+                  const endDropId = rootDropId(rootDropIndexAfterGroup(group), categoryOccurrenceId ?? undefined)
+                  return (
+                    <Fragment key={groupKey}>
+                      {group.categoryBlock && categoryTarget && (
+                        <SortableCategoryItem
+                          block={group.categoryBlock}
+                          occurrence={categoryTarget}
+                          isCollapsed={isSearchActive ? false : categoryCollapsed}
+                          onToggleCollapse={isSearchActive ? () => {} : () => toggleCollapse(categoryOccurrenceId!)}
                           onEdit={handleEdit}
                           onDelete={handleDelete}
                           onToggle={toggleBlock}
-                          onStash={handleAddToStash}
-                          indented={!!group.categoryBlock}
+                          onToggleChildren={toggleCategoryChildren}
+                          childCount={group.children.length}
                           dragDisabled={isSearchActive}
                         />
-                      ))
-                    }
-                    <RootDropSlot
-                      id={rootDropId(rootDropIndexAfterGroup(group), group.categoryBlock?.id)}
-                      active={!!activeDragId && !isSearchActive}
-                      appendArmed={!!activeDraggedBlock && activeDraggedBlock.marker !== 'category' && armedAppendRootDropId === rootDropId(rootDropIndexAfterGroup(group), group.categoryBlock?.id)}
-                    />
-                  </Fragment>
-                ))}
+                      )}
+                      {(!group.categoryBlock || isSearchActive || !categoryCollapsed) &&
+                        group.children.map((block) => {
+                          const occurrence = blockOccurrences.get(block)
+                          if (!occurrence) return null
+                          return (
+                            <SortableBlockItem
+                              key={encodeLoomBlockOccurrence(occurrence)}
+                              block={block}
+                              occurrence={occurrence}
+                              effectiveRole={effectiveBlocks[occurrence.promptOrder]?.role}
+                              onEdit={handleEdit}
+                              onDelete={handleDelete}
+                              onToggle={toggleBlock}
+                              onStash={handleAddToStash}
+                              indented={!!group.categoryBlock}
+                              dragDisabled={isSearchActive}
+                            />
+                          )
+                        })
+                      }
+                      <RootDropSlot
+                        id={endDropId}
+                        active={!!activeDragId && !isSearchActive}
+                        appendArmed={!!activeDraggedBlock && activeDraggedBlock.marker !== 'category' && armedAppendRootDropId === endDropId}
+                      />
+                    </Fragment>
+                  )
+                })}
               </SortableContext>
             </DndContext>
           )}
@@ -3540,6 +3945,7 @@ useEffect(() => {
             blocks={activePreset.blocks}
             values={effectivePromptVariableValues}
             onSave={savePromptVariableValues}
+            onReloadLatest={reloadPromptVariableValues}
             onClose={() => setShowPromptVariablesModal(false)}
           />
         )}
@@ -3547,7 +3953,6 @@ useEffect(() => {
           isOpen={showPromptStashModal}
           onClose={() => setShowPromptStashModal(false)}
           onSelect={handleInsertStashedBlock}
-          onUnstash={handleUnstash}
         />
       </div>
     </PanelFadeIn>

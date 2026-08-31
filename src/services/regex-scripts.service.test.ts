@@ -1,10 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import type { MacroEnv } from "../macros/types";
 import {
   activatePresetBoundRegexScripts,
   applyRegexScripts,
   createRegexScript,
   deleteRegexScript,
+  deleteRegexScripts,
   exportRegexScripts,
   getCharacterBoundScripts,
   getRegexScript,
@@ -17,6 +19,7 @@ import {
   importPresetBoundRegexScripts,
   resolveLumiHubPresetRegexInstallFolder,
   retireLumiHubPresetRegexScriptsForUpdate,
+  reorderRegexScripts,
   reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
   toggleRegexScript,
@@ -26,6 +29,8 @@ import {
 } from "./regex-scripts.service";
 import { initMacros } from "../macros";
 import type { RegexScript } from "../types/regex-script";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const USER_ID = "u1";
 
@@ -62,19 +67,18 @@ function runtimeScript(overrides: Partial<RegexScript>): RegexScript {
     preset_id: null,
     character_id: null,
     owner_extension_identifier: null,
+    validation_error_code: null,
     metadata: {},
     created_at: 0,
     updated_at: 0,
     ...overrides,
   };
 }
-
 beforeAll(() => {
   initMacros();
   closeDatabase();
   initDatabase(":memory:");
   const db = getDb();
-
   db.run(`CREATE TABLE settings (
     key TEXT NOT NULL,
     value TEXT NOT NULL,
@@ -108,12 +112,27 @@ beforeAll(() => {
     pack_id TEXT,
     preset_id TEXT,
     character_id TEXT,
+    validation_error_code TEXT,
     owner_extension_identifier TEXT,
     metadata TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
 
+  db.run(`CREATE TABLE presets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    engine TEXT NOT NULL DEFAULT 'classic',
+    parameters TEXT NOT NULL DEFAULT '{}',
+    prompt_order TEXT NOT NULL DEFAULT '[]',
+    prompts TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    cache_revision INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`);
   db.run(`CREATE UNIQUE INDEX idx_regex_scripts_script_id
     ON regex_scripts(user_id, script_id)
     WHERE script_id != ''`);
@@ -123,6 +142,82 @@ beforeEach(() => {
   const db = getDb();
   db.query("DELETE FROM regex_scripts").run();
   db.query("DELETE FROM settings").run();
+  db.query("DELETE FROM presets").run();
+});
+
+function insertAuthorityPreset(id: string): void {
+  getDb().query(
+    "INSERT INTO presets (id, user_id, cache_revision, prompt_order, updated_at) VALUES (?, ?, 0, '[]', 0)",
+  ).run(id, USER_ID);
+}
+
+function authorityRevision(id: string): number {
+  const row = getDb().query(
+    "SELECT cache_revision FROM presets WHERE id = ? AND user_id = ?",
+  ).get(id, USER_ID) as { cache_revision?: number } | null;
+  return Number(row?.cache_revision ?? -1);
+}
+
+describe("preset-bound regex authority", () => {
+  test("advances each direct operation once while unbound and normalized no-ops stay inert", () => {
+    insertAuthorityPreset("preset-authority");
+    const first = createRegexScript(USER_ID, {
+      name: "First",
+      find_regex: "first",
+      preset_id: "preset-authority",
+      sort_order: 1,
+      metadata: { nested: { alpha: 1, beta: 2 } },
+    }) as RegexScript;
+    expect(authorityRevision("preset-authority")).toBe(1);
+
+    updateRegexScript(USER_ID, first.id, {
+      metadata: { nested: { beta: 2, alpha: 1 } },
+    });
+    expect(authorityRevision("preset-authority")).toBe(1);
+
+    updateRegexScript(USER_ID, first.id, { find_regex: "changed" });
+    expect(authorityRevision("preset-authority")).toBe(2);
+
+    const second = createRegexScript(USER_ID, {
+      name: "Second",
+      find_regex: "second",
+      preset_id: "preset-authority",
+      sort_order: 0,
+    }) as RegexScript;
+    expect(authorityRevision("preset-authority")).toBe(3);
+
+    reorderRegexScripts(USER_ID, [first.id, second.id]);
+    expect(authorityRevision("preset-authority")).toBe(4);
+
+    expect(deleteRegexScripts(USER_ID, [first.id, second.id])).toHaveLength(2);
+    expect(authorityRevision("preset-authority")).toBe(5);
+
+    const imported = importRegexScripts(USER_ID, {
+      preset_id: "preset-authority",
+      scripts: [
+        { name: "Imported A", script_id: "import-a", find_regex: "a" },
+        { name: "Imported B", script_id: "import-b", find_regex: "b" },
+      ],
+    });
+    expect(imported.imported).toBe(2);
+    expect(imported.presetAuthorityChanged).toBe(true);
+    expect(authorityRevision("preset-authority")).toBe(6);
+
+    const importedA = getRegexScriptByScriptId(USER_ID, "import-a")!;
+    expect(deleteRegexScript(USER_ID, importedA.id)).toBe(true);
+    expect(authorityRevision("preset-authority")).toBe(7);
+
+    insertAuthorityPreset("preset-moved");
+    const importedB = getRegexScriptByScriptId(USER_ID, "import-b")!;
+    updateRegexScript(USER_ID, importedB.id, { preset_id: "preset-moved" });
+    expect(authorityRevision("preset-authority")).toBe(8);
+    expect(authorityRevision("preset-moved")).toBe(1);
+
+    const unbound = createRegexScript(USER_ID, { name: "Unbound", find_regex: "x" }) as RegexScript;
+    updateRegexScript(USER_ID, unbound.id, { find_regex: "y" });
+    deleteRegexScript(USER_ID, unbound.id);
+    expect(authorityRevision("preset-authority")).toBe(8);
+  });
 });
 
 describe("extension regex ownership", () => {
@@ -870,7 +965,7 @@ describe("regex JSON overwrite imports", () => {
       }],
     }, { activePresetId: "preset-1" });
 
-    expect(result).toEqual({ imported: 1, skipped: 0, errors: [] });
+    expect(result).toEqual({ imported: 1, skipped: 0, errors: [], presetAuthorityChanged: false });
     const updated = mustGetScript((created as RegexScript).id);
     expect(updated.name).toBe("Updated");
     expect(updated.find_regex).toBe("new");
@@ -898,7 +993,7 @@ describe("regex JSON overwrite imports", () => {
       }],
     }, { activePresetId: "new-preset" });
 
-    expect(result).toEqual({ imported: 1, skipped: 0, errors: [] });
+    expect(result).toEqual({ imported: 1, skipped: 0, errors: [], presetAuthorityChanged: false });
     const updated = mustGetScript((created as RegexScript).id);
     expect(updated.find_regex).toBe("new");
     expect(updated.preset_id).toBe("new-preset");
@@ -1127,33 +1222,59 @@ describe("regex JSON overwrite imports", () => {
     });
   });
 
-  test("rolls back a partial update and preserves the previous enabled set", () => {
-    installLumiHubPresetRegexScripts(USER_ID, {
+  test("publishes the resolved authority only for a committed remote install", () => {
+    insertAuthorityPreset("preset-safe-update");
+    const committedEvents = eventBus.withBufferedEvents(() => installLumiHubPresetRegexScripts(USER_ID, {
       presetId: "preset-safe-update",
       presetName: "Safe update preset",
       hubPresetId: "hub-safe-update",
       presetVersion: "1.0.0",
       scripts: [{ name: "Bundled v1", find_regex: "v1", disabled: false }],
+    }));
+    expect(committedEvents.events.map((event) => event.event)).toEqual([
+      EventType.REGEX_SCRIPT_CHANGED,
+      EventType.PRESET_CHANGED,
+    ]);
+    expect(committedEvents.events[1]).toMatchObject({
+      payload: {
+        id: "preset-safe-update",
+        preset: { id: "preset-safe-update", cache_revision: 1 },
+      },
+      userId: USER_ID,
     });
+    expect(authorityRevision("preset-safe-update")).toBe(1);
+
     const [v1] = getRegexScriptsByPresetId(USER_ID, "preset-safe-update");
     activatePresetBoundRegexScripts(USER_ID, "preset-safe-update");
     expect(mustGetScript(v1.id).disabled).toBe(false);
+    const committedRevision = authorityRevision("preset-safe-update");
 
-    expect(() => installLumiHubPresetRegexScripts(USER_ID, {
-      presetId: "preset-safe-update",
-      presetName: "Safe update preset",
-      hubPresetId: "hub-safe-update",
-      presetVersion: "2.0.0",
-      previous: {
-        hubPresetId: "hub-safe-update",
-        version: "1.0.0",
-        presetName: "Safe update preset",
-      },
-      scripts: [
-        { name: "Valid v2", find_regex: "v2", disabled: false },
-        { name: "Invalid v2", find_regex: "(", disabled: false },
-      ],
-    })).toThrow("LumiHub preset regex import was incomplete (1/2)");
+    const rolledBackEvents = eventBus.withBufferedEvents(() => {
+      try {
+        installLumiHubPresetRegexScripts(USER_ID, {
+          presetId: "preset-safe-update",
+          presetName: "Safe update preset",
+          hubPresetId: "hub-safe-update",
+          presetVersion: "2.0.0",
+          previous: {
+            hubPresetId: "hub-safe-update",
+            version: "1.0.0",
+            presetName: "Safe update preset",
+          },
+          scripts: [
+            { name: "Valid v2", find_regex: "v2", disabled: false },
+            { name: "Invalid v2", find_regex: "(", disabled: false },
+          ],
+        });
+        throw new Error("Expected partial install to fail");
+      } catch (error) {
+        return error;
+      }
+    });
+    expect(rolledBackEvents.value).toBeInstanceOf(Error);
+    expect((rolledBackEvents.value as Error).message).toBe("LumiHub preset regex import was incomplete (1/2)");
+    expect(rolledBackEvents.events).toEqual([]);
+    expect(authorityRevision("preset-safe-update")).toBe(committedRevision);
 
     expect(getRegexScriptsByPresetId(USER_ID, "preset-safe-update")).toHaveLength(1);
     expect(mustGetScript(v1.id)).toMatchObject({
@@ -1193,6 +1314,7 @@ describe("raw capture processing", () => {
       preset_id: null,
       character_id: null,
       owner_extension_identifier: null,
+      validation_error_code: null,
       metadata: {},
       created_at: 0,
       updated_at: 0,
@@ -1218,6 +1340,32 @@ describe("raw capture processing", () => {
   });
 });
 
+
+describe("ordinary replacement processing", () => {
+  test("uses native GetSubstitution in after mode", async () => {
+    const script = runtimeScript({
+      find_regex: "(?<word>ab)(c)?",
+      replace_string: "$10|$<word>|$`|$'|$$",
+      substitute_macros: "after",
+    });
+    const macroEnv = {
+      commit: true,
+      variables: {
+        local: new Map<string, string>(),
+        global: new Map<string, string>(),
+        chat: new Map<string, string>(),
+      },
+      dynamicMacros: {},
+      extra: {},
+    } as unknown as MacroEnv;
+    const input = "xxabcYY";
+    const expected = input.replace(
+      /(?<word>ab)(c)?/,
+      "$10|$<word>|$`|$'|$$",
+    );
+    expect(await applyRegexScripts(input, [script], "ai_output", undefined, macroEnv)).toBe(expected);
+  });
+});
 describe("find-only macro processing", () => {
   test("resolves the find pattern without resolving the replacement", async () => {
     const script = runtimeScript({
@@ -1650,5 +1798,77 @@ describe("associative regex actions", () => {
       },
     ]);
     expect(multiActions.every((action) => action.multi_select === true)).toBe(true);
+  });
+});
+
+describe("bounded regex validation", () => {
+  test("rejects UTF-8 pattern and empty trim without mutating local rows", () => {
+    const before = Number((getDb().query("SELECT COUNT(*) AS count FROM regex_scripts").get() as { count: number }).count);
+    const invalid = createRegexScript(USER_ID, {
+      name: "Too large",
+      find_regex: "😀".repeat(20_000),
+      trim_strings: [""],
+    });
+    expect(typeof invalid).toBe("string");
+    const after = Number((getDb().query("SELECT COUNT(*) AS count FROM regex_scripts").get() as { count: number }).count);
+    expect(after).toBe(before);
+  });
+
+  test("retains invalid foreign imports disabled with a repair code", () => {
+    const imported = createRegexScript(USER_ID, {
+      name: "Imported invalid",
+      find_regex: "[",
+    }, { foreignImport: true });
+    expect(typeof imported).not.toBe("string");
+    expect((imported as RegexScript).disabled).toBe(true);
+    expect((imported as RegexScript).validation_error_code).toBe("invalid_regex");
+  });
+
+  test("lazily quarantines invalid legacy rows before execution", () => {
+    getDb().query(
+      `INSERT INTO regex_scripts
+       (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement,
+        scope, target, trim_strings, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, '', ?, '', '[]', 'g', ?, 'global', ?, ?, '{}', 0, 0)`,
+    ).run(
+      "legacy-invalid",
+      USER_ID,
+      "Legacy invalid",
+      "[",
+      JSON.stringify(["ai_output"]),
+      JSON.stringify(["response"]),
+      JSON.stringify([]),
+    );
+    const row = getRegexScript(USER_ID, "legacy-invalid");
+    expect(row?.disabled).toBe(true);
+    expect(row?.validation_error_code).toBe("invalid_regex");
+    const stored = getDb().query("SELECT disabled, validation_error_code FROM regex_scripts WHERE id = ?").get("legacy-invalid") as {
+      disabled: number;
+      validation_error_code: string;
+    };
+    expect(stored).toEqual({ disabled: 1, validation_error_code: "invalid_regex" });
+  });
+
+  test("cancellation and deadline fail before isolate admission", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(applyRegexScripts(
+      "x",
+      [runtimeScript({ find_regex: "x", replace_string: "y" })],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { signal: controller.signal },
+    )).rejects.toThrow();
+    await expect(applyRegexScripts(
+      "x",
+      [runtimeScript({ find_regex: "x", replace_string: "y" })],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { deadlineAt: Date.now() - 1 },
+    )).rejects.toThrow();
   });
 });

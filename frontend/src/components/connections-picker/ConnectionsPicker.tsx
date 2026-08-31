@@ -239,16 +239,18 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   useEffect(() => {
     if (!open) return
     if (settings.variant === 'provider-tags' && anchorElement) return
-    setSelectedProfileId(activeProfileId ?? profiles[0]?.id ?? null)
+    const active = activeProfileId && profiles.some((profile) => profile.id === activeProfileId && profile.review_required !== true)
+      ? activeProfileId
+      : profiles.find((profile) => profile.review_required !== true)?.id ?? null
+    setSelectedProfileId(active)
   }, [activeProfileId, anchorElement, open, profiles, settings.variant])
-
   useEffect(() => {
     if (!selectedProfileId) return
-    if (profiles.some((profile) => profile.id === selectedProfileId)) return
+    if (profiles.some((profile) => profile.id === selectedProfileId && profile.review_required !== true)) return
     modelsRequestRef.current += 1
-    const fallbackId = activeProfileId && profiles.some((profile) => profile.id === activeProfileId)
+    const fallbackId = activeProfileId && profiles.some((profile) => profile.id === activeProfileId && profile.review_required !== true)
       ? activeProfileId
-      : profiles[0]?.id ?? null
+      : profiles.find((profile) => profile.review_required !== true)?.id ?? null
     setSelectedProfileId(fallbackId)
   }, [activeProfileId, profiles, selectedProfileId])
 
@@ -291,14 +293,15 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   }, [settings.profileTags, settings.visibleTagIds])
 
   const filteredProfiles = useMemo(
-    () => filterConnectionProfiles(profiles, settings.profileTags, query, selectedTagId),
+    () => filterConnectionProfiles(profiles, settings.profileTags, query, selectedTagId)
+      .filter((profile) => profile.review_required !== true),
     [profiles, query, selectedTagId, settings.profileTags],
   )
   const favoriteProfiles = filteredProfiles.filter((profile) => settings.favoriteProfileIds.includes(profile.id))
   const recentProfiles = settings.recentProfileIds
     .map((id) => filteredProfiles.find((profile) => profile.id === id))
     .filter((profile): profile is ConnectionProfile => Boolean(profile))
-  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId && profile.review_required !== true) ?? null
   const favoriteModels = selectedProfile ? getConnectionProfileFavoriteModels(selectedProfile) : []
   const favoriteModelSet = new Set(favoriteModels)
   const orderedModels = [...models].sort((a, b) => Number(favoriteModelSet.has(b)) - Number(favoriteModelSet.has(a)))
@@ -321,8 +324,8 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
 
   useEffect(() => {
     if (!open || !providerTabShowsModels || variantAProfiles.length === 0) return
-    if (selectedProfileId && variantAProfiles.some((profile) => profile.id === selectedProfileId)) return
-    setSelectedProfileId(variantAProfiles[0].id)
+    if (selectedProfileId && variantAProfiles.some((profile) => profile.id === selectedProfileId && profile.review_required !== true)) return
+    setSelectedProfileId(variantAProfiles.find((profile) => profile.review_required !== true)?.id ?? null)
   }, [open, providerTabShowsModels, selectedProfileId, variantAProfiles])
 
   useEffect(() => {
@@ -357,15 +360,15 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
       recentProfileIds: [profileId, ...settings.recentProfileIds.filter((id) => id !== profileId)].slice(0, 8),
     })
   }
-
   const selectProfile = (profile: ConnectionProfile) => {
+    if (profile.review_required === true) return
     setSelectedProfileId(profile.id)
     setActiveProfile(profile.id)
     rememberRecent(profile.id)
   }
 
   const selectModel = async (model: string) => {
-    if (!selectedProfile) return
+    if (!selectedProfile || selectedProfile.review_required === true) return
     const updated = await connectionsApi.update(selectedProfile.id, { model })
     updateProfile(selectedProfile.id, updated)
     setActiveProfile(selectedProfile.id)
@@ -373,7 +376,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   }
 
   const toggleFavoriteModel = async (model: string) => {
-    if (!selectedProfile) return
+    if (!selectedProfile || selectedProfile.review_required === true) return
     const nextFavorites = favoriteModelSet.has(model)
       ? favoriteModels.filter((favoriteModel) => favoriteModel !== model)
       : [...favoriteModels, model]
@@ -383,6 +386,8 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   }
 
   const toggleFavorite = (profileId: string) => {
+    const profile = profiles.find((candidate) => candidate.id === profileId)
+    if (!profile || profile.review_required === true) return
     const favoriteProfileIds = settings.favoriteProfileIds.includes(profileId)
       ? settings.favoriteProfileIds.filter((id) => id !== profileId)
       : [...settings.favoriteProfileIds, profileId]
@@ -437,7 +442,13 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
         data-profile-id={profile.id}
         data-profile-active={active ? 'true' : 'false'}
       >
-        <button type="button" className={styles.profileMain} onClick={() => selectProfile(profile)}>
+        <button
+          type="button"
+          className={styles.profileMain}
+          onClick={() => selectProfile(profile)}
+          disabled={profile.review_required === true}
+          aria-disabled={profile.review_required === true}
+        >
           <span className={styles.profileIcon} style={{ width: settings.thumbnailSize, height: settings.thumbnailSize }}>
             <Link2 size={Math.max(14, settings.thumbnailSize - 10)} />
           </span>
@@ -449,6 +460,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
         </button>
         <button
           type="button"
+          disabled={profile.review_required === true}
           className={clsx(styles.starButton, favorite && styles.starButtonActive)}
           onClick={() => toggleFavorite(profile.id)}
           aria-label={favorite ? `Remove ${profile.name} from favorites` : `Favorite ${profile.name}`}
@@ -464,7 +476,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
     const favorite = settings.favoriteProfileIds.includes(profile.id)
     return (
       <article key={profile.id} className={clsx(styles.profileCard, active && styles.profileCardActive)}>
-        <button type="button" className={styles.profileCardMain} onClick={() => selectProfile(profile)}>
+        <button type="button" className={styles.profileCardMain} onClick={() => selectProfile(profile)} disabled={profile.review_required === true} aria-disabled={profile.review_required === true}>
           <span className={styles.profileCardIcon} style={{ width: settings.thumbnailSize + 10, height: settings.thumbnailSize + 10 }}>
             <Link2 size={Math.max(16, settings.thumbnailSize - 6)} />
           </span>
@@ -476,6 +488,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
         </button>
         <button
           type="button"
+          disabled={profile.review_required === true}
           className={clsx(styles.cardStarButton, favorite && styles.starButtonActive)}
           onClick={() => toggleFavorite(profile.id)}
           aria-label={favorite ? `Remove ${profile.name} from favorites` : `Favorite ${profile.name}`}
@@ -514,7 +527,8 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
     setSelectedTagId(tab.startsWith('tag:') ? tab.slice(4) : null)
     if (!tab.startsWith('tag:')) return
     const tagId = tab.slice(4)
-    const firstTaggedProfile = filterConnectionProfiles(profiles, settings.profileTags, query, tagId)[0]
+    const firstTaggedProfile = filterConnectionProfiles(profiles, settings.profileTags, query, tagId)
+      .find((profile) => profile.review_required !== true)
     if (firstTaggedProfile) setSelectedProfileId(firstTaggedProfile.id)
   }
 

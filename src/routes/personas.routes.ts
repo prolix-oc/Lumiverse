@@ -267,7 +267,7 @@ app.post("/bulk-delete", async (c) => {
 
   const avatarPaths = new Set(personas.map((persona) => persona.avatar_path).filter((path): path is string => !!path));
   for (const avatarPath of avatarPaths) {
-    if (!svc.isPersonaAvatarPathReferenced(userId, avatarPath)) await files.deleteAvatar(avatarPath);
+    if (!svc.isPersonaAvatarPathReferenced(userId, avatarPath)) await files.deleteAvatar(avatarPath, userId);
   }
 
   return c.json({ deleted, count: deleted.length });
@@ -300,7 +300,7 @@ app.delete("/:id", async (c) => {
   for (const imageId of imageIds) {
     images.deleteImageIfUnreferenced(userId, imageId);
   }
-  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path, userId);
   return c.json({ success: true });
 });
 
@@ -462,7 +462,7 @@ app.post("/:id/avatar", async (c) => {
   for (const imageId of oldImageIds) {
     images.deleteImageIfUnreferenced(userId, imageId);
   }
-  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path, userId);
 
   const updated = svc.getPersona(userId, persona.id);
   if (!updated) return c.json({ error: "Not found" }, 404);

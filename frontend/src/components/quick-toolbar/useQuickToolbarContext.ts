@@ -34,8 +34,8 @@ export function useQuickToolbarContext(): Record<string, string> {
   return useMemo(() => {
     const characterName = characters.find((character) => character.id === activeCharacterId)?.name
     const personaName = personas.find((persona) => persona.id === activePersonaId)?.name
-    const connectionName = profiles.find((profile) => profile.id === activeProfileId)?.name
-      ?? profiles.find((profile) => profile.is_default)?.name
+    const connectionName = profiles.find((profile) => profile.id === activeProfileId && profile.review_required !== true)?.name
+      ?? profiles.find((profile) => profile.is_default && profile.review_required !== true)?.name
     const loreLabel = `${activatedWorldInfo.length} ${activatedWorldInfo.length === 1 ? 'entry' : 'entries'}`
     // `characters` opens CharacterBrowser — the *library*, not the active card —
     // so it reports inventory. This is the half of the duplicate-"Narrator" fix

@@ -17,7 +17,7 @@ import {
   resolveWorldInfoCharacters,
 } from "../services/world-info-sources.service";
 import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
-import type { WorldBookEntry } from "../types/world-book";
+import type { CreateWorldBookEntryInput, UpdateWorldBookEntryInput, WorldBookEntry } from "../types/world-book";
 import { makeAssistantCharacter } from "../types/character";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
@@ -40,6 +40,22 @@ function parseBulkWorldBookExportFormat(value: unknown): svc.WorldBookExportForm
   if (value === undefined) return "lumiverse";
   return isWorldBookExportFormat(value) ? value : null;
 }
+
+const ENTRY_CLIENT_IDENTITY_KEYS = ["world_book_id", "id", "uid", "created_at", "updated_at", "revision"] as const;
+
+function entryMutationBody(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  const next = { ...(body as Record<string, unknown>) };
+  for (const key of ENTRY_CLIENT_IDENTITY_KEYS) delete next[key];
+  return next;
+}
+
+function containedEntry(entry: WorldBookEntry | null, bookId: string): WorldBookEntry | null {
+  if (!entry || entry.world_book_id !== bookId) return null;
+  return { ...entry, world_book_id: bookId };
+}
+
+
 
 
 const app = new Hono();
@@ -932,9 +948,9 @@ app.post("/:id/entries", async (c) => {
   const book = svc.getWorldBook(userId, c.req.param("id"));
   if (!book) return c.json({ error: "World book not found" }, 404);
   const body = await c.req.json();
-  const entry = svc.createEntry(userId, book.id, body);
+  const entry = svc.createEntry(userId, book.id, entryMutationBody(body) as CreateWorldBookEntryInput);
   if (!entry) return c.json({ error: "World book not found" }, 404);
-  return c.json(entry, 201);
+  return c.json(containedEntry(entry, book.id) ?? entry, 201);
 });
 
 app.post("/:id/entries/reorder", async (c) => {
@@ -986,11 +1002,29 @@ app.post("/:id/entries/bulk", async (c) => {
   }
 });
 
+app.get("/:id/entries/:eid", (c) => {
+  const userId = c.get("userId");
+  const bookId = c.req.param("id");
+  const book = svc.getWorldBook(userId, bookId);
+  if (!book) return c.json({ error: "World book not found" }, 404);
+  const entry = containedEntry(svc.getEntry(userId, c.req.param("eid")), book.id);
+  if (!entry) return c.json({ error: "Not found" }, 404);
+  return c.json(entry);
+});
+
 app.put("/:id/entries/:eid", async (c) => {
   const userId = c.get("userId");
+  const bookId = c.req.param("id");
+  const book = svc.getWorldBook(userId, bookId);
+  if (!book) return c.json({ error: "World book not found" }, 404);
+  const existing = containedEntry(svc.getEntry(userId, c.req.param("eid")), book.id);
+  if (!existing) return c.json({ error: "Not found" }, 404);
   const body = await c.req.json();
   try {
-    const entry = svc.updateEntry(userId, c.req.param("eid"), body);
+    const entry = containedEntry(
+      svc.updateEntry(userId, book.id, existing.id, entryMutationBody(body) as UpdateWorldBookEntryInput),
+      book.id,
+    );
     if (!entry) return c.json({ error: "Not found" }, 404);
     return c.json(entry);
   } catch (error) {
@@ -1003,6 +1037,7 @@ app.put("/:id/entries/:eid", async (c) => {
     throw error;
   }
 });
+
 
 app.post("/:id/entries/:eid/duplicate", async (c) => {
   const userId = c.get("userId");
@@ -1053,8 +1088,29 @@ app.patch("/:id/entries/:eid/extensions/:namespace", async (c) => {
 
 app.delete("/:id/entries/:eid", async (c) => {
   const userId = c.get("userId");
-  if (!(await svc.deleteEntry(userId, c.req.param("eid")))) return c.json({ error: "Not found" }, 404);
-  return c.json({ success: true });
+  const bookId = c.req.param("id");
+  const book = svc.getWorldBook(userId, bookId);
+  if (!book) return c.json({ error: "World book not found" }, 404);
+  const entry = containedEntry(svc.getEntry(userId, c.req.param("eid")), book.id);
+  if (!entry) return c.json({ error: "Not found" }, 404);
+  try {
+    const rawExpected = c.req.query("expected_revision");
+    const expectedRevision = rawExpected === undefined ? undefined : Number(rawExpected);
+    if (!(await svc.deleteEntry(userId, book.id, entry.id, expectedRevision))) {
+      return c.json({ error: "Not found" }, 404);
+    }
+    return c.json({ success: true });
+  } catch (error) {
+    if (error instanceof svc.WorldBookEntryConflictError) {
+      return c.json(error.payload, 409);
+    }
+    if (error instanceof svc.WorldBookEntryRevisionInvalidError) {
+      return c.json({ error: error.code, code: error.code, field: error.field }, 428);
+    }
+    throw error;
+  }
 });
+
+
 
 export { app as worldBooksRoutes };

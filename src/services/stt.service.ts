@@ -54,9 +54,9 @@ export async function transcribe(userId: string, input: TranscribeInput): Promis
     throw new Error("No connection ID provided for STT — configure an STT connection in Voice settings");
   }
 
-  const profile = sttConnectionsSvc.getConnection(userId, input.connectionId);
+  const profile = sttConnectionsSvc.getUsableConnection(userId, input.connectionId);
   if (!profile) {
-    throw new Error("Selected STT connection was not found");
+    throw new Error("Selected STT connection was not found or requires owner review");
   }
 
   const provider = sttConnectionsSvc.getProvider(profile.provider, userId);

@@ -108,3 +108,94 @@ interface LumiaItemDTO {
   updated_at: number;
 }
 ```
+
+---
+
+## WORK Engine advisory boundaries
+
+The extension `spindle.council` API above remains a read-only
+Response/direct-surface API. It is not the Council capability used by the
+WORK Engine, and it does not expose that capability's admission, transcript,
+usage, or receipt data.
+
+WORK Council has no public REST route or public WORK tool DTO. At Agentic
+admission the host resolves the reviewed LLM-only Council definitions, member
+grants, sidecar connection, requiredness, and correlation. Ambient Response
+tools/events, MCP and extension tools, host tools, delegation, WORK tools,
+workspace/direct writes, publication, and commit authority are denied. The
+sidecar is advisory input to the root WORK frame only: it cannot add tools,
+spawn children, widen the frozen target, or write the canonical Response.
+
+An optional Council result with non-empty deliberation is `accepted`. An
+optional unavailable, empty, failed, or cancelled result is `omitted` and
+does not block the turn; the owner inspection projection records the omission.
+A required non-accepted result fails the WORK operation as
+`council_required_failed`. The public error remains the factual underlying
+failure category; clients must use the public error's recovery fields rather
+than infer a recovery action from the Council receipt.
+
+The private owner-inspection receipt is the closed `AgentCouncilReceiptV1`
+shape:
+
+```ts
+{
+  version: 1,
+  id: string,
+  requestId: string,
+  checkpoint: 'WORK',
+  required: boolean,
+  startedAt: number,
+  completedAt: number | null,
+  state: 'accepted' | 'omitted' | 'failed' | 'cancelled',
+  memberCount: number,
+  resultDigest: string | null,
+  correlation: AgentInspectionCorrelationV1,
+  reason: AgentInspectionReasonV1 | null,
+  canonical: false,
+}
+```
+
+`correlation` is the closed owner-inspection object, not an opaque string. It
+contains `turnSessionId`, `runId`, `attemptId`, `chatId`, `generationId`,
+nullable `messageId`, `swipeId`, `actorId`, and `recipientId`, plus
+`phase`, nullable `taskId`, `toolId`, and `parentId`,
+`hostCorrelationId`, and `hostSequence`. `reason` is the closed
+`AgentInspectionReasonV1` union or `null`.
+
+The Council transcript, prompt inspection, usage evidence, and omission
+details are owner-inspection data. They are not Response content or a public
+compatibility event.
+
+### Cortex sidecar
+
+Cortex likewise has no public route or generic WORK tool DTO. The host creates
+an authorized immutable snapshot before the WORK read:
+
+```ts
+{
+  ownerId: string,
+  attemptId: string,
+  chatId: string,
+  targetMessageId: string | null,
+  targetSwipeId: number | null,
+  checkpoint: 'WORK',
+  snapshotId: string,
+  revision: string | number,
+  value: unknown,
+  availability?: unknown,
+}
+```
+
+A read returns either `{ kind: 'accepted', value, receipt }` or, for an
+optional unavailable entry, `{ kind: 'omission', omission, receipt }`. A
+required sidecar failure throws the Cortex sidecar error and fails WORK; it
+does not become an optional omission.
+
+`AgentCortexReceiptV1` is private owner-inspection evidence. It records the
+request and attempt, `checkpoint: 'WORK'`, snapshot/source revisions and
+target scope, requiredness, timing, state
+(`accepted | omitted | failed | cancelled`), result digest/count,
+correlation, reason, omission, and `canonical: false`. Cortex provides no
+tools, children, workspace/publication writes, or commit authority. Root-only
+context is stripped before RENDER, and the private receipt is never placed in
+the final Response.

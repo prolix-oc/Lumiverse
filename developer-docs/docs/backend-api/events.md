@@ -37,10 +37,22 @@ unsub()
 |-------|---------------|-------------|
 | `GENERATION_STARTED` | `GenerationStartedPayloadDTO` | A generation has begun |
 | `STREAM_TOKEN_RECEIVED` | `StreamTokenPayloadDTO` | A token was received from the LLM |
-| `GENERATION_ENDED` | `GenerationEndedPayloadDTO` | Generation completed (success or error) |
-| `GENERATION_STOPPED` | `GenerationStoppedPayloadDTO` | User stopped the generation |
+| `GENERATION_ENDED` | `GenerationEndedPayloadDTO` | Generation completed or failed; completed content is settled, while failed content remains provisional |
+| `GENERATION_STOPPED` | `GenerationStoppedPayloadDTO` | User stopped the generation; content remains the provisional pool partial |
 
 These events have typed overloads — payloads are automatically narrowed when using `lumiverse-spindle-types`:
+
+For a successful target-backed `GENERATION_ENDED`, `content` exactly matches
+the durable generated swipe after response regex, formatting healing, and macro
+resolution. Continue completion includes the original content and configured
+postfix. Failed `GENERATION_ENDED` and `GENERATION_STOPPED` keep the
+provisional pool partial instead.
+
+For Agentic turns these remain turn-level events. Internal Work Segments do not
+emit additional `MESSAGE_SENT`, `STREAM_TOKEN_RECEIVED`, or per-segment
+generation events. Only the tools-disabled final rendered Response is eligible
+for the ordinary public token stream and successful durable message event;
+segment progress is represented by the bounded status-only Agent Run projection.
 
 ```ts
 spindle.on('STREAM_TOKEN_RECEIVED', (payload) => {
@@ -135,7 +147,7 @@ No `action` discriminator is provided — if you need add/update/delete/navigate
 | Event | Payload |
 |-------|---------|
 | `SETTINGS_UPDATED` | `{ key, value }` |
-| `PRESET_CHANGED` | `{ presetId }` |
+| `PRESET_CHANGED` | `{ preset }` — the complete committed preset authority projection. Emitted only after commit; rolled-back mutations emit nothing. |
 | `CONNECTION_PROFILE_LOADED` | `{ connectionId }` |
 | `MAIN_API_CHANGED` | `{ provider }` |
 | `WORLD_INFO_ACTIVATED` | `{ entries }` |
@@ -155,6 +167,8 @@ No `action` discriminator is provided — if you need add/update/delete/navigate
 |-------|---------|
 | `REGEX_SCRIPT_CHANGED` | `{ id, script }` — fires on create, update, duplicate, reorder, and enable/disable. `script` is a `RegexScriptDTO`. |
 | `REGEX_SCRIPT_DELETED` | `{ id }` |
+
+Regex imports and nested remote preset installs buffer both regex and `PRESET_CHANGED` events until their owning transaction commits. A rollback publishes no events.
 
 ### Expressions
 

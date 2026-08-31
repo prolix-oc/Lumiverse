@@ -21,6 +21,7 @@ async function initDb(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
+
   db.query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)").run("legacy-character", USER_A, "Legacy");
 }
 

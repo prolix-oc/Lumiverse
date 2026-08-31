@@ -275,3 +275,15 @@ This is useful for:
 
 !!! note
     For user-scoped extensions, the user context is inferred automatically. For operator-scoped extensions, the user ID is resolved from the extension context. World books are always scoped to a single user.
+
+
+## Agents & Tools lore boundary
+
+The preset-owned `lore_*` tools are read-only views built for one real, single-user generation. They do not call `getActivated()` a second time and do not expose a mutation or extension endpoint.
+
+- `active` is an immutable snapshot of the full enabled corpus from every attached or global source book considered by that generation. The snapshot uses the post-`worldInfoInterceptorChain` effective entries, including interceptor-enabled/disabled and content-mutated entries, finalized activated overlays, and book/source provenance. Activated-entry IDs and overlays are tracked separately from the full searchable corpus, so an entry may be present with `activated: false`.
+- `all_owned` is an explicit local grant. It performs bounded live FTS/LIKE lookups scoped to the immutable root user ID. It cannot be requested when the server-held profile or main-model grant is only `active`.
+- Disabled entries are excluded in every scope. Book-name selectors are convenience selectors only; ambiguous names return candidate IDs and require an ID retry.
+- `lore_search_entries` ranks exact, then prefix, then substring matches in comment/title and primary keys before secondary keys and content-only matches. Active ties retain snapshot order; owned ties use stable book/order/id ordering. Ranking is applied before pagination, while the envelope's `total` and `truncated` cover the full matching set.
+
+The catalog's list/get/search operations enforce selector, page-size, offset, response-byte, and continuation bounds. `lore_get_book` returns a page of enabled entries, so callers must continue rather than expect an unbounded whole-book response. Results contain documented book/entry fields and source provenance only; they do not include credentials, hidden lore, disabled entries, database metadata bags, exception stacks, or unrestricted user identifiers. Text rendering uses the feature's minimal macro allowlist described in [LLM Tools](llm-tools.md#scope-and-snapshot-boundaries), never the full macro environment.

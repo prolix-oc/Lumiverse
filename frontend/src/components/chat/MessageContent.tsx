@@ -1915,17 +1915,18 @@ export default function MessageContent({
       scheduleLayoutNotify()
     }
 
-    // MutationObserver and ResizeObserver are only needed while the message
-    // content is actively changing (streaming). For finalized messages they
-    // fire on incidental DOM mutations (hover states, lazy image decode
-    // attribute flips, etc.) and cascade into measureElement calls that are
-    // pure overhead during scroll.
+    // Streaming content needs both observers because tokens and injected
+    // widgets can mutate the subtree. Finalized eligible messages still need
+    // a ResizeObserver so width, font, and image reflows can reveal overflow
+    // after the initial measurement.
     let mutationObserver: MutationObserver | null = null
     let observer: ResizeObserver | null = null
-    if (isStreaming) {
+    if (isStreaming || longMessageEligible) {
       observer = new ResizeObserver(scheduleLayoutNotify)
       observer.observe(contentBodyRef.current ?? container)
+    }
 
+    if (isStreaming) {
       mutationObserver = new MutationObserver(scheduleLayoutNotify)
       mutationObserver.observe(container, { childList: true, subtree: true, attributes: true, characterData: true })
     }
@@ -2172,7 +2173,7 @@ export default function MessageContent({
         >
           <div ref={contentBodyRef} className={styles.longMessageBody}>
             {renderedBlocks}
-      <SpindleMessageWidgets messageId={messageId} chatId={chatId} />
+            <SpindleMessageWidgets messageId={messageId} chatId={chatId} />
           </div>
         </div>
         {longMessageEligible && longMessageOverflowing && (

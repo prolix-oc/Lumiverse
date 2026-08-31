@@ -34,6 +34,8 @@ import { createDatabankSlice } from './slices/databank'
 import { createConnectionSlice } from './slices/connection'
 import { createWeaverSlice } from './slices/weaver'
 import { createContainersSlice } from './slices/containers'
+import { createAgentRunsSlice } from './slices/agent-runs'
+import { createUserDataSlice } from './slices/user-data'
 import { registerUserScopedResetStore } from './user-scoped-reset'
 import { configurePresetSelectionCoordinator } from '@/lib/loom/preset-selection-coordinator'
 import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
@@ -74,6 +76,8 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createConnectionSlice(...a),
   ...createWeaverSlice(...a),
   ...createContainersSlice(...a),
+  ...createUserDataSlice(...a),
+  ...createAgentRunsSlice(...a),
 }))
 
 configurePresetSelectionCoordinator({

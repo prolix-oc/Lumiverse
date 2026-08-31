@@ -111,9 +111,12 @@ let originalDataDir = "";
 let activeJobId: string | null = null;
 
 beforeEach(async () => {
+  // Capture first: bun runs afterEach even when beforeEach throws, so a
+  // fallible statement before this line would restore undefined into the
+  // shared env object and poison later test files in the same process.
+  originalDataDir = env.dataDir;
   closeDatabase();
   workDir = mkdtempSync(join(tmpdir(), "lvbak-large-benchmark-"));
-  originalDataDir = env.dataDir;
   env.dataDir = workDir;
   initDatabase(":memory:");
   const baseline = await Bun.file(join(import.meta.dir, "..", "src", "db", "baseline.sql")).text();
@@ -128,7 +131,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (activeJobId) {
-    cancelJob(activeJobId);
+    await cancelJob(activeJobId);
     try {
       await waitForTerminal(activeJobId, 60_000);
     } catch {
@@ -169,7 +172,7 @@ test.skipIf(!process.env.IMPORT_BENCHMARK_GB)(
     const sampler = setInterval(() => samplePeak(peak, process.memoryUsage()), 100);
     const importStarted = performance.now();
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = await startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
       activeJobId = job.jobId;
       const finished = await waitForTerminal(job.jobId, 60 * 60 * 1000);
       activeJobId = null;

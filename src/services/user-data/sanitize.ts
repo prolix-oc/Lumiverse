@@ -3,19 +3,21 @@
 // write outside the prescribed buckets or escape via "../" traversal.
 
 const PREFIX_RE =
-  /^(?:database\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
+  /^(?:database\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|audio|notification-sounds|artifacts)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
 
-const IMAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[a-zA-Z0-9]{1,8})?$/;
-
-const THUMB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_thumb_(?:sm|lg)_v2\.(?:webp|avif)$/;
+const UUID_PREFIX = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const IMAGE_ID_RE = new RegExp(`^${UUID_PREFIX}(?:\\.[a-zA-Z0-9]{1,8}|_(?:h264|hevc)\\.mp4)?$`);
+const THUMB_RE = new RegExp(`^${UUID_PREFIX}_thumb_(?:sm|lg)(?:\\.webp|_v2\\.(?:webp|avif))$`);
 
 const AVATAR_RE = /^[A-Za-z0-9._-]+$/;
 
 const THEME_ASSET_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._\/-]+$/;
 
 const DATABANK_FILE_RE = /^[A-Za-z0-9._-]+$/;
+const ARTIFACT_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/;
 
 const SOUND_FILE_RE = /^completion\.(mp3|wav|ogg|aac|m4a)$/;
+const AUDIO_FILE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:mp3|ogg|wav|webm|aac|flac|m4a|bin)$/;
 
 const NDJSON_RE = /^[a-z_]+\.ndjson$/;
 
@@ -23,7 +25,7 @@ export interface SanitizedEntry {
   /** "database" | "files" | "lancedb" | "manifest" | "secrets" */
   kind: "database" | "files" | "lancedb" | "manifest" | "secrets";
   /** For files/: the bucket name. */
-  bucket?: "images" | "thumbnails" | "avatars" | "databank" | "theme-assets" | "notification-sounds";
+  bucket?: "images" | "thumbnails" | "avatars" | "databank" | "theme-assets" | "audio" | "notification-sounds" | "artifacts";
   /** For database/ and lancedb/: the table name (without .ndjson). */
   table?: string;
   /** Path inside the bucket (basename for images/thumbs, subpath for theme-assets/databank). */
@@ -148,9 +150,19 @@ export function sanitizeEntry(rawPath: string): SanitizedEntry {
         throw new SanitizeError("files/theme-assets entry must be bundleId/slug", rawPath);
       }
       break;
+    case "audio":
+      if (!AUDIO_FILE_RE.test(inner)) {
+        throw new SanitizeError("files/audio entry name must be a UUID with an audio extension", rawPath);
+      }
+      break;
     case "notification-sounds":
       if (!SOUND_FILE_RE.test(inner)) {
         throw new SanitizeError("files/notification-sounds entry must be completion.{ext}", rawPath);
+      }
+      break;
+    case "artifacts":
+      if (!ARTIFACT_RE.test(inner)) {
+        throw new SanitizeError("files/artifacts entry must be a chat and storage path", rawPath);
       }
       break;
     default:

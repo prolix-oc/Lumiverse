@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { DatabaseGenerationCancelledError } from "../db/connection";
 import { bunCmd } from "../utils/bun-cmd";
 import {
   CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS,
@@ -11,37 +12,72 @@ import type {
 } from "./chat-chunk-vectorization-runner";
 
 type HostToSubprocessMessage =
-  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
+  | { type: "process_batch"; requestId: string; generation: number; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
+  | { type: "cancel_generation"; generation: number }
   | { type: "shutdown" };
 
 type SubprocessToHostMessage =
   | { type: "ready" }
-  | { type: "result"; requestId: string; result: ChatChunkVectorizationBatchResult }
-  | { type: "error"; requestId?: string; error: string; name?: string; stack?: string };
+  | { type: "result"; requestId: string; generation: number; result: ChatChunkVectorizationBatchResult }
+  | { type: "error"; requestId?: string; generation?: number; error: string; name?: string; stack?: string };
 
 type PendingBatch = {
   requestId: string;
+  generation: number;
+  signal: AbortSignal;
+  abortListener: (() => void) | null;
   tasks: ChatChunkVectorizationTask[];
   resolve: (result: ChatChunkVectorizationBatchResult) => void;
   reject: (err: unknown) => void;
   timeout: ReturnType<typeof setTimeout> | null;
 };
 
+type VectorizationSubprocess = ReturnType<typeof Bun.spawn>;
+type VectorizationSubprocessOptions = {
+  cmd: string[];
+  env: NodeJS.ProcessEnv;
+  stdin: "ignore";
+  stdout: "inherit";
+  stderr: "inherit";
+  serialization: "advanced";
+  ipc: (message: unknown) => void;
+  onExit: (
+    subprocess: VectorizationSubprocess,
+    exitCode: number | null,
+    signalCode: number | null,
+    error?: Error,
+  ) => void;
+};
+type VectorizationSubprocessFactory = (options: VectorizationSubprocessOptions) => VectorizationSubprocess;
+
+const defaultVectorizationSubprocessFactory: VectorizationSubprocessFactory = (options) => Bun.spawn(options);
+const DEFAULT_SHUTDOWN_COOPERATIVE_GRACE_MS = 1_000;
+let shutdownCooperativeGraceMs = DEFAULT_SHUTDOWN_COOPERATIVE_GRACE_MS;
+let vectorizationSubprocessFactory = defaultVectorizationSubprocessFactory;
 const READY_TIMEOUT_MS = 30_000;
+let forceKillGraceMs = CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS;
 export const CHAT_CHUNK_VECTORIZATION_SUBPROCESS_STARTUP_ERROR_NAME = "ChatChunkVectorizationSubprocessStartupError";
 let warnedDisabled = false;
 let subprocessUnavailableReason: string | null = null;
 
-let subprocess: ReturnType<typeof Bun.spawn> | null = null;
+let subprocess: VectorizationSubprocess | null = null;
 let ready = false;
 let starting: Promise<void> | null = null;
 let resolveStarting: (() => void) | null = null;
 let rejectStarting: ((reason?: unknown) => void) | null = null;
 let inflight: PendingBatch | null = null;
 const queue: PendingBatch[] = [];
+let workerGeneration: number | null = null;
 let expectedExit = false;
 let shutdownRequested = false;
-
+type SubprocessRetirement = {
+  proc: VectorizationSubprocess;
+  promise: Promise<void>;
+  resolve: () => void;
+  termTimer: ReturnType<typeof setTimeout> | null;
+  forceTimer: ReturnType<typeof setTimeout>;
+};
+let retirement: SubprocessRetirement | null = null;
 function createStartupError(message: string, stack?: string): Error {
   const err = new Error(message);
   err.name = CHAT_CHUNK_VECTORIZATION_SUBPROCESS_STARTUP_ERROR_NAME;
@@ -81,43 +117,56 @@ function clearStarting(error?: unknown): void {
   resolve?.();
 }
 
-function clearInflightTimeout(item: PendingBatch | null): void {
-  if (item?.timeout) {
+function clearPendingHooks(item: PendingBatch | null): void {
+  if (!item) return;
+  if (item.timeout) {
     clearTimeout(item.timeout);
     item.timeout = null;
+  }
+  if (item.abortListener) {
+    item.signal.removeEventListener("abort", item.abortListener);
+    item.abortListener = null;
   }
 }
 
 function terminateSubprocess(
-  proc: ReturnType<typeof Bun.spawn> | null,
-  {
-    forceAfterMs,
-    signal = "SIGTERM",
-  }: {
-    forceAfterMs?: number;
-    signal?: "SIGTERM" | "SIGKILL";
-  } = {},
+  proc: VectorizationSubprocess | null,
+  signal: "SIGTERM" | "SIGKILL" = "SIGTERM",
 ): void {
   if (!proc) return;
   try {
     proc.kill(signal);
   } catch {
-    return;
+    /* exit observation remains authoritative */
   }
-  if (!forceAfterMs || signal === "SIGKILL") return;
-  setTimeout(() => {
-    if (subprocess !== proc) return;
-    try {
-      proc.kill("SIGKILL");
-    } catch {
-      /* noop */
-    }
-  }, forceAfterMs);
 }
 
-function rejectQueued(error: Error): void {
-  while (queue.length > 0) {
-    queue.shift()!.reject(error);
+function retireSubprocess(proc: VectorizationSubprocess, cooperativeGraceMs = 0): Promise<void> {
+  if (retirement?.proc === proc) return retirement.promise;
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const terminate = () => terminateSubprocess(proc, "SIGTERM");
+  const termTimer = cooperativeGraceMs > 0 ? setTimeout(terminate, cooperativeGraceMs) : null;
+  termTimer?.unref?.();
+  if (!termTimer) terminate();
+  const forceTimer = setTimeout(
+    () => terminateSubprocess(proc, "SIGKILL"),
+    cooperativeGraceMs + forceKillGraceMs,
+  );
+  forceTimer.unref?.();
+  retirement = { proc, promise, resolve, termTimer, forceTimer };
+  expectedExit = true;
+  ready = false;
+  workerGeneration = null;
+  return promise;
+}
+
+function rejectQueued(error: Error, generation?: number): void {
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const item = queue[index]!;
+    if (generation !== undefined && item.generation !== generation) continue;
+    queue.splice(index, 1);
+    clearPendingHooks(item);
+    item.reject(error);
   }
 }
 
@@ -125,31 +174,47 @@ function failInflight(error: Error): void {
   const item = inflight;
   if (!item) return;
   inflight = null;
-  clearInflightTimeout(item);
+  clearPendingHooks(item);
   item.reject(error);
 }
 
-function handleExit(exitCode: number | null, signalCode: number | null, error?: Error): void {
+function handleExit(
+  exited: VectorizationSubprocess,
+  exitCode: number | null,
+  signalCode: number | null,
+  error?: Error,
+): void {
+  if (subprocess !== exited && retirement?.proc !== exited) return;
   const wasExpected = expectedExit;
   const wasShutdown = shutdownRequested;
-  const wasReady = ready;
-  const launchError = buildLaunchError(exitCode, signalCode, error, !wasReady);
-  subprocess = null;
+  const completedRetirement = retirement?.proc === exited ? retirement : null;
+  const launchError = buildLaunchError(
+    exitCode,
+    signalCode,
+    error,
+    completedRetirement === null && !ready,
+  );
+  if (completedRetirement) {
+    if (completedRetirement.termTimer) clearTimeout(completedRetirement.termTimer);
+    clearTimeout(completedRetirement.forceTimer);
+    retirement = null;
+  }
+  if (subprocess === exited) subprocess = null;
   ready = false;
+  workerGeneration = null;
   expectedExit = false;
-  shutdownRequested = false;
+  shutdownRequested = wasShutdown;
   clearStarting(launchError);
   failInflight(launchError);
   if (!wasExpected) {
     console.warn("[vectorization] Chat chunk subprocess exited unexpectedly:", launchError.message);
   }
-  if (!wasShutdown && queue.length > 0) {
-    pumpQueue();
-  }
+  completedRetirement?.resolve();
+  if (!wasShutdown && queue.length > 0) pumpQueue();
 }
 
-function handleMessage(message: SubprocessToHostMessage): void {
-  if (!message) return;
+function handleMessage(source: VectorizationSubprocess, message: SubprocessToHostMessage): void {
+  if (subprocess !== source || !message) return;
 
   if (message.type === "ready") {
     ready = true;
@@ -164,13 +229,18 @@ function handleMessage(message: SubprocessToHostMessage): void {
     return;
   }
 
-  if (!inflight || !("requestId" in message) || message.requestId !== inflight.requestId) {
+  if (
+    !inflight
+    || !("requestId" in message)
+    || message.requestId !== inflight.requestId
+    || ("generation" in message && message.generation !== inflight.generation)
+  ) {
     return;
   }
 
   const item = inflight;
   inflight = null;
-  clearInflightTimeout(item);
+  clearPendingHooks(item);
 
   if (message.type === "result") {
     item.resolve(message.result);
@@ -185,6 +255,10 @@ function handleMessage(message: SubprocessToHostMessage): void {
 }
 
 function ensureSubprocess(): Promise<void> {
+  if (shutdownRequested) {
+    return Promise.reject(new Error("Chat chunk vectorization subprocess is shutting down"));
+  }
+  if (retirement) return retirement.promise.then(() => ensureSubprocess());
   if (subprocess && ready) return Promise.resolve();
   if (subprocessUnavailableReason) {
     return Promise.reject(createStartupError(subprocessUnavailableReason));
@@ -202,13 +276,13 @@ function ensureSubprocess(): Promise<void> {
       `Chat chunk vectorization subprocess did not become ready within ${READY_TIMEOUT_MS}ms`,
     );
     if (subprocess) {
-      expectedExit = true;
-      terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
+      void retireSubprocess(subprocess);
     }
     clearStarting(err);
   }, READY_TIMEOUT_MS);
 
-  subprocess = Bun.spawn({
+  let launched!: VectorizationSubprocess;
+  launched = vectorizationSubprocessFactory({
     cmd: bunCmd(runtimePath),
     env: process.env,
     stdin: "ignore",
@@ -216,18 +290,20 @@ function ensureSubprocess(): Promise<void> {
     stderr: "inherit",
     serialization: "advanced",
     ipc(message) {
+      if (subprocess !== launched) return;
       if (ready) {
-        handleMessage(message as SubprocessToHostMessage);
+        handleMessage(launched, message as SubprocessToHostMessage);
         return;
       }
       clearTimeout(launchTimeout);
-      handleMessage(message as SubprocessToHostMessage);
+      handleMessage(launched, message as SubprocessToHostMessage);
     },
-    onExit(_subprocess, exitCode, signalCode, error) {
+    onExit(exited, exitCode, signalCode, error) {
       clearTimeout(launchTimeout);
-      handleExit(exitCode, signalCode, error);
+      handleExit(exited, exitCode, signalCode, error);
     },
   });
+  subprocess = launched;
 
   return starting.finally(() => {
     clearTimeout(launchTimeout);
@@ -236,47 +312,60 @@ function ensureSubprocess(): Promise<void> {
 
 function dispatch(item: PendingBatch): void {
   if (!subprocess) {
+    clearPendingHooks(item);
     item.reject(new Error("Chat chunk vectorization subprocess is not running"));
     return;
   }
+  if (workerGeneration !== null && workerGeneration !== item.generation) {
+    queue.unshift(item);
+    cancelChatChunkVectorizationGeneration(workerGeneration, item.generation);
+    return;
+  }
 
+  workerGeneration = item.generation;
   inflight = item;
   item.timeout = setTimeout(() => {
     const err = new Error(
       `Chat chunk vectorization subprocess became unresponsive ${Math.floor(CHAT_CHUNK_VECTORIZATION_WATCHDOG_GRACE_MS / 1000)}s after the cooperative batch timeout`,
     );
     console.warn("[vectorization] Chat chunk subprocess did not honor cooperative batch timeout; terminating subprocess");
-    expectedExit = true;
-    terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
+    void (subprocess ? retireSubprocess(subprocess) : Promise.resolve());
     failInflight(err);
   }, CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS + CHAT_CHUNK_VECTORIZATION_WATCHDOG_GRACE_MS);
   try {
     subprocess.send({
       type: "process_batch",
       requestId: item.requestId,
+      generation: item.generation,
       tasks: item.tasks,
       timeoutMs: CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS,
     } satisfies HostToSubprocessMessage);
   } catch (err) {
     inflight = null;
-    clearInflightTimeout(item);
+    clearPendingHooks(item);
     item.reject(err);
-    expectedExit = true;
-    terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
+    void (subprocess ? retireSubprocess(subprocess) : Promise.resolve());
   }
 }
 
 function pumpQueue(): void {
   if (inflight || queue.length === 0) return;
+  const target = queue[0]!;
   void ensureSubprocess().then(
     () => {
-      if (inflight || queue.length === 0 || !ready) return;
-      const item = queue.shift()!;
-      dispatch(item);
+      if (inflight || !ready) return;
+      const targetIndex = queue.indexOf(target);
+      if (targetIndex < 0) return;
+      queue.splice(targetIndex, 1);
+      dispatch(target);
     },
     (err) => {
-      const item = queue.shift();
-      if (item) item.reject(err);
+      const targetIndex = queue.indexOf(target);
+      if (targetIndex < 0) return;
+      queue.splice(targetIndex, 1);
+      clearPendingHooks(target);
+      target.reject(err);
+      if (queue.length > 0) pumpQueue();
     },
   );
 }
@@ -318,37 +407,126 @@ export function warnChatChunkVectorizationFallback(): void {
 
 export function processChatChunkVectorizationBatchInSubprocess(
   tasks: ChatChunkVectorizationTask[],
+  generation: number,
+  signal: AbortSignal,
 ): Promise<ChatChunkVectorizationBatchResult> {
+  if (shutdownRequested) {
+    return Promise.reject(new Error("Chat chunk vectorization subprocess is shutting down"));
+  }
+  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
-    queue.push({
+    const item: PendingBatch = {
       requestId: crypto.randomUUID(),
+      generation,
+      signal,
+      abortListener: null,
       tasks,
       resolve,
       reject,
       timeout: null,
-    });
+    };
+    item.abortListener = () => {
+      const reason = signal.reason;
+      const currentGeneration = reason instanceof DatabaseGenerationCancelledError
+        ? reason.currentGeneration
+        : generation + 1;
+      cancelChatChunkVectorizationGeneration(generation, currentGeneration);
+    };
+    signal.addEventListener("abort", item.abortListener, { once: true });
+    queue.push(item);
     pumpQueue();
   });
 }
+export function cancelChatChunkVectorizationGeneration(
+  previousGeneration: number,
+  currentGeneration: number,
+): void {
+  const cancellation = new DatabaseGenerationCancelledError(previousGeneration, currentGeneration);
+  rejectQueued(cancellation, previousGeneration);
 
-export function shutdownChatChunkVectorizationSubprocess(): void {
+  if (inflight?.generation === previousGeneration) {
+    try {
+      subprocess?.send({ type: "cancel_generation", generation: previousGeneration } satisfies HostToSubprocessMessage);
+    } catch {
+      /* termination below is authoritative */
+    }
+    failInflight(cancellation);
+  }
+
+  const staleProcess = subprocess;
+  if (staleProcess) {
+    ready = false;
+    workerGeneration = null;
+    clearStarting(cancellation);
+    void retireSubprocess(staleProcess).then(() => {
+      if (queue.length > 0) pumpQueue();
+    });
+  } else if (queue.length > 0) {
+    pumpQueue();
+  }
+}
+
+export function shutdownChatChunkVectorizationSubprocess(): Promise<void> {
+  if (shutdownRequested) return retirement?.promise ?? Promise.resolve();
   const shutdownError = new Error("Chat chunk vectorization subprocess is shutting down");
   shutdownRequested = true;
   expectedExit = true;
   rejectQueued(shutdownError);
   failInflight(shutdownError);
-  if (!subprocess) {
-    shutdownRequested = false;
-    expectedExit = false;
-    return;
-  }
+  clearStarting(shutdownError);
+  const retiring = subprocess;
+  if (!retiring) return Promise.resolve();
+  const observedExit = retireSubprocess(retiring, shutdownCooperativeGraceMs);
   try {
-    subprocess.send({ type: "shutdown" } satisfies HostToSubprocessMessage);
+    retiring.send({ type: "shutdown" } satisfies HostToSubprocessMessage);
   } catch {
-    try {
-      subprocess.kill("SIGTERM");
-    } catch {
-      /* noop */
-    }
+    // Observed exit remains authoritative.
   }
+  return observedExit;
 }
+export const __test__ = {
+  setSubprocessFactory(factory: VectorizationSubprocessFactory): void {
+    vectorizationSubprocessFactory = factory;
+  },
+  setForceKillGraceMs(ms: number): void {
+    forceKillGraceMs = ms;
+  },
+  setShutdownCooperativeGraceMs(ms: number): void {
+    shutdownCooperativeGraceMs = ms;
+  },
+  reset(): void {
+    const resetError = new Error("Chat chunk vectorization client test reset");
+    rejectQueued(resetError);
+    failInflight(resetError);
+    clearStarting(resetError);
+    const procs = new Set<VectorizationSubprocess>();
+    if (subprocess) procs.add(subprocess);
+    if (retirement) {
+      if (retirement.termTimer) clearTimeout(retirement.termTimer);
+      clearTimeout(retirement.forceTimer);
+      procs.add(retirement.proc);
+      retirement.resolve();
+      retirement = null;
+    }
+    subprocess = null;
+    ready = false;
+    workerGeneration = null;
+    expectedExit = false;
+    shutdownRequested = false;
+    subprocessUnavailableReason = null;
+    warnedDisabled = false;
+    forceKillGraceMs = CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS;
+    shutdownCooperativeGraceMs = DEFAULT_SHUTDOWN_COOPERATIVE_GRACE_MS;
+    vectorizationSubprocessFactory = defaultVectorizationSubprocessFactory;
+    for (const proc of procs) terminateSubprocess(proc, "SIGKILL");
+  },
+  getState(): { queueLength: number; inflight: boolean; subprocess: boolean; retirement: boolean; shutdownRequested: boolean } {
+    return {
+      queueLength: queue.length,
+      inflight: inflight !== null,
+      subprocess: subprocess !== null,
+      retirement: retirement !== null,
+      shutdownRequested,
+    };
+  },
+};

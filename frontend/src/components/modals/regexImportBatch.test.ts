@@ -14,7 +14,7 @@ describe('importRegexFiles', () => {
       payloads.push(payload)
       return payloads.length === 1
         ? { imported: 1, skipped: 0, errors: [] }
-        : { imported: 2, skipped: 1, errors: ['Script 2: invalid script'] }
+        : { imported: 2, skipped: 1, errors: ['Script 2: invalid script'], presetAuthorityChanged: true }
     }, { invalidJson: 'Invalid JSON file', importFailed: 'Import failed' })
 
     expect(payloads).toEqual([
@@ -25,6 +25,7 @@ describe('importRegexFiles', () => {
       imported: 3,
       skipped: 1,
       errors: ['second.json: Script 2: invalid script'],
+      presetAuthorityChanged: true,
     })
   })
 

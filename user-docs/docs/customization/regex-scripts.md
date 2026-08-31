@@ -238,6 +238,9 @@ This lets you verify your regex works correctly before it affects real conversat
 
 Scripts can be imported and exported as JSON. Lumiverse also supports importing SillyTavern-format regex scripts for easy migration.
 
+!!! note "Preset-bound scripts and Agent Runtime"
+    Changing a preset-bound script can change the prompt seen by Agent Runtime. Lumiverse therefore refreshes the owning preset authority after create, edit, delete, enable/disable, reorder, bulk, or import operations. If the preset uses exact Loom block references, it may require review before the next Agentic send. Unbound changes and saves that do not change script meaning do not invalidate the runtime.
+
 ---
 
 ## Tips

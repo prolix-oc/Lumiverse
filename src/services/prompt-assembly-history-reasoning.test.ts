@@ -4,7 +4,7 @@ import { type LlmMessage } from "../llm/types";
 import { __reasoningHistoryTest } from "./prompt-assembly.service";
 
 describe("native reasoning prompt history", () => {
-  test("hydrates persisted provider reasoning onto assistant messages", () => {
+  test("hydrates persisted provider reasoning onto private Response history", () => {
     const message = {
       is_user: false,
       extra: {

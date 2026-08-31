@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import * as settingsSvc from "./settings.service";
 import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
@@ -140,28 +141,6 @@ function getValidBinding(
   return binding;
 }
 
-function resolveSpecificBinding(
-  userId: string,
-  source: "chat" | "persona" | "character" | "connection",
-  sourceId: string,
-  binding: PresetProfileBinding
-): ResolvedPresetProfile {
-  if (binding.linked_to_defaults) {
-    return {
-      preset_id: binding.preset_id,
-      binding: getDefaultsForBinding(userId, binding),
-      source,
-      source_id: sourceId,
-    };
-  }
-
-  return {
-    preset_id: binding.preset_id,
-    binding,
-    source,
-    source_id: sourceId,
-  };
-}
 
 export function captureDefaults(
   userId: string,
@@ -368,7 +347,7 @@ export function setConnectionBinding(
   blockStates: Record<string, boolean>,
   promptVariables?: PromptVariableValues,
 ): PresetProfileBinding {
-  const connection = connectionsSvc.getConnection(userId, connectionId);
+  const connection = connectionsSvc.getUsableConnection(userId, connectionId);
   if (!connection) throw new Error("Connection not found");
   assertPresetExists(userId, presetId);
 
@@ -386,63 +365,189 @@ export function deleteConnectionBinding(
   settingsSvc.deleteSetting(userId, variablesKey("connection", connectionId));
   return deleted;
 }
-
 // ---------------------------------------------------------------------------
 // Resolution — determines which binding to apply for a given context
 // ---------------------------------------------------------------------------
+
+export type PresetProfileResolveOptions = {
+  isGroup?: boolean;
+  connectionId?: string | null;
+  personaId?: string | null;
+};
+
+type PresetProfileBindingLoader = {
+  chat(chatId: string): PresetProfileBinding | null;
+  persona(personaId: string): PresetProfileBinding | null;
+  character(characterId: string): PresetProfileBinding | null;
+  connection(connectionId: string): PresetProfileBinding | null;
+  defaults(presetId: string): PresetProfileBinding | null;
+};
+
+function resolveSpecificBindingWithDefaults(
+  source: "chat" | "persona" | "character" | "connection",
+  sourceId: string,
+  binding: PresetProfileBinding,
+  defaults: (presetId: string) => PresetProfileBinding | null,
+): ResolvedPresetProfile {
+  if (binding.linked_to_defaults) {
+    return {
+      preset_id: binding.preset_id,
+      binding: defaults(binding.preset_id),
+      source,
+      source_id: sourceId,
+    };
+  }
+  return {
+    preset_id: binding.preset_id,
+    binding,
+    source,
+    source_id: sourceId,
+  };
+}
+
+function resolveProfileWithLoader(
+  fallbackPresetId: string | null,
+  chatId: string,
+  characterId: string | null,
+  options: PresetProfileResolveOptions,
+  load: PresetProfileBindingLoader,
+): ResolvedPresetProfile {
+  const chatBinding = load.chat(chatId);
+  if (chatBinding) {
+    return resolveSpecificBindingWithDefaults("chat", chatId, chatBinding, load.defaults);
+  }
+  if (options.personaId) {
+    const personaBinding = load.persona(options.personaId);
+    if (personaBinding) {
+      return resolveSpecificBindingWithDefaults("persona", options.personaId, personaBinding, load.defaults);
+    }
+  }
+  if (!options.isGroup && characterId) {
+    const charBinding = load.character(characterId);
+    if (charBinding) {
+      return resolveSpecificBindingWithDefaults("character", characterId, charBinding, load.defaults);
+    }
+  }
+  if (options.connectionId) {
+    const connectionBinding = load.connection(options.connectionId);
+    if (connectionBinding) {
+      return resolveSpecificBindingWithDefaults("connection", options.connectionId, connectionBinding, load.defaults);
+    }
+  }
+  if (fallbackPresetId) {
+    const defaults = load.defaults(fallbackPresetId);
+    if (defaults) {
+      return { preset_id: defaults.preset_id, binding: defaults, source: "defaults", source_id: fallbackPresetId };
+    }
+  }
+  return { preset_id: fallbackPresetId, binding: null, source: "none", source_id: null };
+}
+
+
+function readSettingJson(db: Database, userId: string, key: string): unknown {
+  const row = db.query("SELECT value FROM settings WHERE key = ? AND user_id = ? LIMIT 1").get(key, userId) as { value?: unknown } | null;
+  if (!row || typeof row.value !== "string") return undefined;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return undefined;
+  }
+}
+
+function presetExistsWithDb(db: Database, userId: string, presetId: string): boolean {
+  return db.query("SELECT 1 AS ok FROM presets WHERE id = ? AND user_id = ? LIMIT 1").get(presetId, userId) !== null;
+}
+
+function asProfileBinding(value: unknown): PresetProfileBinding | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.preset_id !== "string" || record.preset_id.length === 0) return null;
+  if (!record.block_states || typeof record.block_states !== "object" || Array.isArray(record.block_states)) return null;
+  const block_states: Record<string, boolean> = {};
+  for (const [id, enabled] of Object.entries(record.block_states as Record<string, unknown>)) {
+    if (typeof enabled === "boolean") block_states[id] = enabled;
+  }
+  const binding: PresetProfileBinding = {
+    preset_id: record.preset_id,
+    block_states,
+    captured_at: typeof record.captured_at === "number" && Number.isFinite(record.captured_at) ? record.captured_at : 0,
+  };
+  if (record.linked_to_defaults === true) binding.linked_to_defaults = true;
+  if (record.prompt_variables && typeof record.prompt_variables === "object" && !Array.isArray(record.prompt_variables)) {
+    binding.prompt_variables = record.prompt_variables as PromptVariableValues;
+  }
+  return binding;
+}
+
+function asPromptVariables(value: unknown): PromptVariableValues | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as PromptVariableValues;
+  return undefined;
+}
+
+function readBindingWithDb(db: Database, userId: string, key: string): PresetProfileBinding | null {
+  const binding = asProfileBinding(readSettingJson(db, userId, key));
+  if (!binding || !presetExistsWithDb(db, userId, binding.preset_id)) return null;
+  return binding;
+}
+
+function overlayPromptVariables(binding: PresetProfileBinding, stored: PromptVariableValues | undefined): PresetProfileBinding {
+  return stored ? { ...binding, prompt_variables: stored } : binding;
+}
+
+function readScopedBindingWithDb(
+  db: Database,
+  userId: string,
+  bindingKey: string,
+  promptVariablesKey: string,
+): PresetProfileBinding | null {
+  const binding = readBindingWithDb(db, userId, bindingKey);
+  if (!binding) return null;
+  return overlayPromptVariables(binding, asPromptVariables(readSettingJson(db, userId, promptVariablesKey)) ?? binding.prompt_variables);
+}
+
+function readDefaultsWithDb(db: Database, userId: string, presetId: string): PresetProfileBinding | null {
+  const current = readBindingWithDb(db, userId, defaultsKey(presetId));
+  if (current) {
+    if (current.preset_id !== presetId) return null;
+    return overlayPromptVariables(current, asPromptVariables(readSettingJson(db, userId, defaultsVariablesKey(presetId))) ?? current.prompt_variables);
+  }
+  const legacy = readBindingWithDb(db, userId, LEGACY_DEFAULTS_KEY);
+  if (legacy?.preset_id !== presetId) return null;
+  return overlayPromptVariables(legacy, asPromptVariables(readSettingJson(db, userId, defaultsVariablesKey(presetId))) ?? legacy.prompt_variables);
+}
 
 export function resolveProfile(
   userId: string,
   fallbackPresetId: string | null,
   chatId: string,
   characterId: string | null,
-  options: { isGroup?: boolean; connectionId?: string | null; personaId?: string | null } = {}
+  options: PresetProfileResolveOptions = {},
 ): ResolvedPresetProfile {
-  // 1. Chat-level binding (most specific)
-  const chatBinding = getChatBinding(userId, chatId);
-  if (chatBinding) {
-    return resolveSpecificBinding(userId, "chat", chatId, chatBinding);
-  }
+  return resolveProfileWithLoader(fallbackPresetId, chatId, characterId, options, {
+    chat: (id) => getChatBinding(userId, id),
+    persona: (id) => getPersonaBinding(userId, id),
+    character: (id) => getCharacterBinding(userId, id),
+    connection: (id) => getConnectionBinding(userId, id),
+    defaults: (id) => getDefaults(userId, id),
+  });
+}
 
-  // 2. Persona-level binding. It deliberately outranks a character profile:
-  // switching personas is expected to restore that persona's preset state in
-  // one action. Chat bindings remain the explicit per-conversation override.
-  if (options.personaId) {
-    const personaBinding = getPersonaBinding(userId, options.personaId);
-    if (personaBinding) {
-      return resolveSpecificBinding(userId, "persona", options.personaId, personaBinding);
-    }
-  }
-
-  // 3. Character-level binding — skipped in group chats. Per-member bindings
-  //    would be ambiguous (which member wins?), so group chats are chat-only.
-  if (!options.isGroup && characterId) {
-    const charBinding = getCharacterBinding(userId, characterId);
-    if (charBinding) {
-      return resolveSpecificBinding(userId, "character", characterId, charBinding);
-    }
-  }
-
-  // 4. Connection-level binding — applies across chats for the active model
-  //    environment when there isn't a more specific chat/character binding.
-  if (options.connectionId) {
-    const connectionBinding = getConnectionBinding(userId, options.connectionId);
-    if (connectionBinding) {
-      return resolveSpecificBinding(userId, "connection", options.connectionId, connectionBinding);
-    }
-  }
-
-  // 5. Default snapshot — defaults are stored per preset, so they only apply
-  //    when there isn't a more specific chat/character/connection binding.
-  if (fallbackPresetId) {
-    const defaults = getDefaults(userId, fallbackPresetId);
-    if (defaults) {
-      return { preset_id: defaults.preset_id, binding: defaults, source: "defaults", source_id: fallbackPresetId };
-    }
-  }
-
-  // 6. No matching binding — use raw preset block states
-  return { preset_id: fallbackPresetId, binding: null, source: "none", source_id: null };
+/** Read-only resolution against an exact Database handle. Does not use getDb() or mutate settings. */
+export function resolveProfileWithDb(
+  db: Database,
+  userId: string,
+  fallbackPresetId: string | null,
+  chatId: string,
+  characterId: string | null,
+  options: PresetProfileResolveOptions = {},
+): ResolvedPresetProfile {
+  return resolveProfileWithLoader(fallbackPresetId, chatId, characterId, options, {
+    chat: (id) => readScopedBindingWithDb(db, userId, chatKey(id), variablesKey("chat", id)),
+    persona: (id) => readScopedBindingWithDb(db, userId, personaKey(id), variablesKey("persona", id)),
+    character: (id) => readScopedBindingWithDb(db, userId, characterKey(id), variablesKey("character", id)),
+    connection: (id) => readScopedBindingWithDb(db, userId, connectionKey(id), variablesKey("connection", id)),
+    defaults: (id) => readDefaultsWithDb(db, userId, id),
+  });
 }
 
 // ---------------------------------------------------------------------------

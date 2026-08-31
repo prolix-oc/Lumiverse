@@ -267,7 +267,7 @@ export default function ProductivitySettings() {
   const halfEditorMode = lorebook.halfEditorMode ?? PRODUCTIVITY_DEFAULTS.lorebookEditorSettings.halfEditorMode
   const fullEditorLaunchMode = lorebook.fullEditorLaunchMode ?? PRODUCTIVITY_DEFAULTS.lorebookEditorSettings.fullEditorLaunchMode
   const tokenCountMode = lorebook.tokenCountMode ?? PRODUCTIVITY_DEFAULTS.lorebookEditorSettings.tokenCountMode
-  const tokenizerAvailability = useTokenizerAvailability()
+  const tokenizerAvailability = useTokenizerAvailability(useStore)
   const characters = useStore((state) => state.characters) ?? []
   const profiles = useStore((state) => state.profiles)
   const updateProfile = useStore((state) => state.updateProfile)

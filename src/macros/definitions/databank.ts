@@ -57,6 +57,7 @@ export function registerDatabankMacros(): void {
     description: "Retrieved databank document chunks relevant to the current context.",
     args: [{ name: "count", type: "integer", optional: true, description: "Override number of chunks to include" }],
     aliases: ["databankMemory", "documents", "knowledgeBank"],
+    handlesDatabankRetrieval: true,
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const db = getDatabank(ctx);
@@ -102,6 +103,7 @@ export function registerDatabankMacros(): void {
     description: "Raw databank chunks joined by separator, without header wrapper.",
     args: [{ name: "count", type: "integer", optional: true, description: "Override number of chunks to include" }],
     builtIn: true,
+    handlesDatabankRetrieval: true,
     handler(ctx: MacroExecContext): string {
       const db = getDatabank(ctx);
       if (!db.enabled || db.count === 0) return "";

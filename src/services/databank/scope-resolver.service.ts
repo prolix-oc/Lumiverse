@@ -9,6 +9,7 @@
  */
 
 import { getDb } from "../../db/connection";
+import { getCharacterDatabankIds } from "../../utils/character-databanks";
 import * as settingsSvc from "../settings.service";
 
 export interface DatabankResolutionContext {
@@ -19,6 +20,35 @@ export interface DatabankResolutionContext {
   characterDatabankIds?: string[];
   /** IDs from chat.metadata.chat_databank_ids (cross-referenced) */
   chatDatabankIds?: string[];
+}
+
+function parseRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string" || value.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+}
+
+function uniqueIds(ids: Iterable<unknown>): string[] {
+  const result = new Set<string>();
+  for (const id of ids) {
+    if (typeof id === "string" && id.length > 0) result.add(id);
+  }
+  return [...result];
 }
 
 /**
@@ -98,4 +128,71 @@ export function resolveActiveDatabankIds(
     .all(...idList, userId) as Array<{ id: string }>;
 
   return validRows.map((r) => r.id);
+}
+
+/**
+ * Resolve active databanks from persisted chat and character attachments.
+ *
+ * A supplied chat ID must belong to the user. Character IDs are constrained to
+ * that chat's persisted participants, then revalidated against character
+ * ownership before their extension cross-references are admitted. Memory
+ * isolation suppresses every character-derived source while preserving global
+ * and chat-scoped sources, including chat metadata attachments.
+ */
+export function resolvePersistedActiveDatabankIds(
+  userId: string,
+  chatId: string,
+  requestedCharacterIds: string | readonly string[] = [],
+): string[] {
+  const db = getDb();
+  const requestedIds = uniqueIds(
+    Array.isArray(requestedCharacterIds) ? requestedCharacterIds : [requestedCharacterIds],
+  );
+  let characterIds = requestedIds;
+  let chatDatabankIds: string[] = [];
+
+  if (chatId) {
+    const chat = db.query(
+      "SELECT character_id, metadata FROM chats WHERE id = ? AND user_id = ? LIMIT 1",
+    ).get(chatId, userId) as { character_id: string; metadata: unknown } | null;
+    if (!chat) return [];
+
+    const metadata = parseRecord(chat.metadata);
+    chatDatabankIds = stringIds(metadata.chat_databank_ids);
+    if (metadata.memory_isolation === true) {
+      characterIds = [];
+    } else {
+      const persistedCharacterIds = uniqueIds([
+        chat.character_id,
+        ...stringIds(metadata.character_ids),
+      ]);
+      if (requestedIds.length === 0) {
+        characterIds = persistedCharacterIds;
+      } else {
+        const persistedSet = new Set(persistedCharacterIds);
+        characterIds = requestedIds.filter((id) => persistedSet.has(id));
+      }
+    }
+  }
+
+  let characterDatabankIds: string[] = [];
+  if (characterIds.length > 0) {
+    const placeholders = characterIds.map(() => "?").join(",");
+    const rows = db.query(
+      `SELECT id, extensions
+         FROM characters
+        WHERE id IN (${placeholders})
+          AND user_id = ?`,
+    ).all(...characterIds, userId) as Array<{ id: string; extensions: unknown }>;
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    characterIds = characterIds.filter((id) => rowsById.has(id));
+    characterDatabankIds = uniqueIds(characterIds.flatMap((id) =>
+      getCharacterDatabankIds(parseRecord(rowsById.get(id)?.extensions))
+    ));
+  }
+
+  return resolveActiveDatabankIds(userId, chatId, characterIds, {
+    characterDatabankIds,
+    chatDatabankIds,
+  });
 }

@@ -1,4 +1,15 @@
 {
+  "connectionReview": {
+    "title": "Review required",
+    "description": "This imported connection is disabled until you review and enable it.",
+    "enable": "Enable connection",
+    "enabling": "Enabling…",
+    "reasons": {
+      "foreignImport": "Imported connection requires local approval.",
+      "repairRequired": "Connection data needs repair before it can be enabled.",
+      "unknown": "Connection requires review before it can be enabled."
+    }
+  },
   "comfyWorkflowEditor": {
     "eyebrow": "COMFYUI",
     "title": "Workflow setup",
@@ -1575,6 +1586,10 @@
     "openChatToAdd": "Open a chat to add chat-scoped world books",
     "removeFromChat": "Remove from this chat",
     "noChatActive": "No world books active for this chat",
+    "chatAttachmentSaveFailed": "Couldn't save this chat's world book attachments.",
+    "entrySaveFailed": "Couldn't save this world book entry.",
+    "entryDeleteFailed": "Couldn't delete this world book entry.",
+    "entryMutationFailed": "Couldn't update this world book entry.",
     "activationSettings": "Activation Settings",
     "selectBook": "Select a book…",
     "selectWorldBookAria": "Select world book",
@@ -3088,7 +3103,9 @@
     "fuseFailed": "Failed to fuse databanks",
     "scrapeFailed": "Failed to scrape URL",
     "loadDocFailed": "Failed to load document content",
-    "saveDocFailed": "Failed to save document"
+    "saveDocFailed": "Failed to save document",
+    "remoteDocumentRemoved": "This document was removed.",
+    "remoteDatabankRemoved": "This databank was removed."
   },
   "creatorWorkshop": {
     "shared": {
@@ -3351,7 +3368,8 @@
     "unknownProvider": "Unknown",
     "editorTabs": {
       "ariaLabel": "Preset editor tabs",
-      "preset": "Preset"
+      "preset": "Preset",
+      "agenticRuntime": "Agentic Runtime"
     },
     "tokens": " tokens",
     "category": {
@@ -3639,6 +3657,516 @@
       "reapplied": "Default profile reapplied",
       "alreadyDefault": "Block states already match defaults"
     },
+    "agenticRuntime": {
+      "eyebrow": "Preset runtime",
+      "title": "Agentic Runtime",
+      "description": "Author activation, child agents, phased instructions, tasks, workspace policy, and local repairs as one versioned draft.",
+      "nativeContextNotice": "World Info and Databank remain live native sources outside Loom. Loom does not copy, pin, or repair them.",
+      "status": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      },
+      "navigation": {
+        "ariaLabel": "Agentic Runtime sections",
+        "saveBeforePresetAction": "Save or resolve the Agentic Runtime draft before changing, importing, or exporting presets."
+      },
+      "sections": {
+        "activation": { "nav": "Activation & Mode", "title": "Activation & Mode", "description": "Choose which modes this preset allows. A chat or one-turn choice is resolved separately and never mutates this preset." },
+        "agents": { "nav": "Agents", "title": "Agents", "description": "Define reusable child profiles and portable connection-slot references." },
+        "tools": { "nav": "Core Tools & Dependencies", "title": "Core Tools & Dependencies", "description": "Grant only the host-owned retrieval tools and budgets required by this preset." },
+        "phases": { "nav": "Phased Instructions", "title": "Phased Instructions", "description": "Select exact Loom block revisions, optional typed conditions, and fixed destinations for the phased runtime. Agentic does not add a second free-form prompt system." },
+        "tasks": { "nav": "Dynamic Tasks", "title": "Dynamic Tasks", "description": "Define bounded task templates, dependency closure, requiredness, and activation." },
+        "workspace": { "nav": "Workspace Retention & Sharing", "title": "Workspace Retention & Sharing", "description": "Choose retention and view-only sharing within host-enforced ceilings." },
+        "repair": { "nav": "Portability & Repair", "title": "Portability & Repair", "description": "Resolve local slots, stale revisions, imported review items, and capability mismatches before activation." }
+      },
+      "activation": {
+        "reviewTitle": "Local review is incomplete",
+        "reviewDescription": "Acknowledge every review item and complete each required repair before enabling this imported configuration.",
+        "enable": "Enable preset agents",
+        "enableHint": "Makes the authored configuration eligible for Response and, when fully ready, Agentic mode.",
+        "allowedModes": "Allowed modes",
+        "defaultMode": "Preset default mode"
+      },
+      "modes": {
+        "response": "Response",
+        "responseHint": "Uses the established generation path and remains available for repair or compatibility.",
+        "agentic": "Agentic",
+        "agenticHint": "Uses the closed single-turn phase machine only when every effective-runtime gate is ready."
+      },
+      "agents": {
+        "connectionRef": "Portable connection slot"
+      },
+      "generationTypes": {
+        "normal": "Normal",
+        "continue": "Continue",
+        "regenerate": "Regenerate",
+        "swipe": "Swipe"
+      },
+      "phases": {
+        "names": { "assemble": "Assemble", "work": "Work", "complete": "Complete", "render": "Render", "prepare_commit": "Prepare commit", "committing": "Committing", "committed": "Committed", "commit_failed": "Commit failed", "exhausted": "Exhausted", "failed": "Failed", "cancelled": "Cancelled", "timed_out": "Timed out" },
+        "workPolicy": { "title": "Work policy", "description": "Instructions available only during private agent work." },
+        "workspaceUsage": { "title": "Workspace usage", "description": "Instructions for using bounded tasks, records, and submissions." },
+        "completionCriteria": { "title": "Completion criteria", "description": "Instructions evaluated before the host accepts completion." },
+        "renderPolicy": { "title": "Render policy", "description": "Instructions used only for the final tools-disabled render." },
+        "source": "Source block",
+        "sourceRevision": "Preset revision {{presetRevision}} · block revision {{blockRevision}} · prompt position {{promptOrder}}",
+        "notSelected": "Not selected",
+        "stale": "Block revision changed — reselect before saving",
+        "required": "Required",
+        "requiredHint": "Required entries must be available for completion.",
+        "requiredFor": "Require {{name}}",
+        "condition": "Condition",
+        "conditionHint": "When enabled, include this block only when the typed condition is true.",
+        "conditionFor": "Condition for {{name}}",
+        "routing": "Fixed routing",
+        "routingHint": "Each policy bucket has a fixed destination and checkpoint.",
+        "routingValue": "Destination: {{destination}} · checkpoint: {{checkpoint}}",
+        "destinations": { "root_work": "Root WORK", "completion_handoff": "Completion handoff", "render": "Tools-disabled RENDER" },
+        "checkpoints": { "WORK": "WORK", "PREPARE_COMMIT": "Prepare commit", "RENDER": "RENDER" },
+        "responseOmissionTitle": "Response mode omits Agentic instructions",
+        "responseOmissionHint": "These authored Loom policy entries and custom-phase instructions are reserved for Agentic runs and are not included in Response mode.",
+        "responseOmissionRoute": "Destination: {{destination}} · checkpoint: {{checkpoint}}",
+        "responseOmissionEntry": "Policy entry {{id}}",
+        "responseOmissionPhaseInstruction": "Phase instruction {{blockId}} · exact block revision {{blockRevision}}"
+      },
+      "customPhases": {
+        "title": "Custom phases",
+        "description": "Add bounded phases with exact instructions, conditions, capabilities, and transitions.",
+        "defaultLabel": "Phase {{number}}",
+        "add": "Add custom phase",
+        "empty": "No custom phases configured.",
+        "summary": "Phase {{number}} · {{id}}",
+        "order": "Order {{number}}",
+        "orderHint": "Earlier phases run first; transitions may repeat or advance.",
+        "moveUp": "Move {{label}} up",
+        "moveDown": "Move {{label}} down",
+        "id": "Phase ID",
+        "idFor": "Phase ID for {{label}}",
+        "label": "Display label",
+        "labelFor": "Display label for phase {{id}}",
+        "required": "Required phase",
+        "requiredHint": "A required phase must complete before the run can finish.",
+        "requiredFor": "Require {{label}}",
+        "repeatLimit": "Repeat limit",
+        "repeatLimitFor": "Repeat limit for {{label}}",
+        "repeatLimitHint": "Maximum number of times this phase may repeat itself.",
+        "instructions": "Instructions",
+        "instructionsHint": "Select existing Loom blocks by exact preset and block revision.",
+        "notSelected": "Not selected",
+        "unavailableInstruction": "Unavailable instruction block {{id}}",
+        "removeInstruction": "Remove instruction block {{id}}",
+        "childInstructionSubsets": "Delegated child phase subsets",
+        "childInstructionSubsetsHint": "Assign only selected phase instruction blocks to each authored child profile. An empty subset sends no phase instructions.",
+        "childInstructionSubsetsNoProfiles": "Author a child profile before assigning phase instructions.",
+        "childSubsetAssign": "Assign subset",
+        "childSubsetAssignFor": "Assign phase subset for {{id}}",
+        "childSubsetProfileId": "Profile ID: {{id}}",
+        "childSubsetUnassigned": "Not assigned — this child receives only its profile system prompt.",
+        "childSubsetEmpty": "Empty subset — this child receives only its profile system prompt.",
+        "childSubsetCount": "{{count}} phase instruction block(s) assigned.",
+        "childSubsetRepair": "Repair required — this assignment does not match the phase's exact source.",
+        "childSubsetUnknownProfile": "Unknown child profile {{id}}",
+        "childSubsetRemove": "Remove subset for child profile {{id}}",
+        "enter": "Enter condition",
+        "enterHint": "The phase starts when this condition is true.",
+        "exit": "Exit condition",
+        "exitHint": "The phase completes when this condition is true.",
+        "skip": "Skip condition",
+        "skipEnabled": "Allow phase skipping",
+        "skipHint": "When enabled, skip this phase when the condition is true.",
+        "skipFor": "Allow skipping {{label}}",
+        "capabilities": "Requested capabilities",
+        "capabilitiesHint": "Request only the host capabilities this phase needs.",
+        "capabilitiesList": {
+          "core_retrieval": "Core retrieval",
+          "workspace_read": "Read workspace",
+          "workspace_write": "Write workspace",
+          "delegation": "Delegate to child agents",
+          "council": "Council",
+          "cortex": "Memory Cortex"
+        },
+        "transitions": "Next phases",
+        "transitionsHint": "Choose which phases this phase may enter next.",
+        "transitionAutomatic": "Automatic sequence",
+        "transitionAutomaticHint": "An empty transition list permits bounded self-repeats, then advances to the immediate next phase.",
+        "transitionAutomaticNext": "Automatic next phase: {{label}}",
+        "transitionAutomaticTerminal": "No next phase. Completing this phase ends the sequence.",
+        "transitionExplicit": "Explicit transitions",
+        "transitionExplicitHint": "Only the selected self-repeat and immediate-next transitions are permitted.",
+        "useExplicitTransitions": "Use explicit transitions",
+        "useAutomaticTransition": "Use automatic sequence",
+        "repeatTarget": "Repeat this phase",
+        "nextTarget": "Next phase: {{label}}",
+        "invalidTarget": "Unavailable phase: {{id}}",
+        "remove": "Remove custom phase"
+      },
+      "tasks": {
+        "add": "Add task template",
+        "defaultName": "Task {{number}}",
+        "id": "Template ID",
+        "label": "Label",
+        "description": "Task description",
+        "required": "Required",
+        "optional": "Optional",
+        "requiredHint": "Activated required tasks must settle before completion. Model-created tasks remain optional.",
+        "dependencies": "Dependency templates",
+        "quarantined": "Quarantined task template",
+        "quarantinedHint": "This imported task template is invalid and cannot be edited until it is discarded.",
+        "discardQuarantined": "Discard quarantined task template",
+        "remove": "Remove template"
+      },
+      "workspace": {
+        "retention": "Retention",
+        "sharing": "Sharing",
+        "retentionOptions": { "turn_terminal": "Turn terminal", "chat_lifetime": "Chat lifetime" },
+        "retentionHints": { "turn_terminal": "Keep the view-only workspace only through the turn's terminal retention window.", "chat_lifetime": "Retain authorized published workspace metadata for the chat lifetime." },
+        "sharingOptions": { "root_only": "Root only", "view_only": "View-only participants" },
+        "sharingHints": { "root_only": "Only the root agent receives workspace capabilities.", "view_only": "People can inspect the redacted workspace; it remains non-editable." },
+        "ceilings": "Effective host ceilings",
+        "ceilingsHint": "Informational safeguards enforced by this host. Presets and imports cannot raise them.",
+        "readOnly": "Read-only",
+        "loading": "Loading host ceilings…",
+        "ceilingLabels": {
+          "childAdmissions": "Child admissions",
+          "aggregateToolCalls": "Aggregate tool calls",
+          "logicalProviderRequests": "Logical provider requests",
+          "physicalDispatchAttempts": "Physical dispatch attempts",
+          "childOutputTokens": "Child output tokens",
+          "workAttemptOutputTokens": "Work attempt output tokens",
+          "workAttemptProviderDispatches": "Work attempt provider dispatches",
+          "workAttemptUnsignedBoundaries": "Work attempt unsigned boundaries",
+          "workAttemptToolCalls": "Work attempt tool calls",
+          "workAttemptWorkspaceOperations": "Work attempt workspace operations",
+          "workSegmentOutputTokens": "Work segment output tokens",
+          "workSegmentProviderDispatches": "Work segment provider dispatches",
+          "workSegmentUnsignedBoundaries": "Work segment unsigned boundaries",
+          "workSegmentToolCalls": "Work segment tool calls",
+          "workSegmentWorkspaceOperations": "Work segment workspace operations",
+          "workDispatchOutputTokens": "Work dispatch output tokens",
+          "workRecoveryReserveOutputTokens": "Work recovery reserve output tokens",
+          "workFuturePhaseReserveOutputTokens": "Work future-phase reserve output tokens",
+          "rootWallClockMs": "Root wall-clock time (ms)",
+          "activityEvents": "Activity events",
+          "activityBytes": "Activity bytes",
+          "lifecycleLogRecords": "Lifecycle log records",
+          "activeRootsPerUser": "Active roots per user",
+          "activeRootsProcess": "Active roots per process",
+          "providerDispatchesPerUser": "Provider dispatches per user",
+          "providerDispatchesProcess": "Provider dispatches per process",
+          "toolExecutionsPerUser": "Tool executions per user",
+          "toolExecutionsProcess": "Tool executions per process"
+        }
+      },
+      "limits": {
+        "customPhases": "A preset can define at most 64 custom phases.",
+        "policyBucket": "A Loom policy bucket can contain at most 64 entries.",
+        "policyTotal": "A preset can contain at most 128 Loom policy entries.",
+        "tasks": "A preset can define at most 256 task templates.",
+        "invalidBlockRevision": "This Loom block has an invalid revision and cannot be selected."
+      },
+      "repair": {
+        "acknowledge": "I reviewed this item",
+        "chooseConnection": "Choose a local connection",
+        "searchConnections": "Search connections…",
+        "noConnections": "No compatible connections",
+        "mapSlot": "Map {{name}} to a local connection",
+        "ready": "No portability or repair items require action.",
+        "selectCurrentLoomRevisions": "Select current Loom revisions",
+        "selectCurrentLoomRevisionsHint": "Stage current valid Loom block, preset, and prompt-order revisions for review and save. Missing or invalid blocks stay unrepaired. Newer revisions are not auto-accepted.",
+        "selectCurrentLoomRevisionsPending": "Current Loom revisions are staged. Save to persist the authored runtime, or reset to discard.",
+        "boundary": "Only preset agents, core retrieval tools, Loom blocks, tasks, and workspace policy are available here. Extension tools, hooks, egress grants, and role editors are not part of this runtime.",
+        "kinds": {
+          "unresolved_slot": "Unresolved connection slot",
+          "stale_slot": "Stale connection mapping",
+          "disabled_import": "Imported configuration disabled",
+          "capability_mismatch": "Provider capability mismatch",
+          "stale_block": "Stale Loom block revision",
+          "unknown": "Runtime item needs repair"
+        },
+        "actions": {
+          "acknowledge": "Review",
+          "map_slot": "Map a connection",
+          "select_revision": "Select a revision",
+          "discard": "Discard invalid authored value",
+          "choose_response": "Use Response",
+          "unknown": "Handle this item"
+        },
+        "reasons": {
+          "unresolved_slot": "Choose an authenticated local connection.",
+          "stale_slot": "Confirm or replace the previous local mapping.",
+          "repair_required": "Repair the authored data before activation.",
+          "capability_mismatch": "The mapped provider lacks a required capability.",
+          "stale_policy_source": "Reselect the current Loom block revision and order before saving.",
+          "invalid_runtime_policy": "The canonical Loom runtime policy is invalid.",
+          "invalid_policy_entry": "A Loom policy entry is invalid.",
+          "invalid_predicate": "A cognition condition is incomplete.",
+          "predicate_limit_exceeded": "The cognition condition exceeds host depth or size limits.",
+          "unknown": "This runtime item needs repair."
+        }
+      },
+      "predicate": {
+        "kind": "Condition type",
+        "add": "Add condition",
+        "remove": "Remove condition",
+        "generationType": "Generation type",
+        "phase": "Phase",
+        "variableKey": "Preset variable name",
+        "factKey": "Participant fact name",
+        "operator": "Operator",
+        "value": "Value",
+        "valueType": "Value type",
+        "values": "Membership values",
+        "addValue": "Add value",
+        "removeValue": "Remove value {{number}}",
+        "valueTypes": { "string": "Text", "number": "Number", "boolean": "Boolean", "stringList": "Text list" },
+        "boolean": { "true": "True", "false": "False" },
+        "tool": "Tool",
+        "available": "Tool must be available",
+        "task": "Task template",
+        "chooseTask": "Choose a task",
+        "transition": "Transition",
+        "kinds": {
+          "all": "All conditions",
+          "any": "Any condition",
+          "not": "Not",
+          "generation_type": "Generation type",
+          "phase": "Current phase",
+          "preset_variable": "Preset variable",
+          "participant_fact": "Participant fact",
+          "tool_available": "Tool availability",
+          "task_transition": "Task transition"
+        },
+        "operators": { "equals": "Equals", "in": "In list", "includes": "Includes", "present": "Is present" },
+        "transitions": { "pending": "Pending", "active": "Active", "blocked": "Blocked", "completed": "Completed", "cancelled": "Cancelled", "failed": "Failed" }
+      },
+      "load": {
+        "loading": "Loading Agentic Runtime…",
+        "error": "The Agentic Runtime could not be loaded. Editing and saving are disabled.",
+        "retry": "Retry loading"
+      },
+
+      "save": {
+        "action": "Save Agentic Runtime",
+        "saving": "Saving complete runtime draft…",
+        "saved": "Agentic Runtime saved",
+        "unsaved": "Unsaved Agentic Runtime changes",
+        "reset": "Reset draft",
+        "conflict": "The preset or runtime changed elsewhere. Reload and review before saving.",
+        "conflictHint": "Reload the canonical preset and Agentic configuration before reviewing or retrying. Your local draft will not overwrite the newer revision.",
+        "reloadLatest": "Reload latest for review",
+        "reloadingLatest": "Reloading latest…",
+        "reloadError": "The latest canonical state could not be loaded. Your local draft is still preserved.",
+        "latestReady": "The latest canonical state is staged. Review it before editing and retrying.",
+        "reviewLatest": "Review latest",
+        "error": "Agentic Runtime could not be saved. Your draft is still available."
+      },
+      "validation": {
+        "invalid_config": "The runtime configuration is invalid.",
+        "invalid_modes": "Allowed modes must be unique, ordered, and include Response first.",
+        "invalid_default_mode": "The default mode must be allowed.",
+        "invalid_profile": "A child profile is incomplete or uses a duplicate ID.",
+        "invalid_slot": "A portable connection slot is invalid.",
+        "unresolved_slot": "Map every required connection slot.",
+        "invalid_block_reference": "A selected Loom block no longer exists.",
+        "stale_block_revision": "A selected Loom block revision changed.",
+        "invalid_runtime_policy": "The canonical Loom runtime policy is invalid.",
+        "invalid_policy_entry": "A Loom policy entry is invalid.",
+        "stale_policy_source": "A Loom policy source no longer matches the current block revision or order. Select the current revision before saving.",
+        "invalid_predicate": "A cognition condition is incomplete.",
+        "predicate_limit_exceeded": "The cognition condition exceeds host depth or size limits.",
+        "invalid_task_template": "A task template is invalid.",
+        "invalid_task_policy": "Task policy references must match the declared task templates.",
+        "missing_task_dependency": "A task dependency no longer exists.",
+        "cyclic_task_dependency": "Task dependencies must be acyclic.",
+        "review_acknowledgement_unknown": "Remove review acknowledgements that are not part of the current review.",
+        "review_acknowledgement_required": "Acknowledge every imported review item before enabling."
+      }
+    },
+    "agentsTools": {
+      "eyebrow": "Preset capabilities",
+      "title": "Agents & Tools",
+      "description": "Authorize reusable child agents and the built-in retrieval tools this preset may use. Nothing runs until this configuration is enabled and saved.",
+      "limits": {
+        "title": "Host runtime ceilings",
+        "description": "Read-only effective ceilings enforced by this Lumiverse host. Authored preset budgets remain portable, but execution cannot exceed these values.",
+        "readOnly": "Read-only",
+        "loading": "Loading host ceilings…",
+        "rows": {
+          "childAdmissions": "Child admissions",
+          "aggregateToolCalls": "Aggregate tool calls",
+          "logicalProviderRequests": "Logical provider requests",
+          "physicalDispatchAttempts": "Physical dispatch attempts",
+          "childOutputTokens": "Child output tokens",
+          "rootWallClockMs": "Root wall-clock (ms)",
+          "activityEvents": "Activity events",
+          "activityBytes": "Activity bytes",
+          "lifecycleLogRecords": "Lifecycle log records",
+          "activeRootsPerUser": "Active roots per user",
+          "activeRootsProcess": "Active roots per process",
+          "providerDispatchesPerUser": "Provider dispatches per user",
+          "providerDispatchesProcess": "Provider dispatches per process",
+          "toolExecutionsPerUser": "Tool executions per user",
+          "toolExecutionsProcess": "Tool executions per process"
+        }
+      },
+      "maxInvocations": {
+        "label": "Maximum child-agent invocations",
+        "hint": "Maximum child-agent invocations per generation. Default: 64; minimum: 1; no preset maximum. Use a whole safe integer.",
+        "error": "Enter a whole safe integer of at least 1."
+      },
+      "maxToolCalls": {
+        "label": "Maximum tool calls",
+        "hint": "Maximum aggregate tool-call attempts per generation. Default: 64; minimum: 1; no preset maximum. Use a whole safe integer.",
+        "error": "Enter a whole safe integer of at least 1."
+      },
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enableAria": "Enable agents and tools for this preset",
+      "review": {
+        "title": "Review imported capabilities",
+        "description": "Imported agent configurations are disabled for safety. Review the profiles, connections, tools, and lore access before enabling them on this device.",
+        "action": "Mark as reviewed"
+      },
+      "unsupported": {
+        "title": "Unsupported agent configuration",
+        "description": "This preset contains agent settings that this editor cannot safely read. Editing creates a new disabled configuration; the existing metadata is preserved until you save."
+      },
+      "main": {
+        "title": "Main model tools",
+        "description": "Choose the core retrieval tools available directly to the main model, independently of every child profile."
+      },
+      "tools": {
+        "legend": "Allowed core tools",
+        "lore_list_books": {
+          "label": "List lore books",
+          "description": "Browse available lore books and their provenance."
+        },
+        "lore_get_book": {
+          "label": "Get lore book",
+          "description": "Read one enabled lore book through bounded pages."
+        },
+        "lore_list_entries": {
+          "label": "List lore entries",
+          "description": "Browse enabled entries in a selected lore book."
+        },
+        "lore_get_entry": {
+          "label": "Get lore entry",
+          "description": "Read one enabled entry by its exact identifier."
+        },
+        "lore_search_entries": {
+          "label": "Search lore entries",
+          "description": "Search enabled lore content within the granted scope."
+        },
+        "chat_search_history": {
+          "label": "Search current chat",
+          "description": "Search the immutable message history selected for this generation."
+        }
+      },
+      "scope": {
+        "label": "Lore access ceiling",
+        "active": "Active lore",
+        "all_owned": "All owned lore",
+        "activeHint": "Only lore already available to this generation.",
+        "all_ownedHint": "May search all enabled lore books owned by the local user."
+      },
+      "profiles": {
+        "title": "Child agent profiles",
+        "description": "Profiles define a reusable subordinate model, its authority, and its failure limits.",
+        "add": "Add profile",
+        "defaultName": "Agent {{number}}",
+        "listAria": "Child agent profiles",
+        "moveUp": "Move {{name}} up",
+        "moveDown": "Move {{name}} down",
+        "delete": "Delete {{name}}",
+        "confirmDeleteTitle": "Delete this profile?",
+        "confirmDeleteDescription": "Prompt blocks that reference this profile will become invalid. This change is not saved until you save the configuration.",
+        "name": "Display name",
+        "id": "Profile ID",
+        "idHint": "Stable snake_case ID used in prompt syntax. Renaming the profile does not change it.",
+        "connection": "Connection profile",
+        "selectConnection": "Select a connection",
+        "searchConnections": "Search connections…",
+        "noConnections": "No connection profiles configured",
+        "useMainConnection": "Use main connection",
+        "connectionHint": "Use the current main connection, or bind this child to an existing connection profile.",
+        "systemPrompt": "System prompt",
+        "systemPromptPlaceholder": "Define this agent's role, boundaries, and output expectations.",
+        "systemPromptHint": "Literal child-agent instruction. Preset macros are not evaluated here.",
+        "tools": "Allowed tools",
+        "workspaceCapabilities": "Workspace capabilities",
+        "workspaceCapabilitiesHint": "Grant only the workspace operations this child needs. Empty means no workspace operations.",
+        "delegation": "Allow main-model delegation",
+        "delegationHint": "Lets the main model choose this profile through agent_delegate.",
+        "activity": "Allow live activity",
+        "activityHint": "Permits status and tool activity when invocation syntax requests streaming. Child prose is never streamed.",
+        "failurePolicy": "Failure policy",
+        "failureRequired": "Required — abort generation",
+        "failureOptional": "Optional — continue with an empty result",
+        "failureHint": "Controls deterministic prompt-block failures.",
+        "maxOutputTokens": "Maximum output tokens",
+        "timeout": "Timeout (seconds)",
+        "timeoutHint": "Per-invocation limit in whole seconds (minimum 5; no preset maximum).",
+        "empty": "Add a child profile to define its connection, tools, and prompt."
+      },
+      "syntax": {
+        "title": "Prompt syntax",
+        "description": "Copy a named-result producer for manual authoring, or create a direct enabled user-role block that can be reused without result-name collisions.",
+        "taskPlaceholder": "Describe the task for this agent.",
+        "copy": "Copy agent syntax",
+        "copied": "Copied",
+        "copyFailed": "Clipboard access failed. Select and copy the syntax manually.",
+        "createBlock": "Create prompt block with this agent",
+        "saveFirst": "Save the agent configuration before creating a block.",
+        "blockName": "Agent: {{name}}"
+      },
+      "navigation": {
+        "saveBeforePresetAction": "Save the Agents & Tools configuration before changing, importing, or exporting presets."
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "delete": "Delete"
+      },
+      "save": {
+        "reviewFirst": "Review the imported capabilities before saving or enabling them.",
+        "notConfigured": "Agents and tools are not configured for this preset.",
+        "unsaved": "Unsaved agent configuration",
+        "saved": "Agent configuration saved",
+        "action": "Save configuration"
+      },
+      "validation": {
+        "invalid_config": "Agent configuration must be an object.",
+        "unknown_config_key": "The configuration contains unsupported fields.",
+        "invalid_version": "Only agent configuration version 1 is supported.",
+        "invalid_enabled": "The enabled state is invalid.",
+        "invalid_max_invocations": "Maximum child-agent invocations must be a finite safe integer.",
+        "max_invocations_below_minimum": "Maximum child-agent invocations must be at least 1.",
+        "invalid_main_tools": "The main tool selection is invalid.",
+        "invalid_profiles": "The profile list is invalid.",
+        "too_many_profiles": "A preset can contain at most {{profileLimit}} child profiles.",
+        "unknown_profile_key": "This profile contains unsupported fields.",
+        "unknown_tool": "An unknown core tool is selected.",
+        "duplicate_tool": "A core tool can only be selected once.",
+        "invalid_main_scope": "The main-model lore scope is invalid.",
+        "invalid_scope": "The lore scope is invalid.",
+        "scope_requires_lore_tool": "All owned lore requires at least one lore tool.",
+        "invalid_id": "Use 1–64 lowercase letters, numbers, or underscores, starting with a letter.",
+        "duplicate_id": "Profile IDs must be unique.",
+        "invalid_name": "The profile name is invalid.",
+        "name_too_long": "Display names must be {{nameMax}} characters or fewer.",
+        "invalid_system_prompt": "The system prompt must be text.",
+        "system_prompt_too_long": "System prompts must be {{promptMax}} UTF-8 bytes or fewer.",
+        "invalid_connection": "Choose a valid connection profile or use the main connection.",
+        "connection_not_found": "This connection profile was deleted or is no longer available.",
+        "main_connection_unavailable": "Select an existing connection because no main connection is active.",
+        "invalid_delegation": "The delegation setting is invalid.",
+        "invalid_failure_policy": "Choose required or optional failure handling.",
+        "invalid_stream_activity": "The activity setting is invalid.",
+        "invalid_max_output_tokens": "Maximum output tokens must be a whole number.",
+        "max_output_tokens_out_of_range": "Maximum output tokens must be between {{tokenMin}} and {{tokenMax}}.",
+        "invalid_timeout": "Timeout must be a whole number of seconds.",
+        "timeout_below_minimum": "Timeout must be at least {{timeoutMin}} seconds."
+      }
+    },
     "empty": {
       "loading": "Loading...",
       "noPresetTitle": "No Preset Selected",
@@ -3674,6 +4202,26 @@
     },
     "toast": {
       "exportFailed": "Failed to export preset",
+      "importHydrationWarning": "Preset imported, but its editor details could not be refreshed. The saved copy is available.",
+      "portableErrors": {
+        "PORTABLE_PRESET_INVALID": "The portable preset is invalid.",
+        "PORTABLE_PROMPT_BLOCK_INVALID": "The preset contains an invalid prompt block.",
+        "PORTABLE_EXPORT_UNSTABLE": "The preset changed during export. Try again.",
+        "AGENT_RUNTIME_PORTABLE_INVALID": "The portable runtime data is invalid.",
+        "AGENT_RUNTIME_PORTABLE_STALE": "The portable runtime data is stale. Export it again.",
+        "AGENT_RUNTIME_PORTABLE_CONTRADICTORY": "The portable runtime data is contradictory.",
+        "AGENT_RUNTIME_PORTABLE_REGEX_INVALID": "The portable regex data is invalid.",
+        "AGENT_RUNTIME_PORTABLE_PRESET_INVALID": "The portable preset data is invalid.",
+        "AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID": "The portable runtime refers to unavailable context data.",
+        "AGENT_RUNTIME_PORTABLE_RULE_INVALID": "The portable context rule is invalid.",
+        "AGENT_RUNTIME_PORTABLE_SELECTION_INVALID": "The portable context selection is invalid.",
+        "LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE": "A sealed block is missing trusted LumiHub provenance.",
+        "LUMIHUB_LINK_UNAVAILABLE": "Link LumiHub before importing sealed preset blocks.",
+        "LUMIHUB_SEALED_RESOLUTION_FAILED": "LumiHub could not resolve the sealed preset blocks.",
+        "LUMIHUB_SEALED_DIGEST_MISMATCH": "LumiHub returned sealed content that failed verification.",
+        "PRESET_REVISION_CONFLICT": "The preset changed elsewhere. Refresh and try again.",
+        "PRESET_REVISION_REQUIRED": "The preset revision is required. Refresh and try again."
+      },
       "importedRegexFromPreset": "Imported {{count}} regex script from preset",
       "importedRegexFromPreset_plural": "Imported {{count}} regex scripts from preset",
       "regexImportFailed": "{{count}} regex script failed to import",

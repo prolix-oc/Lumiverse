@@ -1,5 +1,5 @@
 import { unlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { env } from "./env";
 import { getDatabasePath, initDatabase } from "./db/connection";
 import { runMigrations } from "./db/migrate";
@@ -56,6 +56,24 @@ await initVapidKeys();
 // Initialize database and run migrations synchronously
 const db = initDatabase();
 await runMigrations(db);
+// Reconcile every durable authority before routes, providers, or extensions
+// can start. Each failure closes Agentic readiness without blocking Response.
+// Keep this module dynamic because its service graph exposes getDb() defaults;
+// migrations and initDatabase must complete before those modules are evaluated.
+const { reconcileStartupState, summarizeIsolateHealth } = await import("./services/startup-recovery.service");
+const startupRecovery = await reconcileStartupState(db);
+console.log(
+  `[startup] Recovery: imports=${startupRecovery.stages.imports.status}, ` +
+  `artifacts=${startupRecovery.stages.artifacts.status} inspected=${startupRecovery.artifacts.inspected}, ` +
+  `turns=${startupRecovery.stages.turns.status} inspected=${startupRecovery.turns.inspected}, ` +
+  `projections=${startupRecovery.stages.projections.status}, runtime epoch=${startupRecovery.runtimeEpoch}`,
+);
+if (!startupRecovery.readiness.isolateTermination) {
+  console.warn(
+    `[startup] Agentic preprocessing unavailable (${summarizeIsolateHealth(startupRecovery.isolate)}); ` +
+    "Agentic readiness is closed and Response mode remains available",
+  );
+}
 
 const {
   describeImageProcessingRecovery,
@@ -258,6 +276,7 @@ const server = Bun.serve({
 // Give the EventBus access to the server for native topic-based publish().
 eventBus.setServer(server);
 
+
 // Initialize multiplayer rooms: registers the chat/generation fan-out listener
 // (re-broadcasts to room topics), the prompt-assembly persona provider, and
 // re-arms any freeform deadline timers dropped by the restart.
@@ -373,9 +392,9 @@ async function gracefulShutdown(signal: string) {
   // 1. Stop accepting new connections
   server.stop(true);
 
-  // 2. Abort all active LLM generations
+  // 2. Durably cancel active LLM generations before aborting live work.
   const { stopAllGenerations, stopGenerationSweep } = await import("./services/generate.service");
-  stopAllGenerations();
+  await stopAllGenerations();
   stopGenerationSweep();
 
   // 3. Disconnect LumiHub WebSocket client
@@ -410,15 +429,15 @@ async function gracefulShutdown(signal: string) {
   stopPkceSweep();
   stopIllarinSweeps();
   stopAllDeliveryWorkers();
-  stopChatChunkVectorizationWorker();
+  await stopChatChunkVectorizationWorker();
   stopQueryCacheCleanup();
   stopWorldBookVectorizationSweep();
   stopVersionCheckCleanup();
 
-  // 5b. Tear down the regex sandbox worker pool so we don't leak the worker
-  //     threads on shutdown.
-  const { shutdownRegexSandbox } = await import("./utils/regex-sandbox");
-  shutdownRegexSandbox();
+  // 5b. Tear down every isolate pool and its subprocess descendants. Each
+  // pool is attempted even if another pool reports an exit error.
+  const { shutdownIsolatePools } = await import("./services/startup-recovery.service");
+  await shutdownIsolatePools();
 
   // 5c. Stop the rate-limit sweep timer.
   const { stopRateLimitSweep } = await import("./middleware/rate-limit");
@@ -447,8 +466,10 @@ async function gracefulShutdown(signal: string) {
   stopSmartctlMonitor();
 
   // 8. Close database (triggers WAL checkpoint)
-  const { closeDatabase } = await import("./db/connection");
-  closeDatabase();
+  const { stopLanceDbMaintenanceSupervisor } = await import("./services/lancedb-maintenance-supervisor");
+  await stopLanceDbMaintenanceSupervisor();
+  const { closeDatabaseAsync } = await import("./db/connection");
+  await closeDatabaseAsync();
 
   console.log("[Shutdown] Cleanup complete.");
   process.exit(0);

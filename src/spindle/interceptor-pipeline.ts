@@ -100,6 +100,9 @@ class InterceptorPipeline {
     context: unknown,
     userId?: string | null,
     signal?: AbortSignal,
+    postHandlerValidator?: (
+      messages: LlmMessageDTO[],
+    ) => void | Promise<void>,
   ): Promise<InterceptorResult> {
     let result = messages;
     const sourceMessageMetadata = collectSourceMessageMetadata(messages);
@@ -139,9 +142,10 @@ class InterceptorPipeline {
       });
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
+      let output: InterceptorResult;
       try {
         restoreSourceMessageMetadata(result, sourceMessageMetadata);
-        const output = await Promise.race([
+        output = await Promise.race([
           interceptor.handler(result, context),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
@@ -160,21 +164,6 @@ class InterceptorPipeline {
             }
           }),
         ]);
-        result = output.messages;
-        emitSpindlePreGenerationActivity({
-          chatId,
-          userId,
-          phase: "interceptor",
-          status: "completed",
-          extensionId: interceptor.extensionId,
-          extensionName: interceptor.extensionName,
-        });
-        if (output.parameters && Object.keys(output.parameters).length > 0) {
-          mergedParameters = { ...mergedParameters, ...output.parameters };
-        }
-        if (output.breakdown && output.breakdown.length > 0) {
-          mergedBreakdown.push(...output.breakdown);
-        }
       } catch (err) {
         if (signal?.aborted) {
           emitSpindlePreGenerationActivity({
@@ -200,12 +189,71 @@ class InterceptorPipeline {
           `[Spindle] Interceptor error from ${interceptor.extensionId}:`,
           err
         );
-        // Continue with previous result on error
+        restoreSourceMessageMetadata(result, sourceMessageMetadata);
+        try {
+          await postHandlerValidator?.(result);
+        } catch (validationErr) {
+          emitSpindlePreGenerationActivity({
+            chatId,
+            userId,
+            phase: "interceptor",
+            status: "error",
+            extensionId: interceptor.extensionId,
+            extensionName: interceptor.extensionName,
+            error:
+              validationErr instanceof Error
+                ? validationErr.message
+                : String(validationErr),
+          });
+          console.error(
+            `[Spindle] Interceptor validation error from ${interceptor.extensionId}:`,
+            validationErr
+          );
+          throw validationErr;
+        }
+        // Continue with the restored previous result on error.
+        continue;
       } finally {
-        if (timeout) clearTimeout(timeout);
+        clearTimeout(timeout);
         if (signal && abortHandler) {
           signal.removeEventListener("abort", abortHandler);
         }
+      }
+
+      restoreSourceMessageMetadata(output.messages, sourceMessageMetadata);
+      try {
+        await postHandlerValidator?.(output.messages);
+      } catch (err) {
+        emitSpindlePreGenerationActivity({
+          chatId,
+          userId,
+          phase: "interceptor",
+          status: "error",
+          extensionId: interceptor.extensionId,
+          extensionName: interceptor.extensionName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        console.error(
+          `[Spindle] Interceptor validation error from ${interceptor.extensionId}:`,
+          err
+        );
+        throw err;
+      }
+
+      result = output.messages;
+      emitSpindlePreGenerationActivity({
+        chatId,
+        userId,
+        phase: "interceptor",
+        status: "completed",
+        extensionId: interceptor.extensionId,
+        extensionName: interceptor.extensionName,
+      });
+      if (output.parameters && Object.keys(output.parameters).length > 0) {
+        mergedParameters = { ...mergedParameters, ...output.parameters };
+      }
+      if (output.breakdown && output.breakdown.length > 0) {
+        mergedBreakdown.push(...output.breakdown);
       }
     }
 

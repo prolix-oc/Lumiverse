@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, type RefObject } from 'react'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import { useTranslation } from 'react-i18next'
@@ -26,21 +26,12 @@ import ModelCombobox from './ModelCombobox'
 import MultiChipSelect from './MultiChipSelect'
 import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import type { OpenRouterConnectionSettings } from '@/api/openrouter'
 import type { ReasoningSettings } from '@/types/store'
 import styles from '../ConnectionManager.module.css'
 
 const MODEL_ROULETTE_PROVIDER = 'model_roulette'
-
-interface ConnectionFormProps {
-  providers: ProviderInfo[]
-  profile?: ConnectionProfile
-  initialProvider?: string
-  onSave: (input: CreateConnectionProfileInput) => void
-  onCancel: () => void
-  /** Called when OAuth auto-creates the connection during creation flow. */
-  onOAuthCreated?: (profile: ConnectionProfile) => void
-}
 
 const FALLBACK_PROVIDERS = [
   { value: 'openai', label: 'OpenAI' },
@@ -53,6 +44,18 @@ const FALLBACK_PROVIDERS = [
   { value: 'custom', label: 'Custom (OpenAI-compatible)' },
 ]
 
+interface ConnectionFormProps {
+  providers: ProviderInfo[]
+  profile?: ConnectionProfile
+  initialProvider?: string
+  onSave: (input: CreateConnectionProfileInput) => void
+  onCancel: () => void
+  /** Called when OAuth auto-creates the connection during creation flow. */
+  onOAuthCreated?: (profile: ConnectionProfile) => void
+  onReview?: () => Promise<void> | void
+  /** Stable row control to focus after a review-required profile is enabled. */
+  focusTargetRef?: RefObject<HTMLElement | null>
+}
 function parseRouletteConnectionIds(profile?: ConnectionProfile): string[] {
   const raw = profile?.metadata?.connection_roulette?.connection_ids
   if (!Array.isArray(raw)) return []
@@ -87,8 +90,9 @@ const BEDROCK_ENDPOINTS = [
   { value: 'runtime', label: 'Runtime (cross-region profiles)' },
 ]
 
-export default function ConnectionForm({ providers, profile, initialProvider, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
+export default function ConnectionForm({ providers, profile, initialProvider, onSave, onCancel, onOAuthCreated, onReview, focusTargetRef }: ConnectionFormProps) {
   const { t } = useTranslation('panels')
+  const reviewRequired = profile?.review_required === true
   const anthropicCacheTtlOptions = [
     { value: '5m', label: t('connectionForm.fiveMinutes') },
     { value: '1h', label: t('connectionForm.oneHour') },
@@ -171,6 +175,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
   const validRouletteConnectionIds = rouletteConnectionIds.filter((id) => rouletteOptionIds.has(id))
 
   const fetchModels = useCallback(async () => {
+    if (reviewRequired) return
     if (isRoulette) {
       setModels([])
       setModelLabels({})
@@ -212,7 +217,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, isRoulette, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
+  }, [apiKey, apiUrl, isRoulette, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, reviewRequired, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
 
   useEffect(() => {
     if (profile?.id) fetchModels()
@@ -543,6 +548,8 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
 
   return (
     <div className={styles.form}>
+      {profile && <ConnectionReviewStatus profile={profile} onReview={onReview ?? (() => undefined)} focusTargetRef={focusTargetRef} />}
+      <fieldset disabled={reviewRequired} style={{ border: 0, padding: 0, margin: 0 }}>
       <FormField label={t('connectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('connectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
@@ -913,6 +920,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
           )}
         </div>
       )}
+      </fieldset>
       {!isRoulette && <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('connectionForm.cancel')}</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!canSubmit}>

@@ -22,7 +22,16 @@ import {
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { yieldToEventLoop } from "../llm/stream-utils";
+import {
+  isAgentLoreSearchMatch,
+  rankAgentLoreSearch,
+} from "./agent-lore-relevance";
+import {
+  AGENT_LORE_SEARCH_SCAN_MAX_BYTES,
+  AGENT_LORE_SEARCH_SCAN_MAX_ROWS,
+} from "./agent-runtime-accounting";
 
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
 /** Canonical stale-entry error. Routes/RPCs can serialize `payload` directly. */
 export class WorldBookEntryConflictError extends Error {
   readonly payload: WorldBookEntryConflictPayload;
@@ -326,6 +335,18 @@ function rowToEntry(row: any): WorldBookEntry {
   };
 }
 
+function omitClientEntryIdentity<T extends object>(input: T): T {
+  const next = { ...input } as T & Record<string, unknown>;
+  delete next.world_book_id;
+  delete next.id;
+  delete next.uid;
+  delete next.created_at;
+  delete next.updated_at;
+  delete next.revision;
+  return next;
+}
+
+
 function getPendingVectorIndexState(entry: { vectorized: boolean; disabled?: boolean; content?: string | null }): {
   vector_index_status: WorldBookVectorIndexStatus;
   vector_indexed_at: null;
@@ -510,7 +531,7 @@ export function setEntityExtensionNamespace(
   const target = entityNamespaceTarget(entity);
   const db = getDb();
 
-  return db.transaction((): EntityExtensionNamespaceResult | null => {
+  return withUserDataMutationSync(userId, () => db.transaction((): EntityExtensionNamespaceResult | null => {
     const row = db.query(target.selectSql).get(entityId, userId) as { bag?: unknown } | null;
     if (!row) return null;
 
@@ -544,7 +565,7 @@ export function setEntityExtensionNamespace(
       value: serialized === null ? null : extensions[namespace],
       extensions,
     };
-  })();
+  })());
 }
 
 function normalizeKeywordList(values: string[]): string[] {
@@ -976,6 +997,7 @@ export function createWorldBook(
   input: CreateWorldBookInput,
   options: CreateWorldBookOptions = {},
 ): WorldBook {
+  return withUserDataMutationSync(userId, () => {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   getDb()
@@ -983,6 +1005,7 @@ export function createWorldBook(
     .run(id, userId, input.name, input.description || "", input.folder || "", JSON.stringify(input.metadata || {}), now, now);
   if (options.emitEvent !== false) emitWorldBookChanged(userId, id);
   return getWorldBook(userId, id)!;
+  });
 }
 
 /** Load SillyTavern migration identities once. This keeps rerun deduplication
@@ -1017,6 +1040,7 @@ export function listSillyTavernWorldBookNameIds(userId: string): Map<string, str
 }
 
 export function updateWorldBook(userId: string, id: string, input: UpdateWorldBookInput): WorldBook | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getWorldBook(userId, id);
   if (!existing) return null;
 
@@ -1038,6 +1062,7 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
   getDb().query(`UPDATE world_books SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
   emitWorldBookChanged(userId, id);
   return getWorldBook(userId, id)!;
+  });
 }
 
 /**
@@ -1046,6 +1071,7 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
  * rather than a separate database entity.
  */
 export function renameWorldBookFolder(userId: string, oldName: string, newName: string): WorldBook[] {
+  return withUserDataMutationSync(userId, () => {
   const source = oldName.trim();
   const target = newName.trim();
   if (!source || !target) return [];
@@ -1069,6 +1095,7 @@ export function renameWorldBookFolder(userId: string, oldName: string, newName: 
     emitWorldBookChanged(userId, worldBook.id);
   }
   return updated;
+  });
 }
 
 /**
@@ -1076,6 +1103,7 @@ export function renameWorldBookFolder(userId: string, oldName: string, newName: 
  * are moved into the unfiled bucket, represented by an empty folder string.
  */
 export function deleteWorldBookFolder(userId: string, name: string): WorldBook[] {
+  return withUserDataMutationSync(userId, () => {
   const folder = name.trim();
   if (!folder) return [];
 
@@ -1094,6 +1122,7 @@ export function deleteWorldBookFolder(userId: string, name: string): WorldBook[]
     emitWorldBookChanged(userId, worldBook.id);
   }
   return updated;
+  });
 }
 
 function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): string[] {
@@ -1108,6 +1137,7 @@ function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): 
 }
 
 export async function deleteWorldBook(userId: string, id: string): Promise<boolean> {
+  return withUserDataMutation(userId, async () => {
   if (!getWorldBook(userId, id)) return false;
   const entryIds = getWorldBookEntryIdsForDelete(userId, [id]);
   const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
@@ -1118,9 +1148,11 @@ export async function deleteWorldBook(userId: string, id: string): Promise<boole
   );
   if (deleted) emitWorldBookDeleted(userId, id);
   return deleted;
+  });
 }
 
 export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promise<{ deleted: string[] }> {
+  return withUserDataMutation(userId, async () => {
   const uniqueIds = dedupeWorldBookIds(ids);
   if (uniqueIds.length === 0) return { deleted: [] };
   const db = getDb();
@@ -1140,9 +1172,13 @@ export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promi
     () => {
       const removed: string[] = [];
       db.transaction(() => {
-        const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
+        const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ? RETURNING id");
         for (const id of orderedOwnedIds) {
-          if (stmt.run(id, userId).changes > 0) removed.push(id);
+          const deleted = stmt.get(id, userId) as { id: string } | null;
+          if (deleted?.id !== id) {
+            throw new Error("One or more world books changed before deletion");
+          }
+          removed.push(id);
         }
       })();
       return removed;
@@ -1154,9 +1190,11 @@ export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promi
   }
 
   return { deleted };
+  });
 }
 
 export function bulkUpdateWorldBooksFolder(userId: string, ids: string[], folder: string): { updated: number } {
+  return withUserDataMutationSync(userId, () => {
   const uniqueIds = dedupeWorldBookIds(ids);
   const normalizedFolder = folder.trim();
   const now = Math.floor(Date.now() / 1000);
@@ -1175,6 +1213,7 @@ export function bulkUpdateWorldBooksFolder(userId: string, ids: string[], folder
   }
 
   return { updated: updatedIds.length };
+  });
 }
 
 export function bulkExportWorldBooks(
@@ -1265,6 +1304,7 @@ export function setWorldBookSemanticActivation(
   worldBookId: string,
   enabled: boolean,
 ): { summary: WorldBookVectorSummary; updated_entries: number } | null {
+  return withUserDataMutationSync(userId, () => {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
 
@@ -1319,6 +1359,7 @@ export function setWorldBookSemanticActivation(
     summary: getWorldBookVectorSummary(userId, worldBookId)!,
     updated_entries: updatedEntries,
   };
+  });
 }
 
 export function getConvertToVectorizedPreview(
@@ -1356,6 +1397,7 @@ export function convertToVectorized(
   userId: string,
   worldBookId: string,
 ): { summary: WorldBookVectorSummary; converted: number } | null {
+  return withUserDataMutationSync(userId, () => {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
 
@@ -1386,6 +1428,7 @@ export function convertToVectorized(
     summary: getWorldBookVectorSummary(userId, worldBookId)!,
     converted,
   };
+  });
 }
 
 // --- World Book Entry CRUD ---
@@ -1419,6 +1462,200 @@ function sanitizeEntryFtsQuery(input: string): string {
 function escapeLike(input: string): string {
   return input.replace(/[\\%_]/g, "\\$&");
 }
+const AGENT_LORE_SEARCH_SCAN_BATCH = 128;
+
+interface AgentLoreSearchScope {
+  fromClause: string;
+  baseWhere: string[];
+  baseParams: SQLQueryBindings[];
+}
+
+interface AgentLoreSearchPreflightRow {
+  id: string;
+  world_book_id: string;
+  order_value: number;
+  comment_bytes: number;
+  key_bytes: number;
+  keysecondary_bytes: number;
+  content_bytes: number;
+}
+
+interface AgentLoreSearchScanRow {
+  id: string;
+  world_book_id: string;
+  order_value: number;
+  comment: string;
+  key: string;
+  keysecondary: string;
+  content: string;
+}
+
+interface AgentLoreSearchCursor {
+  worldBookId: string;
+  orderValue: number;
+  id: string;
+}
+
+function buildAgentLoreSearchScope(
+  userId: string,
+  ftsQuery: string,
+  bookId: string | undefined,
+): AgentLoreSearchScope {
+  const fromClause = ftsQuery
+    ? "world_book_entries e " +
+      "JOIN world_book_entries_fts fts ON fts.rowid = e.rowid " +
+      "JOIN world_books w ON w.id = e.world_book_id"
+    : "world_book_entries e JOIN world_books w ON w.id = e.world_book_id";
+  const baseWhere = [
+    "w.user_id = ?",
+    "e.disabled = 0",
+    ...(ftsQuery ? ["world_book_entries_fts MATCH ?"] : []),
+    ...(bookId !== undefined ? ["e.world_book_id = ?"] : []),
+  ];
+  const baseParams: SQLQueryBindings[] = [
+    userId,
+    ...(ftsQuery ? [ftsQuery] : []),
+    ...(bookId !== undefined ? [bookId] : []),
+  ];
+  return { fromClause, baseWhere, baseParams };
+}
+
+function addAgentLoreSearchBytes(total: number, value: number): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > AGENT_LORE_SEARCH_SCAN_MAX_BYTES ||
+    total > AGENT_LORE_SEARCH_SCAN_MAX_BYTES - value
+  ) {
+    throw new AgentLoreQueryLimitError();
+  }
+  return total + value;
+}
+
+/**
+ * Preflight an owned candidate corpus without selecting ranked text. The
+ * stable order and filters intentionally match both ranking passes below.
+ */
+function preflightOwnedAgentLoreSearch(
+  userId: string,
+  ftsQuery: string,
+  bookId: string | undefined,
+): void {
+  const scope = buildAgentLoreSearchScope(userId, ftsQuery, bookId);
+  const rows = getDb()
+    .query(
+      `SELECT e.id, e.world_book_id, e.order_value,
+              COALESCE(length(CAST(e.comment AS BLOB)), 0) AS comment_bytes,
+              COALESCE(length(CAST(e.key AS BLOB)), 0) AS key_bytes,
+              COALESCE(length(CAST(e.keysecondary AS BLOB)), 0) AS keysecondary_bytes,
+              COALESCE(length(CAST(e.content AS BLOB)), 0) AS content_bytes
+       FROM ${scope.fromClause}
+       WHERE ${scope.baseWhere.join(" AND ")}
+       ORDER BY e.world_book_id ASC, e.order_value ASC, e.id ASC
+       LIMIT ?`,
+    )
+    .all(
+      ...scope.baseParams,
+      AGENT_LORE_SEARCH_SCAN_MAX_ROWS + 1,
+    ) as AgentLoreSearchPreflightRow[];
+
+  if (rows.length > AGENT_LORE_SEARCH_SCAN_MAX_ROWS) {
+    throw new AgentLoreQueryLimitError();
+  }
+
+  let bytes = 0;
+  for (const row of rows) {
+    bytes = addAgentLoreSearchBytes(bytes, row.comment_bytes);
+    bytes = addAgentLoreSearchBytes(bytes, row.key_bytes);
+    bytes = addAgentLoreSearchBytes(bytes, row.keysecondary_bytes);
+    bytes = addAgentLoreSearchBytes(bytes, row.content_bytes);
+  }
+}
+
+function agentLoreSearchKeys(serialized: string): string[] {
+  const parsed: unknown = JSON.parse(serialized);
+  return Array.isArray(parsed)
+    ? parsed.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+function rankOwnedAgentLoreEntry(
+  row: AgentLoreSearchScanRow,
+  query: string,
+): number {
+  return rankAgentLoreSearch({
+    comment: row.comment,
+    primaryKeys: agentLoreSearchKeys(row.key),
+    secondaryKeys: agentLoreSearchKeys(row.keysecondary),
+    content: row.content,
+  }, query);
+}
+
+/**
+ * Scan an owned candidate corpus in stable book/order/id order. FTS narrows
+ * queries that meet the trigram minimum; shorter queries deliberately scan
+ * the owner's enabled corpus so Unicode case folding remains identical to the
+ * immutable active-scope search.
+ */
+function scanOwnedAgentLoreSearch(
+  userId: string,
+  rawSearch: string,
+  ftsQuery: string,
+  bookId: string | undefined,
+  visit: (row: AgentLoreSearchScanRow, rank: number) => void,
+): void {
+  const scope = buildAgentLoreSearchScope(userId, ftsQuery, bookId);
+  let cursor: AgentLoreSearchCursor | undefined;
+
+  while (true) {
+    const cursorWhere = cursor
+      ? [
+          "e.world_book_id > ? OR",
+          "(e.world_book_id = ? AND e.order_value > ?) OR",
+          "(e.world_book_id = ? AND e.order_value = ? AND e.id > ?)",
+        ].join(" ")
+      : "";
+    const rows = getDb()
+      .query(
+        `SELECT e.id, e.world_book_id, e.order_value, e.comment,
+                e.key, e.keysecondary, e.content
+         FROM ${scope.fromClause}
+         WHERE ${scope.baseWhere.join(" AND ")}
+         ${cursor ? `AND (${cursorWhere})` : ""}
+         ORDER BY e.world_book_id ASC, e.order_value ASC, e.id ASC
+         LIMIT ?`,
+      )
+      .all(
+        ...scope.baseParams,
+        ...(cursor
+          ? [
+              cursor.worldBookId,
+              cursor.worldBookId,
+              cursor.orderValue,
+              cursor.worldBookId,
+              cursor.orderValue,
+              cursor.id,
+            ]
+          : []),
+        AGENT_LORE_SEARCH_SCAN_BATCH,
+      ) as AgentLoreSearchScanRow[];
+
+    for (const row of rows) {
+      const rank = rankOwnedAgentLoreEntry(row, rawSearch);
+      if (isAgentLoreSearchMatch(rank)) visit(row, rank);
+    }
+
+    const last = rows.at(-1);
+    if (!last || rows.length < AGENT_LORE_SEARCH_SCAN_BATCH) return;
+    cursor = {
+      worldBookId: last.world_book_id,
+      orderValue: last.order_value,
+      id: last.id,
+    };
+  }
+}
+
+
 
 export function listEntriesPaginated(
   userId: string,
@@ -1497,21 +1734,25 @@ export function listEntries(userId: string, worldBookId: string): WorldBookEntry
 
 /**
  * Batch-load entries for multiple world books in 2 queries (ownership + entries).
- * Returns a Map from bookId → entries[], preserving per-book grouping. When
- * provided, `bookNameMap` is populated from the ownership query at no extra cost.
+ * Optional maps are populated from the ownership query at no extra cost.
  */
 export function listEntriesForBooks(
   userId: string,
   bookIds: string[],
   bookNameMap?: Map<string, string>,
+  bookMap?: Map<string, WorldBook>,
 ): Map<string, WorldBookEntry[]> {
   if (bookIds.length === 0) return new Map();
   const ph = bookIds.map(() => "?").join(", ");
-  const owned = getDb()
-    .query(`SELECT id, name FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
-    .all(...bookIds, userId) as { id: string; name: string }[];
-  for (const book of owned) bookNameMap?.set(book.id, book.name);
-  const ownedSet = new Set(owned.map(b => b.id));
+  const ownedRows = getDb()
+    .query(`SELECT * FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...bookIds, userId) as unknown[];
+  const owned = ownedRows.map((row) => rowToBook(row));
+  for (const book of owned) {
+    bookNameMap?.set(book.id, book.name);
+    bookMap?.set(book.id, book);
+  }
+  const ownedSet = new Set(owned.map((book) => book.id));
   const validIds = bookIds.filter(id => ownedSet.has(id));
   if (validIds.length === 0) return new Map();
   const eph = validIds.map(() => "?").join(", ");
@@ -1533,14 +1774,489 @@ export function getEntry(userId: string, id: string): WorldBookEntry | null {
   return row ? rowToEntry(row) : null;
 }
 
+export const AGENT_LORE_PAGE_MAX = 50;
+export const AGENT_LORE_RESULT_MAX_BYTES = 64 * 1024;
+
+export class AgentLoreQueryLimitError extends Error {
+  readonly code = "agent_tool_limit_exceeded" as const;
+
+  constructor() {
+    super("Agent lore result exceeds the response limit");
+    this.name = "AgentLoreQueryLimitError";
+  }
+}
+
+export interface OwnedAgentLorePage<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface OwnedAgentLoreNameResolution {
+  candidates: Array<{ id: string; name: string }>;
+  total: number;
+  truncated: boolean;
+}
+
+const AGENT_LORE_ENTRY_COLUMNS = `
+  e.id, e.world_book_id, e.uid, e.key, e.keysecondary, e.content, e.comment,
+  e.position, e.depth, e.role, e.order_value, e.selective, e.constant, e.disabled,
+  e.group_name, e.group_override, e.group_weight, e.probability, e.scan_depth,
+  e.case_sensitive, e.match_whole_words, e.automation_id,
+  e.use_regex, e.prevent_recursion, e.exclude_recursion, e.delay_until_recursion,
+  e.priority, e.sticky, e.cooldown, e.delay, e.selective_logic,
+  e.use_probability, e.vectorized, e.vector_index_status, e.vector_indexed_at,
+  e.vector_index_error, e.created_at, e.updated_at
+`;
+const AGENT_LORE_ROW_OVERHEAD_BYTES = 512;
+const AGENT_BOOK_PAGE_BYTE_EXPR = [
+  "COALESCE(length(CAST(page.id AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.name AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.description AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.folder AS BLOB)), 0)",
+  String(AGENT_LORE_ROW_OVERHEAD_BYTES),
+].join(" + ");
+const AGENT_ENTRY_PAGE_BYTE_EXPR = [
+  "COALESCE(length(CAST(page.id AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.world_book_id AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.uid AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.key AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.keysecondary AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.content AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.comment AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.role AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.group_name AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.automation_id AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.vector_index_status AS BLOB)), 0)",
+  "COALESCE(length(CAST(page.vector_index_error AS BLOB)), 0)",
+  String(AGENT_LORE_ROW_OVERHEAD_BYTES),
+].join(" + ");
+
+export interface OwnedAgentLoreBookPageOptions {
+  limit: number;
+  offset: number;
+  folder?: string;
+  query?: string;
+}
+
+export interface OwnedAgentLoreEntryPageOptions {
+  bookId?: string;
+  limit: number;
+  offset: number;
+  query?: string;
+}
+
+interface OwnedAgentLoreListPageOptions extends OwnedAgentLoreEntryPageOptions {
+  bookId: string;
+}
+
+
+function assertOwnedAgentLorePage(limit: number, offset: number): void {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > AGENT_LORE_PAGE_MAX ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    throw new RangeError("Invalid agent lore pagination");
+  }
+}
+function rowToOwnedAgentBook(row: {
+  id: string;
+  name: string;
+  description?: string | null;
+  folder?: string | null;
+  created_at: number;
+  updated_at: number;
+}): WorldBook {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? "",
+    folder: row.folder ?? "",
+    metadata: {},
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function assertAgentLoreResultBytes<T>(data: readonly T[]): void {
+  let bytes = 2;
+  for (const item of data) {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(item);
+    } catch {
+      throw new AgentLoreQueryLimitError();
+    }
+    bytes += Buffer.byteLength(serialized, "utf8") + 1;
+    if (bytes > AGENT_LORE_RESULT_MAX_BYTES) {
+      throw new AgentLoreQueryLimitError();
+    }
+  }
+}
+
+
+/**
+ * Read one bounded page of books owned by the root user. The query is kept
+ * deliberately separate from the ordinary world-book list API: agent calls
+ * must use deterministic name/id ordering and never receive metadata bags.
+ */
+export function listOwnedAgentLoreBooks(
+  userId: string,
+  options: OwnedAgentLoreBookPageOptions,
+): OwnedAgentLorePage<WorldBook> {
+  assertOwnedAgentLorePage(options.limit, options.offset);
+  const where: string[] = ["user_id = ?"];
+  const params: SQLQueryBindings[] = [userId];
+  if (options.folder !== undefined) {
+    where.push("folder = ?");
+    params.push(options.folder);
+  }
+  if (options.query !== undefined) {
+    const query = `%${escapeLike(options.query)}%`;
+    where.push("(name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");
+    params.push(query, query);
+  }
+  const whereSql = where.join(" AND ");
+  const db = getDb();
+  const countRow = db
+    .query(`SELECT COUNT(*) AS count FROM world_books WHERE ${whereSql}`)
+    .get(...params) as { count: number } | null;
+  const pageBytes = db
+    .query(
+      `SELECT COALESCE(SUM(${AGENT_BOOK_PAGE_BYTE_EXPR}), 0) AS bytes
+       FROM (
+         SELECT id, name, description, folder
+         FROM world_books
+         WHERE ${whereSql}
+         ORDER BY name COLLATE NOCASE ASC, id ASC
+         LIMIT ? OFFSET ?
+       ) AS page`,
+    )
+    .get(...params, options.limit, options.offset) as { bytes: number } | null;
+  if ((pageBytes?.bytes ?? 0) > AGENT_LORE_RESULT_MAX_BYTES) {
+    throw new AgentLoreQueryLimitError();
+  }
+  const rows = db
+    .query(
+      `SELECT id, name, description, folder, created_at, updated_at
+       FROM world_books
+       WHERE ${whereSql}
+       ORDER BY name COLLATE NOCASE ASC, id ASC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, options.limit, options.offset) as Array<{
+      id: string;
+      name: string;
+      description?: string | null;
+      folder?: string | null;
+      created_at: number;
+      updated_at: number;
+    }>;
+  const data = rows.map((row) => rowToOwnedAgentBook(row));
+  assertAgentLoreResultBytes(data);
+  return {
+    data,
+    total: countRow?.count ?? 0,
+    limit: options.limit,
+    offset: options.offset,
+  };
+}
+
+/**
+ * Resolve an exact owned book name without scanning or materializing
+ * substring decoys. The count distinguishes no match, unique match, and
+ * ambiguity even when thousands of books share the same name; only two
+ * deterministic candidates are ever returned.
+ */
+export function resolveOwnedAgentLoreBookName(
+  userId: string,
+  name: string,
+): OwnedAgentLoreNameResolution {
+  if (Buffer.byteLength(name, "utf8") > 512) {
+    throw new RangeError("Invalid agent lore selector");
+  }
+  const db = getDb();
+  const where = "user_id = ? AND name COLLATE NOCASE = ?";
+  const countRow = db
+    .query(`SELECT COUNT(*) AS count FROM world_books WHERE ${where}`)
+    .get(userId, name) as { count: number } | null;
+  const oversizedRow = db
+    .query(
+      `SELECT 1 AS oversized
+       FROM world_books
+       WHERE ${where}
+         AND (
+           length(CAST(id AS BLOB)) > ${AGENT_LORE_RESULT_MAX_BYTES} OR
+           length(CAST(name AS BLOB)) > ${AGENT_LORE_RESULT_MAX_BYTES}
+         )
+       LIMIT 1`,
+    )
+    .get(userId, name) as { oversized: number } | null;
+  if (oversizedRow) {
+    throw new AgentLoreQueryLimitError();
+  }
+  const rows = db
+    .query(
+      `SELECT id, name FROM world_books
+       WHERE ${where}
+       ORDER BY id ASC
+       LIMIT 2`,
+    )
+    .all(userId, name) as Array<{ id: string; name: string }>;
+  assertAgentLoreResultBytes(rows);
+  const total = countRow?.count ?? 0;
+  return {
+    candidates: rows,
+    total,
+    truncated: rows.length < total,
+  };
+}
+
+/** Resolve one owned book without exposing another user's row. */
+export function getOwnedAgentLoreBook(
+  userId: string,
+  bookId: string,
+): WorldBook | null {
+  const db = getDb();
+  const pageBytes = db
+    .query(
+      `SELECT (
+         COALESCE(length(CAST(id AS BLOB)), 0) +
+         COALESCE(length(CAST(name AS BLOB)), 0) +
+         COALESCE(length(CAST(description AS BLOB)), 0) +
+         COALESCE(length(CAST(folder AS BLOB)), 0) +
+         ${AGENT_LORE_ROW_OVERHEAD_BYTES}
+       ) AS bytes
+       FROM world_books
+       WHERE id = ? AND user_id = ?`,
+    )
+    .get(bookId, userId) as { bytes: number } | null;
+  if ((pageBytes?.bytes ?? 0) > AGENT_LORE_RESULT_MAX_BYTES) {
+    throw new AgentLoreQueryLimitError();
+  }
+  const row = db
+    .query(
+      "SELECT id, name, description, folder, created_at, updated_at " +
+      "FROM world_books WHERE id = ? AND user_id = ?",
+    )
+    .get(bookId, userId) as {
+      id: string;
+      name: string;
+      description?: string | null;
+      folder?: string | null;
+      created_at: number;
+      updated_at: number;
+    } | null;
+  if (!row) return null;
+  const book = rowToOwnedAgentBook(row);
+  assertAgentLoreResultBytes([book]);
+  return book;
+}
+
+
+/**
+ * Read a bounded, disabled-filtered page of entries for one owned book.
+ * Ownership is part of both the count and page query so a stale or foreign
+ * book id cannot be used as an oracle.
+ */
+export function listOwnedAgentLoreEntries(
+  userId: string,
+  options: OwnedAgentLoreListPageOptions,
+): OwnedAgentLorePage<WorldBookEntry> {
+  assertOwnedAgentLorePage(options.limit, options.offset);
+  const where: string[] = [
+    "w.user_id = ?",
+    "e.world_book_id = ?",
+    "e.disabled = 0",
+  ];
+  const params: SQLQueryBindings[] = [userId, options.bookId];
+  if (options.query !== undefined) {
+    const query = `%${escapeLike(options.query)}%`;
+    where.push(
+      "(e.comment LIKE ? ESCAPE '\\' OR e.content LIKE ? ESCAPE '\\' OR " +
+      "e.key LIKE ? ESCAPE '\\' OR e.keysecondary LIKE ? ESCAPE '\\')",
+    );
+    params.push(query, query, query, query);
+  }
+  const whereSql = where.join(" AND ");
+  const db = getDb();
+  const from = "world_book_entries e JOIN world_books w ON w.id = e.world_book_id";
+  const countRow = db
+    .query(`SELECT COUNT(*) AS count FROM ${from} WHERE ${whereSql}`)
+    .get(...params) as { count: number } | null;
+  const pageBytes = db
+    .query(
+      `SELECT COALESCE(SUM(${AGENT_ENTRY_PAGE_BYTE_EXPR}), 0) AS bytes
+       FROM (
+         SELECT e.id, e.world_book_id, e.uid, e.key, e.keysecondary,
+                e.content, e.comment, e.role, e.group_name, e.automation_id,
+                e.vector_index_status, e.vector_index_error
+         FROM ${from}
+         WHERE ${whereSql}
+         ORDER BY e.order_value ASC, e.id ASC
+         LIMIT ? OFFSET ?
+       ) AS page`,
+    )
+    .get(...params, options.limit, options.offset) as { bytes: number } | null;
+  if ((pageBytes?.bytes ?? 0) > AGENT_LORE_RESULT_MAX_BYTES) {
+    throw new AgentLoreQueryLimitError();
+  }
+  const rows = db
+    .query(
+      `SELECT ${AGENT_LORE_ENTRY_COLUMNS} FROM ${from}
+       WHERE ${whereSql}
+       ORDER BY e.order_value ASC, e.id ASC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, options.limit, options.offset) as Array<Record<string, unknown>>;
+  const data = rows.map((row) => rowToEntry(row));
+  assertAgentLoreResultBytes(data);
+  return {
+    data,
+    total: countRow?.count ?? 0,
+    limit: options.limit,
+    offset: options.offset,
+  };
+}
+
+/** Resolve one enabled entry only when its book is owned by the root user. */
+export function getOwnedAgentLoreEntry(
+  userId: string,
+  entryId: string,
+): WorldBookEntry | null {
+  const db = getDb();
+  const pageBytes = db
+    .query(
+      `SELECT (
+         COALESCE(length(CAST(e.id AS BLOB)), 0) +
+         COALESCE(length(CAST(e.world_book_id AS BLOB)), 0) +
+         COALESCE(length(CAST(e.uid AS BLOB)), 0) +
+         COALESCE(length(CAST(e.key AS BLOB)), 0) +
+         COALESCE(length(CAST(e.keysecondary AS BLOB)), 0) +
+         COALESCE(length(CAST(e.content AS BLOB)), 0) +
+         COALESCE(length(CAST(e.comment AS BLOB)), 0) +
+         COALESCE(length(CAST(e.role AS BLOB)), 0) +
+         COALESCE(length(CAST(e.group_name AS BLOB)), 0) +
+         COALESCE(length(CAST(e.automation_id AS BLOB)), 0) +
+         COALESCE(length(CAST(e.vector_index_status AS BLOB)), 0) +
+         COALESCE(length(CAST(e.vector_index_error AS BLOB)), 0) +
+         ${AGENT_LORE_ROW_OVERHEAD_BYTES}
+       ) AS bytes
+       FROM world_book_entries e
+       JOIN world_books w ON w.id = e.world_book_id
+       WHERE e.id = ? AND w.user_id = ? AND e.disabled = 0`,
+    )
+    .get(entryId, userId) as { bytes: number } | null;
+  if ((pageBytes?.bytes ?? 0) > AGENT_LORE_RESULT_MAX_BYTES) {
+    throw new AgentLoreQueryLimitError();
+  }
+  const row = db
+    .query(
+      `SELECT ${AGENT_LORE_ENTRY_COLUMNS}
+       FROM world_book_entries e
+       JOIN world_books w ON w.id = e.world_book_id
+       WHERE e.id = ? AND w.user_id = ? AND e.disabled = 0`,
+    )
+    .get(entryId, userId) as Record<string, unknown> | null;
+  if (!row) return null;
+  const entry = rowToEntry(row);
+  assertAgentLoreResultBytes([entry]);
+  return entry;
+}
+export function searchOwnedAgentLoreEntries(
+  userId: string,
+  options: OwnedAgentLoreEntryPageOptions & { query: string },
+): OwnedAgentLorePage<WorldBookEntry> {
+  assertOwnedAgentLorePage(options.limit, options.offset);
+  const rawSearch = options.query.trim();
+  const ftsQuery = sanitizeEntryFtsQuery(rawSearch);
+  const rankCounts = Array.from({ length: 9 }, () => 0);
+  let total = 0;
+
+  preflightOwnedAgentLoreSearch(userId, ftsQuery, options.bookId);
+
+  scanOwnedAgentLoreSearch(
+    userId,
+    rawSearch,
+    ftsQuery,
+    options.bookId,
+    (_row, rank) => {
+      if (total === Number.MAX_SAFE_INTEGER) {
+        throw new AgentLoreQueryLimitError();
+      }
+      total += 1;
+      rankCounts[rank] += 1;
+    },
+  );
+
+  let remainingOffset = options.offset;
+  let remainingLimit = options.limit;
+  const slices = new Map<number, { skip: number; take: number }>();
+  for (let rank = 0; rank < rankCounts.length && remainingLimit > 0; rank += 1) {
+    const count = rankCounts[rank];
+    if (remainingOffset >= count) {
+      remainingOffset -= count;
+      continue;
+    }
+    const take = Math.min(remainingLimit, count - remainingOffset);
+    slices.set(rank, { skip: remainingOffset, take });
+    remainingLimit -= take;
+    remainingOffset = 0;
+  }
+
+  const selectedByRank = new Map<number, string[]>();
+  const seenByRank = Array.from({ length: rankCounts.length }, () => 0);
+  if (slices.size > 0) {
+    scanOwnedAgentLoreSearch(
+      userId,
+      rawSearch,
+      ftsQuery,
+      options.bookId,
+      (row, rank) => {
+        const slice = slices.get(rank);
+        if (!slice) return;
+        const seen = seenByRank[rank];
+        seenByRank[rank] += 1;
+        if (seen < slice.skip) return;
+        const selected = selectedByRank.get(rank) ?? [];
+        if (selected.length >= slice.take) return;
+        selected.push(row.id);
+        selectedByRank.set(rank, selected);
+      },
+    );
+  }
+
+  const selectedIds = [...selectedByRank.entries()]
+    .sort(([left], [right]) => left - right)
+    .flatMap(([, ids]) => ids);
+  const data = selectedIds.map((entryId) => {
+    const entry = getOwnedAgentLoreEntry(userId, entryId);
+    if (!entry) throw new Error("Owned agent lore changed during synchronous search");
+    return entry;
+  });
+  assertAgentLoreResultBytes(data);
+  return {
+    data,
+    total,
+    limit: options.limit,
+    offset: options.offset,
+  };
+}
+
 export function createEntry(
   userId: string,
   worldBookId: string,
   input: CreateWorldBookEntryInput,
   opts?: { emitEvent?: boolean },
 ): WorldBookEntry | null {
+  return withUserDataMutationSync(userId, () => {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
+  input = omitClientEntryIdentity(input);
+
 
   const id = crypto.randomUUID();
   const uid = crypto.randomUUID();
@@ -1617,12 +2333,36 @@ export function createEntry(
   }
   if (opts?.emitEvent !== false) emitWorldBookEntryChanged(userId, id);
   return created;
+  });
 }
 
-export function updateEntry(userId: string, id: string, input: UpdateWorldBookEntryInput): WorldBookEntry | null {
+export function updateEntry(
+  userId: string,
+  id: string,
+  input: UpdateWorldBookEntryInput,
+): WorldBookEntry | null;
+export function updateEntry(
+  userId: string,
+  worldBookId: string,
+  id: string,
+  input: UpdateWorldBookEntryInput,
+): WorldBookEntry | null;
+export function updateEntry(
+  userId: string,
+  worldBookIdOrEntryId: string,
+  entryIdOrInput: string | UpdateWorldBookEntryInput,
+  maybeInput?: UpdateWorldBookEntryInput,
+): WorldBookEntry | null {
+  return withUserDataMutationSync(userId, () => {
+  const hasExpectedParent = typeof entryIdOrInput === "string";
+  const id = hasExpectedParent ? entryIdOrInput : worldBookIdOrEntryId;
+  let input = hasExpectedParent ? maybeInput : entryIdOrInput;
+  if (!input) return null;
   const expectedRevision = readExpectedRevision(input);
   const existing = getEntry(userId, id);
-  if (!existing) return null;
+  const worldBookId = hasExpectedParent ? worldBookIdOrEntryId : existing?.world_book_id;
+  if (!existing || !worldBookId || existing.world_book_id !== worldBookId) return null;
+  input = omitClientEntryIdentity(input);
 
   const fields: string[] = [];
   const values: SQLQueryBindings[] = [];
@@ -1685,8 +2425,8 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   fields.push("updated_at = ?", "revision = revision + 1");
   values.push(now);
 
-  const where = ["id = ?"];
-  values.push(id);
+  const where = ["id = ?", "world_book_id = ?"];
+  values.push(id, worldBookId);
   if (expectedRevision !== undefined) {
     where.push("revision = ?");
     values.push(expectedRevision);
@@ -1698,15 +2438,16 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     .changes;
   if (changes === 0) {
     const current = getEntry(userId, id);
-    if (!current) return null;
+    if (!current || current.world_book_id !== worldBookId) return null;
     if (expectedRevision !== undefined) {
       throwEntryRevisionConflict(id, expectedRevision, current);
     }
     return null;
   }
 
-  touchWorldBook(existing.world_book_id, now);
-  const updated = getEntry(userId, id)!;
+  touchWorldBook(worldBookId, now);
+  const updated = getEntry(userId, id);
+  if (!updated || updated.world_book_id !== worldBookId) return null;
   if (!updated.vectorized) {
     deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
   } else if (shouldResetVectorIndex(input)) {
@@ -1716,20 +2457,22 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   }
   emitWorldBookEntryChanged(userId, id);
   return updated;
+  });
 }
 
 export async function deleteEntry(
   userId: string,
+  worldBookId: string,
   id: string,
   expectedRevision?: number,
 ): Promise<boolean> {
+  return withUserDataMutation(userId, async () => {
   const parsedExpectedRevision = parseExpectedRevision(
     expectedRevision,
     expectedRevision !== undefined,
   );
-  // Verify the entry belongs to a world book owned by this user
   const entry = getEntry(userId, id);
-  if (!entry) return false;
+  if (!entry || entry.world_book_id !== worldBookId) return false;
   assertEntryExpectedRevision(entry, parsedExpectedRevision);
 
   const deleted = await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(
@@ -1738,32 +2481,33 @@ export async function deleteEntry(
     () => {
       const result = parsedExpectedRevision !== undefined
         ? getDb()
-          .query("DELETE FROM world_book_entries WHERE id = ? AND revision = ?")
-          .run(id, parsedExpectedRevision)
+          .query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ? AND revision = ?")
+          .run(id, worldBookId, parsedExpectedRevision)
         : getDb()
-          .query("DELETE FROM world_book_entries WHERE id = ?")
-          .run(id);
+          .query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?")
+          .run(id, worldBookId);
       const removed = result.changes > 0;
       if (!removed) {
+        const current = getEntry(userId, id);
+        if (!current || current.world_book_id !== worldBookId) return false;
         if (parsedExpectedRevision !== undefined) {
-          const current = getEntry(userId, id);
-          if (current) {
-            throwEntryRevisionConflict(id, parsedExpectedRevision, current);
-          }
+          throwEntryRevisionConflict(id, parsedExpectedRevision, current);
         }
         return false;
       }
-      touchWorldBook(entry.world_book_id);
+      touchWorldBook(worldBookId);
       return true;
     },
   );
   if (deleted) {
-    eventBus.emit(EventType.WORLD_BOOK_ENTRY_DELETED, { id, worldBookId: entry.world_book_id }, userId);
+    eventBus.emit(EventType.WORLD_BOOK_ENTRY_DELETED, { id, worldBookId }, userId);
   }
   return deleted;
+  });
 }
 
 export function duplicateEntry(userId: string, entryId: string, input?: DuplicateWorldBookEntryInput): WorldBookEntry | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getEntry(userId, entryId);
   if (!existing) return null;
   const expectedRevision = input ? readExpectedRevision(input) : undefined;
@@ -1813,6 +2557,7 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
     vectorized: existing.vectorized,
     extensions: cloneEntryExtensions(existing.extensions),
   });
+  });
 }
 
 export function reorderEntries(
@@ -1821,6 +2566,7 @@ export function reorderEntries(
   orderedIds: string[],
   expectedRevisions?: Record<string, number>,
 ): boolean {
+  return withUserDataMutationSync(userId, () => {
   const parsedExpectedRevisions = parseExpectedRevisions(
     expectedRevisions,
     expectedRevisions !== undefined,
@@ -1873,6 +2619,7 @@ export function reorderEntries(
 
   emitWorldBookChanged(userId, worldBookId);
   return true;
+  });
 }
 
 export async function bulkOperateEntries(
@@ -1880,6 +2627,7 @@ export async function bulkOperateEntries(
   worldBookId: string,
   input: WorldBookEntryBulkActionInput,
 ): Promise<WorldBookEntryBulkActionResult | null> {
+  return withUserDataMutation(userId, async () => {
   const expectedRevisions = readExpectedRevisions(input);
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
@@ -1933,16 +2681,17 @@ export async function bulkOperateEntries(
             ? db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?").run(entryId, worldBookId)
             : db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ? AND revision = ?")
               .run(entryId, worldBookId, expected);
-          if (result.changes === 0 && expected !== undefined) {
-            const current = readEntryById(userId, entryId);
-            if (current !== null) {
-              throwEntryRevisionConflict(entryId, expected, current);
+          if (result.changes === 0) {
+            if (expected !== undefined) {
+              const current = readEntryById(userId, entryId);
+              if (current !== null) throwEntryRevisionConflict(entryId, expected, current);
             }
             throw new Error("One or more entries were not found in this world book");
           }
         }
         touchWorldBook(worldBookId, now);
       })();
+      return true;
     });
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
@@ -2212,6 +2961,7 @@ export async function bulkOperateEntries(
   }
 
   throw new Error("Unsupported bulk action");
+  });
 }
 
 // --- Import helpers ---
@@ -2399,6 +3149,7 @@ export function importWorldBook(
   payload: any,
   options: ImportWorldBookOptions = {},
 ): ImportResult {
+  return withUserDataMutationSync(userId, () => {
   // Accept imported lorebook format or a plain {entries} object.
   // Imported lorebooks may wrap entries in an object keyed by numeric index,
   // or provide them as an array.
@@ -2423,6 +3174,7 @@ export function importWorldBook(
     entryCount: result.insertedIds.length,
     aborted: result.aborted || undefined,
   };
+  });
 }
 
 // Bulk import variant that forces vectorization off for every entry. Used by
@@ -2432,6 +3184,7 @@ export async function importWorldBookBulk(
   payload: any,
   options: ImportWorldBookOptions = {},
 ): Promise<ImportResult> {
+  return withUserDataMutation(userId, async () => {
   const bookName = payload.name || payload.originalName || "Imported World Book";
   const description = payload.description || "";
 
@@ -2476,6 +3229,7 @@ export async function importWorldBookBulk(
     entryCount,
     aborted: aborted || undefined,
   };
+  }, options.signal);
 }
 
 // --- Character Book Import / Export ---
@@ -2487,6 +3241,7 @@ export function importCharacterBook(
   characterBook: any,
   options: { autoManagedByCharacter?: boolean; signal?: AbortSignal } = {},
 ): ImportResult {
+  return withUserDataMutationSync(userId, () => {
   const bookName = characterBook.name || `${characterName}'s Lorebook`;
   const importedAt = new Date().toLocaleString();
   const description = characterBook.description || `Imported from ${characterName} at ${importedAt}`;
@@ -2512,6 +3267,7 @@ export function importCharacterBook(
     entryCount: result.insertedIds.length,
     aborted: result.aborted || undefined,
   };
+  });
 }
 
 // Import a world book from the Lumiverse export format (used in lumiverse_modules.json).
@@ -2523,6 +3279,7 @@ export function importLumiverseWorldBook(
   data: Record<string, any>,
   options: ImportWorldBookOptions = {},
 ): ImportResult {
+  return withUserDataMutationSync(userId, () => {
   const bookName = data.name || "Imported Lorebook";
   const description = data.description || `Imported from CharX at ${new Date().toLocaleString()}`;
   const worldBook = createWorldBook(userId, {
@@ -2543,6 +3300,7 @@ export function importLumiverseWorldBook(
     entryCount: result.insertedIds.length,
     aborted: result.aborted || undefined,
   };
+  });
 }
 
 // --- World Book Export ---

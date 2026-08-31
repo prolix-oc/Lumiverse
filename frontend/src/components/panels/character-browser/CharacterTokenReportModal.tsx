@@ -40,8 +40,8 @@ export default function CharacterTokenReportModal({ isOpen, onClose, characterNa
   const requestRef = useRef(0)
 
   const profileModel = useMemo(() => (
-    profiles.find((profile) => profile.id === activeProfileId)?.model
-      ?? profiles.find((profile) => profile.is_default)?.model
+    profiles.find((profile) => profile.id === activeProfileId && profile.review_required !== true)?.model
+      ?? profiles.find((profile) => profile.is_default && profile.review_required !== true)?.model
       ?? null
   ), [activeProfileId, profiles])
 

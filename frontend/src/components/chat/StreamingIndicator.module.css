@@ -5,6 +5,32 @@
   align-items: center;
 }
 
+.dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.statusText {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: 0.8rem;
+}
+
+.details,
+.recovery {
+  color: var(--lumiverse-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.recovery {
+  flex-basis: 100%;
+}
+
 .dot {
   width: 5px;
   height: 5px;

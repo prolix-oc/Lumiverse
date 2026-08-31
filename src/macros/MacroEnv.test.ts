@@ -219,6 +219,38 @@ describe("buildEnv persona pronouns", () => {
   });
 });
 
+describe("buildEnv user identity", () => {
+  test("uses the authenticated account name when no persona is selected", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      userName: " Account User ",
+    });
+
+    expect(env.names.user).toBe("Account User");
+    expect(env.names.notChar).toBe("Account User");
+  });
+
+  test("prefers the trimmed persona name over the authenticated account name", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: { ...basePersona, name: " Persona User " },
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      userName: "Account User",
+    });
+
+    expect(env.names.user).toBe("Persona User");
+    expect(env.names.notChar).toBe("Persona User");
+  });
+});
+
 describe("buildEnv persona add-on outlets", () => {
   test("publishes enabled outlet add-ons without appending them to {{persona}}", () => {
     const env = buildEnv({

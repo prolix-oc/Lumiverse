@@ -1,11 +1,12 @@
 import type { LlmMessageDTO } from "lumiverse-spindle-types";
-import type { AssemblyBreakdownEntry, GenerationType } from "../llm/types";
+import type { AssemblyBreakdownEntry, AssemblyResult, GenerationType } from "../llm/types";
 import type { PromptBlock, PromptVariableValues, Preset } from "../types/preset";
 import { assemblePrompt } from "../services/prompt-assembly.service";
 import { prefetchAssemblyData } from "../services/prompt-assembly-prefetch";
 import {
   assemblePromptInWorker,
   canUsePromptAssemblyWorker,
+  isSafeResponseAssemblyFallbackError,
 } from "../services/prompt-assembly-worker-client";
 import { normalizePromptBlocks } from "../services/presets.service";
 
@@ -95,6 +96,9 @@ export async function assembleSpindleBlocks(
 
   const ctx = {
     userId,
+    generationId: crypto.randomUUID(),
+    assemblySurface: "RESPONSE" as const,
+    dryRun: true,
     chatId,
     connectionId: input.connectionId,
     personaId: input.personaId,
@@ -104,13 +108,19 @@ export async function assembleSpindleBlocks(
     macroCommit: false,
     signal,
   };
-
-  const assembled = canUsePromptAssemblyWorker()
-    ? await assemblePromptInWorker(ctx)
-    : await (async () => {
-        const prefetched = await prefetchAssemblyData(ctx);
-        return assemblePrompt({ ...ctx, prefetched });
-      })();
+  let assembled: AssemblyResult;
+  if (canUsePromptAssemblyWorker()) {
+    try {
+      assembled = await assemblePromptInWorker(ctx);
+    } catch (error) {
+      if (!isSafeResponseAssemblyFallbackError(error)) throw error;
+      const prefetched = await prefetchAssemblyData(ctx);
+      assembled = await assemblePrompt({ ...ctx, prefetched });
+    }
+  } else {
+    const prefetched = await prefetchAssemblyData(ctx);
+    assembled = await assemblePrompt({ ...ctx, prefetched });
+  }
 
   return {
     messages: assembled.messages.map((message) => ({

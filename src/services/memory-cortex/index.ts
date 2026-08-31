@@ -27,7 +27,7 @@ import {
   type MemoryCortexConfig,
 } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
-import { extractWithSidecar, extractBatchWithSidecar, getToolChoiceParams, getExtractionStructuredParams } from "./salience-sidecar";
+import { extractWithSidecar, extractBatchWithSidecar } from "./salience-sidecar";
 import { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 import { extractEntitiesHeuristic, extractMentionExcerpt, detectNicknameIntroductions } from "./entity-extractor";
 import { refineHeuristicDetections } from "./detection-refiner";
@@ -99,7 +99,6 @@ export type { FormatterMode, ShadowPromptResult, LinkedFormatResult } from "./sh
 export { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 export type { CortexUsageStats } from "./gc";
 export { formatColorMapForPrompt, getColorMap } from "./font-attribution";
-export { getExtractionStructuredParams, getToolChoiceParams } from "./salience-sidecar";
 export type { FontColorMapping, ColorAttribution } from "./font-attribution";
 export type {
   CortexQuery,

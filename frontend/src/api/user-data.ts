@@ -1,120 +1,127 @@
-import { BASE_URL, get, post } from './client'
+import { ApiError, BASE_URL, get, post } from './client'
+import {
+  normalizeUserDataApiFailure,
+  normalizeUserDataCommand,
+  normalizeUserDataExportPrepare,
+  normalizeUserDataJob,
+  normalizeUserDataJobId,
+  normalizeUserDataStartImport,
+  parseDecryptionTicket,
+  USER_DATA_LIMITS,
+  UserDataProtocolError,
+  type DecryptionTicket,
+  type UserDataCommandResponse,
+  type UserDataExportPrepareResponse,
+  type UserDataJob,
+  type UserDataStartImportResponse,
+} from '@/types/user-data'
 
-export interface DecryptionTicket {
-  kind: 'lumiverse-decryption-ticket'
-  version: 1
-  archiveId: string
-  issuer: 'lumiverse'
-  issuerInstance: string | null
-  issuedAt: number
-  algorithm: 'AES-256-GCM'
-  keyB64: string
-  secretsHash: string
-}
+export type { DecryptionTicket, UserDataCommandResponse, UserDataExportPrepareResponse, UserDataJob, UserDataStartImportResponse }
 
-export interface ExportPrepareResponse {
-  archiveId: string
-  archiveUrl: string
-  archiveFilename: string
-  ticketFilename: string | null
-  ticket: DecryptionTicket | null
-  secretsCount: number
-  /** Secret keys the source instance couldn't decrypt — excluded from the export. */
-  unreachableSecrets: string[]
-}
+export type ExportPrepareResponse = UserDataExportPrepareResponse
 
-export interface TicketSubmissionResponse {
-  accepted: true
-  wasReused: boolean
-  previouslyConsumedAt: number | null
-  uses: number
-}
+export interface TicketSubmissionResponse { accepted: true }
 
-export interface ImportJobStatus {
-  jobId: string
-  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled'
-  startedAt: number
-  finishedAt: number | null
-  manifest: {
-    schemaVersion: number
-    exportedAt: number
-    archiveId: string
-    producerVersion: string | null
-    includeVectors: boolean
-    embeddingConfig: { provider: string | null; model: string | null; dimension: number | null }
-    counts: Record<string, number>
-    missingFiles: string[]
-    hasEncryptedSecrets?: boolean
-    secretsCount?: number
-  } | null
-  summary: Record<string, { imported: number; skipped: number }>
-  fileSummary: Record<string, number>
-  error: string | null
+/** Compatibility name for the canonical bounded status projection. */
+export type ImportJobStatus = UserDataJob
+
+function apiFailure(error: unknown, fallback: Parameters<typeof normalizeUserDataApiFailure>[1] = 'network'): Error {
+  const failure = normalizeUserDataApiFailure(error, fallback)
+  const wrapped = new Error(failure.message || failure.code)
+  Object.assign(wrapped, { body: { code: failure.code, error: failure.message, message: failure.message } })
+  return wrapped
 }
 
 export const userDataApi = {
-  /** Returns the URL the browser can navigate to / GET for a streamed export
-   *  without API keys. */
   exportUrl(includeVectors: boolean): string {
     return `${BASE_URL}/user-data/export?includeVectors=${includeVectors ? '1' : '0'}`
   },
 
-  /** Prepare a secrets-bearing export. Returns the ticket JSON (to download
-   *  out-of-band) and the URL to stream the archive from. */
-  prepareSecretsExport(includeVectors: boolean): Promise<ExportPrepareResponse> {
-    return post('/user-data/export/prepare', { includeVectors, includeSecrets: true })
+  async prepareSecretsExport(includeVectors: boolean): Promise<ExportPrepareResponse> {
+    try {
+      return normalizeUserDataExportPrepare(await post<unknown>('/user-data/export/prepare', { includeVectors, includeSecrets: true }))
+    } catch (error) {
+      throw apiFailure(error)
+    }
+  },
+  /** Parse ticket input exactly once before it crosses the API boundary. */
+  async submitTicket(jobId: string, ticketInput: unknown): Promise<TicketSubmissionResponse> {
+    const routeJobId = normalizeUserDataJobId(jobId)
+    const ticket = parseDecryptionTicket(ticketInput)
+    try {
+      const result = await post<unknown>(`/user-data/import/${encodeURIComponent(routeJobId)}/ticket`, ticket)
+      const normalized = normalizeUserDataCommand(result)
+      if (!normalized.accepted) throw apiFailure(normalized.failure, 'ticket_submission_failed')
+      return { accepted: true }
+    } catch (error) {
+      throw apiFailure(error, 'ticket_submission_failed')
+    }
   },
 
-  /** Submit the parsed ticket JSON to a job awaiting one. */
-  submitTicket(jobId: string, ticket: DecryptionTicket): Promise<TicketSubmissionResponse> {
-    return post(`/user-data/import/${jobId}/ticket`, ticket)
-  },
-
-  /** Resume an awaiting-ticket import without restoring secrets. */
-  skipTicket(jobId: string): Promise<{ skipped: boolean }> {
-    return post(`/user-data/import/${jobId}/skip-ticket`)
-  },
-
-  /**
-   * Upload an archive as the raw request body. Returns { jobId } once the
-   * upload is staged. Progress reports come over the WebSocket.
-   */
-  async startImport(file: File, onProgress?: (percent: number) => void): Promise<{ jobId: string }> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${BASE_URL}/user-data/import`)
-      xhr.withCredentials = true
-      xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-
-      if (onProgress) {
-        xhr.upload.addEventListener('progress', (e) => {
-          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
-        })
+  async skipTicket(jobId: string): Promise<{ skipped: boolean }> {
+    const routeJobId = normalizeUserDataJobId(jobId)
+    try {
+      const normalized = normalizeUserDataCommand(await post<unknown>(`/user-data/import/${encodeURIComponent(routeJobId)}/skip-ticket`))
+      if (!normalized.accepted || normalized.status === 'too_late' || normalized.status === 'not_found') {
+        throw apiFailure(normalized.failure, 'ticket_gate_conflict')
       }
+      return { skipped: true }
+    } catch (error) {
+      throw apiFailure(error, 'ticket_gate_conflict')
+    }
+  },
 
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            resolve(JSON.parse(xhr.responseText))
-          } catch (err) {
-            reject(new Error('Server returned invalid JSON: ' + (err as Error).message))
-          }
-        } else {
-          let body: any
-          try { body = JSON.parse(xhr.responseText) } catch { body = xhr.responseText }
-          reject(new Error(body?.error || `Upload failed (${xhr.status})`))
-        }
+  async startImport(file: File, onProgress?: (percent: number) => void): Promise<UserDataStartImportResponse> {
+    if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > USER_DATA_LIMITS.maxArchiveUploadBytes) {
+      throw new UserDataProtocolError('size', 'archive upload exceeds the supported size limit')
+    }
+    const { promise, resolve, reject } = Promise.withResolvers<UserDataStartImportResponse>()
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${BASE_URL}/user-data/import`)
+    xhr.withCredentials = true
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) onProgress(Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100))))
+      })
+    }
+    xhr.onload = () => {
+      let body: unknown
+      try { body = JSON.parse(xhr.responseText) } catch { body = null }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(normalizeUserDataStartImport(body)) } catch (error) { reject(error) }
+        return
       }
-      xhr.onerror = () => reject(new Error('Network error during upload'))
-      xhr.send(file)
-    })
+      reject(apiFailure(new ApiError(xhr.status, xhr.statusText, body), 'upload_failed'))
+    }
+    xhr.onerror = () => reject(apiFailure(new Error('Network error during upload'), 'network'))
+    xhr.onabort = () => reject(apiFailure(new Error('Upload cancelled'), 'cancelled'))
+    xhr.send(file)
+    return promise
   },
 
-  getImportStatus(jobId: string): Promise<ImportJobStatus> {
-    return get(`/user-data/import/${jobId}/status`)
+  async getImportStatus(jobId: string): Promise<ImportJobStatus> {
+    const routeJobId = normalizeUserDataJobId(jobId)
+    try {
+      const response = await get<unknown>(`/user-data/import/${encodeURIComponent(routeJobId)}/status`)
+      return normalizeUserDataJob(response)
+    } catch (error) {
+      if (error instanceof UserDataProtocolError) throw error
+      throw apiFailure(error, 'network')
+    }
   },
 
-  cancelImport(jobId: string): Promise<{ cancelled: boolean; status: string }> {
-    return post(`/user-data/import/${jobId}/cancel`)
+  async cancelImport(jobId: string): Promise<{ status: 'cancelled' | 'cancelling' | 'cleanup_pending' | 'too_late' | 'not_found' }> {
+    const routeJobId = normalizeUserDataJobId(jobId)
+    try {
+      const result = normalizeUserDataCommand(await post<unknown>(`/user-data/import/${encodeURIComponent(routeJobId)}/cancel`))
+      if (result.status !== 'cancelled' && result.status !== 'cancelling' && result.status !== 'cleanup_pending' && result.status !== 'too_late' && result.status !== 'not_found') {
+        throw apiFailure(result.failure, 'malformed_response')
+      }
+      return { status: result.status }
+    } catch (error) {
+      if (error instanceof UserDataProtocolError) throw error
+      throw apiFailure(error, 'network')
+    }
   },
 }

@@ -1,4 +1,15 @@
 {
+  "connectionReview": {
+    "title": "需要審查",
+    "description": "此匯入的連線在審查並啟用前會保持停用。",
+    "enable": "啟用連線",
+    "enabling": "正在啟用…",
+    "reasons": {
+      "foreignImport": "匯入的連線需要本機核准。",
+      "repairRequired": "連線資料需要修復後才能啟用。",
+      "unknown": "啟用前需要審查此連線。"
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "檔案",
@@ -1402,6 +1413,10 @@
     "openChatToAdd": "打開聊天以添加聊天範圍的世界書",
     "removeFromChat": "從當前聊天移除",
     "noChatActive": "當前聊天沒有激活的世界書",
+    "chatAttachmentSaveFailed": "無法保存此聊天的世界書附件。",
+    "entrySaveFailed": "無法保存此世界書條目。",
+    "entryDeleteFailed": "無法刪除此世界書條目。",
+    "entryMutationFailed": "無法更新此世界書條目。",
     "activationSettings": "激活設置",
     "selectBook": "選擇世界書…",
     "selectWorldBookAria": "選擇世界書",
@@ -2820,7 +2835,9 @@
     "fuseFailed": "合併數據庫失敗",
     "scrapeFailed": "抓取 URL 失敗",
     "loadDocFailed": "加載文檔內容失敗",
-    "saveDocFailed": "保存文檔失敗"
+    "saveDocFailed": "保存文檔失敗",
+    "remoteDocumentRemoved": "該文件已被刪除。",
+    "remoteDatabankRemoved": "該資料庫已被刪除。"
   },
   "creatorWorkshop": {
     "shared": {
@@ -3083,7 +3100,8 @@
     "unknownProvider": "未知",
     "editorTabs": {
       "ariaLabel": "預設編輯器分頁",
-      "preset": "預設"
+      "preset": "預設",
+      "agenticRuntime": "智能體執行環境"
     },
     "tokens": " 詞元",
     "category": {
@@ -3132,6 +3150,14 @@
       "emptyOutput": "（空輸出）",
       "noPreview": "無內容可預覽",
       "lockBlock": "鎖定塊（防止誤編輯）",
+      "sealedBlockTitle": "LumiHub 封存塊",
+      "sealedBlockHint": "進階發佈選項。將此預設上傳至 LumiHub 時，塊內容會從公開 JSON 中移除，並儲存為 Hub 端的私人塊。本機副本在上傳前仍會保留文字。",
+      "sealedBlockInstalledHint": "已從 LumiHub 安裝。你可以在本機檢視和編輯此塊，但 Lumiverse 一律會從匯出內容和分享資料中移除此內容。",
+      "sealedBlockKey": "封存塊解析鍵",
+      "sealedBlockKeyPlaceholder": "dialogue.frame",
+      "sealedBlockKeyHint": "穩定的解析鍵。請使用字母、數字、點號、連字號、底線或冒號。",
+      "sealedBlockEnable": "我了解此功能是用於 LumiHub 發佈，並希望在上傳時封存此塊。",
+      "sealedBlockInstalledEnable": "由於此塊是從 LumiHub 安裝，匯出時一律會保持封存。",
       "categoryMode": "類別模式",
       "categoryModeNormal": "普通開關",
       "categoryModeMulti": "多選",
@@ -3331,6 +3357,601 @@
       "reapplied": "已重新應用默認配置",
       "alreadyDefault": "塊狀態已與默認一致"
     },
+    "agenticRuntime": {
+      "eyebrow": "預設執行階段",
+      "title": "代理式執行階段",
+      "description": "將啟用設定、子代理、分階段指示、情境、任務、工作區政策及本機修復整合為一份有版本控管的草稿。",
+      "nativeContextNotice": "世界資訊（World Info）與資料庫（Databank）仍是 Loom 之外的即時原生來源。Loom 不會複製、固定版本或修復它們。",
+      "status": {
+        "enabled": "已啟用",
+        "disabled": "已停用"
+      },
+      "navigation": {
+        "ariaLabel": "代理式執行階段區段",
+        "saveBeforePresetAction": "變更、匯入或匯出預設之前，請先儲存或處理代理式執行階段草稿。"
+      },
+      "sections": {
+        "activation": {
+          "nav": "啟用與模式",
+          "title": "啟用與模式",
+          "description": "選擇此預設允許的模式。聊天或單回合的選擇會另行決定，且絕不會變更此預設。"
+        },
+        "agents": {
+          "nav": "代理",
+          "title": "代理",
+          "description": "定義可重複使用的子代理設定檔及可攜式連線插槽參照。"
+        },
+        "tools": {
+          "nav": "核心工具與相依項目",
+          "title": "核心工具與相依項目",
+          "description": "僅授予此預設所需、由主機擁有的擷取工具與預算。"
+        },
+        "phases": {
+          "nav": "分階段指示",
+          "title": "分階段指示",
+          "description": "依確切修訂版本選取 Loom 區塊、情境傳遞及分階段執行環境的固定目的地。代理式模式不會加入第二套自由格式提示系統。"
+        },
+        "tasks": {
+          "nav": "動態任務",
+          "title": "動態任務",
+          "description": "定義有界限的任務範本、相依閉包、必要性及啟用條件。"
+        },
+        "workspace": {
+          "nav": "工作區保留與共用",
+          "title": "工作區保留與共用",
+          "description": "在主機強制上限內選擇保留方式與僅供檢視的共用方式。"
+        },
+        "repair": {
+          "nav": "可攜性與修復",
+          "title": "可攜性與修復",
+          "description": "啟用前，請處理本機插槽、過時修訂版本、匯入的審查項目及功能不相符問題。"
+        }
+      },
+      "activation": {
+        "reviewTitle": "本機審查尚未完成",
+        "reviewDescription": "啟用此匯入的設定前，請確認每個審查項目並完成所有必要修復。",
+        "enable": "啟用預設代理",
+        "enableHint": "使編寫的設定可用於回應模式，並在完全就緒時可用於代理式模式。",
+        "allowedModes": "允許的模式",
+        "defaultMode": "預設的預設模式"
+      },
+      "modes": {
+        "response": "回應",
+        "responseHint": "使用既有的生成路徑，並持續可用於修復或相容性用途。",
+        "agentic": "代理式",
+        "agenticHint": "僅在每個有效執行階段閘門都準備就緒時，才使用封閉式單回合階段機制。"
+      },
+      "agents": {
+        "connectionRef": "可攜式連線插槽"
+      },
+      "generationTypes": {
+        "normal": "一般",
+        "continue": "繼續",
+        "regenerate": "重新生成",
+        "swipe": "滑動"
+      },
+      "phases": {
+        "names": {
+          "assemble": "組裝",
+          "work": "工作",
+          "complete": "完成",
+          "render": "渲染",
+          "prepare_commit": "準備提交",
+          "committing": "提交中",
+          "committed": "已提交",
+          "commit_failed": "提交失敗",
+          "exhausted": "已耗盡",
+          "failed": "失敗",
+          "cancelled": "已取消",
+          "timed_out": "已逾時"
+        },
+        "workPolicy": {
+          "title": "工作政策",
+          "description": "僅在代理的私密工作期間可用的指示。"
+        },
+        "workspaceUsage": {
+          "title": "工作區使用方式",
+          "description": "使用有界限的任務、記錄及提交內容的指示。"
+        },
+        "completionCriteria": {
+          "title": "完成條件",
+          "description": "主機接受完成狀態前評估的指示。"
+        },
+        "renderPolicy": {
+          "title": "呈現政策",
+          "description": "僅用於停用工具後最終呈現的指示。"
+        },
+        "source": "來源區塊",
+        "sourceRevision": "預設修訂版本 {{presetRevision}} · 區塊修訂版本 {{blockRevision}} · 提示位置 {{promptOrder}}",
+        "notSelected": "未選取",
+        "stale": "區塊修訂版本已變更 — 儲存前請重新選取",
+        "required": "必要",
+        "requiredHint": "必要項目必須可用才能完成。",
+        "requiredFor": "將 {{name}} 設為必要",
+        "condition": "條件",
+        "conditionHint": "啟用後，僅當型別化條件為 true 時才包含此區塊。",
+        "conditionFor": "{{name}} 的條件",
+        "routing": "固定路由",
+        "routingHint": "每個政策區塊都有固定的目的地與檢查點。",
+        "routingValue": "目的地：{{destination}} · 檢查點：{{checkpoint}}",
+        "destinations": {
+          "root_work": "根 WORK",
+          "completion_handoff": "完成交接",
+          "render": "停用工具的 RENDER"
+        },
+        "checkpoints": {
+          "WORK": "WORK",
+          "PREPARE_COMMIT": "準備提交",
+          "RENDER": "RENDER"
+        },
+        "responseOmissionTitle": "Response 模式會省略 Agentic 指示",
+        "responseOmissionHint": "這些 Loom 政策項目與自訂階段指示僅供 Agentic 執行使用，不會包含在 Response 模式中。",
+        "responseOmissionRoute": "目的地：{{destination}} · 檢查點：{{checkpoint}}",
+        "responseOmissionEntry": "政策項目 {{id}}",
+        "responseOmissionPhaseInstruction": "階段指示 {{blockId}} · 確切區塊修訂版本 {{blockRevision}}"
+      },
+      "customPhases": {
+        "title": "自訂階段",
+        "description": "新增包含確切指示、條件、能力與轉換的有界限階段。",
+        "defaultLabel": "階段 {{number}}",
+        "add": "新增自訂階段",
+        "empty": "尚未設定自訂階段。",
+        "summary": "階段 {{number}} · {{id}}",
+        "order": "順序 {{number}}",
+        "orderHint": "較早的階段會先執行；轉換可以重複或前進。",
+        "moveUp": "將 {{label}} 上移",
+        "moveDown": "將 {{label}} 下移",
+        "id": "階段 ID",
+        "idFor": "{{label}} 的階段 ID",
+        "label": "顯示標籤",
+        "labelFor": "階段 {{id}} 的顯示標籤",
+        "required": "必要階段",
+        "requiredHint": "必要階段必須在執行完成前結束。",
+        "requiredFor": "將 {{label}} 設為必要",
+        "repeatLimit": "重複上限",
+        "repeatLimitFor": "{{label}} 的重複上限",
+        "repeatLimitHint": "此階段最多可重複的次數。",
+        "instructions": "指示",
+        "instructionsHint": "依確切的預設與區塊修訂版本選取現有 Loom 區塊。",
+        "notSelected": "未選取",
+        "unavailableInstruction": "無法使用的指示區塊 {{id}}",
+        "removeInstruction": "移除指示區塊 {{id}}",
+        "childInstructionSubsets": "委派子代理階段子集",
+        "childInstructionSubsetsHint": "只將已選取的階段指示區塊分配給每個已編寫的子代理設定。空子集不會傳送階段指示。",
+        "childInstructionSubsetsNoProfiles": "請先編寫子代理設定，再分配階段指示。",
+        "childSubsetAssign": "分配子集",
+        "childSubsetAssignFor": "為 {{id}} 分配階段子集",
+        "childSubsetProfileId": "設定 ID：{{id}}",
+        "childSubsetUnassigned": "未分配——此子代理只會收到其設定的系統提示。",
+        "childSubsetEmpty": "空子集——此子代理只會收到其設定的系統提示。",
+        "childSubsetCount": "已分配 {{count}} 個階段指示區塊。",
+        "childSubsetRepair": "需要修復——此分配與階段的確切來源不符。",
+        "childSubsetUnknownProfile": "未知子代理設定 {{id}}",
+        "childSubsetRemove": "移除子代理設定 {{id}} 的子集",
+        "enter": "進入條件",
+        "enterHint": "此條件為真時，階段會開始。",
+        "exit": "離開條件",
+        "exitHint": "此條件為真時，階段會完成。",
+        "skip": "略過條件",
+        "skipEnabled": "允許略過階段",
+        "skipHint": "啟用後，條件為真時會略過此階段。",
+        "skipFor": "允許略過 {{label}}",
+        "capabilities": "要求的能力",
+        "capabilitiesHint": "只要求此階段所需的主機能力。",
+        "capabilitiesList": {
+          "core_retrieval": "核心擷取",
+          "workspace_read": "讀取工作區",
+          "workspace_write": "寫入工作區",
+          "delegation": "委派給子代理",
+          "council": "Council",
+          "cortex": "記憶 Cortex"
+        },
+        "transitions": "後續階段",
+        "transitionsHint": "選擇此階段接下來可以進入的階段。",
+        "transitionAutomatic": "自動順序",
+        "transitionAutomaticHint": "空白轉換清單允許在上限內自我重複，然後前進至緊接的下一階段。",
+        "transitionAutomaticNext": "自動進入下一階段：{{label}}",
+        "transitionAutomaticTerminal": "沒有下一階段。完成此階段即結束序列。",
+        "transitionExplicit": "明確轉換",
+        "transitionExplicitHint": "僅允許選取的自我重複與緊接下一階段轉換。",
+        "useExplicitTransitions": "使用明確轉換",
+        "useAutomaticTransition": "使用自動順序",
+        "repeatTarget": "重複此階段",
+        "nextTarget": "下一階段：{{label}}",
+        "invalidTarget": "無法使用的階段：{{id}}",
+        "remove": "移除自訂階段"
+      },
+      "tasks": {
+        "add": "新增任務範本",
+        "defaultName": "任務 {{number}}",
+        "id": "範本 ID",
+        "label": "標籤",
+        "description": "任務描述",
+        "required": "必要",
+        "optional": "選用",
+        "requiredHint": "已啟用的必要任務必須先結束，才能完成。模型建立的任務仍為選用。",
+        "dependencies": "相依範本",
+        "quarantined": "已隔離的任務範本",
+        "quarantinedHint": "此匯入的任務範本無效，在捨棄前無法編輯。",
+        "discardQuarantined": "捨棄已隔離的任務範本",
+        "remove": "移除範本"
+      },
+      "workspace": {
+        "retention": "保留",
+        "sharing": "共用",
+        "retentionOptions": {
+          "turn_terminal": "回合終止",
+          "chat_lifetime": "聊天存續期間"
+        },
+        "retentionHints": {
+          "turn_terminal": "僅在該回合的終止保留時段內保留僅供檢視的工作區。",
+          "chat_lifetime": "在聊天存續期間保留已授權且已發布的工作區中繼資料。"
+        },
+        "sharingOptions": {
+          "root_only": "僅根代理",
+          "view_only": "僅供檢視的參與者"
+        },
+        "sharingHints": {
+          "root_only": "只有根代理會獲得工作區功能。",
+          "view_only": "使用者可以查看經遮蔽處理的工作區；該工作區仍不可編輯。"
+        },
+        "ceilings": "有效主機上限",
+        "ceilingsHint": "由此主機強制執行的資訊性防護措施。預設與匯入項目無法提高這些上限。",
+        "readOnly": "唯讀",
+        "loading": "正在載入主機上限…",
+        "ceilingLabels": {
+          "childAdmissions": "子代理准入",
+          "aggregateToolCalls": "工具呼叫總數",
+          "logicalProviderRequests": "邏輯供應商要求",
+          "physicalDispatchAttempts": "實體派送嘗試",
+          "childOutputTokens": "子代理輸出權杖",
+          "workAttemptOutputTokens": "每次工作嘗試的輸出權杖",
+          "workAttemptProviderDispatches": "每次工作嘗試的供應商分派",
+          "workAttemptUnsignedBoundaries": "每次工作嘗試的未簽署界限",
+          "workAttemptToolCalls": "每次工作嘗試的工具呼叫",
+          "workAttemptWorkspaceOperations": "每次工作嘗試的工作區操作",
+          "workSegmentOutputTokens": "每個工作區段的輸出權杖",
+          "workSegmentProviderDispatches": "每個工作區段的供應商分派",
+          "workSegmentUnsignedBoundaries": "每個工作區段的未簽署界限",
+          "workSegmentToolCalls": "每個工作區段的工具呼叫",
+          "workSegmentWorkspaceOperations": "每個工作區段的工作區操作",
+          "workDispatchOutputTokens": "每次工作分派的輸出權杖",
+          "workRecoveryReserveOutputTokens": "為工作復原預留的輸出權杖",
+          "workFuturePhaseReserveOutputTokens": "為後續工作階段預留的輸出權杖",
+          "rootWallClockMs": "根代理實際時間（毫秒）",
+          "activityEvents": "活動事件",
+          "activityBytes": "活動位元組數",
+          "lifecycleLogRecords": "生命週期記錄",
+          "activeRootsPerUser": "每位使用者的活動根代理數",
+          "activeRootsProcess": "每個處理程序的活動根代理數",
+          "providerDispatchesPerUser": "每位使用者的供應商派送數",
+          "providerDispatchesProcess": "每個處理程序的供應商派送數",
+          "toolExecutionsPerUser": "每位使用者的工具執行數",
+          "toolExecutionsProcess": "每個處理程序的工具執行數"
+        }
+      },
+      "limits": {
+        "customPhases": "一個預設最多可定義 64 個自訂階段。",
+        "policyBucket": "每個 Loom 政策分類最多可包含 64 個項目。",
+        "policyTotal": "一個預設最多可包含 128 個 Loom 政策項目。",
+        "tasks": "一個預設最多可定義 256 個任務範本。",
+        "invalidBlockRevision": "此 Loom 區塊的修訂版本無效，無法選取。"
+      },
+      "repair": {
+        "acknowledge": "我已審查此項目",
+        "chooseConnection": "選擇本機連線",
+        "searchConnections": "搜尋連線…",
+        "noConnections": "沒有相容的連線",
+        "mapSlot": "將 {{name}} 對應至本機連線",
+        "ready": "沒有需要處理的可攜性或修復項目。",
+        "selectCurrentLoomRevisions": "選擇目前 Loom 修訂",
+        "selectCurrentLoomRevisionsHint": "將目前有效的 Loom 區塊、預設與提示順序修訂暫存以供審查並儲存。缺失或無效的區塊保持未修復。不會自動接受較新修訂。",
+        "selectCurrentLoomRevisionsPending": "目前 Loom 修訂已暫存。請儲存以持久化已撰寫的執行階段，或重設以捨棄。",
+        "boundary": "此處僅提供預設代理、核心擷取工具、Loom 區塊、情境套件、任務及工作區政策。擴充工具、掛鉤、對外連線授權及角色編輯器不屬於此執行階段。",
+        "kinds": {
+          "unresolved_slot": "未解析的連線插槽",
+          "stale_slot": "過時的連線對應",
+          "disabled_import": "匯入的設定已停用",
+          "capability_mismatch": "提供者功能不相符",
+          "stale_block": "過時的 Loom 區塊修訂版本",
+          "unknown": "需要修復的執行階段項目"
+        },
+        "actions": {
+          "acknowledge": "審查",
+          "map_slot": "對應連線",
+          "select_revision": "選取修訂版本",
+          "discard": "捨棄無效的編寫值",
+          "choose_response": "使用回應模式",
+          "unknown": "處理此項目"
+        },
+        "reasons": {
+          "unresolved_slot": "選擇已驗證的本機連線。",
+          "stale_slot": "確認或取代先前的本機對應。",
+          "repair_required": "啟用前請修復編寫的資料。",
+          "capability_mismatch": "已對應的提供者缺少必要功能。",
+          "stale_policy_source": "Loom 政策來源與目前區塊修訂版本或順序不相符。儲存前請選取目前的修訂版本。",
+          "invalid_runtime_policy": "規範 Loom 執行階段政策無效。",
+          "invalid_policy_entry": "Loom 政策項目無效。",
+          "invalid_predicate": "認知條件不完整。",
+          "predicate_limit_exceeded": "認知條件超出主機的深度或大小限制。",
+          "unknown": "此執行階段項目需要修復。"
+        }
+      },
+      "predicate": {
+        "kind": "條件類型",
+        "add": "新增條件",
+        "remove": "移除條件",
+        "generationType": "生成類型",
+        "phase": "階段",
+        "variableKey": "預設變數名稱",
+        "factKey": "參與者事實名稱",
+        "operator": "運算子",
+        "value": "值",
+        "valueType": "值類型",
+        "values": "成員值",
+        "addValue": "新增值",
+        "removeValue": "移除值 {{number}}",
+        "valueTypes": { "string": "文字", "number": "數字", "boolean": "布林值", "stringList": "文字清單" },
+        "boolean": { "true": "真", "false": "假" },
+        "tool": "工具",
+        "available": "工具必須可用",
+        "task": "任務範本",
+        "chooseTask": "選擇任務",
+        "transition": "轉換",
+        "kinds": {
+          "all": "所有條件",
+          "any": "任一條件",
+          "not": "非",
+          "generation_type": "生成類型",
+          "phase": "目前階段",
+          "preset_variable": "預設變數",
+          "participant_fact": "參與者事實",
+          "tool_available": "工具可用性",
+          "task_transition": "任務轉換"
+        },
+        "operators": {
+          "equals": "等於",
+          "in": "在清單中",
+          "includes": "包含",
+          "present": "存在"
+        },
+        "transitions": {
+          "pending": "待處理",
+          "active": "進行中",
+          "blocked": "已封鎖",
+          "completed": "已完成",
+          "cancelled": "已取消",
+          "failed": "失敗"
+        }
+      },
+      "load": {
+        "loading": "正在載入代理式執行階段…",
+        "error": "無法載入代理式執行階段。在載入完成前，編輯與儲存功能已停用。",
+        "retry": "重試載入"
+      },
+
+      "save": {
+        "action": "儲存代理式執行階段",
+        "saving": "正在儲存完整的執行階段草稿…",
+        "saved": "代理式執行階段已儲存",
+        "unsaved": "代理式執行階段有未儲存的變更",
+        "reset": "重設草稿",
+        "conflict": "預設或執行階段已在其他位置變更。請重新載入並審查後再儲存。",
+        "conflictHint": "請先重新載入標準的預設與 Agentic 設定，再進行審查或重試。您的本機草稿不會覆寫較新的修訂版本。",
+        "reloadLatest": "重新載入最新版本以供審查",
+        "reloadingLatest": "正在重新載入最新版本…",
+        "reloadError": "無法載入最新標準狀態。您的本機草稿仍受到保留。",
+        "latestReady": "最新標準狀態已準備好。請先審查，再編輯並重試。",
+        "reviewLatest": "審查最新版本",
+        "error": "無法儲存代理式執行階段。您的草稿仍然可用。"
+      },
+      "validation": {
+        "invalid_config": "執行階段設定無效。",
+        "invalid_modes": "允許的模式必須不重複、依序排列，且第一項必須包含回應模式。",
+        "invalid_default_mode": "預設模式必須是允許的模式。",
+        "invalid_profile": "子代理設定檔不完整或使用了重複的 ID。",
+        "invalid_slot": "可攜式連線插槽無效。",
+        "unresolved_slot": "請對應每個必要的連線插槽。",
+        "invalid_block_reference": "選取的 Loom 區塊已不存在。",
+        "stale_block_revision": "選取的 Loom 區塊修訂版本已變更。",
+        "invalid_runtime_policy": "規範 Loom 執行階段政策無效。",
+        "invalid_policy_entry": "Loom 政策項目無效。",
+        "stale_policy_source": "Loom 政策來源與目前區塊修訂版本或順序不相符。儲存前請選取目前的修訂版本。",
+        "invalid_predicate": "認知條件不完整。",
+        "predicate_limit_exceeded": "認知條件超出主機的深度或大小限制。",
+        "invalid_task_template": "任務範本無效。",
+        "invalid_task_policy": "任務策略引用必須與已宣告的任務範本一致。",
+        "missing_task_dependency": "任務相依項目已不存在。",
+        "cyclic_task_dependency": "任務相依關係不得形成循環。",
+        "review_acknowledgement_unknown": "請移除不屬於目前審查的確認項目。",
+        "review_acknowledgement_required": "啟用前，請確認每個匯入的審查項目。"
+      }
+    },
+    "agentsTools": {
+      "eyebrow": "預設能力",
+      "title": "智能體與工具",
+      "description": "授權此預設可使用的可重用子智能體和內建檢索工具。啟用並儲存設定前不會執行任何內容。",
+      "limits": {
+        "title": "主機執行時上限",
+        "description": "此 Lumiverse 主機強制執行的唯讀有效上限。預設中編寫的預算仍可攜，但執行不能超過這些值。",
+        "readOnly": "唯讀",
+        "loading": "正在載入主機上限…",
+        "rows": {
+          "childAdmissions": "子智能體准入",
+          "aggregateToolCalls": "工具呼叫總數",
+          "logicalProviderRequests": "邏輯提供商請求",
+          "physicalDispatchAttempts": "實體派送嘗試",
+          "childOutputTokens": "子智能體輸出詞元",
+          "rootWallClockMs": "根執行牆鐘時間（毫秒）",
+          "activityEvents": "活動事件",
+          "activityBytes": "活動位元組數",
+          "lifecycleLogRecords": "生命週期日誌記錄",
+          "activeRootsPerUser": "每位使用者的活動根執行",
+          "activeRootsProcess": "程序活動根執行",
+          "providerDispatchesPerUser": "每位使用者的提供商派送",
+          "providerDispatchesProcess": "程序提供商派送",
+          "toolExecutionsPerUser": "每位使用者的工具執行",
+          "toolExecutionsProcess": "程序工具執行"
+        }
+      },
+      "maxInvocations": {
+        "label": "子智能體最大呼叫次數",
+        "hint": "每次生成的子智能體呼叫次數上限。預設值：64；最小值：1；此預設沒有最大值。請輸入安全整數。",
+        "error": "請輸入不小於 1 的安全整數。"
+      },
+      "maxToolCalls": {
+        "label": "工具最大呼叫次數",
+        "hint": "每次生成的工具呼叫總次數上限。預設值：64；最小值：1；此預設沒有最大值。請輸入安全整數。",
+        "error": "請輸入不小於 1 的安全整數。"
+      },
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "enableAria": "為此預設啟用智能體與工具",
+      "review": {
+        "title": "審核匯入的能力",
+        "description": "為確保安全，匯入的智能體設定預設停用。在此裝置上啟用前，請審核設定、連線、工具和世界書存取權限。",
+        "action": "標記為已審核"
+      },
+      "unsupported": {
+        "title": "不支援的智能體設定",
+        "description": "此預設包含編輯器無法安全讀取的設定。開始編輯會建立新的停用設定；儲存前仍會保留原有中繼資料。"
+      },
+      "main": {
+        "title": "主模型工具",
+        "description": "選擇主模型可直接使用的核心檢索工具，與各子智能體設定彼此獨立。"
+      },
+      "tools": {
+        "legend": "允許的核心工具",
+        "lore_list_books": {
+          "label": "列出世界書",
+          "description": "瀏覽可用世界書及其來源。"
+        },
+        "lore_get_book": {
+          "label": "取得世界書",
+          "description": "透過受限分頁讀取一本已啟用的世界書。"
+        },
+        "lore_list_entries": {
+          "label": "列出世界書條目",
+          "description": "瀏覽所選世界書中的已啟用條目。"
+        },
+        "lore_get_entry": {
+          "label": "取得世界書條目",
+          "description": "依準確識別碼讀取一條已啟用條目。"
+        },
+        "lore_search_entries": {
+          "label": "搜尋世界書條目",
+          "description": "在授權範圍內搜尋已啟用的世界書內容。"
+        },
+        "chat_search_history": {
+          "label": "搜尋目前聊天",
+          "description": "搜尋為本次生成選定的不可變訊息歷史。"
+        }
+      },
+      "scope": {
+        "label": "世界書存取上限",
+        "active": "活動世界書",
+        "all_owned": "全部自有世界書",
+        "activeHint": "僅限本次生成已經可用的世界書內容。",
+        "all_ownedHint": "可搜尋本機使用者擁有的全部已啟用世界書。"
+      },
+      "profiles": {
+        "title": "子智能體設定",
+        "description": "設定可重用的下級模型、授權範圍和失敗限制。",
+        "add": "新增設定",
+        "defaultName": "智能體 {{number}}",
+        "listAria": "子智能體設定",
+        "moveUp": "上移 {{name}}",
+        "moveDown": "下移 {{name}}",
+        "delete": "刪除 {{name}}",
+        "confirmDeleteTitle": "刪除此設定？",
+        "confirmDeleteDescription": "引用此設定的提示詞區塊將失效。儲存設定前，此變更不會寫入。",
+        "name": "顯示名稱",
+        "id": "設定 ID",
+        "idHint": "提示詞語法使用的穩定 snake_case ID。重新命名設定不會改變它。",
+        "connection": "連線設定",
+        "selectConnection": "選擇連線",
+        "searchConnections": "搜尋連線…",
+        "noConnections": "尚未設定連線",
+        "useMainConnection": "使用主連線",
+        "connectionHint": "使用目前主連線，或將此子智能體綁定到已有連線設定。",
+        "systemPrompt": "系統提示詞",
+        "systemPromptPlaceholder": "定義此智能體的職責、邊界和輸出要求。",
+        "systemPromptHint": "子智能體的原文指令。此處不會解析預設巨集。",
+        "tools": "允許的工具",
+        "workspaceCapabilities": "工作區能力",
+        "workspaceCapabilitiesHint": "僅授予此子智能體所需的工作區操作。留空表示不授予工作區操作。",
+        "delegation": "允許主模型委派",
+        "delegationHint": "允許主模型透過 agent_delegate 選擇此設定。",
+        "activity": "允許即時活動",
+        "activityHint": "當呼叫語法要求串流活動時顯示狀態和工具活動。不會串流傳輸子智能體正文。",
+        "failurePolicy": "失敗策略",
+        "failureRequired": "必要 — 中止生成",
+        "failureOptional": "可選 — 以空結果繼續",
+        "failureHint": "控制確定性提示詞區塊的失敗行為。",
+        "maxOutputTokens": "最大輸出詞元",
+        "timeout": "逾時（秒）",
+        "timeoutHint": "每次呼叫的限制，以整秒為單位（最短 5 秒，無預設上限）。",
+        "empty": "新增子智能體設定以設定其連線、工具和提示詞。"
+      },
+      "syntax": {
+        "title": "提示詞語法",
+        "description": "複製供手動編寫使用的具名結果產生區塊，或建立可重複使用且不會發生結果名稱衝突的直接執行使用者角色區塊。",
+        "taskPlaceholder": "描述要交給此智能體的任務。",
+        "copy": "複製智能體語法",
+        "copied": "已複製",
+        "copyFailed": "無法存取剪貼簿。請手動選擇並複製語法。",
+        "createBlock": "使用此智能體建立提示詞區塊",
+        "saveFirst": "建立提示詞區塊前請先儲存智能體設定。",
+        "blockName": "智能體：{{name}}"
+      },
+      "navigation": {
+        "saveBeforePresetAction": "變更、匯入或匯出預設前，請先儲存「智能體與工具」設定。"
+      },
+      "actions": {
+        "cancel": "取消",
+        "delete": "刪除"
+      },
+      "save": {
+        "reviewFirst": "儲存或啟用匯入能力前，請先完成審核。",
+        "notConfigured": "此預設尚未設定智能體與工具。",
+        "unsaved": "智能體設定尚未儲存",
+        "saved": "智能體設定已儲存",
+        "action": "儲存設定"
+      },
+      "validation": {
+        "invalid_config": "智能體設定必須是物件。",
+        "unknown_config_key": "設定包含不支援的欄位。",
+        "invalid_version": "僅支援智能體設定版本 1。",
+        "invalid_enabled": "啟用狀態無效。",
+        "invalid_max_invocations": "子智能體最大呼叫次數必須是有限且安全的整數。",
+        "max_invocations_below_minimum": "子智能體最大呼叫次數必須至少為 1。",
+        "invalid_main_tools": "主工具選擇無效。",
+        "invalid_profiles": "設定清單無效。",
+        "too_many_profiles": "一個預設最多可包含 {{profileLimit}} 個子智能體設定。",
+        "unknown_profile_key": "此設定包含不支援的欄位。",
+        "unknown_tool": "選擇了未知的核心工具。",
+        "duplicate_tool": "每個核心工具只能選擇一次。",
+        "invalid_main_scope": "主模型的世界書範圍無效。",
+        "invalid_scope": "世界書範圍無效。",
+        "scope_requires_lore_tool": "選擇全部自有世界書時，至少需要一個世界書工具。",
+        "invalid_id": "請使用 1–64 個小寫字母、數字或底線，並以字母開頭。",
+        "duplicate_id": "設定 ID 必須唯一。",
+        "invalid_name": "設定名稱無效。",
+        "name_too_long": "顯示名稱不得超過 {{nameMax}} 個字元。",
+        "invalid_system_prompt": "系統提示詞必須是文字。",
+        "system_prompt_too_long": "系統提示詞不得超過 {{promptMax}} 個 UTF-8 位元組。",
+        "invalid_connection": "請選擇有效連線設定或使用主連線。",
+        "connection_not_found": "此連線設定已刪除或不再可用。",
+        "main_connection_unavailable": "目前沒有主連線，請選擇已有連線。",
+        "invalid_delegation": "委派設定無效。",
+        "invalid_failure_policy": "請選擇必要或可選失敗處理。",
+        "invalid_stream_activity": "活動設定無效。",
+        "invalid_max_output_tokens": "最大輸出詞元必須是整數。",
+        "max_output_tokens_out_of_range": "最大輸出詞元必須介於 {{tokenMin}} 和 {{tokenMax}} 之間。",
+        "invalid_timeout": "逾時必須為整秒數。",
+        "timeout_below_minimum": "逾時不得少於 {{timeoutMin}} 秒。"
+      }
+    },
     "empty": {
       "loading": "加載中…",
       "noPresetTitle": "未選擇預設",
@@ -3359,6 +3980,26 @@
     },
     "toast": {
       "exportFailed": "導出預設失敗",
+      "importHydrationWarning": "預設已導入，但編輯器詳細資訊無法重新整理。已儲存的副本仍可用。",
+      "portableErrors": {
+        "PORTABLE_PRESET_INVALID": "便攜預設無效。",
+        "PORTABLE_PROMPT_BLOCK_INVALID": "預設包含無效的提示詞塊。",
+        "PORTABLE_EXPORT_UNSTABLE": "導出期間預設發生變更，請重試。",
+        "AGENT_RUNTIME_PORTABLE_INVALID": "便攜執行階段資料無效。",
+        "AGENT_RUNTIME_PORTABLE_STALE": "便攜執行階段資料已過期，請重新導出。",
+        "AGENT_RUNTIME_PORTABLE_CONTRADICTORY": "便攜執行階段資料相互矛盾。",
+        "AGENT_RUNTIME_PORTABLE_REGEX_INVALID": "便攜正規表示式資料無效。",
+        "AGENT_RUNTIME_PORTABLE_PRESET_INVALID": "便攜預設資料無效。",
+        "AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID": "便攜執行階段引用了不可用的上下文資料。",
+        "AGENT_RUNTIME_PORTABLE_RULE_INVALID": "便攜上下文規則無效。",
+        "AGENT_RUNTIME_PORTABLE_SELECTION_INVALID": "便攜上下文選擇無效。",
+        "LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE": "密封塊缺少可信的 LumiHub 來源資訊。",
+        "LUMIHUB_LINK_UNAVAILABLE": "導入密封預設塊前請先連結 LumiHub。",
+        "LUMIHUB_SEALED_RESOLUTION_FAILED": "LumiHub 無法解析密封預設塊。",
+        "LUMIHUB_SEALED_DIGEST_MISMATCH": "LumiHub 返回的密封內容驗證失敗。",
+        "PRESET_REVISION_CONFLICT": "預設已在其他位置變更，請重新整理後重試。",
+        "PRESET_REVISION_REQUIRED": "需要預設版本，請重新整理後重試。"
+      },
       "importedRegexFromPreset": "從預設導入了 {{count}} 條正則腳本",
       "importedRegexFromPreset_plural": "從預設導入了 {{count}} 條正則腳本",
       "regexImportFailed": "{{count}} 條正則腳本導入失敗",

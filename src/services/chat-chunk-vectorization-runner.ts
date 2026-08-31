@@ -17,6 +17,10 @@ interface ProcessChatChunkVectorizationBatchOptions {
   signal?: AbortSignal;
 }
 
+function assertBatchActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+}
+
 export async function processChatChunkVectorizationBatch(
   tasks: ChatChunkVectorizationTask[],
   options?: ProcessChatChunkVectorizationBatchOptions,
@@ -25,6 +29,7 @@ export async function processChatChunkVectorizationBatch(
     return { refreshedChatIds: [], failedChunkIds: [], processedCount: 0 };
   }
 
+  assertBatchActive(options?.signal);
   const db = getDb();
   const chunks: Array<{
     id: string;
@@ -36,6 +41,7 @@ export async function processChatChunkVectorizationBatch(
   }> = [];
 
   for (const task of tasks) {
+    assertBatchActive(options?.signal);
     const chunk = db
       .query("SELECT id, content, chat_id, vectorized_at, message_ids, message_count, token_count FROM chat_chunks WHERE id = ?")
       .get(task.chunkId) as any;
@@ -66,6 +72,7 @@ export async function processChatChunkVectorizationBatch(
   }
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(tasks[0].userId);
+  assertBatchActive(options?.signal);
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
   const refreshedChats = new Set<string>();
   const failedChunkIds = new Set<string>();
@@ -76,12 +83,14 @@ export async function processChatChunkVectorizationBatch(
     batchSize,
     (chunk) => chunk.content,
     async (batchChunks, _texts, vectors) => {
+      assertBatchActive(options?.signal);
       // Re-confirm each chunk still exists before writing. The embedding API call
       // above can take seconds; a chunk rebuild that ran in that window deletes
       // these rows and mints new chunk UUIDs. Writing now would leave orphaned
       // vectors that retrieval surfaces as duplicate memory-injection entries.
       const batchIds = batchChunks.map((chunk) => chunk.id);
       const placeholders = batchIds.map(() => "?").join(",");
+      assertBatchActive(options?.signal);
       const surviving = new Set(
         (db
           .query(`SELECT id FROM chat_chunks WHERE id IN (${placeholders})`)
@@ -120,10 +129,13 @@ export async function processChatChunkVectorizationBatch(
 
       if (batchItems.length === 0) return;
 
-      await embeddingsSvc.batchUpsertChunkVectors(tasks[0].userId, batchItems);
+      assertBatchActive(options?.signal);
+      await embeddingsSvc.batchUpsertChunkVectors(tasks[0].userId, batchItems, options?.signal);
+      assertBatchActive(options?.signal);
 
       const now = Math.floor(Date.now() / 1000);
       const updatePlaceholders = writtenChunks.map(() => "?").join(", ");
+      assertBatchActive(options?.signal);
       db.query(
         `UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id IN (${updatePlaceholders})`,
       ).run(now, cfg.model, ...writtenChunks.map((chunk) => chunk.id));
@@ -145,6 +157,7 @@ export async function processChatChunkVectorizationBatch(
         });
 
         try {
+          assertBatchActive(options?.signal);
           const recovered = await embeddingsSvc.tryRecoverChatChunkEmbeddingWithAutoSplit(
             tasks[0].userId,
             chunk.chatId,
@@ -158,8 +171,10 @@ export async function processChatChunkVectorizationBatch(
             chunk.tokenCount,
             { signal: options?.signal },
           );
+          assertBatchActive(options?.signal);
           if (recovered.recovered) {
             if (!recovered.skipped) {
+              assertBatchActive(options?.signal);
               db.query("UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?")
                 .run(Math.floor(Date.now() / 1000), cfg.model, chunk.id);
               refreshedChats.add(chunk.chatId);
@@ -167,6 +182,7 @@ export async function processChatChunkVectorizationBatch(
             return;
           }
         } catch (recoveryErr) {
+          assertBatchActive(options?.signal);
           const recoveryError = recoveryErr instanceof Error ? recoveryErr : new Error(String(recoveryErr));
           console.warn("[vectorization] Chat chunk auto-split recovery failed:", {
             chunkId: chunk.id,
@@ -181,16 +197,21 @@ export async function processChatChunkVectorizationBatch(
     },
     { label: "chat-chunks", signal: options?.signal },
   );
+  assertBatchActive(options?.signal);
 
   for (const chatId of refreshedChats) {
+    assertBatchActive(options?.signal);
     // Self-heal: drop any vectors left over from a previous chunk generation
     // that a concurrent rebuild couldn't clean up.
     try {
       const liveIds = (db
         .query("SELECT id FROM chat_chunks WHERE chat_id = ?")
         .all(chatId) as Array<{ id: string }>).map((row) => row.id);
-      await embeddingsSvc.reconcileChatChunkEmbeddings(tasks[0].userId, chatId, liveIds);
+      assertBatchActive(options?.signal);
+      await embeddingsSvc.reconcileChatChunkEmbeddings(tasks[0].userId, chatId, liveIds, options?.signal);
+      assertBatchActive(options?.signal);
     } catch (err) {
+      assertBatchActive(options?.signal);
       console.warn(`[vectorization] Orphan reconcile failed for chat ${chatId}:`, err);
     }
   }

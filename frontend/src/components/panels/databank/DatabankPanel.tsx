@@ -60,6 +60,42 @@ function scopeLabel(scope: string, t: (key: string) => string): string {
   return scope
 }
 
+function DocumentNameInput({
+  name,
+  onRename,
+  renameTitle,
+}: {
+  name: string
+  onRename: (next: string) => void
+  renameTitle: string
+}) {
+  const [focused, setFocused] = useState(false)
+  const [draft, setDraft] = useState(name)
+  const focusedNameRef = useRef(name)
+  const edited = focused && draft !== focusedNameRef.current
+  return (
+    <input
+      className={styles.docNameInput}
+      value={edited ? draft : name}
+      onClick={(e) => e.stopPropagation()}
+      onFocus={() => {
+        focusedNameRef.current = name
+        setDraft(name)
+        setFocused(true)
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setFocused(false)
+        const val = draft.trim()
+        if (val && val !== focusedNameRef.current) onRename(val)
+      }}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      title={renameTitle}
+    />
+  )
+}
+
+
 export default function DatabankPanel() {
   const { t } = useTranslation('panels')
   const {
@@ -72,6 +108,9 @@ export default function DatabankPanel() {
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
+  // Monotonic store signal raised by the singleton WS dispatcher whenever a
+  // native Databank mutation or authenticated reconnect requires fresh data.
+  const databankRevision = useStore((s) => s.databankRevision)
 
   const [docSearch, setDocSearch] = useState('')
   const [dragging, setDragging] = useState(false)
@@ -80,7 +119,13 @@ export default function DatabankPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const banksRequestRef = useRef(0)
+  const contentRequestRef = useRef(0)
+  const editingDocIdRef = useRef<string | null>(null)
+  const editingDirtyRef = useRef(false)
+  const selectedDatabankIdRef = useRef<string | null>(null)
+  const pendingContextResetRef = useRef(false)
   const docsRequestRef = useRef(0)
+
 
   // ── Document editor ──
   const [editingDocId, setEditingDocId] = useState<string | null>(null)
@@ -90,6 +135,55 @@ export default function DatabankPanel() {
   const [editorLoading, setEditorLoading] = useState(false)
   const [editorSaving, setEditorSaving] = useState(false)
   const [editorError, setEditorError] = useState<string | null>(null)
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
+  editingDocIdRef.current = editingDocId
+  editingDirtyRef.current = editingDirty
+  selectedDatabankIdRef.current = selectedDatabankId
+
+  const closeDocEditor = useCallback(() => {
+    contentRequestRef.current += 1
+    editingDocIdRef.current = null
+    editingDirtyRef.current = false
+    setEditingDocId(null)
+    setEditingContent('')
+    setEditingName('')
+    setEditingDirty(false)
+    setEditorError(null)
+    setEditorLoading(false)
+    setDiscardConfirmOpen(false)
+  }, [])
+
+  const flushPendingContextReset = useCallback(() => {
+    if (!pendingContextResetRef.current) return
+    pendingContextResetRef.current = false
+    docsRequestRef.current += 1
+    setSelectedDatabankId(null)
+    setDatabankDocuments([])
+  }, [setSelectedDatabankId, setDatabankDocuments])
+
+  const settlePendingContextReset = useCallback(() => {
+    pendingContextResetRef.current = false
+    setDiscardConfirmOpen(false)
+  }, [])
+
+
+
+  const loadEditorContent = useCallback(async (docId: string, bankId: string) => {
+    const requestId = ++contentRequestRef.current
+    try {
+      const result = await databankApi.getDocumentContent(bankId, docId)
+      if (requestId !== contentRequestRef.current) return
+      if (editingDocIdRef.current !== docId) return
+      if (editingDirtyRef.current) return
+      setEditingContent(result.content ?? '')
+    } catch (e: unknown) {
+      if (requestId !== contentRequestRef.current) return
+      if (editingDocIdRef.current !== docId) return
+      const err = e as { body?: { error?: string }; message?: string }
+      setEditorError(err.body?.error || err.message || t('databankPanel.loadDocFailed'))
+    }
+  }, [t])
+
 
   // ── Cross-reference: all user databanks (for selectors) ──
   const [allBanks, setAllBanks] = useState<Databank[]>([])
@@ -162,7 +256,7 @@ export default function DatabankPanel() {
   // Load character databank bindings
   useEffect(() => {
     if (!activeCharacterId) { setCharDatabankIds([]); setCharExtensions({}); return }
-    charactersApi.get(activeCharacterId).then((c: any) => {
+    charactersApi.get(activeCharacterId).then((c: { extensions?: Record<string, unknown> }) => {
       const ext = c.extensions || {}
       setCharExtensions(ext)
       const ids = Array.isArray(ext.databank_ids) ? ext.databank_ids.filter((id: unknown) => typeof id === 'string') : []
@@ -173,10 +267,10 @@ export default function DatabankPanel() {
   // Load chat databank bindings
   useEffect(() => {
     if (!activeChatId) { setChatDatabankIds([]); setChatMetadata({}); return }
-    chatsApi.get(activeChatId).then((chat: any) => {
+    chatsApi.get(activeChatId).then((chat: { metadata?: Record<string, unknown> }) => {
       const meta = chat.metadata || {}
       setChatMetadata(meta)
-      setChatDatabankIds((meta.chat_databank_ids as string[]) ?? [])
+      setChatDatabankIds(Array.isArray(meta.chat_databank_ids) ? meta.chat_databank_ids.filter((id: unknown) => typeof id === 'string') : [])
     }).catch(() => {})
   }, [activeChatId])
 
@@ -220,23 +314,38 @@ export default function DatabankPanel() {
     }
   }, [databankScopeFilter, activeCharacterId, activeChatId, setDatabanks])
 
+
   useEffect(() => {
     void loadBanks()
     return () => { banksRequestRef.current += 1 }
-  }, [loadBanks])
+  }, [loadBanks, databankRevision])
 
   // A selected bank belongs to the scope/context in which it was chosen. Clear
   // it before rendering a different scope so stale documents and actions from
   // the previous bank cannot appear under an empty selector.
   useEffect(() => {
+    if (editingDirtyRef.current && editingDocIdRef.current) {
+      pendingContextResetRef.current = true
+      setDiscardConfirmOpen(true)
+      return
+    }
+    pendingContextResetRef.current = false
     docsRequestRef.current += 1
+    contentRequestRef.current += 1
     setSelectedDatabankId(null)
     setDatabankDocuments([])
-    setEditingDocId(null)
-    setEditingContent('')
-    setEditingName('')
-    setEditingDirty(false)
-  }, [databankScopeFilter, activeCharacterId, activeChatId, setSelectedDatabankId, setDatabankDocuments])
+    closeDocEditor()
+  }, [databankScopeFilter, activeCharacterId, activeChatId, setSelectedDatabankId, setDatabankDocuments, closeDocEditor])
+
+  // DATABANK_DELETED removes the bank and nulls selection. That is not
+  // user-clean navigation, which closes the editor in the same turn.
+  useEffect(() => {
+    if (!editingDocId || selectedDatabankId) return
+    docsRequestRef.current += 1
+    closeDocEditor()
+    setError(t('databankPanel.remoteDatabankRemoved'))
+  }, [editingDocId, selectedDatabankId, closeDocEditor, t])
+
 
   // ── Load documents when bank selection changes ──
   const loadDocs = useCallback(async () => {
@@ -247,16 +356,40 @@ export default function DatabankPanel() {
     }
     try {
       const result = await databankApi.listDocuments(selectedDatabankId, { limit: 1000 })
-      if (requestId === docsRequestRef.current) setDatabankDocuments(result.data)
+      if (requestId !== docsRequestRef.current) return
+      setDatabankDocuments(result.data)
+      const listComplete = result.offset + result.data.length >= result.total
+      const openId = editingDocIdRef.current
+      if (listComplete && openId && !result.data.some((doc) => doc.id === openId)) {
+        closeDocEditor()
+        setError(t('databankPanel.remoteDocumentRemoved'))
+      }
     } catch {
-      if (requestId === docsRequestRef.current) setDatabankDocuments([])
+      if (requestId === docsRequestRef.current && !editingDocIdRef.current) setDatabankDocuments([])
     }
-  }, [selectedDatabankId, setDatabankDocuments])
+  }, [selectedDatabankId, setDatabankDocuments, closeDocEditor, t])
+
 
   useEffect(() => {
     void loadDocs()
     return () => { docsRequestRef.current += 1 }
-  }, [loadDocs])
+  }, [loadDocs, databankRevision])
+
+  useEffect(() => {
+    if (!editingDocId) return
+    const live = databankDocuments.find((doc) => doc.id === editingDocId)
+    if (live) setEditingName(live.name)
+  }, [databankDocuments, editingDocId])
+
+  useEffect(() => {
+    const docId = editingDocIdRef.current
+    const bankId = selectedDatabankIdRef.current
+    if (!docId || !bankId || editingDirtyRef.current) return
+    void loadEditorContent(docId, bankId)
+  }, [databankRevision, loadEditorContent])
+
+
+
 
   // ── Poll for document status updates ──
   useEffect(() => {
@@ -453,9 +586,10 @@ export default function DatabankPanel() {
     }
   }, [selectedDatabankId, scrapeUrl, addDatabankDocument, t])
 
-  // ── Open document editor ──
   const handleOpenDocEditor = useCallback(async (doc: DatabankDocument) => {
     if (!selectedDatabankId) return
+    editingDocIdRef.current = doc.id
+    editingDirtyRef.current = false
     setEditingDocId(doc.id)
     setEditingName(doc.name)
     setEditingContent('')
@@ -463,25 +597,11 @@ export default function DatabankPanel() {
     setEditorError(null)
     setEditorLoading(true)
     try {
-      const result = await databankApi.getDocumentContent(selectedDatabankId, doc.id)
-      setEditingContent(result.content ?? '')
-    } catch (e: any) {
-      setEditorError(e?.body?.error || e?.message || t('databankPanel.loadDocFailed'))
+      await loadEditorContent(doc.id, selectedDatabankId)
     } finally {
-      setEditorLoading(false)
+      if (editingDocIdRef.current === doc.id) setEditorLoading(false)
     }
-  }, [selectedDatabankId, t])
-
-  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
-
-  const closeDocEditor = useCallback(() => {
-    setEditingDocId(null)
-    setEditingContent('')
-    setEditingName('')
-    setEditingDirty(false)
-    setEditorError(null)
-    setDiscardConfirmOpen(false)
-  }, [])
+  }, [selectedDatabankId, loadEditorContent])
 
   const handleCloseDocEditor = useCallback(() => {
     if (editingDirty) {
@@ -489,7 +609,8 @@ export default function DatabankPanel() {
       return
     }
     closeDocEditor()
-  }, [editingDirty, closeDocEditor])
+    flushPendingContextReset()
+  }, [editingDirty, closeDocEditor, flushPendingContextReset])
 
   const handleSaveDocEditor = useCallback(async () => {
     if (!selectedDatabankId || !editingDocId) return
@@ -508,16 +629,16 @@ export default function DatabankPanel() {
         updatedAt: updated.updatedAt,
       })
       setEditingDirty(false)
-      // Return to the list so the user sees the reprocessing badge tick over.
-      setEditingDocId(null)
-      setEditingContent('')
-      setEditingName('')
-    } catch (e: any) {
-      setEditorError(e?.body?.error || e?.message || t('databankPanel.saveDocFailed'))
+      closeDocEditor()
+      flushPendingContextReset()
+    } catch (e: unknown) {
+      const err = e as { body?: { error?: string }; message?: string }
+      setEditorError(err.body?.error || err.message || t('databankPanel.saveDocFailed'))
     } finally {
       setEditorSaving(false)
     }
-  }, [selectedDatabankId, editingDocId, editingContent, updateDatabankDocument, t])
+  }, [selectedDatabankId, editingDocId, editingContent, updateDatabankDocument, t, closeDocEditor, flushPendingContextReset])
+
 
   // ── Rename document ──
   const handleRenameDoc = useCallback(async (docId: string, newName: string) => {
@@ -600,6 +721,7 @@ export default function DatabankPanel() {
               className={styles.editorTextarea}
               value={editingContent}
               onChange={(value) => {
+                editingDirtyRef.current = true
                 setEditingContent(value)
                 setEditingDirty(true)
               }}
@@ -613,8 +735,11 @@ export default function DatabankPanel() {
 
         <ConfirmationModal
           isOpen={discardConfirmOpen}
-          onConfirm={closeDocEditor}
-          onCancel={() => setDiscardConfirmOpen(false)}
+          onConfirm={() => {
+            closeDocEditor()
+            flushPendingContextReset()
+          }}
+          onCancel={settlePendingContextReset}
           title={t('databankPanel.discardTitle')}
           message={t('databankPanel.discardMessage')}
           variant="warning"
@@ -1067,16 +1192,10 @@ export default function DatabankPanel() {
             >
               <FileText size={16} className={styles.docIcon} />
               <div className={styles.docInfo}>
-                <input
-                  className={styles.docNameInput}
-                  defaultValue={doc.name}
-                  onClick={(e) => e.stopPropagation()}
-                  onBlur={(e) => {
-                    const val = e.target.value.trim()
-                    if (val && val !== doc.name) handleRenameDoc(doc.id, val)
-                  }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                  title={t('databankPanel.clickToRename')}
+                <DocumentNameInput
+                  name={doc.name}
+                  onRename={(next) => { void handleRenameDoc(doc.id, next) }}
+                  renameTitle={t('databankPanel.clickToRename')}
                 />
                 <div className={styles.docMeta}>
                   {formatFileSize(doc.fileSize)}

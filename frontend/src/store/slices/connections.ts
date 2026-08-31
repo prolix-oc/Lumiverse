@@ -21,27 +21,43 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
   activeProfileId: null,
 
   setProfiles: (profiles) => {
-    set((state) => ({
-      profiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).llm),
-    }))
+    const state = get()
+    const nextProfiles = reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).llm)
+    set({ profiles: nextProfiles })
     const activeProfileId = get().activeProfileId
-    if (activeProfileId && !profiles.some((profile) => profile.id === activeProfileId)) {
+    if (
+      activeProfileId
+      && !nextProfiles.some((profile) => profile.id === activeProfileId && profile.review_required !== true)
+    ) {
       get().setActiveProfile(null, 'profile_invalidated')
     }
   },
   setActiveProfile: (id, reason = 'user_selection') => {
     const state = get()
-    if (state.activeProfileId === id) return
     const oldProfile = state.activeProfileId
       ? state.profiles.find((p) => p.id === state.activeProfileId)
       : null
-    const newProfile = id
+    const requestedProfile = id
       ? state.profiles.find((p) => p.id === id)
       : null
+    // User and extension selections are closed operations: unknown and
+    // review-required IDs resolve to no active profile. Cold-start bootstrap
+    // hydration is the one exception because settings arrive before profiles;
+    // setProfiles validates the pending id as soon as that snapshot lands.
+    const pendingBootstrapId = reason === 'bootstrap_reconcile' && state.profiles.length === 0
+      ? id
+      : null
+    const nextId = requestedProfile?.review_required === true
+      ? null
+      : requestedProfile?.id ?? pendingBootstrapId ?? null
+    if (state.activeProfileId === nextId) return
+    const newProfile = nextId
+      ? state.profiles.find((p) => p.id === nextId)
+      : null
 
-    set({ activeProfileId: id })
+    set({ activeProfileId: nextId })
     if (shouldPersistActiveProfileId(reason)) {
-      settingsApi.put('activeProfileId', id).catch(() => {})
+      settingsApi.put('activeProfileId', nextId).catch(() => {})
     }
 
     // Apply or restore reasoning settings based on profile bindings
@@ -90,16 +106,19 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
       const order = connectionsOrder.llm
       const existingIndex = state.profiles.findIndex((candidate) => candidate.id === profile.id)
+      const nextProfiles = existingIndex === -1
+        ? [profile, ...state.profiles]
+        : state.profiles.map((candidate, index) => index === existingIndex ? profile : candidate)
       const nextOrder = order.includes(profile.id) ? order : [profile.id, ...order]
       const nextConnectionsOrder = { ...connectionsOrder, llm: nextOrder }
+      const active = nextProfiles.find((candidate) => candidate.id === state.activeProfileId)
       if (nextOrder !== order) orderToPersist = nextConnectionsOrder
       return {
         // A connection mutation is delivered both over WebSocket and in the
         // initiating request's REST response. Either can arrive first, so treat
         // adding an already-known id as an update instead of creating two rows.
-        profiles: existingIndex === -1
-          ? [profile, ...state.profiles]
-          : state.profiles.map((candidate, index) => index === existingIndex ? profile : candidate),
+        profiles: nextProfiles,
+        activeProfileId: active?.review_required === true ? null : active?.id ?? null,
         connectionsOrder: nextConnectionsOrder,
       }
     })
@@ -108,9 +127,14 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     if (orderToPersist) persistKey('connectionsOrder', orderToPersist, 'state-sync')
   },
   updateProfile: (id, updates) =>
-    set((state) => ({
-      profiles: state.profiles.map((p) => (p.id === id ? { ...p, ...updates } : p)),
-    })),
+    set((state) => {
+      const profiles = state.profiles.map((p) => (p.id === id ? { ...p, ...updates } : p))
+      const active = profiles.find((p) => p.id === state.activeProfileId)
+      return {
+        profiles,
+        activeProfileId: active?.review_required === true ? null : active?.id ?? null,
+      }
+    }),
   removeProfile: (id) => {
     const wasActive = get().activeProfileId === id
     if (wasActive) get().setActiveProfile(null, 'profile_deleted')

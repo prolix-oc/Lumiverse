@@ -138,7 +138,7 @@ describe('InputArea action bar live reorder', () => {
   test('hold completes before reorder, clicks work before hold, and wrappers stay exclusive', async () => {
     expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(500)
     saveComposerActionBar({
-      order: ['home', 'regen', 'continue', 'selectMessages'],
+      order: ['home', 'regen', 'continue', 'agentRetry', 'selectMessages'],
       hidden: ['selectMessages'],
     })
     const clock = installHoldClock()
@@ -189,7 +189,7 @@ describe('InputArea action bar live reorder', () => {
       })
       expect(clicks).toEqual([])
       const persisted = JSON.parse(localStorage.getItem(COMPOSER_ACTION_BAR_STORAGE_KEY) ?? '{}') as { order: string[] }
-      expect(persisted.order.slice(0, 3)).toEqual(['home', 'continue', 'regen'])
+      expect(persisted.order.slice(0, 4)).toEqual(['home', 'continue', 'regen', 'agentRetry'])
     } finally {
       clock.restore()
       await act(async () => root.unmount())
@@ -198,7 +198,7 @@ describe('InputArea action bar live reorder', () => {
 
   test('reload reads the reordered composer blob and modal reorder still persists', async () => {
     saveComposerActionBar({
-      order: ['home', 'continue', 'regen'],
+      order: ['home', 'continue', 'regen', 'agentRetry'],
       hidden: ['selectMessages', 'oneliner', 'persona', 'connections', 'altFields', 'addons', 'guides', 'quickReplies', 'tools', 'extras'],
     })
     const host = document.createElement('div')
@@ -212,13 +212,14 @@ describe('InputArea action bar live reorder', () => {
       'home',
       'continue',
       'regen',
+      'agentRetry',
       'connectionsPicker',
       'promptVariables',
     ])
     await act(async () => root.unmount())
 
     saveComposerActionBar({
-      order: ['regen', 'home', 'continue'],
+      order: ['regen', 'home', 'continue', 'agentRetry'],
       hidden: ['selectMessages', 'oneliner', 'persona', 'connections', 'altFields', 'addons', 'guides', 'quickReplies', 'tools', 'extras'],
     })
     const host2 = document.createElement('div')
@@ -232,6 +233,7 @@ describe('InputArea action bar live reorder', () => {
       'regen',
       'home',
       'continue',
+      'agentRetry',
       'connectionsPicker',
       'promptVariables',
     ])

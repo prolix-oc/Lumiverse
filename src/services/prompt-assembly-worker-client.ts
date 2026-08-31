@@ -1,18 +1,27 @@
-import os from "node:os";
 import type { AssemblyContext, AssemblyResult } from "../llm/types";
+import { HOST_PREPARATION_LIMITS_V1, isPreparationFailureCode } from "../types/agent-preprocessing";
 import { registry } from "../macros";
 import { macroInterceptorChain } from "../spindle/macro-interceptor";
 import { worldInfoInterceptorChain } from "../spindle/world-info-interceptor";
+import { defaultIsolateCommand } from "./isolate-process";
+import {
+  getIsolateHealthSnapshot,
+  IsolatePoolError,
+  IsolatePoolV1,
+  type ActiveIsolateJob,
+} from "./isolate-pool";
+import {
+  isIsolateResponseEnvelopeV1,
+} from "./isolate-protocol";
 
-type AssembleRequest = {
-  type: "assemble";
-  requestId: string;
-  ctx: Omit<AssemblyContext, "signal" | "prefetched">;
-};
+export type PromptAssemblyWorkerContext = Omit<
+  AssemblyContext,
+  "signal" | "prefetched" | "agentRuntimeOwner" | "createAgentRuntimeOwner"
+>;
 
-type WorkerResponse =
+export type PromptAssemblyWorkerResponse =
   | { type: "result"; requestId: string; result: AssemblyResult }
-  | { type: "error"; requestId: string; error: string; name?: string; stack?: string };
+  | { type: "error"; requestId: string; error: string; name?: string; stack?: string; code?: string };
 
 function workerDisabledByEnv(): boolean {
   return process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER === "false";
@@ -24,225 +33,117 @@ function hasMainProcessOnlyMacros(): boolean {
 
 export function canUsePromptAssemblyWorker(): boolean {
   if (workerDisabledByEnv()) return false;
-  // Extension macros are registered in the main process and cannot yet execute
-  // inside the assembly worker. Keep behavior correct by falling back to the
-  // in-process pipeline when any non-built-in macro is registered.
+  // Extension macros and interceptors are registered in the main process. The
+  // Response pipeline must retain its established compatibility fallback for
+  // these callbacks rather than silently dropping their behavior in an isolate.
   if (hasMainProcessOnlyMacros()) return false;
   if (macroInterceptorChain.count > 0) return false;
   if (worldInfoInterceptorChain.count > 0) return false;
   return true;
 }
 
-// ─── Worker pool ──────────────────────────────────────────────────────────
-//
-// Assembly workers are REUSED rather than spawned-and-terminated per request.
-// A fresh isolate pays the tokenizer module cold-load every generation (GLM
-// ~1.1s, Claude ~130ms) and starts the token-count + databank result caches
-// empty — so a per-call worker never benefits from the cross-generation
-// caching that makes regenerate/swipe cheap. A reused worker loads tokenizers
-// once and keeps those caches warm.
-//
-// One job per worker at a time; concurrent assemblies (council mode, multiple
-// tabs) fan out across the pool. Workers are evicted after a quiet period so an
-// idle instance doesn't hold tokenizer/LanceDB memory indefinitely.
-
-const IDLE_TTL_MS = 5 * 60_000;
-const DEFAULT_MAX_WORKERS = 2;
-
-const MAX_WORKERS = (() => {
-  const raw = Number(process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKERS);
-  const want = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_MAX_WORKERS;
-  let ceil = DEFAULT_MAX_WORKERS;
-  try {
-    ceil = Math.max(1, os.availableParallelism() - 1);
-  } catch {
-    /* availableParallelism unavailable — keep the default ceiling */
+function parsePromptAssemblyResponse(
+  message: unknown,
+  job: ActiveIsolateJob<PromptAssemblyWorkerContext, AssemblyResult>,
+): AssemblyResult {
+  if (isIsolateResponseEnvelopeV1(message) && message.requestId === job.requestId) {
+    if (message.type === "result") return message.result as AssemblyResult;
+    const error = new IsolatePoolError(
+      isPreparationFailureCode(message.code) ? message.code : "worker_unavailable",
+      message.error,
+      { remote: true },
+    );
+    if (message.name) error.name = message.name;
+    if (message.stack) error.stack = message.stack;
+    throw error;
   }
-  return Math.max(1, Math.min(want, ceil));
-})();
-
-interface Job {
-  requestId: string;
-  ctx: Omit<AssemblyContext, "signal" | "prefetched">;
-  chatId: string | null;
-  signal?: AbortSignal;
-  resolve: (result: AssemblyResult) => void;
-  reject: (err: unknown) => void;
-  onAbort?: () => void;
-  settled: boolean;
-}
-
-interface PoolWorker {
-  worker: Worker;
-  job: Job | null;
-  /** Last chat assembled here — used for sticky routing so a regenerate reuses
-   *  the worker whose token/databank caches are already warm for that chat. */
-  lastChatId: string | null;
-  idleTimer: ReturnType<typeof setTimeout> | null;
-}
-
-const pool: PoolWorker[] = [];
-const waiting: Job[] = [];
-
-function settleJob(job: Job, fn: () => void): void {
-  if (job.settled) return;
-  job.settled = true;
-  if (job.signal && job.onAbort) {
-    job.signal.removeEventListener("abort", job.onAbort);
+  if (!message || typeof message !== "object") {
+    throw new IsolatePoolError("worker_malformed", "Prompt assembly worker returned a malformed response");
   }
-  fn();
+  const response = message as Partial<PromptAssemblyWorkerResponse>;
+  if (response.requestId !== job.requestId || (response.type !== "result" && response.type !== "error")) {
+    throw new IsolatePoolError("worker_malformed", "Prompt assembly worker response identity is invalid");
+  }
+  if (response.type === "error") {
+    const error = new IsolatePoolError("worker_malformed", response.error || "Prompt assembly worker failed", { remote: true });
+    if (response.name) error.name = response.name;
+    if (response.stack) error.stack = response.stack;
+    throw error;
+  }
+  if (!(response.type === "result" && "result" in response)) {
+    throw new IsolatePoolError("worker_malformed", "Prompt assembly worker result is missing");
+  }
+  return response.result as AssemblyResult;
+}
+export function isSafeResponseAssemblyFallbackError(error: unknown): boolean {
+  const code = error instanceof IsolatePoolError
+    ? error.code
+    : error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : undefined;
+  // Main-process retry is only a compatibility escape for a disabled or
+  // unavailable transport. Validation, queue, cancellation, and every
+  // preparation limit remain visible and must never be retried inline.
+  return code === "worker_disabled"
+    || code === "worker_unavailable"
+    || code === "worker_crashed"
+    || code === "worker_timed_out"
+    || code === "worker_malformed";
 }
 
-function spawnWorker(): PoolWorker {
-  const worker = new Worker(new URL("./prompt-assembly-worker.ts", import.meta.url), {
-    type: "module",
+function createPromptAssemblyPool(): IsolatePoolV1<PromptAssemblyWorkerContext, AssemblyResult> {
+  return new IsolatePoolV1<PromptAssemblyWorkerContext, AssemblyResult>({
+    name: "prompt-assembly",
+    workerUrl: new URL("./prompt-assembly-worker.ts", import.meta.url),
+    subprocessCommand: defaultIsolateCommand(new URL("./prompt-assembly-subprocess.ts", import.meta.url)),
+    workerRequest: (job) => ({
+      version: 1,
+      type: "request",
+      requestId: job.requestId,
+      operation: "assemble_prompt",
+      payload: job.payload,
+    }),
+    responseParser: parsePromptAssemblyResponse,
+    maxWorkers: HOST_PREPARATION_LIMITS_V1.maxWorkers,
+    maxQueuedPerUser: HOST_PREPARATION_LIMITS_V1.maxQueuedJobsPerUser,
+    maxQueuedGlobal: HOST_PREPARATION_LIMITS_V1.maxQueuedJobsProcess,
+    maxFrameBytes: HOST_PREPARATION_LIMITS_V1.maxOutputBytes,
+    defaultTimeoutMs: HOST_PREPARATION_LIMITS_V1.maxWallClockMs,
   });
-  const pw: PoolWorker = { worker, job: null, lastChatId: null, idleTimer: null };
-  worker.onmessage = (event: MessageEvent<WorkerResponse>) => onMessage(pw, event.data);
-  worker.onerror = (event) => onError(pw, event.message || "Prompt assembly worker crashed");
-  pool.push(pw);
-  return pw;
 }
 
-function destroyWorker(pw: PoolWorker): void {
-  const idx = pool.indexOf(pw);
-  if (idx >= 0) pool.splice(idx, 1);
-  if (pw.idleTimer) {
-    clearTimeout(pw.idleTimer);
-    pw.idleTimer = null;
-  }
-  pw.worker.onmessage = null;
-  pw.worker.onerror = null;
-  pw.worker.terminate();
-}
-
-/** Terminate only workers that are not serving a prompt or queueing work. */
-export function releaseIdlePromptAssemblyWorkers(): number {
-  if (waiting.length > 0) return 0;
-  let released = 0;
-  for (const pw of [...pool]) {
-    if (pw.job) continue;
-    destroyWorker(pw);
-    released++;
-  }
-  return released;
-}
-
-function markIdle(pw: PoolWorker): void {
-  if (pw.idleTimer) clearTimeout(pw.idleTimer);
-  pw.idleTimer = setTimeout(() => {
-    pw.idleTimer = null;
-    if (!pw.job) destroyWorker(pw);
-  }, IDLE_TTL_MS);
-}
-
-function onMessage(pw: PoolWorker, msg: WorkerResponse | undefined): void {
-  const job = pw.job;
-  if (!job || !msg || msg.requestId !== job.requestId) return;
-  pw.job = null;
-  if (msg.type === "result") {
-    settleJob(job, () => job.resolve(msg.result));
-  } else {
-    const err = new Error(msg.error);
-    err.name = msg.name || "PromptAssemblyWorkerError";
-    if (msg.stack) err.stack = msg.stack;
-    settleJob(job, () => job.reject(err));
-  }
-  markIdle(pw);
-  drain();
-}
-
-function onError(pw: PoolWorker, message: string): void {
-  const job = pw.job;
-  pw.job = null;
-  // The worker is in an unknown state — discard it so a fresh one respawns.
-  destroyWorker(pw);
-  // Reject the in-flight job (generate.service falls back to in-process).
-  if (job) settleJob(job, () => job.reject(new Error(message)));
-  drain();
-}
-
-function abortJob(job: Job): void {
-  if (job.settled) return;
-  // Still queued — just drop it.
-  const wIdx = waiting.indexOf(job);
-  if (wIdx >= 0) waiting.splice(wIdx, 1);
-  // In-flight — the worker's CPU-bound assembly can't be cancelled (the signal
-  // is stripped before postMessage), so discard the worker to stop the work.
-  const pw = pool.find((p) => p.job === job);
-  if (pw) {
-    pw.job = null;
-    destroyWorker(pw);
-  }
-  settleJob(job, () =>
-    job.reject(job.signal?.reason ?? new DOMException("Aborted", "AbortError")),
-  );
-  drain();
-}
-
-function assign(pw: PoolWorker, job: Job): void {
-  if (pw.idleTimer) {
-    clearTimeout(pw.idleTimer);
-    pw.idleTimer = null;
-  }
-  pw.job = job;
-  pw.lastChatId = job.chatId;
-  pw.worker.postMessage({
-    type: "assemble",
-    requestId: job.requestId,
-    ctx: job.ctx,
-  } satisfies AssembleRequest);
-}
-
-function pickIdleWorker(chatId: string | null): PoolWorker | null {
-  // Sticky: prefer the worker already warm for this chat.
-  if (chatId) {
-    for (const pw of pool) {
-      if (!pw.job && pw.lastChatId === chatId) return pw;
-    }
-  }
-  for (const pw of pool) {
-    if (!pw.job) return pw;
-  }
-  return null;
-}
-
-function drain(): void {
-  while (waiting.length > 0) {
-    const next = waiting[0];
-    let pw = pickIdleWorker(next.chatId);
-    if (!pw && pool.length < MAX_WORKERS) pw = spawnWorker();
-    if (!pw) break; // all busy and at capacity — wait for a worker to free up
-    waiting.shift();
-    assign(pw, next);
-  }
-}
+let pool = createPromptAssemblyPool();
 
 export function assemblePromptInWorker(ctx: AssemblyContext): Promise<AssemblyResult> {
-  const { signal, prefetched: _prefetched, ...workerCtx } = ctx;
-
-  return new Promise<AssemblyResult>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      return;
-    }
-
-    const job: Job = {
-      requestId: crypto.randomUUID(),
-      ctx: workerCtx,
-      chatId: workerCtx.chatId ?? null,
-      signal,
-      resolve,
-      reject,
-      settled: false,
-    };
-
-    if (signal) {
-      job.onAbort = () => abortJob(job);
-      signal.addEventListener("abort", job.onAbort, { once: true });
-    }
-
-    waiting.push(job);
-    drain();
+  const {
+    signal,
+    prefetched: _prefetched,
+    agentRuntimeOwner: _agentRuntimeOwner,
+    createAgentRuntimeOwner: _createAgentRuntimeOwner,
+    ...workerCtx
+  } = ctx;
+  return pool.submit({
+    userId: workerCtx.userId,
+    operation: "assemble_prompt",
+    payload: workerCtx,
+    signal,
+    timeoutMs: HOST_PREPARATION_LIMITS_V1.maxWallClockMs,
   });
+}
+
+export function getPromptAssemblyWorkerHealth() {
+  return getIsolateHealthSnapshot();
+}
+
+/** Release the reconstructable pool only when no prompt is active or queued. */
+export function releaseIdlePromptAssemblyWorkers(): number {
+  if (pool.activeCount() > 0 || pool.queuedCount() > 0) return 0;
+  const idlePool = pool;
+  pool = createPromptAssemblyPool();
+  void idlePool.shutdown();
+  return 1;
+}
+
+export async function shutdownPromptAssemblyWorkerPool(): Promise<void> {
+  await pool.shutdown();
 }

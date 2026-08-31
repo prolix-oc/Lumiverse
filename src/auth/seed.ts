@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hashPassword } from "../crypto/password";
-import { getDb } from "../db/connection";
+import { getDb, onDbReset } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
 export { backfillDefaultPresets } from "./default-preset";
@@ -29,6 +29,10 @@ const CONTENT_TABLES = [
  * seedOwner() and used by enforceFirstUserOwner() for O(1) runtime checks.
  */
 let firstUserId: string | null = null;
+
+onDbReset(() => {
+  firstUserId = null;
+});
 
 /** Returns the cached first-user ID, or null if not yet resolved. */
 export function getFirstUserId(): string | null {

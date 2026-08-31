@@ -1,5 +1,6 @@
 import type { PresetProfileBinding } from '@/api/preset-profiles'
 import type { PromptVariableValues } from '@/lib/loom/types'
+import { commitRuntimeAuthorityMutation } from '@/lib/agentRuntimeSelection'
 
 export type PresetProfilePromptVariableSource = 'chat' | 'persona' | 'character' | 'connection' | 'defaults'
 
@@ -102,6 +103,7 @@ export async function updatePresetProfilePromptVariables(
       binding = await api.updateDefaultsPromptVariables(target.id, values)
       break
   }
+  commitRuntimeAuthorityMutation()
   const change = { target, binding }
   for (const listener of promptVariableChangeListeners) {
     try {

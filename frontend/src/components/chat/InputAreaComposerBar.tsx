@@ -3,6 +3,7 @@ import {
   createPointerHoldController,
   nextToolbarIconOrder,
   toolbarActionIdFromTarget,
+  type PointerHoldController,
 } from '@/components/quick-toolbar/toolbarPointerHold'
 import styles from './InputArea.module.css'
 
@@ -24,13 +25,15 @@ export function ComposerActionBarLive({
   const eventSuppressClickRef = useRef(false)
   const itemPendingIdRef = useRef<string | null>(null)
   const itemDraggingIdRef = useRef<string | null>(null)
+  const pointerIdRef = useRef<number | null>(null)
+  const pointerCaptureTargetRef = useRef<HTMLDivElement | null>(null)
   const [draggingActionId, setDraggingActionId] = useState<string | null>(null)
   const orderRef = useRef(order)
   orderRef.current = order
   const reorderRef = useRef(reorder)
   reorderRef.current = reorder
 
-  const itemHoldRef = useRef<ReturnType<typeof createPointerHoldController> | null>(null)
+  const itemHoldRef = useRef<PointerHoldController | null>(null)
   if (itemHoldRef.current === null) {
     itemHoldRef.current = createPointerHoldController(() => {
       const id = itemPendingIdRef.current
@@ -41,8 +44,20 @@ export function ComposerActionBarLive({
     })
   }
 
+  const releasePointerCapture = () => {
+    const pointerId = pointerIdRef.current
+    const target = pointerCaptureTargetRef.current
+    pointerIdRef.current = null
+    pointerCaptureTargetRef.current = null
+    if (pointerId === null || !target?.hasPointerCapture?.(pointerId)) return
+    target.releasePointerCapture(pointerId)
+  }
+
   useEffect(() => () => {
     itemHoldRef.current?.cancel()
+    releasePointerCapture()
+    itemPendingIdRef.current = null
+    itemDraggingIdRef.current = null
   }, [])
 
   const applyItemReorderFromPointer = (event: { target: EventTarget | null; clientX: number; clientY: number }) => {
@@ -56,36 +71,55 @@ export function ComposerActionBarLive({
     reorderRef.current(next)
   }
 
-  const endItemReorder = () => {
+  const finishItemReorder = (pointerId?: number) => {
+    if (pointerId !== undefined && pointerIdRef.current !== pointerId) return
+    const itemHeld = itemHoldRef.current?.finish()
+    const wasDragging = itemDraggingIdRef.current !== null
+    eventSuppressClickRef.current = Boolean(itemHeld?.held || wasDragging)
+    itemPendingIdRef.current = null
+    itemDraggingIdRef.current = null
+    setDraggingActionId(null)
+    releasePointerCapture()
+  }
+
+  const cancelItemReorder = (pointerId?: number) => {
+    if (pointerId !== undefined && pointerIdRef.current !== pointerId) return
     itemHoldRef.current?.cancel()
     itemPendingIdRef.current = null
     itemDraggingIdRef.current = null
     setDraggingActionId(null)
+    eventSuppressClickRef.current = false
+    releasePointerCapture()
   }
 
   return (
     <div
       className={styles.actionBar}
       onPointerDown={(event) => {
-        if (event.target instanceof Element && event.target.closest('button[aria-label="Customize composer"]')) return
+        if (event.target instanceof Element && event.target.closest('[data-composer-customize]')) return
         const itemId = toolbarActionIdFromTarget(event.target)
         if (!itemId || !enableReorder) return
+        if (pointerIdRef.current !== null) return
+        eventSuppressClickRef.current = false
         itemPendingIdRef.current = itemId
+        pointerIdRef.current = event.pointerId
+        pointerCaptureTargetRef.current = event.currentTarget
+        event.currentTarget.setPointerCapture?.(event.pointerId)
         itemHoldRef.current?.start(event)
       }}
       onPointerMove={(event) => {
+        if (pointerIdRef.current !== null && event.pointerId !== pointerIdRef.current) return
         itemHoldRef.current?.move(event)
         applyItemReorderFromPointer(event)
       }}
-      onPointerUp={() => {
-        const itemHeld = itemHoldRef.current?.finish()
-        if (itemHeld?.held) eventSuppressClickRef.current = true
-        itemPendingIdRef.current = null
-        itemDraggingIdRef.current = null
-        setDraggingActionId(null)
+      onPointerUp={(event) => {
+        finishItemReorder(event.pointerId)
       }}
-      onPointerCancel={() => {
-        endItemReorder()
+      onPointerCancel={(event) => {
+        cancelItemReorder(event.pointerId)
+      }}
+      onLostPointerCapture={(event) => {
+        finishItemReorder(event.pointerId)
       }}
       onClickCapture={(event) => {
         if (!eventSuppressClickRef.current) return

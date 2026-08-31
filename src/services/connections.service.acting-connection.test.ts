@@ -33,7 +33,6 @@ const secretsSvc = await import("./secrets.service");
 const settingsSvc = await import("./settings.service");
 const multiplayerSvc = await import("./multiplayer.service");
 const chatBackground = await import("./chat-background.service");
-const councilProfilesSvc = await import("./council/council-profiles.service");
 const pool = await import("./generation-pool.service");
 const generateSvc = await import("./generate.service");
 const dispatcher = await import("./edit-and-send-dispatcher.service");
@@ -220,9 +219,6 @@ function track<T extends { mockRestore: () => void }>(spy: T): T {
  */
 function stubGenerationSurroundings(): void {
   track(spyOn(chatBackground, "abortChatBackground").mockResolvedValue(undefined));
-  track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation(() => {
-    throw new Error("skip-assembly");
-  }));
 }
 
 beforeEach(() => {
@@ -521,9 +517,11 @@ describe("startGeneration origin gating — zero extra queries on interactive pa
     };
     await generateSvc.startGeneration(input).catch(() => { /* assembly is stubbed out */ });
 
-    // The setting is seeded `true`, yet the bound profile still wins — and the
-    // spy proves the read never happened, rather than asserting it in prose.
-    expect((input as { connection_id?: string }).connection_id).toBe("gate-bound");
+    // The setting is seeded true, yet the bound profile still wins without
+    // mutating the caller-owned request object; the spy proves the setting read
+    // never happened rather than asserting it in prose.
+    expect(Object.hasOwn(input, "connection_id")).toBe(false);
+    expect(pool.getPoolEntry("gen-gate-interactive")?.model).toBe(BINDING_MODEL_OVERRIDE);
     expect(getSettingSpy.mock.calls.map((call) => call[1])).not.toContain("quickToolbarSettings");
   });
 
@@ -541,7 +539,7 @@ describe("startGeneration origin gating — zero extra queries on interactive pa
     await generateSvc.startGeneration(input, { origin: "edit_and_send" })
       .catch(() => { /* assembly is stubbed out */ });
 
-    expect((input as { connection_id?: string }).connection_id).toBe("gate-active");
+    expect(Object.hasOwn(input, "connection_id")).toBe(false);
     expect(pool.getPoolEntry("gen-gate-dispatch")?.model).toBe("model-active");
     expect(getSettingSpy.mock.calls.map((call) => call[1])).toContain("quickToolbarSettings");
   });

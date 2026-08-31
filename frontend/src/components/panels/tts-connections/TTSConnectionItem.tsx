@@ -12,6 +12,7 @@ import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/compo
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useDragHandleBlur } from '../connection-manager/useDragHandleBlur'
 import ProviderIcon from '@/components/shared/ProviderIcon'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
@@ -33,6 +34,7 @@ export default function TTSConnectionItem({
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
   const isQwen = isQwenTtsProvider(profile.provider)
+  const reviewRequired = profile.review_required === true
   const voiceLabel = formatTtsConnectionVoiceLabel(profile)
 
   useEffect(() => {
@@ -42,6 +44,7 @@ export default function TTSConnectionItem({
   }, [testResult])
 
   const handleTest = useCallback(async () => {
+    if (reviewRequired) return
     setTesting(true)
     setTestResult(null)
     try {
@@ -52,7 +55,7 @@ export default function TTSConnectionItem({
     } finally {
       setTesting(false)
     }
-  }, [profile.id, t])
+  }, [profile.id, reviewRequired, t])
 
   const handleSaveEdit = useCallback(async (input: CreateTtsConnectionInput) => {
     try {
@@ -63,10 +66,13 @@ export default function TTSConnectionItem({
       console.error('[TTSConnectionItem] Failed to update:', err)
     }
   }, [profile.id, onUpdate])
+  const handleReview = useCallback(async () => {
+    const updated = await ttsConnectionsApi.update(profile.id, { reviewed: true })
+    onUpdate(updated)
+  }, [onUpdate, profile.id])
 
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
   const handleRef = useDragHandleBlur(isDragging)
 
   return (
@@ -77,9 +83,12 @@ export default function TTSConnectionItem({
           profile={profile}
           onSave={handleSaveEdit}
           onCancel={() => setEditing(false)}
+          onReview={handleReview}
+          focusTargetRef={handleRef}
         />
       ) : (
         <>
+          <ConnectionReviewStatus profile={profile} onReview={handleReview} focusTargetRef={handleRef} />
           <div className={styles.itemRow}>
             <button
               ref={handleRef}
@@ -107,12 +116,13 @@ export default function TTSConnectionItem({
               </div>
             </div>
             <div className={styles.itemActions}>
-              <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')}>
+              <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')} disabled={reviewRequired}>
                 <Edit3 size={13} />
               </button>
               <button
                 type="button"
                 className={styles.actionBtn}
+                disabled={reviewRequired}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect()
                   setMenuPos({ x: rect.right, y: rect.bottom + 4 })
@@ -125,7 +135,7 @@ export default function TTSConnectionItem({
                 position={menuPos}
                 onClose={() => setMenuPos(null)}
                 items={[
-                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
+                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing || reviewRequired },
                   ...(isQwen
                     ? [{
                         key: 'qwen-clones',
@@ -135,6 +145,7 @@ export default function TTSConnectionItem({
                           setMenuPos(null)
                           openModal('qwenCustomVoice', { connectionId: profile.id })
                         },
+                        disabled: reviewRequired,
                       }]
                     : []),
                   { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },

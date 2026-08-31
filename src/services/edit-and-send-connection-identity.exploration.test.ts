@@ -277,7 +277,11 @@ function track<T extends { mockRestore: () => void }>(spy: T): T {
  */
 function stubGenerationSurroundings(): void {
   track(spyOn(chatBackground, "abortChatBackground").mockResolvedValue(undefined));
-  track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation(() => {
+  const resolveProfile = councilProfilesSvc.resolveProfile;
+  let profileResolutionCount = 0;
+  track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation((...args) => {
+    profileResolutionCount += 1;
+    if (profileResolutionCount === 1) return resolveProfile(...args);
     throw new Error("skip-assembly");
   }));
 }
@@ -662,9 +666,10 @@ describe("Case 8 — the opt-in is inert on a chat that carries a live binding",
     // the unfixed and the fixed tree.
     await start(input, { origin: "edit_and_send" }).catch(() => { /* assembly is stubbed out */ });
 
+    const entry = pool.getPoolEntry(generationId);
     expect({
-      resolvedConnectionId: (input as { connection_id?: string }).connection_id,
-      resolvedModel: pool.getPoolEntry(generationId)?.model,
+      resolvedConnectionId: entry?.connectionId,
+      resolvedModel: entry?.model,
     }).toEqual({
       resolvedConnectionId: PROFILE_A,
       resolvedModel: MODEL_A,
@@ -709,12 +714,11 @@ describe("Case 9 — the origin cannot be forged in band", () => {
     };
     const input = { ...body, userId: USER, signal: undefined } as unknown as StartArgs;
 
-    const started = await start(input).catch(() => null);
+    await start(input).catch(() => null);
 
-    expect((input as { connection_id?: string }).connection_id).toBe(PROFILE_C);
-    if (started) {
-      expect(pool.getPoolEntry(started.generationId)?.model).toBe(BINDING_MODEL_OVERRIDE);
-    }
+    const entry = pool.getPoolForChat(USER, chatId);
+    expect(entry?.connectionId).toBe(PROFILE_C);
+    expect(entry?.model).toBe(BINDING_MODEL_OVERRIDE);
     expect(getSettingSpy.mock.calls.map((call) => call[1])).not.toContain("quickToolbarSettings");
   });
 });

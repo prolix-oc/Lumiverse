@@ -7,6 +7,7 @@ import MessageContent from './MessageContent'
 import ReasoningBlock from './ReasoningBlock'
 import MessageAttachments from './MessageAttachments'
 import { useStore } from '@/store'
+import { selectAgentRunForTarget } from '@/store/slices/agent-runs'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import type { Message } from '@/types/api'
 import type { MessageOverrideProps } from '@/lib/componentOverrides'
@@ -27,16 +28,27 @@ function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden, isContextAnchor,
+    agentActivity, agentSummary, tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden, isContextAnchor,
     handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
     editAndSendPending,
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
   const displayAvatarUrl = minimalUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
+  const inspectionRun = useStore((state) => (
+    typeof message.swipe_id === 'number'
+      ? selectAgentRunForTarget(state, chatId, message.id, message.swipe_id)
+      : undefined
+  ))
   const handlePromptBreakdown = useCallback(() => {
-    openModal('promptItemizer', { messageId: message.id })
-  }, [openModal, message.id])
+    openModal('promptItemizer', {
+      messageId: message.id,
+      chatId,
+      ...(inspectionRun?.inspectionAttemptId
+        ? { inspectionAttemptId: inspectionRun.inspectionAttemptId }
+        : {}),
+    })
+  }, [openModal, message.id, chatId, inspectionRun?.inspectionAttemptId])
 
   // ── Build the flattened override props contract ──
   const overrideProps: MessageOverrideProps = useMemo(() => ({
@@ -59,8 +71,8 @@ function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false
     content: {
       raw: displayContent,
     },
-    reasoning: reasoning ? {
-      raw: reasoning,
+    reasoning: reasoning || agentActivity || agentSummary ? {
+      raw: reasoning ?? '',
       duration: reasoningDuration ?? null,
       isStreaming: isActivelyStreaming,
     } : null,
@@ -97,7 +109,7 @@ function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false
     styles,
   }), [
     message, isUser, displayName, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isContextAnchor, isActivelyStreaming,
-    isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
+    isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration, agentActivity, agentSummary,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
     handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
     handleFork, handlePromptBreakdown,
@@ -120,12 +132,14 @@ function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false
         findQuery={findQuery}
       />
     ),
-    Reasoning: reasoning ? (
+    Reasoning: reasoning || agentActivity || agentSummary ? (
       <ReasoningBlock
-        reasoning={reasoning}
+        reasoning={reasoning ?? ''}
         reasoningDuration={reasoningDuration}
         reasoningStartedAt={reasoningStartedAt}
         isStreaming={isActivelyStreaming}
+        agentActivity={agentActivity}
+        agentSummary={agentSummary}
       />
     ) : null,
     Attachments: attachments && attachments.length > 0 ? (
@@ -133,14 +147,14 @@ function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false
     ) : null,
   }), [
     displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth, findQuery,
-    reasoning, reasoningDuration, reasoningStartedAt, attachments,
+    reasoning, reasoningDuration, reasoningStartedAt, agentActivity, agentSummary, attachments,
   ])
 
   // ── Default props for the built-in renderer ──
   const defaultProps: MinimalMessageDefaultProps = {
     message, chatId, depth, isSelectMode, isSelected, onToggleSelect, findQuery,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
-    isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
+    isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt, agentActivity, agentSummary,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
     handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
     handleFork, handlePromptBreakdown, editAndSendPending,

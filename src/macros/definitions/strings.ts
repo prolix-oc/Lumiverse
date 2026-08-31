@@ -1,8 +1,21 @@
 import { registry } from "../MacroRegistry";
+import type { MacroExecContext } from "../types";
 import {
-  regexReplaceSandboxed,
+  regexCaptureReplacementsSandboxed,
   RegexTimeoutError,
+  type SandboxCaptureReplacement,
 } from "../../utils/regex-sandbox";
+import { PreparationLimitExceededError, utf8ByteLength } from "../../types/agent-preprocessing";
+import { MAX_LIST_ITEMS, selectDelimitedItem } from "../list-utils";
+
+function measureMappedCodePointBytes(
+  value: string,
+  map: (codePoint: string) => string,
+): number {
+  let bytes = 0;
+  for (const codePoint of value) bytes += utf8ByteLength(map(codePoint));
+  return bytes;
+}
 
 export function registerStringMacros(): void {
   registry.registerMacro({
@@ -31,7 +44,11 @@ export function registerStringMacros(): void {
     aliases: ["uppercase", "toUpper"],
     handler: (ctx) => {
       const text = ctx.isScoped ? ctx.body : (ctx.args[0] ?? "");
-      return text.toUpperCase();
+      return ctx.budget.transform(
+        text,
+        (value) => value.toUpperCase(),
+        (value) => measureMappedCodePointBytes(value, (codePoint) => codePoint.toUpperCase()),
+      );
     },
   });
 
@@ -46,7 +63,11 @@ export function registerStringMacros(): void {
     aliases: ["lowercase", "toLower"],
     handler: (ctx) => {
       const text = ctx.isScoped ? ctx.body : (ctx.args[0] ?? "");
-      return text.toLowerCase();
+      return ctx.budget.transform(
+        text,
+        (value) => value.toLowerCase(),
+        (value) => measureMappedCodePointBytes(value, (codePoint) => codePoint.toLowerCase()),
+      );
     },
   });
 
@@ -62,7 +83,8 @@ export function registerStringMacros(): void {
     handler: (ctx) => {
       const text = ctx.isScoped ? ctx.body : (ctx.args[0] ?? "");
       if (!text) return "";
-      return text.charAt(0).toUpperCase() + text.slice(1);
+      const first = text.charAt(0).toUpperCase();
+      return ctx.budget.append([first, text.slice(1)]);
     },
   });
 
@@ -83,7 +105,7 @@ export function registerStringMacros(): void {
       const replacement = ctx.args[1] ?? "";
       const text = ctx.isScoped ? ctx.body : (ctx.args[2] ?? "");
       if (!find) return text;
-      return text.replaceAll(find, replacement);
+      return ctx.budget.replaceAll(text, find, replacement);
     },
   });
 
@@ -124,9 +146,12 @@ export function registerStringMacros(): void {
       const text = ctx.args[0] ?? "";
       const delimiter = ctx.args[1] ?? ",";
       const index = parseInt(ctx.args[2], 10) || 0;
-      const parts = text.split(delimiter);
-      const item = parts[index < 0 ? parts.length + index : index];
-      return item?.trim() ?? "";
+      const selection = selectDelimitedItem(text, delimiter, index, MAX_LIST_ITEMS);
+      if (selection.overflow) {
+        ctx.warn(`{{split}} capped at ${MAX_LIST_ITEMS} items`);
+        return "";
+      }
+      return selection.value;
     },
   });
 
@@ -151,11 +176,12 @@ export function registerStringMacros(): void {
       // Items are list values, so that structural whitespace is noise and
       // would otherwise accumulate into joined output. The separator (arg 0)
       // is intentionally left intact — its whitespace is meaningful.
-      const items = ctx.args
-        .slice(1)
+      const rawItems = ctx.args.slice(1);
+      ctx.budget.reserveTrimString(rawItems.length);
+      const items = rawItems
         .map((a) => a.trim())
         .filter((a) => a !== "");
-      return items.join(sep);
+      return ctx.budget.join(items, sep);
     },
   });
 
@@ -173,7 +199,7 @@ export function registerStringMacros(): void {
     handler: (ctx) => {
       const count = Math.min(Math.max(parseInt(ctx.args[0], 10) || 0, 0), 1000);
       const text = ctx.isScoped ? ctx.body : (ctx.args[1] ?? "");
-      return text.repeat(count);
+      return ctx.budget.repeat(text, count);
     },
   });
 
@@ -194,7 +220,7 @@ export function registerStringMacros(): void {
       const suffix = ctx.args[1] ?? "";
       const text = ctx.isScoped ? ctx.body : (ctx.args[2] ?? "");
       if (!text) return "";
-      return prefix + text + suffix;
+      return ctx.budget.wrap(prefix, text, suffix);
     },
   });
 
@@ -218,10 +244,11 @@ export function registerStringMacros(): void {
       const flags = (ctx.isScoped ? ctx.args[2] : ctx.args[3]) ?? "g";
       if (!pattern) return text;
       try {
-        // Run user-supplied regex in the sandbox so a pathological pattern
-        // can't freeze the prompt-assembly thread.
-        return await regexReplaceSandboxed(pattern, flags, text, replacement);
+        // Capture replacements in the terminable regex sandbox, then preflight
+        // the exact rebuilt byte count before allocating the final string.
+        return await regexReplaceWithBudget(ctx, pattern, flags, text, replacement);
       } catch (err) {
+        if (err instanceof PreparationLimitExceededError) throw err;
         if (err instanceof RegexTimeoutError) {
           ctx.warn(`Regex pattern exceeded time budget: ${pattern}`);
           return text;
@@ -269,4 +296,78 @@ export function registerStringMacros(): void {
       return (lastSpace > maxChars * 0.8 ? truncated.substring(0, lastSpace) : truncated) + "...";
     },
   });
+}
+const MAX_REGEX_REPLACEMENTS = 10_000;
+
+async function regexReplaceWithBudget(
+  ctx: MacroExecContext,
+  pattern: string,
+  flags: string,
+  text: string,
+  replacement: string,
+): Promise<string> {
+  const replacements: SandboxCaptureReplacement[] =
+    await regexCaptureReplacementsSandboxed(
+      pattern,
+      flags,
+      text,
+      replacement,
+      500,
+      {
+        signal: ctx.budget.signal,
+        maxMatches: Math.min(MAX_REGEX_REPLACEMENTS, 1024),
+        maxExpansionBytes: Math.max(
+          0,
+          ctx.budget.limits.maxCumulativeExpansionBytes - ctx.budget.cumulativeExpansionBytes,
+        ),
+        maxOutputBytes: ctx.budget.limits.maxOutputBytes,
+        maxOperationBytes: ctx.budget.limits.maxOperationBytes,
+      },
+    );
+  if (replacements.length > MAX_REGEX_REPLACEMENTS) {
+    throw new PreparationLimitExceededError(
+      "operation_bytes",
+      ctx.budget.limits.maxOperationBytes,
+      ctx.budget.limits.maxOperationBytes + 1,
+    );
+  }
+  if (replacements.length === 0) return text;
+
+  let cursor = 0;
+  let outputBytes = Buffer.byteLength(text, "utf8");
+  for (const entry of replacements) {
+    ctx.budget.checkAbort();
+    if (
+      !Number.isSafeInteger(entry.index)
+      || !Number.isSafeInteger(entry.matchLength)
+      || entry.index < cursor
+      || entry.matchLength < 0
+      || entry.index + entry.matchLength > text.length
+    ) {
+      throw new Error("Regex sandbox returned malformed match spans");
+    }
+    const replacementBytes = Buffer.byteLength(entry.replacement, "utf8");
+    if (replacementBytes > ctx.budget.limits.maxOperationBytes) {
+      throw new PreparationLimitExceededError(
+        "operation_bytes",
+        ctx.budget.limits.maxOperationBytes,
+        replacementBytes,
+      );
+    }
+    ctx.budget.preflightExpansion(entry.replacement, replacementBytes);
+    const matched = text.slice(entry.index, entry.index + entry.matchLength);
+    outputBytes += replacementBytes - Buffer.byteLength(matched, "utf8");
+    ctx.budget.preflightOutput(outputBytes);
+    cursor = entry.index + entry.matchLength;
+  }
+
+  const parts: string[] = [];
+  cursor = 0;
+  for (const entry of replacements) {
+    parts.push(text.slice(cursor, entry.index), entry.replacement);
+    cursor = entry.index + entry.matchLength;
+  }
+  parts.push(text.slice(cursor));
+  ctx.budget.preflightOutput(outputBytes);
+  return ctx.budget.append(parts);
 }

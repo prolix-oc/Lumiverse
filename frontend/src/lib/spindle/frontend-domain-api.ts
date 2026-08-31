@@ -141,9 +141,9 @@ function safeConnectionProfile(profile: ConnectionProfile): ConnectionProfile {
 }
 
 function activeConnection(state: AppStore): ConnectionActiveState {
-  const profile = state.profiles.find((candidate) => candidate.id === state.activeProfileId)
+  const profile = state.profiles.find((candidate) => candidate.id === state.activeProfileId && candidate.review_required !== true)
   return {
-    activeProfileId: state.activeProfileId,
+    activeProfileId: profile?.id ?? null,
     provider: profile?.provider ?? null,
     model: profile?.model ?? null,
   }

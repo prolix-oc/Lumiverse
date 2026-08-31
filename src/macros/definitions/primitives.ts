@@ -47,8 +47,9 @@ export function registerCoreMacros(): void {
       if (ctx.isScoped) {
         // {{#trim}}...{{/trim}} — preserve whitespace (ST compat)
         if (ctx.flags.preserveWhitespace) return ctx.body;
+        ctx.budget.reserveTrimString();
         // {{trim}}...{{/trim}} — strip blank lines, dedent, and trim
-        return dedent(ctx.body).trim();
+        return ctx.budget.transform(ctx.body, (value) => dedent(value).trim());
       }
       // Non-scoped trim acts as a marker; handled in post-processing
       return "";
@@ -92,10 +93,9 @@ export function registerCoreMacros(): void {
     category: "Core",
     description: "Reverse a string",
     returnType: "string",
-    args: [{ name: "text", description: "Text to reverse" }],
     handler: (ctx) => {
-      if (ctx.isScoped) return [...ctx.body].reverse().join("");
-      return ctx.args[0] ? [...ctx.args[0]].reverse().join("") : "";
+      const text = ctx.isScoped ? ctx.body : (ctx.args[0] ?? "");
+      return text ? ctx.budget.transform(text, (value) => [...value].reverse().join("")) : "";
     },
   });
 

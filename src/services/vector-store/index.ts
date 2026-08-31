@@ -18,7 +18,16 @@ import {
   type VectorStoreConnectionSecrets,
 } from "../vector-store-config.service";
 
-let activeStore: VectorStore | null = null;
+type ActiveStoreSlot = { readonly generation: number; readonly store: VectorStore };
+let activeStore: ActiveStoreSlot | null = null;
+let activeStoreGeneration = 0;
+let vectorStoreLifecycleTail: Promise<void> = Promise.resolve();
+
+function serializeVectorStoreLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const result = vectorStoreLifecycleTail.then(operation, operation);
+  vectorStoreLifecycleTail = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 /**
  * Construct (but do not memoize) a store for an explicit config + secrets.
@@ -50,23 +59,35 @@ export async function buildVectorStore(
  * Resolve the active vector store, memoized for the process lifetime. `init()`
  * is idempotent and safe to repeat.
  */
-export async function getActiveVectorStore(): Promise<VectorStore> {
-  if (!activeStore) {
-    const config = getResolvedVectorStoreConfig();
-    const secrets = await getVectorStoreConnectionSecrets();
-    activeStore = await buildVectorStore(config, secrets);
-  }
-  await activeStore.init();
-  return activeStore;
+export function getActiveVectorStore(): Promise<VectorStore> {
+  return serializeVectorStoreLifecycle(async () => {
+    if (!activeStore) {
+      const generation = activeStoreGeneration;
+      const config = getResolvedVectorStoreConfig();
+      const secrets = await getVectorStoreConnectionSecrets();
+      const store = await buildVectorStore(config, secrets);
+      await store.init();
+      if (generation !== activeStoreGeneration) {
+        await store.close();
+        throw new Error("Vector store configuration changed during initialization");
+      }
+      activeStore = { generation, store };
+    } else {
+      await activeStore.store.init();
+    }
+    return activeStore.store;
+  });
 }
 
 /** Clear the memoized store handle (e.g. after a provider config change). */
-export function resetActiveVectorStore(): void {
-  if (activeStore) {
-    // Best-effort close; never throw out of a reset.
-    Promise.resolve(activeStore.close()).catch(() => {});
-  }
-  activeStore = null;
+export function resetActiveVectorStore(): Promise<void> {
+  return serializeVectorStoreLifecycle(async () => {
+    const previous = activeStore
+    activeStoreGeneration += 1
+    if (!previous) return
+    if (activeStore === previous) activeStore = null
+    await previous.store.close()
+  })
 }
 
 export * from "./types";

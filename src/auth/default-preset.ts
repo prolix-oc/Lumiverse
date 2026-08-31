@@ -2,6 +2,7 @@ import { getDb } from "../db/connection";
 import * as settingsSvc from "../services/settings.service";
 import { DEFAULT_PROMPT_BEHAVIOR } from "../services/prompt-behavior";
 import { SYSTEM_SECRET_PRINCIPAL_EMAIL } from "../services/secrets.service";
+import { updatePreset } from "../services/presets.service";
 
 export const DEFAULT_PRESET_BLOCKS = [
   {
@@ -426,14 +427,8 @@ function upgradeLegacyPresetMetadata(userId: string, row: PresetRow): void {
   if (metadata._lumiverse_preset_slug === BUILTIN_DEFAULT_PRESET_SLUG) return;
   metadata._lumiverse_preset_slug = BUILTIN_DEFAULT_PRESET_SLUG;
   metadata.isDefault = true;
-  getDb()
-    .query("UPDATE presets SET metadata = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?")
-    .run(
-      JSON.stringify(metadata),
-      Math.floor(Date.now() / 1000),
-      row.id,
-      userId,
-    );
+  const updated = updatePreset(userId, row.id, { metadata });
+  if (!updated) throw new Error("Built-in default preset disappeared during legacy metadata upgrade");
 }
 
 function getActivePresetId(userId: string): string | null {

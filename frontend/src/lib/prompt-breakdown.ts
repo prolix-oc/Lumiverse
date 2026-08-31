@@ -1,3 +1,6 @@
+import type { AgentRunInspectionDetailV1 } from '@/types/agent-runs'
+import type { BreakdownCacheEntry } from '@/types/store'
+
 export const GROUP_COLORS: Record<string, string> = {
   lumiverse: '#8a7fb0',
   chatHistory: '#d4a842',
@@ -20,6 +23,7 @@ export interface BreakdownEntry {
   role?: string
   content?: string
   blockId?: string
+  promptOrder?: number
   extensionId?: string
   extensionName?: string
   messageCount?: number
@@ -100,3 +104,78 @@ export function groupBreakdownEntries(entries: BreakdownEntry[]): BreakdownGroup
 export function getBlockDisplayColor(index: number): string {
   return BLOCK_PALETTE[index % BLOCK_PALETTE.length]
 }
+
+
+export function workInspectionCheckpointLabel(
+  assemblySurface: 'RESPONSE' | 'WORK' | undefined,
+  checkpoint?: string | null,
+  customPhaseId?: string | null,
+): string {
+  if (assemblySurface === 'WORK') {
+    const labeled = (typeof checkpoint === 'string' && checkpoint.length > 0)
+      ? checkpoint
+      : (typeof customPhaseId === 'string' && customPhaseId.length > 0)
+        ? customPhaseId
+        : 'WORK'
+    return labeled === 'ordinary_response' ? 'WORK' : labeled
+  }
+  return (typeof checkpoint === 'string' && checkpoint.length > 0) ? checkpoint : 'ordinary_response'
+}
+
+export function inspectionAttemptTargetMessageId(
+  detail: Pick<AgentRunInspectionDetailV1, 'target' | 'committedTarget'>,
+): string | null {
+  return detail.target?.messageId ?? detail.committedTarget?.messageId ?? null
+}
+
+export function inspectionDetailToBreakdown(detail: AgentRunInspectionDetailV1): BreakdownCacheEntry {
+  const retained = detail.promptEvidence.filter(
+    (entry) => entry.destination !== 'cortex' && entry.destination !== 'council',
+  )
+  const prompts = retained.some((entry) => entry.included)
+    ? retained.filter((entry) => entry.included)
+    : retained
+  const rootWorkInspection = detail.promptEvidence.find(
+    (entry) => entry.destination === 'root_work' && entry.loomInspection,
+  )?.loomInspection
+  const continuationInspection = detail.promptEvidence.find(
+    (entry) => (
+      (entry.destination === 'completion_handoff' || entry.destination === 'child_work')
+      && entry.loomInspection
+    ),
+  )?.loomInspection
+  const loomPromptInspection = rootWorkInspection
+    ?? continuationInspection
+    ?? detail.promptEvidence.find((entry) => entry.loomInspection)?.loomInspection
+    ?? undefined
+  return {
+    entries: prompts.map((entry) => ({
+      name: entry.sourceId,
+      type: 'lumiverse',
+      tokens: 0,
+      role: entry.role,
+      content: entry.content,
+      blockId: entry.sourceId,
+      promptOrder: entry.promptOrder,
+    })),
+    messages: prompts.map((entry) => ({
+      role: entry.role === 'user' || entry.role === 'assistant' ? entry.role : 'system',
+      content: entry.content,
+    })),
+    totalTokens: detail.usage.totals.totalTokens,
+    chatHistoryTokens: 0,
+    maxContext: 0,
+    model: 'recorded',
+    provider: 'inspection',
+    parameters: {},
+    usage: {
+      prompt_tokens: detail.usage.totals.inputTokens,
+      completion_tokens: detail.usage.totals.outputTokens,
+      total_tokens: detail.usage.totals.totalTokens,
+    },
+    tokenizer_name: null,
+    assemblySurface: 'WORK',
+    loomPromptInspection,
+  }
+}
+

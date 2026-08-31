@@ -1397,10 +1397,11 @@ function LoomBlockEditorBridge({
     let cloned: SpindleLoomBlockEditorValue
     try {
       // Blocks arrive from the host block editor, which emits host-only
-      // fields on every save (placementBinding, and seal metadata when
-      // trusted features are on). The public DTO rejects them by design, so
-      // strip them at the boundary before validating — otherwise every save
-      // fails with "unknown field" and the editor reports validationFailed.
+      // fields on every save (placementBinding, agent-runtime revisions, and
+      // seal metadata when trusted features are on). The public DTO rejects
+      // them by design, so strip them at the boundary before validating —
+      // otherwise every save fails with "unknown field" and the editor
+      // reports validationFailed.
       const publicBlocks = blocks.map((block) => {
         const clean = { ...block } as Record<string, unknown>
         for (const key of HOST_ONLY_BLOCK_FIELDS) delete clean[key]

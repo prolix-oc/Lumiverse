@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { tokenizersApi } from '@/api/tokenizers'
-import { useStore } from '@/store'
 import {
   clearTokenCountCache,
   fnv1a32,
@@ -46,6 +45,16 @@ export interface UseTokenCountsOptions {
   content: TokenizableContent
   extensions?: unknown
   enabled?: boolean
+}
+export type TokenCountStoreState = {
+  activeProfileId: string | null
+  profiles: Array<{ id: string; model?: string; is_default?: boolean; review_required?: boolean }>
+}
+
+export type TokenCountStore = <T>(selector: (state: TokenCountStoreState) => T) => T
+
+export interface UseTokenCountsDependencies {
+  store: TokenCountStore
 }
 
 export interface TokenCountSweepEntry {
@@ -107,10 +116,15 @@ function getTokenCountRuntimeVersion(): number {
 
 subscribeTokenCountCache(publishRuntimeMutation)
 
+export type TokenCountRuntimeApi = Pick<typeof tokenizersApi, 'countForModel' | 'testPattern'>
+
+let tokenCountApiForRuntime: TokenCountRuntimeApi = tokenizersApi
+
 function createRuntimeScheduler(): TokenCountScheduler {
+  const runtimeApi = tokenCountApiForRuntime
   return createTokenCountScheduler({
     async run(request: TokenCountRequest, signal: AbortSignal): Promise<TokenCountResult> {
-      const response = await tokenizersApi.countForModel(request.model, request.content, { signal })
+      const response = await runtimeApi.countForModel(request.model, request.content, { signal })
       const count = response.token_count
       if (count == null || !Number.isFinite(count) || !Number.isInteger(count) || count < 0) {
         return { count: estimateTokens(request.content), approximate: true }
@@ -160,11 +174,11 @@ export function resolveTokenCount({ stored, cached, estimate }: ResolveTokenCoun
 }
 
 /** Resolve the active connection profile model, falling back to the default profile. */
-export function useActiveTokenizerModel(): string | null {
-  const activeProfileId = useStore((state) => state.activeProfileId)
-  const profiles = useStore((state) => state.profiles)
-  const activeModel = profiles.find((profile) => profile.id === activeProfileId)?.model
-  const defaultModel = profiles.find((profile) => profile.is_default)?.model
+export function useActiveTokenizerModel(store: TokenCountStore): string | null {
+  const activeProfileId = store((state) => state.activeProfileId)
+  const profiles = store((state) => state.profiles)
+  const activeModel = profiles.find((profile) => profile.id === activeProfileId && profile.review_required !== true)?.model
+  const defaultModel = profiles.find((profile) => profile.is_default && profile.review_required !== true)?.model
   const candidate = typeof activeModel === 'string' && activeModel.length > 0 ? activeModel : defaultModel
   return typeof candidate === 'string' && candidate.length > 0 ? candidate : null
 }
@@ -184,14 +198,14 @@ const tokenizerPatternProbes = new Map<string, { matched: boolean; tokenizerName
  * all-entry exact-count sweep. A failed request remains uncached so a later
  * mount can recover when a tokenizer is installed or the service returns.
  */
-export function useTokenizerAvailability(): TokenizerAvailability {
-  const model = useActiveTokenizerModel()
+export function useTokenizerAvailability(store: TokenCountStore): TokenizerAvailability {
+  const model = useActiveTokenizerModel(store)
   const [, setProbeVersion] = useState(0)
 
   useEffect(() => {
     if (!model || tokenizerPatternProbes.has(model)) return
     let cancelled = false
-    void tokenizersApi.testPattern(model)
+    void tokenCountApiForRuntime.testPattern(model)
       .then((result) => {
         tokenizerPatternProbes.set(model, { matched: result.matched, tokenizerName: result.tokenizer_name })
       })
@@ -226,7 +240,8 @@ export function invalidateTokenCountsForEntry(entryId: string): void {
 }
 
 /** Dispose the shared runtime and clear non-persistent cache/invalidation state. */
-export function resetTokenCountRuntime(): void {
+export function resetTokenCountRuntime(runtimeApi?: TokenCountRuntimeApi): void {
+  tokenCountApiForRuntime = runtimeApi ?? tokenizersApi
   tokenCountScheduler.dispose()
   tokenCountScheduler = createRuntimeScheduler()
   for (const state of entryInvalidationVersions.values()) state.version += 1
@@ -235,14 +250,17 @@ export function resetTokenCountRuntime(): void {
 }
 
 /** Manually request a count for one entry snapshot. */
-export function useTokenCounts({
-  entryId,
-  persistExactCount,
-  content,
-  extensions,
-  enabled = true,
-}: UseTokenCountsOptions): UseTokenCountsResult {
-  const model = useActiveTokenizerModel()
+export function useTokenCounts(
+  {
+    entryId,
+    persistExactCount,
+    content,
+    extensions,
+    enabled = true,
+  }: UseTokenCountsOptions,
+  dependencies: UseTokenCountsDependencies,
+): UseTokenCountsResult {
+  const model = useActiveTokenizerModel(dependencies.store)
   const syntheticEntryId = useId()
 
   const normalizedContent = content ?? ''
@@ -409,8 +427,12 @@ export function planTokenCountSweep(
  * Sweep tasks receive one explicit permit each and remain subject to the
  * scheduler's two-request concurrency ceiling and activity pause.
  */
-export function useTokenCountSweep(entries: readonly TokenCountSweepEntry[], enabled = true): void {
-  const model = useActiveTokenizerModel()
+export function useTokenCountSweep(
+  entries: readonly TokenCountSweepEntry[],
+  enabled: boolean,
+  store: TokenCountStore,
+): void {
+  const model = useActiveTokenizerModel(store)
   const plan = useMemo(
     () => (!enabled || model == null ? [] : planTokenCountSweep(entries, model)),
     [enabled, entries, model],

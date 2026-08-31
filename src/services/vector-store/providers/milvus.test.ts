@@ -206,3 +206,83 @@ describe("MilvusStore.hybridSearch", () => {
     expect(lexicalCalls).toBe(2);
   });
 });
+
+
+function suspendedCollectionLookup() {
+  const entered = Promise.withResolvers<void>();
+  const result = Promise.withResolvers<boolean>();
+  const lookup = async () => {
+    entered.resolve();
+    return result.promise;
+  };
+  return { entered, result, lookup };
+}
+
+function createCancellationStore() {
+  const store = new MilvusStore({ address: "127.0.0.1:19530" }, null);
+  const calls = { deletes: 0, flushes: 0, loads: 0 };
+  Object.assign(store, {
+    client: {
+      delete: async () => {
+        calls.deletes += 1;
+        return { status: { error_code: "Success" } };
+      },
+      flushSync: async () => {
+        calls.flushes += 1;
+        return { status: { error_code: "Success" } };
+      },
+      loadCollectionSync: async () => {
+        calls.loads += 1;
+        return { status: { error_code: "Success" } };
+      },
+    },
+  });
+  return { store, calls };
+}
+
+describe("Milvus collection lookup cancellation", () => {
+  test("deleteByFilter rechecks cancellation after a suspended false lookup", async () => {
+    const { store, calls } = createCancellationStore();
+    const suspended = suspendedCollectionLookup();
+    Object.assign(store, { hasCollection: suspended.lookup });
+    const controller = new AbortController();
+
+    const deletion = store.deleteByFilter("embeddings", eq("id", "stale"), controller.signal);
+    await suspended.entered.promise;
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    suspended.result.resolve(false);
+
+    await expect(deletion).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual({ deletes: 0, flushes: 0, loads: 0 });
+  });
+
+  test("deleteByIds rechecks cancellation after a suspended false lookup", async () => {
+    const { store, calls } = createCancellationStore();
+    const suspended = suspendedCollectionLookup();
+    Object.assign(store, { hasCollection: suspended.lookup });
+    const controller = new AbortController();
+
+    const deletion = store.deleteByIds("embeddings", ["stale"], controller.signal);
+    await suspended.entered.promise;
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    suspended.result.resolve(false);
+
+    await expect(deletion).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual({ deletes: 0, flushes: 0, loads: 0 });
+  });
+
+  test("optimize rechecks cancellation after a suspended false lookup", async () => {
+    const { store, calls } = createCancellationStore();
+    const suspended = suspendedCollectionLookup();
+    Object.assign(store, { hasCollection: suspended.lookup });
+    const controller = new AbortController();
+
+    const optimization = store.optimize(["embeddings"], controller.signal);
+    await suspended.entered.promise;
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    suspended.result.resolve(false);
+
+    await expect(optimization).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual({ deletes: 0, flushes: 0, loads: 0 });
+  });
+});

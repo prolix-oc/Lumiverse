@@ -8,6 +8,12 @@ Extension-created scripts are attributed by the host. An extension cannot update
 
 Extensions whose purpose is to edit the user's complete regex library may also request the privileged `regex_scripts_unrestricted` permission. It is additive: both permissions must be granted. With it, `update` and `delete` may target legacy, card-bound, preset-bound, and other-extension-owned scripts. The host still protects ownership, binding, and trusted folder-version attribution from reassignment.
 
+## Host mutation authority
+
+The first-party `/api/v1/regex-scripts` mutation routes return their normal result plus `presetAuthorityChanged: boolean` and `presetAuthorities: Preset[]`. Create, update, delete, toggle, reorder, folder, bulk, and import operations report every preset whose executable regex companions changed. Each affected preset advances `cache_revision` exactly once and its exact Loom source references enter repair; unbound changes and semantic no-ops return `false` with an empty authority list.
+
+These projections, not a browser's stale local script list, are authoritative. Clients hydrate every returned owner and commit one runtime-authority invalidation for the response. Imports and nested remote installs buffer regex and preset events inside the database transaction: rollback emits nothing, while success emits each committed event only after commit.
+
 ## Usage
 
 ```ts

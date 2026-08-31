@@ -1,9 +1,49 @@
+interface GeminiWirePart {
+  thought?: unknown;
+  text?: unknown;
+  functionCall?: {
+    name?: unknown;
+    args?: unknown;
+    id?: unknown;
+  };
+  thoughtSignature?: unknown;
+}
+
+interface GeminiResponseShape {
+  candidates: Array<{
+    content?: { parts?: GeminiWirePart[] };
+    finishReason?: unknown;
+    groundingMetadata?: unknown;
+  }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
+  groundingMetadata?: unknown;
+}
+
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
+import {
+  createBoundedSseReader,
+  ProviderProtocolError,
+  ProviderResponseTooLargeError,
+  PROVIDER_STREAM_LIMITS,
+  fetchWithPreflightAbort,
+  readJsonWithAbort,
+  yieldToEventLoop,
+} from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
+import { parseModelToolArguments } from "../tool-arguments";
 import { fetchProviderJson, throwProviderResponseError } from "../../utils/provider-errors";
-import { sanitizeGeminiSchema } from "./google";
+import {
+  GeminiThoughtSignatureAccumulator,
+  assertGeminiFunctionCallArguments,
+  mergeGeminiFunctionCallArguments,
+  parseGeminiUsageMetadata,
+  sanitizeGeminiSchema,
+} from "./google";
 import {
   appendGoogleSearchTool,
   buildGoogleSearchTool,
@@ -11,6 +51,14 @@ import {
   GOOGLE_SEARCH_PARAMETERS,
 } from "./google-search";
 import { splitLeadingSystemMessagePrefix } from "../system-message-prefix";
+
+/**
+ * Keep the provider's clone-safe invalid-arguments sentinel intact while
+ * bridging the legacy ToolCallResult args type.
+ */
+function parseToolCallArgs(raw: unknown): ToolCallResult["args"] {
+  return parseModelToolArguments(raw) as ToolCallResult["args"];
+}
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
@@ -230,6 +278,12 @@ export class GoogleVertexProvider implements LlmProvider {
     supportsStreaming: true,
     apiKeyRequired: true, // We use the "API key" slot to store the service account JSON
     modelListStyle: "none", // Vertex model list requires project/location — handled in listModels()
+    toolCalling: true,
+    requiredToolChoice: true,
+    nativeToolContinuation: true,
+    toolContinuationMode: "native",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
     // Same as Gemini API: reasoning is preserved across tool calls via the
     // opaque `thoughtSignature` on each functionCall part, captured onto
     // ToolCallResult.thought_signature and re-emitted by formatParts.
@@ -283,31 +337,76 @@ export class GoogleVertexProvider implements LlmProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) await throwProviderResponseError("Vertex AI", "generate", res);
+    if (!res.ok) await throwProviderResponseError(
+      "Vertex AI",
+      "generate",
+      res,
+      request.signal,
+      request.receiveLimitBytes,
+    );
 
-    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
-    const candidate = data.candidates?.[0];
-    const parts = candidate?.content?.parts || [];
-
+    const data = await readJsonWithAbort<GeminiResponseShape>(res, request.signal, request.receiveLimitBytes);
+    if (!data || typeof data !== "object" || !Array.isArray(data.candidates)) {
+      throw new ProviderProtocolError("Vertex response shape is invalid");
+    }
+    const candidate = data.candidates[0];
+    if (!candidate || typeof candidate !== "object" ||
+        !candidate.content || typeof candidate.content !== "object" ||
+        !Array.isArray(candidate.content.parts)) {
+      throw new ProviderProtocolError("Vertex response content parts are invalid");
+    }
+    const parts = candidate.content.parts;
     let content = "";
     let reasoning = "";
     const fnCalls: ToolCallResult[] = [];
+    const seenIds = new Set<string>();
+    const thoughtSignatures = new GeminiThoughtSignatureAccumulator();
     for (const p of parts) {
-      if (p.thought) {
-        reasoning += p.text || "";
-      } else if (p.functionCall) {
-        fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
-      } else {
-        content += p.text || "";
+      if (!p || typeof p !== "object") throw new ProviderProtocolError("Vertex response part is malformed");
+      if (p.thought !== undefined && typeof p.thought !== "boolean") {
+        throw new ProviderProtocolError("Vertex thought marker is malformed");
       }
+      if (p.thoughtSignature !== undefined && !p.functionCall) {
+        thoughtSignatures.add(p.thoughtSignature, this.displayName);
+      }
+      if (p.thought) {
+        if (typeof p.text !== "string") throw new ProviderProtocolError("Vertex reasoning part is malformed");
+        reasoning += thoughtSignatures.addText(p.text, this.displayName);
+      } else if (p.functionCall) {
+        const call = p.functionCall;
+        if (!call || typeof call !== "object" || typeof call.name !== "string" || call.name.length === 0) {
+          throw new ProviderProtocolError("Vertex functionCall is malformed");
+        }
+        if (fnCalls.length >= PROVIDER_STREAM_LIMITS.maxCalls) {
+          throw new ProviderResponseTooLargeError("Vertex call count exceeded its limit", PROVIDER_STREAM_LIMITS.maxCalls, fnCalls.length + 1);
+        }
+        const args = parseToolCallArgs(call.args);
+        assertGeminiFunctionCallArguments(args, this.displayName);
+        const thoughtSignature = thoughtSignatures.add(p.thoughtSignature, this.displayName);
+        const callId = typeof call.id === "string" && call.id.length > 0 ? call.id : crypto.randomUUID();
+        if (seenIds.has(callId)) throw new ProviderProtocolError("Vertex native tool call IDs must be unique");
+        seenIds.add(callId);
+        fnCalls.push({
+          name: call.name as string,
+          args,
+          call_id: callId,
+          thought_signature: thoughtSignature,
+        });
+      } else if (typeof p.text === "string") {
+        content += p.text;
+      } else if (p.text !== undefined) {
+        throw new ProviderProtocolError("Vertex text part is malformed");
+      }
+    }
+    if (candidate.finishReason !== undefined && typeof candidate.finishReason !== "string") {
+      throw new ProviderProtocolError("Vertex finishReason must be a string");
     }
     const thoughtSignature = this.getNonToolThoughtSignature(
       parts,
       request.parameters?._replay_thought_signatures === true,
     );
-
     const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
-    const groundingMetadata = candidate?.groundingMetadata ?? data.groundingMetadata;
+    const groundingMetadata = candidate.groundingMetadata ?? data.groundingMetadata;
 
     return {
       content,
@@ -315,14 +414,7 @@ export class GoogleVertexProvider implements LlmProvider {
       finish_reason: toolCalls ? "tool_calls" : (candidate?.finishReason || "STOP"),
       tool_calls: toolCalls,
       ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
-      usage: data.usageMetadata
-        ? {
-            prompt_tokens: data.usageMetadata.promptTokenCount || 0,
-            completion_tokens: data.usageMetadata.candidatesTokenCount || 0,
-            total_tokens: data.usageMetadata.totalTokenCount || 0,
-            ...(groundingMetadata ? { provider_raw: { groundingMetadata } } : {}),
-          }
-        : undefined,
+      usage: parseGeminiUsageMetadata(data.usageMetadata, this.displayName, groundingMetadata),
     };
   }
 
@@ -337,93 +429,164 @@ export class GoogleVertexProvider implements LlmProvider {
     const model = this.sanitizeModelId(request.model);
     const url = `${base}/${model}:streamGenerateContent?alt=sse`;
     const body = this.buildBody(request);
-
     const res = await fetchWithPreflightAbort(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
     }, request.signal);
+    if (!res.ok) await throwProviderResponseError(
+      "Vertex AI",
+      "stream",
+      res,
+      request.signal,
+      request.receiveLimitBytes,
+    );
 
-    if (!res.ok) await throwProviderResponseError("Vertex AI", "stream", res);
-
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const maybeYield = createCooperativeYielder(64, request.signal);
-
-    let streamDoneNaturally = false;
-    try {
-      while (true) {
-        const { done, value } = await readWithAbort(reader, request.signal);
-        if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          await maybeYield();
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          try {
-            const data = JSON.parse(trimmed.slice(6));
-            const candidate = data.candidates?.[0];
-            const parts = candidate?.content?.parts || [];
-            const finishReason = candidate?.finishReason;
-
-            let text = "";
-            let reasoning = "";
-            const fnCalls: ToolCallResult[] = [];
-            for (const p of parts) {
-              if (p.thought) {
-                reasoning += p.text || "";
-              } else if (p.functionCall) {
-                fnCalls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {}, call_id: crypto.randomUUID(), thought_signature: p.thoughtSignature });
-              } else {
-                text += p.text || "";
-              }
-            }
-            const thoughtSignature = this.getNonToolThoughtSignature(
-              parts,
-              request.parameters?._replay_thought_signatures === true,
-            );
-
-            const usage = data.usageMetadata
-              ? {
-                  prompt_tokens: data.usageMetadata.promptTokenCount || 0,
-                  completion_tokens: data.usageMetadata.candidatesTokenCount || 0,
-                  total_tokens: data.usageMetadata.totalTokenCount || 0,
-                  ...((candidate?.groundingMetadata ?? data.groundingMetadata)
-                    ? { provider_raw: { groundingMetadata: candidate?.groundingMetadata ?? data.groundingMetadata } }
-                    : {}),
-                }
-              : undefined;
-
-            const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
-
-            if (text || reasoning || toolCalls || thoughtSignature) {
-              yield {
-                token: text,
-                reasoning: reasoning || undefined,
-                finish_reason: toolCalls ? "tool_calls" : (finishReason === "STOP" ? "stop" : undefined),
-                tool_calls: toolCalls,
-                ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
-                usage,
-              };
-            } else if (finishReason || usage) {
-              yield { token: "", finish_reason: finishReason === "STOP" ? "stop" : (finishReason || undefined), usage };
-            }
-          } catch {
-            // Skip malformed SSE lines
+    const sse = createBoundedSseReader(res, request.signal, {
+      maxResponseBytes: request.receiveLimitBytes,
+    });
+    const toolCallBuffer = new Map<number, {
+      name: string;
+      args: ToolCallResult["args"];
+      callId: string;
+      thoughtSignature?: string;
+    }>();
+    let eventCount = 0;
+    const seenNativeIds = new Set<string>();
+    let lastNewToolIndex = -1;
+    const thoughtSignatures = new GeminiThoughtSignatureAccumulator();
+    for await (const event of sse) {
+      if (request.signal?.aborted) {
+        throw request.signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+      eventCount += 1;
+      if (eventCount % 64 === 0) await yieldToEventLoop(request.signal);
+      let data: any;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed Vertex SSE JSON", { cause: error });
+      }
+      if (!data || typeof data !== "object" || !Array.isArray(data.candidates)) {
+        throw new ProviderProtocolError("Vertex SSE payload is malformed");
+      }
+      if (event.event !== undefined && event.event !== "message") {
+        throw new ProviderProtocolError("Vertex SSE event name does not match its payload");
+      }
+      const candidate = data.candidates[0];
+      if (!candidate || typeof candidate !== "object") throw new ProviderProtocolError("Vertex SSE candidate is missing");
+      const parts = candidate.content?.parts;
+      if (parts !== undefined && !Array.isArray(parts)) throw new ProviderProtocolError("Vertex SSE candidate parts must be an array");
+      let text = "";
+      let reasoning = "";
+      for (let partIndex = 0; partIndex < (parts?.length ?? 0); partIndex += 1) {
+        const part = parts[partIndex];
+        if (!part || typeof part !== "object") throw new ProviderProtocolError("Vertex SSE part is malformed");
+        if (part.thought !== undefined && typeof part.thought !== "boolean") {
+          throw new ProviderProtocolError("Vertex thought marker is malformed");
+        }
+        if (part.thoughtSignature !== undefined && !part.functionCall) {
+          thoughtSignatures.add(part.thoughtSignature, this.displayName);
+        }
+        if (part.thought) {
+          if (typeof part.text !== "string") throw new ProviderProtocolError("Vertex reasoning part is malformed");
+          reasoning += thoughtSignatures.addText(part.text, this.displayName);
+        } else if (part.functionCall) {
+          const call = part.functionCall;
+          if (!call || typeof call !== "object" || typeof call.name !== "string" || call.name.length === 0) {
+            throw new ProviderProtocolError("Vertex functionCall is malformed");
           }
+          if (call.id !== undefined && (typeof call.id !== "string" || call.id.length === 0)) {
+            throw new ProviderProtocolError("Vertex functionCall ID is malformed");
+          }
+          const existing = toolCallBuffer.get(partIndex);
+          if (!existing && partIndex <= lastNewToolIndex) {
+            throw new ProviderProtocolError("Vertex functionCall parts arrived out of order");
+          }
+          let parsedArgs: ToolCallResult["args"] | undefined;
+          if (call.args !== undefined) {
+            if (!call.args || typeof call.args !== "object" || Array.isArray(call.args)) {
+              throw new ProviderProtocolError("Vertex functionCall args must be an object");
+            }
+            parsedArgs = parseToolCallArgs(call.args);
+            assertGeminiFunctionCallArguments(parsedArgs, this.displayName);
+          } else if (!existing) {
+            throw new ProviderProtocolError("Vertex functionCall is missing arguments");
+          }
+
+          if (!existing) {
+            if (toolCallBuffer.size >= PROVIDER_STREAM_LIMITS.maxCalls) {
+              throw new ProviderResponseTooLargeError("Vertex call count exceeded its limit", PROVIDER_STREAM_LIMITS.maxCalls, toolCallBuffer.size + 1);
+            }
+            const callId = call.id ?? crypto.randomUUID();
+            if (seenNativeIds.has(callId)) throw new ProviderProtocolError("Vertex native tool call IDs must be unique");
+            const thoughtSignature = thoughtSignatures.add(part.thoughtSignature, this.displayName);
+            seenNativeIds.add(callId);
+            lastNewToolIndex = partIndex;
+            toolCallBuffer.set(partIndex, {
+              name: call.name,
+              args: parsedArgs ?? {},
+              callId,
+              thoughtSignature,
+            });
+          } else {
+            if (call.id !== undefined && call.id !== existing.callId) throw new ProviderProtocolError("Vertex functionCall ID changed during streaming");
+            if (call.name !== existing.name) throw new ProviderProtocolError("Vertex functionCall name changed during streaming");
+            if (parsedArgs) {
+              existing.args = mergeGeminiFunctionCallArguments(existing.args, parsedArgs, this.displayName);
+            }
+            const thoughtSignature = thoughtSignatures.add(part.thoughtSignature, this.displayName);
+            if (thoughtSignature !== undefined) {
+              if (existing.thoughtSignature && existing.thoughtSignature !== thoughtSignature) {
+                throw new ProviderProtocolError("Vertex thought signature changed during streaming");
+              }
+              existing.thoughtSignature = thoughtSignature;
+            }
+          }
+        } else if (typeof part.text === "string") {
+          text += part.text;
+        } else if (part.text !== undefined) {
+          throw new ProviderProtocolError("Vertex text part is malformed");
         }
       }
-    } finally {
-      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
+      const groundingMetadata = candidate.groundingMetadata ?? data.groundingMetadata;
+      const usage = parseGeminiUsageMetadata(data.usageMetadata, this.displayName, groundingMetadata);
+      const finishReason = candidate.finishReason;
+      if (finishReason !== undefined && finishReason !== null && typeof finishReason !== "string") {
+        throw new ProviderProtocolError("Vertex finishReason must be a string");
+      }
+      const toolCalls = toolCallBuffer.size > 0
+        ? [...toolCallBuffer.entries()].sort(([a], [b]) => a - b).map(([, call]) => ({
+            name: call.name,
+            args: call.args,
+            call_id: call.callId,
+            thought_signature: call.thoughtSignature,
+          }))
+        : undefined;
+      const thoughtSignature = this.getNonToolThoughtSignature(
+        parts ?? [],
+        request.parameters?._replay_thought_signatures === true,
+      );
+      if (finishReason) {
+        sse.markTerminal();
+        yield {
+          token: text,
+          reasoning: reasoning || undefined,
+          finish_reason: toolCalls ? "tool_calls" : finishReason,
+          tool_calls: toolCalls,
+          ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
+          usage,
+        };
+      } else if (text || reasoning || usage || thoughtSignature) {
+        yield {
+          token: text,
+          reasoning: reasoning || undefined,
+          ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
+          usage,
+        };
+      } else if (toolCalls) {
+        yield { token: "", tool_calls: toolCalls };
+      }
     }
   }
 
@@ -518,11 +681,12 @@ export class GoogleVertexProvider implements LlmProvider {
         case "tool_use":
           return { functionCall: { name: part.name, args: part.input }, thoughtSignature: part.thought_signature || "context_engineering_is_the_way_to_go" };
         case "tool_result": {
+          const name = toolNameById.get(part.tool_use_id);
+          if (!name) throw new ProviderProtocolError("Vertex tool result references an unknown tool call");
           let payload: unknown = part.content;
           try { payload = JSON.parse(part.content); } catch { /* keep as string */ }
           const key = part.is_error ? "error" : "output";
           const response: Record<string, unknown> = { [key]: payload };
-          const name = toolNameById.get(part.tool_use_id) ?? "tool";
           return { functionResponse: { name, response } };
         }
         default:
@@ -549,8 +713,13 @@ export class GoogleVertexProvider implements LlmProvider {
     return map;
   }
 
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming", "_replay_thought_signatures"]);
-
+  private static readonly INTERNAL_PARAMS = new Set([
+    "max_context_length", "_include_usage", "_streaming", "_replay_thought_signatures",
+  ]);
+  private static readonly TOOL_CONTROL_PARAMS = new Set([
+    "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call",
+    "plugins", "web_search", "google_search", "enable_web_search", "enableSearch",
+  ]);
   private static readonly HANDLED_PARAMS = new Set([
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
     "responseMimeType", "responseSchema", "responseJsonSchema",
@@ -558,6 +727,9 @@ export class GoogleVertexProvider implements LlmProvider {
   ]);
 
   private buildBody(request: GenerationRequest): any {
+    if (request.toolMode === "required" && !this.capabilities.requiredToolChoice) {
+      throw new Error("Provider does not support required tool choice");
+    }
     const params = request.parameters || {};
 
     // Vertex exposes a single systemInstruction. Preserve any system message
@@ -617,6 +789,7 @@ export class GoogleVertexProvider implements LlmProvider {
       if (body[key] !== undefined) continue;
       if (GoogleVertexProvider.HANDLED_PARAMS.has(key)) continue;
       if (GoogleVertexProvider.INTERNAL_PARAMS.has(key)) continue;
+      if (request.toolMode && GoogleVertexProvider.TOOL_CONTROL_PARAMS.has(key)) continue;
       body[key] = params[key];
     }
 
@@ -632,7 +805,33 @@ export class GoogleVertexProvider implements LlmProvider {
       ];
     }
 
-    if (hasFunctionDeclarations) {
+    if (request.toolMode === "finalization") {
+      delete body.tools;
+      body.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+    } else if (request.toolMode === "required") {
+      if (!hasFunctionDeclarations) throw new Error("Required tool mode needs at least one admitted host tool");
+      body.tools = [{
+        functionDeclarations: functionTools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: sanitizeGeminiSchema(t.parameters),
+        })),
+      }];
+      body.toolConfig = { functionCallingConfig: { mode: "ANY" } };
+    } else if (request.toolMode === "ordinary") {
+      if (hasFunctionDeclarations) {
+        body.tools = [{
+          functionDeclarations: functionTools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: sanitizeGeminiSchema(t.parameters),
+          })),
+        }];
+      } else {
+        delete body.tools;
+        body.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+      }
+    } else if (hasFunctionDeclarations) {
       body.tools = [{
         functionDeclarations: functionTools.map((t) => ({
           name: t.name,
@@ -642,7 +841,7 @@ export class GoogleVertexProvider implements LlmProvider {
       }];
     }
 
-    appendGoogleSearchTool(this.name, body, googleSearchTool);
+    if (!request.toolMode) appendGoogleSearchTool(this.name, body, googleSearchTool);
 
     return body;
   }

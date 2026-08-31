@@ -16,6 +16,7 @@ import { formatNanoGptCachingSummary } from '@/lib/nanogpt-prompt-caching'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useDragHandleBlur } from './useDragHandleBlur'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
@@ -88,6 +89,7 @@ export default function ConnectionItem({
   const isOpenRouter = profile.provider === 'openrouter'
   const isNanoGpt = profile.provider === 'nanogpt'
   const isRoulette = profile.provider === MODEL_ROULETTE_PROVIDER
+  const reviewRequired = profile.review_required === true
   const rouletteCount = isRoulette ? getRouletteConnectionCount(profile) : 0
   const showCredits = isOpenRouter && isActive && profile.has_api_key && !editing
   const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
@@ -158,19 +160,29 @@ export default function ConnectionItem({
     const timer = setTimeout(() => setTestResult(null), 5000)
     return () => clearTimeout(timer)
   }, [testResult])
-
   const handleTest = useCallback(async () => {
+    if (reviewRequired) return
     setTesting(true)
     setTestResult(null)
     try {
       const result = await connectionsApi.test(profile.id)
       setTestResult({ success: result.success, message: result.message })
-    } catch (err: any) {
-      setTestResult({ success: false, message: err.message || t('connectionItem.connectionFailed') })
+    } catch (err) {
+      setTestResult({ success: false, message: err instanceof Error ? err.message : t('connectionItem.connectionFailed') })
     } finally {
       setTesting(false)
     }
-  }, [profile.id, t])
+  }, [profile.id, reviewRequired, t])
+
+  const handleReview = useCallback(async () => {
+    const updated = await connectionsApi.update(profile.id, { reviewed: true })
+    onUpdate(updated)
+    setEditing(false)
+  }, [profile.id, onUpdate])
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
+  const handleRef = useDragHandleBlur(isDragging)
+
 
   const handleSaveEdit = useCallback(async (input: CreateConnectionProfileInput) => {
     try {
@@ -283,11 +295,6 @@ export default function ConnectionItem({
   }
 
 
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
-  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
-  const handleRef = useDragHandleBlur(isDragging)
-
   return (
     <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)} data-component="ConnectionItem">
       {editing ? (
@@ -297,10 +304,13 @@ export default function ConnectionItem({
             profile={profile}
             onSave={handleSaveEdit}
             onCancel={() => setEditing(false)}
+            onReview={handleReview}
+            focusTargetRef={handleRef}
           />
         </div>
       ) : (
         <>
+          <ConnectionReviewStatus profile={profile} onReview={handleReview} focusTargetRef={handleRef} />
           <div className={styles.itemRow}>
             <button
               ref={handleRef}
@@ -313,7 +323,7 @@ export default function ConnectionItem({
             >
               <GripVertical size={16} />
             </button>
-            <button type="button" className={styles.itemBtn} onClick={onSelect}>
+            <button type="button" className={styles.itemBtn} onClick={onSelect} disabled={reviewRequired} aria-disabled={reviewRequired}>
               {isRoulette ? (
                 <span className={clsx(styles.itemIcon, styles.rouletteIcon)}>
                   <Shuffle size={16} />
@@ -353,7 +363,7 @@ export default function ConnectionItem({
                   title={profile.has_api_key
                     ? (isNanoGpt ? t('connectionItem.reauthorizeNanoGpt') : t('connectionItem.reauthorizeOpenRouter'))
                     : (isNanoGpt ? t('connectionItem.signInNanoGpt') : t('connectionItem.signInOpenRouter'))}
-                  disabled={oauthLoading}
+                  disabled={oauthLoading || reviewRequired}
                   icon={oauthLoading ? <Spinner size={13} /> : <LogIn size={13} />}
                 />
               )}
@@ -371,7 +381,7 @@ export default function ConnectionItem({
                 position={menuPos}
                 onClose={() => setMenuPos(null)}
                 items={[
-                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
+                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing || reviewRequired },
                   { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
                   { key: 'div', type: 'divider' as const },
                   { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
@@ -380,13 +390,13 @@ export default function ConnectionItem({
             </div>
           </div>
           {isOpenRouter && !profile.has_api_key && !editing && (
-            <button type="button" className={styles.oauthBanner} onClick={handleOAuthLogin} disabled={oauthLoading}>
+            <button type="button" className={styles.oauthBanner} onClick={handleOAuthLogin} disabled={oauthLoading || reviewRequired}>
               {oauthLoading ? <Spinner size={12} /> : <LogIn size={12} />}
               <span>{t('connectionItem.signInOpenRouterHint')}</span>
             </button>
           )}
           {isNanoGpt && !profile.has_api_key && !editing && (
-            <button type="button" className={styles.oauthBanner} onClick={handleOAuthLogin} disabled={oauthLoading}>
+            <button type="button" className={styles.oauthBanner} onClick={handleOAuthLogin} disabled={oauthLoading || reviewRequired}>
               {oauthLoading ? <Spinner size={12} /> : <LogIn size={12} />}
               <span>{t('connectionItem.signInNanoGptHint')}</span>
             </button>

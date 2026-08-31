@@ -157,8 +157,8 @@ export interface VectorStore {
   upsert(collection: CollectionName, rows: VectorRow[]): Promise<void>;
   /** Read full stored rows for provider-neutral copy/move flows. */
   getRowsByFilter(collection: CollectionName, filter: VectorFilter, limit?: number): Promise<VectorRow[]>;
-  deleteByFilter(collection: CollectionName, filter: VectorFilter): Promise<void>;
-  deleteByIds(collection: CollectionName, ids: string[]): Promise<void>;
+  deleteByFilter(collection: CollectionName, filter: VectorFilter, signal?: AbortSignal): Promise<void>;
+  deleteByIds(collection: CollectionName, ids: string[], signal?: AbortSignal): Promise<void>;
 
   /** KNN search. Returned hits carry similarity already normalized to "higher = better". */
   vectorSearch(opts: SearchOptions): Promise<VectorHit[]>;
@@ -169,7 +169,7 @@ export interface VectorStore {
 
   countRows(collection: CollectionName, filter?: VectorFilter): Promise<number>;
   /** Compaction / index rebuild. No-op where unsupported. */
-  optimize(collections?: CollectionName[]): Promise<void>;
+  optimize(collections?: CollectionName[], signal?: AbortSignal): Promise<void>;
   health(collection: CollectionName): Promise<TableHealth>;
   /** Drop everything this store owns (on-disk dir for LanceDB; collections otherwise). */
   reset(): Promise<{ deleted: boolean; location: string }>;

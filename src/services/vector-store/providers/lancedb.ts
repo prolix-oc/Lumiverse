@@ -19,12 +19,13 @@
  * embeddings.service.ts.
  */
 import { connect, Index, type Connection, type Table } from "@lancedb/lancedb";
+import { AsyncLocalStorage } from "node:async_hooks"
 
 export type { Table } from "@lancedb/lancedb";
 import { dirname, join } from "path";
 import { mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync, type Dirent } from "fs";
 import { env } from "../../../env";
-import { getDb } from "../../../db/connection";
+import { getDb, onDbReset, registerDatabaseReplacementFence } from "../../../db/connection";
 import { embeddingCache } from "../../embedding-cache";
 import { resolveBrokenTermuxLanceDbMirrorPath, resolveLanceDbConnectUri } from "../../../utils/lancedb-path";
 import type { WorldBookVectorIndexStatus } from "../../../types/world-book";
@@ -123,6 +124,112 @@ let connHandle: Connection | null = null;
 let connGeneration = 0;
 let lancedbPathDiagnosticsLogged = false;
 let optimizeTimer: ReturnType<typeof setTimeout> | null = null;
+let deferredOptimizeEpoch = 0;
+let nativeMutationAdmissionsBlocked = 0;
+let lanceDatabaseGeneration = 0;
+let nextLanceGenerationOwnerId = 1;
+type LanceGenerationOwnerKind = "write" | "native_mutation" | "replacement" | "external_maintenance";
+type LanceGenerationOwner = {
+  readonly id: number;
+  readonly kind: LanceGenerationOwnerKind;
+  generation: number;
+  readonly controller: AbortController;
+  readonly externalSignal?: AbortSignal;
+  retire?: () => void | Promise<void>;
+  released: boolean;
+};
+const lanceGenerationOwners = new Map<number, LanceGenerationOwner>();
+const lanceGenerationOwnerStorage = new AsyncLocalStorage<LanceGenerationOwner>();
+
+export class LanceDatabaseGenerationCancelledError extends Error {
+  readonly code = "lancedb_generation_cancelled";
+
+  constructor(readonly admittedGeneration: number, readonly currentGeneration: number) {
+    super(`LanceDB generation ${admittedGeneration} was replaced by generation ${currentGeneration}`);
+    this.name = "LanceDatabaseGenerationCancelledError";
+  }
+}
+
+function lanceGenerationCancellation(owner: LanceGenerationOwner): unknown {
+  return owner.externalSignal?.aborted
+    ? owner.externalSignal.reason ?? new DOMException("Aborted", "AbortError")
+    : owner.controller.signal.reason instanceof Error
+      ? owner.controller.signal.reason
+      : new LanceDatabaseGenerationCancelledError(owner.generation, lanceDatabaseGeneration);
+}
+
+function assertLanceGenerationOwner(owner: LanceGenerationOwner): void {
+  if (
+    owner.released
+    || owner.externalSignal?.aborted
+    || owner.controller.signal.aborted
+    || owner.generation !== lanceDatabaseGeneration
+  ) {
+    throw lanceGenerationCancellation(owner);
+  }
+}
+
+function releaseLanceGenerationOwner(owner: LanceGenerationOwner): void {
+  if (owner.released) return;
+  owner.released = true;
+  lanceGenerationOwners.delete(owner.id);
+  for (const resolve of nativeMutationDrainWaiters) resolve();
+  nativeMutationDrainWaiters.clear();
+}
+
+function admitLanceGenerationOwner(
+  kind: LanceGenerationOwnerKind,
+  externalSignal?: AbortSignal,
+): LanceGenerationOwner {
+  externalSignal?.throwIfAborted();
+  if (nativeMutationAdmissionsBlocked !== 0) {
+    throw new LanceDatabaseGenerationCancelledError(
+      lanceDatabaseGeneration,
+      lanceDatabaseGeneration + 1,
+    );
+  }
+  const owner: LanceGenerationOwner = {
+    id: nextLanceGenerationOwnerId++,
+    kind,
+    generation: lanceDatabaseGeneration,
+    controller: new AbortController(),
+    ...(externalSignal ? { externalSignal } : {}),
+    released: false,
+  };
+  lanceGenerationOwners.set(owner.id, owner);
+  return owner;
+}
+
+export interface LanceExternalMaintenanceAdmission {
+  readonly signal: AbortSignal;
+  setRetirement(retire: () => void | Promise<void>): void;
+  run<T>(callback: () => Promise<T>): Promise<T>;
+  release(): void;
+}
+
+export function admitLanceExternalMaintenanceOwner(): LanceExternalMaintenanceAdmission {
+  const owner = admitLanceGenerationOwner("external_maintenance");
+  return {
+    signal: owner.controller.signal,
+    setRetirement(retire) {
+      owner.retire = retire;
+      if (owner.controller.signal.aborted) void Promise.resolve(retire()).catch(() => {});
+    },
+    async run(callback) {
+      assertLanceGenerationOwner(owner);
+      return lanceGenerationOwnerStorage.run(owner, async () => {
+        const result = await callback();
+        assertLanceGenerationOwner(owner);
+        return result;
+      });
+    },
+    release() {
+      releaseLanceGenerationOwner(owner);
+    },
+  };
+}
+const nativeMutationDrainWaiters = new Set<() => void>();
+let databaseReplacementTail: Promise<void> = Promise.resolve();
 const OPTIMIZE_DEBOUNCE_MS = 15_000; // 15 seconds after last write (reduced from 30s)
 /** Grace period for version cleanup — keeps old versions alive long enough for
  *  in-flight reads and eventually-consistent handles to advance. Without this,
@@ -362,12 +469,14 @@ async function acquireCrossProcessWriteLockIfNeeded(): Promise<(() => void) | nu
   }
 }
 
-export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  // A child maintenance process asks the serving process to close this gate
-  // before it starts mutating Lance files. Writers need to honor the same
-  // gate as readers; the cross-process write lock alone cannot protect a
-  // native read from optimize() deleting its version files.
+async function withWriteLockForOwner<T>(
+  owner: LanceGenerationOwner,
+  fn: () => Promise<T>,
+): Promise<T> {
+  assertLanceGenerationOwner(owner);
   await awaitMaintenanceGate();
+  assertLanceGenerationOwner(owner);
+
   if (!_writeLockHeld) {
     _writeLockHeld = true;
   } else {
@@ -384,19 +493,43 @@ export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
           reject(new Error(`[embeddings] Write lock acquisition timed out after ${WRITE_LOCK_WAIT_TIMEOUT_MS}ms (${_writeLockQueue.length} still queued)`));
         }
       }, WRITE_LOCK_WAIT_TIMEOUT_MS);
-      // Clear the timer if the lock is acquired before timeout
       const origResolve = entry.resolve;
       entry.resolve = () => { clearTimeout(timer); origResolve(); };
     });
   }
-  const releaseCrossProcessLock = await acquireCrossProcessWriteLockIfNeeded();
+
+  let releaseCrossProcessLock: (() => void) | null = null;
   try {
-    return await fn();
+    // Once this owner receives the in-process lock, every exit — including a
+    // generation cancellation at handoff — must advance the queue in finally.
+    assertLanceGenerationOwner(owner);
+    releaseCrossProcessLock = await acquireCrossProcessWriteLockIfNeeded();
+    assertLanceGenerationOwner(owner);
+    const result = await fn();
+    assertLanceGenerationOwner(owner);
+    return result;
   } finally {
     releaseCrossProcessLock?.();
     const next = _writeLockQueue.shift();
     if (next) next.resolve();
     else _writeLockHeld = false;
+  }
+}
+
+export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const inherited = lanceGenerationOwnerStorage.getStore();
+  if (inherited) {
+    assertLanceGenerationOwner(inherited);
+    return withWriteLockForOwner(inherited, fn);
+  }
+  const owner = admitLanceGenerationOwner("write");
+  try {
+    return await lanceGenerationOwnerStorage.run(
+      owner,
+      () => withWriteLockForOwner(owner, fn),
+    );
+  } finally {
+    releaseLanceGenerationOwner(owner);
   }
 }
 
@@ -738,12 +871,108 @@ function isIncompleteEmbeddingsTableError(err: unknown, tableName: string): bool
   );
 }
 
-function resetInMemoryVectorStoreState(): void {
-  if (optimizeTimer) {
-    clearTimeout(optimizeTimer);
-    optimizeTimer = null;
-  }
+function cancelDeferredOptimize(): void {
+  deferredOptimizeEpoch += 1;
+  if (optimizeTimer) clearTimeout(optimizeTimer);
+  optimizeTimer = null;
   optimizeQueuedAt = null;
+  optimizeWorldBooksQueued = false;
+  lastChatOptimizeScheduledAt = 0;
+  lastWorldBookOptimizeScheduledAt = 0;
+}
+async function waitForNativeMutationDrain(excludedOwnerId?: number): Promise<void> {
+  while ([...lanceGenerationOwners.values()].some((owner) => owner.id !== excludedOwnerId)) {
+    await new Promise<void>((resolve) => nativeMutationDrainWaiters.add(resolve));
+  }
+}
+
+function releaseNativeMutation(owner: LanceGenerationOwner): void {
+  releaseLanceGenerationOwner(owner);
+}
+
+function prepareLanceDatabaseReplacement(): Promise<() => void> {
+  return prepareLanceDatabaseReplacementForOwner(lanceGenerationOwnerStorage.getStore());
+}
+
+function prepareLanceDatabaseReplacementForOwner(
+  excludedOwner?: LanceGenerationOwner,
+): Promise<() => void> {
+  nativeMutationAdmissionsBlocked += 1;
+  cancelDeferredOptimize();
+  const previous = databaseReplacementTail;
+  const gate = Promise.withResolvers<void>();
+  databaseReplacementTail = previous.then(() => gate.promise, () => gate.promise);
+
+  const previousGeneration = lanceDatabaseGeneration;
+  lanceDatabaseGeneration += 1;
+  if (excludedOwner) excludedOwner.generation = lanceDatabaseGeneration;
+  const cancellation = new LanceDatabaseGenerationCancelledError(
+    previousGeneration,
+    lanceDatabaseGeneration,
+  );
+  for (const owner of lanceGenerationOwners.values()) {
+    if (owner === excludedOwner) continue;
+    owner.controller.abort(cancellation);
+    if (owner.retire) void Promise.resolve(owner.retire()).catch(() => {});
+  }
+
+  return (async () => {
+    await previous.catch(() => undefined);
+    await waitForNativeMutationDrain(excludedOwner?.id);
+    await waitForReadsToDrain();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      nativeMutationAdmissionsBlocked -= 1;
+      gate.resolve();
+    };
+  })();
+}
+
+function tryPrepareLanceDatabaseReplacementSync(): (() => void) | null {
+  if (
+    nativeMutationAdmissionsBlocked !== 0
+    || lanceGenerationOwners.size !== 0
+    || _activeReadCount !== 0
+  ) return null;
+  nativeMutationAdmissionsBlocked = 1;
+  lanceDatabaseGeneration += 1;
+  cancelDeferredOptimize();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    nativeMutationAdmissionsBlocked = 0;
+  };
+}
+
+async function withLanceDatabaseReplacement<T>(replace: () => Promise<T> | T): Promise<T> {
+  const inherited = lanceGenerationOwnerStorage.getStore();
+  const owner = inherited ?? admitLanceGenerationOwner("replacement");
+  const releasePromise = prepareLanceDatabaseReplacementForOwner(owner);
+  let releaseFence: (() => void) | undefined;
+  try {
+    releaseFence = await releasePromise;
+    assertLanceGenerationOwner(owner);
+    if (inherited) return await replace();
+    return await lanceGenerationOwnerStorage.run(
+      owner,
+      () => withWriteLockForOwner(owner, async () => await replace()),
+    );
+  } finally {
+    releaseFence?.();
+    if (!inherited) releaseLanceGenerationOwner(owner);
+  }
+}
+
+registerDatabaseReplacementFence({
+  prepare: prepareLanceDatabaseReplacement,
+  tryPrepareSync: tryPrepareLanceDatabaseReplacementSync,
+});
+
+function resetInMemoryVectorStoreState(): void {
+  cancelDeferredOptimize();
   stopIndexHealthMonitor();
   embeddingCache.clear();
 
@@ -778,50 +1007,50 @@ function resetInMemoryVectorStoreState(): void {
  * The parent did not execute the transaction and may otherwise retain a table
  * handle pointing at a pre-compaction manifest or index generation.
  */
-export function refreshLanceDbAfterExternalMaintenance(): void {
-  resetInMemoryVectorStoreState();
-  startIndexHealthMonitor(EMBEDDINGS_TABLE);
+export async function refreshLanceDbAfterExternalMaintenance(): Promise<void> {
+  await withLanceDatabaseReplacement(async () => {
+    resetInMemoryVectorStoreState();
+    startIndexHealthMonitor(EMBEDDINGS_TABLE);
+  });
 }
 
 export function resetSqliteVectorizationState(): void {
-  try {
-    const db = getDb();
-    db.run(
-      `UPDATE world_book_entries
-       SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
-           vector_indexed_at = NULL,
-           vector_index_error = NULL`
-    );
-    db.run(`UPDATE chat_chunks SET vectorized_at = NULL, vector_model = NULL`);
-    db.run(`DELETE FROM query_vector_cache`);
-    db.run(`DELETE FROM chat_memory_cache`);
-  } catch (err) {
-    console.warn("[embeddings] Failed to reset SQLite vectorization state:", err);
-  }
+  const db = getDb();
+  db.run(
+    `UPDATE world_book_entries
+     SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
+         vector_indexed_at = NULL,
+         vector_index_error = NULL`,
+  );
+  db.run(`UPDATE chat_chunks SET vectorized_at = NULL, vector_model = NULL`);
+  db.run(`DELETE FROM query_vector_cache`);
+  db.run(`DELETE FROM chat_memory_cache`);
 }
 
-function performBrokenEmbeddingsTableRecovery(reason: string, err: unknown): void {
-  resetInMemoryVectorStoreState();
+async function performBrokenEmbeddingsTableRecovery(reason: string, err: unknown): Promise<void> {
+  await withLanceDatabaseReplacement(async () => {
+    resetInMemoryVectorStoreState();
 
-  // This store only contains one shared table, so deleting just embeddings.lance
-  // can leave parent-level LanceDB metadata claiming the table still exists.
-  // Reset the entire store so the next operation can recreate it cleanly.
-  const deleted = existsSync(LANCEDB_PATH);
-  if (deleted) {
-    rmSync(LANCEDB_PATH, { recursive: true, force: true });
-  }
-  resetSqliteVectorizationState();
-  console.warn(`[embeddings] Recovered incomplete LanceDB table after ${reason}; deleted ${LANCEDB_PATH}`, err);
+    // This store only contains one shared table, so deleting just embeddings.lance
+    // can leave parent-level LanceDB metadata claiming the table still exists.
+    // Reset the entire store so the next operation can recreate it cleanly.
+    const deleted = existsSync(LANCEDB_PATH);
+    if (deleted) {
+      rmSync(LANCEDB_PATH, { recursive: true, force: true });
+    }
+    resetSqliteVectorizationState();
+    console.warn("[embeddings] Recovered incomplete LanceDB table after " + reason + "; deleted " + LANCEDB_PATH, err);
+  });
 }
 
 async function recoverBrokenEmbeddingsTable(tableName: string, reason: string, err: unknown, lockHeld = false): Promise<boolean> {
   if (!isIncompleteEmbeddingsTableError(err, tableName)) return false;
   if (lockHeld) {
-    performBrokenEmbeddingsTableRecovery(reason, err);
+    await performBrokenEmbeddingsTableRecovery(reason, err);
     return true;
   }
   await withWriteLock(async () => {
-    performBrokenEmbeddingsTableRecovery(reason, err);
+    await performBrokenEmbeddingsTableRecovery(reason, err);
   });
   return true;
 }
@@ -1077,6 +1306,7 @@ let optimizeQueuedAt: number | null = null;
 let lastChatOptimizeScheduledAt = 0;
 let lastWorldBookOptimizeScheduledAt = 0;
 let optimizeWorldBooksQueued = false;
+onDbReset(() => cancelDeferredOptimize());
 
 // ---------------------------------------------------------------------------
 // Index health tracking — detect when indexes need rebuilding
@@ -1522,14 +1752,35 @@ export async function runStartupVectorMaintenance(): Promise<void> {
   startIndexHealthMonitor(EMBEDDINGS_TABLE);
 }
 
-export async function optimizeTable(tableNames?: string[]): Promise<void> {
+export async function runAbortFencedNativeMutation<T>(
+  signal: AbortSignal | undefined,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const inherited = lanceGenerationOwnerStorage.getStore();
+  const owner = inherited ?? admitLanceGenerationOwner("native_mutation", signal);
+  try {
+    assertLanceGenerationOwner(owner);
+    const result = await (inherited
+      ? mutation()
+      : lanceGenerationOwnerStorage.run(owner, mutation));
+    assertLanceGenerationOwner(owner);
+    return result;
+  } finally {
+    if (!inherited) releaseNativeMutation(owner);
+  }
+}
+export async function optimizeTable(tableNames?: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   const targets = tableNames && tableNames.length > 0
     ? tableNames
     : [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE];
   await withWriteLock(async () => {
+    signal?.throwIfAborted();
     for (const tableName of targets) {
+      signal?.throwIfAborted();
       try {
         let table = await getTableIfExists(tableName, true);
+        signal?.throwIfAborted();
         if (!table) continue;
         let activeTable: Table = table;
 
@@ -1537,19 +1788,25 @@ export async function optimizeTable(tableNames?: string[]): Promise<void> {
         // optimize already updates indexes; rebuilding every scalar/FTS index
         // again here only creates a second orphaned UUID generation.
         await withMaintenanceExclusive(async () => {
-          await withRetryableLanceWriteConflictRetry(`${tableName}: optimize`, tableName, async () => {
+          signal?.throwIfAborted();
+          await withRetryableLanceWriteConflictRetry(tableName + ": optimize", tableName, async () => {
+            signal?.throwIfAborted();
             activeTable = await reopenTableForWrite(tableName);
-            await activeTable.optimize({
+            signal?.throwIfAborted();
+            await runAbortFencedNativeMutation(signal, () => activeTable.optimize({
               cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS),
-            });
+            }));
           });
+          signal?.throwIfAborted();
           sweepTableEmptyIndexDirs(tableName);
         });
       } catch (err) {
-        console.warn(`[embeddings] Optimize failed for ${tableName}:`, err);
+        signal?.throwIfAborted();
+        console.warn("[embeddings] Optimize failed for " + tableName + ":", err);
       }
     }
   });
+  signal?.throwIfAborted();
 }
 
 export interface CombinedVectorStoreHealth {
@@ -1672,7 +1929,11 @@ export async function getVectorStoreHealth(): Promise<CombinedVectorStoreHealth>
   };
 }
 
-export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book" = "general"): void {
+export function scheduleOptimize(
+  reason: "general" | "chat_chunk" | "world_book" = "general",
+  signal?: AbortSignal,
+): void {
+  signal?.throwIfAborted();
   const now = Date.now();
   if (reason === "chat_chunk") {
     // Chat memory writes are high-frequency, but they share the same Lance table
@@ -1680,15 +1941,11 @@ export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book"
     // every chat-churn window can make disk usage balloon during active chats.
     // Rate-limit the background optimize for chat-only writes. Lorebook edits are
     // independently rate-limited below so typing does not rewrite the table.
-    if (now - lastChatOptimizeScheduledAt < CHAT_OPTIMIZE_MIN_INTERVAL_MS) {
-      return;
-    }
+    if (now - lastChatOptimizeScheduledAt < CHAT_OPTIMIZE_MIN_INTERVAL_MS) return;
     lastChatOptimizeScheduledAt = now;
   }
   if (reason === "world_book") {
-    if (now - lastWorldBookOptimizeScheduledAt < WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS) {
-      return;
-    }
+    if (now - lastWorldBookOptimizeScheduledAt < WORLD_BOOK_OPTIMIZE_MIN_INTERVAL_MS) return;
     lastWorldBookOptimizeScheduledAt = now;
     optimizeWorldBooksQueued = true;
   }
@@ -1698,17 +1955,28 @@ export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book"
   const delay = elapsed >= OPTIMIZE_MAX_WAIT_MS
     ? 0
     : Math.min(OPTIMIZE_DEBOUNCE_MS, OPTIMIZE_MAX_WAIT_MS - elapsed);
+  const admittedEpoch = deferredOptimizeEpoch;
   optimizeTimer = setTimeout(async () => {
     optimizeTimer = null;
     optimizeQueuedAt = null;
+    if (admittedEpoch !== deferredOptimizeEpoch || signal?.aborted) return;
     try {
       const includeWorldBooks = optimizeWorldBooksQueued;
       optimizeWorldBooksQueued = false;
-      await optimizeTable(includeWorldBooks ? undefined : [EMBEDDINGS_TABLE]);
+      signal?.throwIfAborted();
+      if (admittedEpoch !== deferredOptimizeEpoch) return;
+      await optimizeTable(includeWorldBooks ? undefined : [EMBEDDINGS_TABLE], signal);
+      signal?.throwIfAborted();
+      if (admittedEpoch !== deferredOptimizeEpoch) return;
     } catch (err) {
+      if (signal?.aborted || admittedEpoch !== deferredOptimizeEpoch) return;
       console.warn("[embeddings] Deferred optimize failed:", err);
     }
   }, delay);
+}
+
+export function isDeferredOptimizeScheduled(): boolean {
+  return optimizeTimer !== null;
 }
 
 /**
@@ -1735,13 +2003,18 @@ export async function safeTableDelete(
   table: Table,
   filter: string,
   reason: "general" | "chat_chunk" | "world_book" = "general",
+  signal?: AbortSignal,
 ): Promise<void> {
-  if ((await table.countRows()) === 0) return;
+  signal?.throwIfAborted();
+  const rowCount = await table.countRows();
+  signal?.throwIfAborted();
+  if (rowCount === 0) return;
   try {
-    await table.delete(filter);
+    await runAbortFencedNativeMutation(signal, () => table.delete(filter));
   } catch (err) {
+    signal?.throwIfAborted();
     if (!isEmptyFragmentDeleteError(err)) throw err;
-    scheduleOptimize(reason);
+    scheduleOptimize(reason, signal);
   }
 }
 
@@ -1941,26 +2214,19 @@ function cleanupBrokenTermuxLanceDbMirror(): void {
  * recovering from corruption (e.g. "vector not divisible by 8" errors).
  */
 export async function forceResetLanceDB(): Promise<{ deleted: boolean; path: string }> {
-  // Acquire write lock to ensure no LanceDB operations are in-flight when we
-  // delete the directory. Without this, concurrent writes would panic trying
-  // to access files that no longer exist.
-  return withWriteLock(async () => {
+  return withLanceDatabaseReplacement(async () => {
     resetInMemoryVectorStoreState();
-
-    // Delete the entire LanceDB directory from disk
     const deleted = existsSync(LANCEDB_PATH);
     if (deleted) {
       rmSync(LANCEDB_PATH, { recursive: true, force: true });
-      console.info(`[embeddings] Force-deleted LanceDB directory: ${LANCEDB_PATH}`);
+      console.info("[embeddings] Force-deleted LanceDB directory: " + LANCEDB_PATH);
     }
 
     resetSqliteVectorizationState();
-
     console.info("[embeddings] LanceDB force reset complete. Vector store will reinitialize on next use.");
     return { deleted, path: LANCEDB_PATH };
   });
 }
-
 // ---------------------------------------------------------------------------
 // Structured filter → LanceDB SQL `where()` translation
 // ---------------------------------------------------------------------------
@@ -2059,36 +2325,49 @@ export class LanceDbStore implements VectorStore {
     })).filter((row) => row.vector.length > 0);
   }
 
-  async deleteByFilter(collection: CollectionName, filter: VectorFilter): Promise<void> {
+  async deleteByFilter(collection: CollectionName, filter: VectorFilter, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const tableName = collectionToTable(collection);
     await withWriteLock(async () => {
+      signal?.throwIfAborted();
       let table = await getTableIfExists(tableName, true);
+      signal?.throwIfAborted();
       if (!table) return;
-      await withRetryableLanceWriteConflictRetry(`${tableName}: delete by filter`, tableName, async () => {
+      await withRetryableLanceWriteConflictRetry(tableName + ": delete by filter", tableName, async () => {
+        signal?.throwIfAborted();
         table = await reopenTableForWrite(tableName);
-        await safeTableDelete(table, translateFilter(filter), "general");
+        signal?.throwIfAborted();
+        await safeTableDelete(table, translateFilter(filter), "general", signal);
       });
     });
-    scheduleOptimize("general");
+    signal?.throwIfAborted();
+    scheduleOptimize("general", signal);
   }
 
-  async deleteByIds(collection: CollectionName, ids: string[]): Promise<void> {
+  async deleteByIds(collection: CollectionName, ids: string[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (ids.length === 0) return;
     const tableName = collectionToTable(collection);
     await withWriteLock(async () => {
+      signal?.throwIfAborted();
       let table = await getTableIfExists(tableName, true);
+      signal?.throwIfAborted();
       if (!table) return;
       const BATCH = 500;
       for (let i = 0; i < ids.length; i += BATCH) {
+        signal?.throwIfAborted();
         const batch = ids.slice(i, i + BATCH);
-        const filter = `id IN (${batch.map((id) => sqlValue(id)).join(", ")})`;
-        await withRetryableLanceWriteConflictRetry(`${tableName}: delete batch`, tableName, async () => {
+        const filter = "id IN (" + batch.map((id) => sqlValue(id)).join(", ") + ")";
+        await withRetryableLanceWriteConflictRetry(tableName + ": delete batch", tableName, async () => {
+          signal?.throwIfAborted();
           table = await reopenTableForWrite(tableName);
-          await safeTableDelete(table, filter, "general");
+          signal?.throwIfAborted();
+          await safeTableDelete(table, filter, "general", signal);
         });
       }
     });
-    scheduleOptimize("general");
+    signal?.throwIfAborted();
+    scheduleOptimize("general", signal);
   }
 
   async vectorSearch(opts: SearchOptions): Promise<VectorHit[]> {
@@ -2184,9 +2463,11 @@ export class LanceDbStore implements VectorStore {
     return (rows as any[]).length;
   }
 
-  async optimize(collections?: CollectionName[]): Promise<void> {
+  async optimize(collections?: CollectionName[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const tables = collections?.map(collectionToTable);
-    await optimizeTable(tables);
+    await optimizeTable(tables, signal);
+    signal?.throwIfAborted();
   }
 
   async health(collection: CollectionName): Promise<TableHealth> {
@@ -2202,7 +2483,7 @@ export class LanceDbStore implements VectorStore {
   }
 
   async close(): Promise<void> {
-    resetInMemoryVectorStoreState();
+    await withLanceDatabaseReplacement(async () => { resetInMemoryVectorStoreState(); });
   }
 
   withWriteLock<T>(fn: () => Promise<T>): Promise<T> {

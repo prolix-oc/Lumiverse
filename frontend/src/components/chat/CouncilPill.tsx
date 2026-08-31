@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
+import type { AgentCouncilReceiptV1 } from '@/types/agent-runs'
 import clsx from 'clsx'
 import styles from './CouncilPill.module.css'
 
@@ -116,6 +117,30 @@ export default function CouncilPill() {
             </svg>
           </span>
         )}
+      </div>
+    </div>
+  )
+}
+
+/** Distinct WORK receipt presentation; the Response CouncilPill above remains event-driven. */
+export function WorkCouncilPill({ receipt }: {
+  receipt: Pick<AgentCouncilReceiptV1, 'state' | 'required' | 'memberCount'>
+}) {
+  const { t } = useTranslation('chat')
+  const stateLabel = t(`agentRun.receipts.states.${receipt.state}`)
+  const requirementLabel = receipt.required
+    ? t('council.workReceipt.required')
+    : t('council.workReceipt.optional')
+
+  return (
+    <div className={styles.wrapper} data-kind="work-council" data-state={receipt.state} role="status">
+      <div className={styles.indicator} data-kind="work-council">
+        <span className={styles.label}>{t('council.workReceipt.label')}</span>
+        <span className={styles.label}>{stateLabel}</span>
+        <span className={styles.label}>
+          {t('council.workReceipt.members', { count: receipt.memberCount })}
+        </span>
+        <span className={styles.label}>{requirementLabel}</span>
       </div>
     </div>
   )

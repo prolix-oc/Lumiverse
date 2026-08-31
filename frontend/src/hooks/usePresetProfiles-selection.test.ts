@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { createPresetSelectionCoordinator } from '@/lib/loom/preset-selection-coordinator-core'
+import {
+  beginActiveLoomPresetSelection,
+  configurePresetSelectionCoordinator,
+  registerActiveLoomPresetSelectionBlocker,
+} from '@/lib/loom/preset-selection-coordinator'
 import { createPresetProfileSelectionController } from './usePresetProfiles-selection'
 
 function deferred<T>() {
@@ -67,6 +72,7 @@ describe('preset profile selection controller', () => {
       const transition = Promise.resolve(beginCalls === 2)
       transitions.push(transition)
       return {
+        isCurrent: () => true,
         transition: async () => transition,
         cancel: () => {},
       }
@@ -205,5 +211,79 @@ describe('preset profile selection controller', () => {
     expect(beginCalls).toBe(2)
     expect(flushed).toEqual(['preset-a', 'preset-b'])
     expect(activePresetId).toBe('preset-c')
+  })
+
+  test('retires a blocked profile target before replaying its newer retarget', async () => {
+    let activePresetId: string | null = 'preset-a'
+    const exposed: string[] = []
+    configurePresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => {
+        activePresetId = presetId
+        exposed.push(presetId)
+      },
+      flushPreset: async () => {},
+    })
+    const registration = registerActiveLoomPresetSelectionBlocker(() => true)
+    const profiles = createPresetProfileSelectionController()
+
+    const obsolete = profiles.select('preset-b', 'preset-a')
+    const current = profiles.select('preset-c', 'preset-a')
+
+    expect(await obsolete).toBe(false)
+    registration.release()
+
+    expect(await current).toBe(true)
+    expect(exposed).toEqual(['preset-c'])
+    expect(activePresetId).toBe('preset-c')
+  })
+
+  test('cancels a blocked profile replay when its controller unmounts', async () => {
+    let activePresetId: string | null = 'preset-a'
+    let selectionChanges = 0
+    configurePresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => {
+        activePresetId = presetId
+        selectionChanges += 1
+      },
+      flushPreset: async () => {},
+    })
+    const registration = registerActiveLoomPresetSelectionBlocker(() => true)
+    const profiles = createPresetProfileSelectionController()
+    const transition = profiles.select('preset-b', 'preset-a')
+
+    profiles.cancel()
+
+    expect(await transition).toBe(false)
+    registration.release()
+    await Promise.resolve()
+    expect(activePresetId).toBe('preset-a')
+    expect(selectionChanges).toBe(0)
+  })
+
+  test('reuses one chronologically fenced request for a repeated blocked target', async () => {
+    let activePresetId: string | null = 'preset-a'
+    let beginCalls = 0
+    configurePresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => { activePresetId = presetId },
+      flushPreset: async () => {},
+    })
+    const registration = registerActiveLoomPresetSelectionBlocker(() => true)
+    const profiles = createPresetProfileSelectionController(() => {
+      beginCalls += 1
+      return beginActiveLoomPresetSelection()
+    })
+
+    const first = profiles.select('preset-b', 'preset-a')
+    const second = profiles.select('preset-b', 'preset-a')
+
+    expect(first).toBe(second)
+    expect(beginCalls).toBe(1)
+    registration.release()
+
+    expect(await first).toBe(true)
+    expect(activePresetId).toBe('preset-b')
   })
 })

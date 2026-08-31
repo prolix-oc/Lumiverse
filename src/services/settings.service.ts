@@ -6,6 +6,7 @@ import {
 } from "./world-book-vector-state";
 import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
 
+import { withUserDataMutationSync } from "./user-data/snapshot";
 export interface Setting {
   key: string;
   value: any;
@@ -118,7 +119,7 @@ export function getSettingsByKeys(userId: string, keys: string[]): Map<string, a
   return result;
 }
 
-export function putSetting(
+function putSettingUnsafe(
   userId: string,
   key: string,
   value: any,
@@ -152,9 +153,18 @@ export function putSetting(
   return setting;
 }
 
+export function putSetting(
+  userId: string,
+  key: string,
+  value: any,
+  options: { suppressBroadcast?: boolean } = {},
+): Setting {
+  return withUserDataMutationSync(userId, () => putSettingUnsafe(userId, key, value, options));
+}
+
 const MAX_SETTINGS_PER_BULK_PUT = 200;
 
-export function putMany(userId: string, settings: Record<string, any>): Setting[] {
+function putManyUnsafe(userId: string, settings: Record<string, any>): Setting[] {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     throw new InvalidSettingError("settings payload must be an object");
   }
@@ -212,7 +222,12 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   return results;
 }
 
+export function putMany(userId: string, settings: Record<string, any>): Setting[] {
+  return withUserDataMutationSync(userId, () => putManyUnsafe(userId, settings));
+}
+
 export function deleteSetting(userId: string, key: string): boolean {
-  const result = getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId);
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () =>
+    getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId).changes > 0
+  );
 }

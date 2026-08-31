@@ -23,5 +23,11 @@ export class CustomProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: false,
     modelListStyle: "openai",
+    toolCalling: true,
+    requiredToolChoice: false,
+    nativeToolContinuation: false,
+    toolContinuationMode: "legacy",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
   };
 }

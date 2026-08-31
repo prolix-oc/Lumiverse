@@ -155,8 +155,26 @@ function assertOpenController(): PresetEditorController {
 
 export function setPresetEditorController(next: PresetEditorController | null): void {
   controller = next
-  const state = next?.getState() ?? DEFAULT_STATE
-  const promptVariableValues = next?.getPromptVariableValues?.() ?? {}
+  let state = DEFAULT_STATE
+  let promptVariableValues: PromptVariableValuesDTO = {}
+  let bridgeFailed = false
+  if (next) {
+    try {
+      state = next.getState()
+    } catch {
+      // The optional Spindle bridge must not take down the native Loom panel
+      // when a preset cannot be projected into the public editor shape.
+      state = DEFAULT_STATE
+      bridgeFailed = true
+    }
+    try {
+      promptVariableValues = next.getPromptVariableValues?.() ?? {}
+    } catch {
+      promptVariableValues = {}
+      bridgeFailed = true
+    }
+  }
+  if (bridgeFailed) controller = null
   syncPresetEditorState(state, promptVariableValues)
 }
 

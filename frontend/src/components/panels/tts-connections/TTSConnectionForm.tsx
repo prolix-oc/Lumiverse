@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import type { RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, TextArea, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -11,6 +12,7 @@ import type {
   CreateTtsConnectionInput,
   TtsVoice,
 } from '@/types/api'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import styles from '../ConnectionManager.module.css'
 
 interface Props {
@@ -18,10 +20,13 @@ interface Props {
   profile?: TtsConnectionProfile
   onSave: (input: CreateTtsConnectionInput) => void
   onCancel: () => void
+  onReview?: () => Promise<void> | void
+  focusTargetRef?: RefObject<HTMLElement | null>
 }
 
-export default function TTSConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+export default function TTSConnectionForm({ providers, profile, onSave, onCancel, onReview, focusTargetRef }: Props) {
   const { t } = useTranslation('panels')
+  const reviewRequired = profile?.review_required === true
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'openai_tts')
   const [apiKey, setApiKey] = useState('')
@@ -87,6 +92,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
   }, [voiceOptions])
 
   const fetchModels = useCallback(async () => {
+    if (reviewRequired) return
     setModelsLoading(true)
     try {
       const result = await ttsConnectionsApi.previewModels({
@@ -101,9 +107,10 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, profile?.id, provider])
+  }, [apiKey, apiUrl, profile?.id, provider, reviewRequired])
 
   const fetchVoices = useCallback(async () => {
+    if (reviewRequired) return
     setVoicesLoading(true)
     try {
       const result = await ttsConnectionsApi.previewVoices({
@@ -118,7 +125,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
     } finally {
       setVoicesLoading(false)
     }
-  }, [apiKey, apiUrl, profile?.id, provider])
+  }, [apiKey, apiUrl, profile?.id, provider, reviewRequired])
 
   useEffect(() => {
     if (profile?.id && capabilities?.voiceListStyle === 'dynamic') {
@@ -194,6 +201,8 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
 
   return (
     <div className={styles.form}>
+      {profile && <ConnectionReviewStatus profile={profile} onReview={onReview ?? (() => undefined)} focusTargetRef={focusTargetRef} />}
+      <fieldset disabled={reviewRequired} style={{ border: 0, padding: 0, margin: 0 }}>
       <FormField label={t('ttsConnectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('ttsConnectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
@@ -299,6 +308,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('ttsConnectionForm.setDefault')} />
       </FormField>
 
+      </fieldset>
       <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('ttsConnectionForm.cancel')}</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>

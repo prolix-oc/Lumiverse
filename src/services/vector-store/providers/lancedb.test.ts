@@ -1,14 +1,21 @@
 import { describe, expect, test } from "bun:test";
+import { closeDatabase, closeDatabaseAsync, getDb, getDbGeneration, getDbGenerationSignal, initDatabase } from "../../../db/connection";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   ensureVectorIndex,
   isCrossProcessLockFromPriorProcessInstance,
+  admitLanceExternalMaintenanceOwner,
+  isDeferredOptimizeScheduled,
   isRetryableLanceWriteConflict,
   pauseLanceDbForExternalMaintenance,
   raceWithSignal,
+  runAbortFencedNativeMutation,
+  safeTableDelete,
+  scheduleOptimize,
   shouldUseCrossProcessWriteLock,
+  withWriteLock,
   sweepEmptyIndexDirs,
   WORLD_BOOK_EMBEDDINGS_TABLE,
 } from "./lancedb";
@@ -54,6 +61,151 @@ describe("lancedb write conflict handling", () => {
   });
 });
 
+describe("lancedb generation mutation fencing", () => {
+  test("holds database replacement until an invoked native delete drains", async () => {
+    initDatabase(":memory:");
+    const generation = getDbGeneration();
+    const signal = getDbGenerationSignal(generation);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let nativeMutations = 0;
+    const table = {
+      countRows: async () => 1,
+      delete: async () => {
+        nativeMutations += 1;
+        entered.resolve();
+        await release.promise;
+      },
+    };
+
+    const deletion = safeTableDelete(table as any, "id = 'stale'", "general", signal);
+    await entered.promise;
+    const reset = closeDatabaseAsync();
+    let resetSettled = false;
+    void reset.then(() => { resetSettled = true; });
+    await Promise.resolve();
+
+    expect(signal.aborted).toBe(true);
+    expect(resetSettled).toBe(false);
+    expect(getDbGeneration()).toBe(generation);
+    expect(() => getDb()).toThrow("was replaced by generation");
+    await expect(runAbortFencedNativeMutation(signal, async () => {
+      nativeMutations += 1;
+    })).rejects.toMatchObject({ code: "database_generation_cancelled" });
+    expect(nativeMutations).toBe(1);
+
+    release.resolve();
+    await expect(deletion).rejects.toMatchObject({ code: "database_generation_cancelled" });
+    await reset;
+    expect(getDbGeneration()).toBe(generation + 1);
+    await Bun.sleep(0);
+    expect(nativeMutations).toBe(1);
+  });
+
+  test("invalidates deferred optimize before draining suspended native optimize", async () => {
+    initDatabase(":memory:");
+    const generation = getDbGeneration();
+    const signal = getDbGenerationSignal(generation);
+    scheduleOptimize("general", signal);
+    expect(isDeferredOptimizeScheduled()).toBe(true);
+
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let nativeMutations = 0;
+    const optimizing = runAbortFencedNativeMutation(signal, async () => {
+      nativeMutations += 1;
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const reset = closeDatabaseAsync();
+    let resetSettled = false;
+    void reset.then(() => { resetSettled = true; });
+    await Promise.resolve();
+
+    expect(signal.aborted).toBe(true);
+    expect(isDeferredOptimizeScheduled()).toBe(false);
+    expect(resetSettled).toBe(false);
+    expect(getDbGeneration()).toBe(generation);
+    expect(() => scheduleOptimize("general", signal)).toThrow();
+
+    release.resolve();
+    await expect(optimizing).rejects.toMatchObject({ code: "database_generation_cancelled" });
+    await reset;
+    await Bun.sleep(0);
+    expect(nativeMutations).toBe(1);
+    expect(isDeferredOptimizeScheduled()).toBe(false);
+  });
+
+  test("drains cancelled queued writes and leaves the write lock usable after replacement", async () => {
+    initDatabase(":memory:");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let firstQueuedWriteRan = false;
+    let secondQueuedWriteRan = false;
+    const activeWrite = withWriteLock(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const activeOutcome = activeWrite.then(() => null, (error) => error);
+    await entered.promise;
+    const firstQueuedWrite = withWriteLock(async () => {
+      firstQueuedWriteRan = true;
+    });
+    const firstQueuedOutcome = firstQueuedWrite.then(() => null, (error) => error);
+    const secondQueuedWrite = withWriteLock(async () => {
+      secondQueuedWriteRan = true;
+    });
+    const secondQueuedOutcome = secondQueuedWrite.then(() => null, (error) => error);
+    // Let both admitted owners reach the in-process queue before replacement
+    // cancels their Lance generation.
+    await Promise.resolve();
+    const replacement = closeDatabaseAsync();
+    let replacementSettled = false;
+    void replacement.then(() => { replacementSettled = true; });
+    await Promise.resolve();
+
+    expect(replacementSettled).toBe(false);
+    release.resolve();
+    expect(await activeOutcome).toMatchObject({ code: "lancedb_generation_cancelled" });
+    expect(await firstQueuedOutcome).toMatchObject({ code: "lancedb_generation_cancelled" });
+    expect(await secondQueuedOutcome).toMatchObject({ code: "lancedb_generation_cancelled" });
+    await replacement;
+    expect(replacementSettled).toBe(true);
+    expect(firstQueuedWriteRan).toBe(false);
+    expect(secondQueuedWriteRan).toBe(false);
+
+    let subsequentWriteRan = false;
+    await withWriteLock(async () => {
+      subsequentWriteRan = true;
+    });
+    expect(subsequentWriteRan).toBe(true);
+  });
+
+  test("replacement retires and drains an admitted external maintenance owner", async () => {
+    initDatabase(":memory:");
+    const admission = admitLanceExternalMaintenanceOwner();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const external = admission.run(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const externalOutcome = external.then(() => null, (error) => error);
+    await entered.promise;
+    const replacement = closeDatabaseAsync();
+    let replacementSettled = false;
+    void replacement.then(() => { replacementSettled = true; });
+    await Promise.resolve();
+
+    expect(admission.signal.aborted).toBe(true);
+    expect(replacementSettled).toBe(false);
+    release.resolve();
+    expect(await externalOutcome).toMatchObject({ code: "lancedb_generation_cancelled" });
+    admission.release();
+    await replacement;
+  });
+});
 describe("lancedb empty index directory cleanup", () => {
   test("removes only aged, empty UUID directories", () => {
     const root = mkdtempSync(join(tmpdir(), "lumiverse-lancedb-index-sweep-test-"));

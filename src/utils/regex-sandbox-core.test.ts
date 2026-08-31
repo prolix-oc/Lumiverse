@@ -26,6 +26,23 @@ function captureReplacements(
   }) as CaptureReplacement[];
 }
 
+function nativeCaptureReplacements(
+  pattern: string,
+  flags: string,
+  input: string,
+  replacement: string,
+): CaptureReplacement[] {
+  return runRegexRequest({
+    id: "native-capture-replacements",
+    op: "capture-replacements",
+    pattern,
+    flags,
+    input,
+    replacement,
+    replacementMode: "native",
+  }) as CaptureReplacement[];
+}
+
 function legacyCaptureReplacements(
   pattern: string,
   flags: string,
@@ -124,6 +141,7 @@ describe("terminal-literal search window", () => {
       pattern,
       flags: "gi",
       input,
+
       replacement: "<$1>",
     });
     expect(result).toBe(`<field1>${incomplete.repeat(3_000)}`);
@@ -140,5 +158,78 @@ describe("terminal-literal search window", () => {
       replacement: "$'",
     };
     expect(runRegexRequest(request)).toBe(input.replace(/fooENDING/g, "$'"));
+  });
+});
+describe("native replacement semantics", () => {
+  test("matches native String.replace for every replacement token", () => {
+    const pattern = "(?<word>ab)(c)?";
+    const flags = "";
+    const input = "prefix abc suffix";
+    const replacements = [
+      "$&",
+      "$$",
+      "$`",
+      "$'",
+      "$1",
+      "$2",
+      "$3",
+      "$10",
+      "$<word>",
+      "$<missing>",
+      "$0",
+      "$01",
+      "$100",
+    ];
+
+    for (const replacement of replacements) {
+      const native = input.replace(new RegExp(pattern, flags), replacement);
+      expect(runRegexRequest({
+        id: `native-${replacement}`,
+        op: "replace",
+        pattern,
+        flags,
+        input,
+        replacement,
+      })).toBe(native);
+      expect(runRegexRequest({
+        id: `native-test-${replacement}`,
+        op: "test",
+        pattern,
+        flags,
+        input,
+        replacement,
+      })).toEqual({ result: native, matches: 1 });
+      const nativeMatches = nativeCaptureReplacements(pattern, flags, input, replacement);
+      const matchIndex = input.indexOf("abc");
+      const matchLength = "abc".length;
+      expect(nativeMatches).toEqual([{
+        index: matchIndex,
+        matchLength,
+        replacement: native.slice(matchIndex, native.length - (input.length - matchIndex - matchLength)),
+      }]);
+    }
+  });
+});
+
+describe("capture materialization limits", () => {
+  test("rejects a match with too many capture groups before materializing it", () => {
+    const groupCount = 1_025;
+    expect(() => collect(`(a)`.repeat(groupCount), "", "a".repeat(groupCount))).toThrow(
+      "capture group count",
+    );
+  });
+
+  test("rejects a large repeated capture before cloning its bytes", () => {
+    const input = "a".repeat(2 * 1024 * 1024);
+    expect(() => collect("(a+)", "", input)).toThrow("capture bytes");
+  });
+
+  test("rejects cumulative capture bytes even below the match-count cap", () => {
+    const input = "a".repeat(4_500_000);
+    expect(() => collect("(.{9000})", "g", input)).toThrow("capture bytes");
+  });
+
+  test("rejects excessive match counts", () => {
+    expect(() => collect("a", "g", "a".repeat(1_025))).toThrow("Regex matched more than 1024 times");
   });
 });

@@ -14,6 +14,8 @@ import { DRAWER_TABS, registryToCommands } from '@/lib/drawer-tab-registry'
 import { getVisibleSettingsTabs, settingsRegistryToCommands } from '@/lib/settings-tab-registry'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
+import { agentRuntimeErrorTranslationKey } from '@/lib/agentRuntimeSelection'
+import { startGenerationWithRecovery } from '@/lib/generation-recovery'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
 
 export type CommandScope = 'global' | 'chat' | 'chat-idle' | 'landing' | 'character'
@@ -33,6 +35,21 @@ export interface Command {
 
 export const GROUP_ORDER: CommandGroup[] = ['actions', 'panels', 'settings', 'extensions']
 
+function commandGenerationError(error: unknown, fallback: string): string {
+  const runtimeKey = agentRuntimeErrorTranslationKey(error)
+  if (runtimeKey) return i18n.t(runtimeKey, { ns: 'chat' })
+  if (!error || typeof error !== 'object') return fallback
+  const source = error as { body?: unknown; message?: unknown }
+  const body = source.body && typeof source.body === 'object'
+    ? source.body as { error?: unknown }
+    : null
+  return typeof body?.error === 'string'
+    ? body.error
+    : typeof source.message === 'string'
+      ? source.message
+      : fallback
+}
+
 const tc = (key: string, options?: Record<string, unknown>) => i18n.t(key, { ns: 'commands', ...options })
 
 export const COMMANDS: Command[] = [
@@ -45,24 +62,55 @@ export const COMMANDS: Command[] = [
     icon: RotateCw,
     keywords: ['regenerate', 'retry', 'redo', 'reroll', 'response'],
     group: 'actions',
-    scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
-      if (!activeChatId) return
-      beginStreaming()
+      const {
+        activeChatId,
+        activeProfileId,
+        activePersonaId,
+        activeCharacterId,
+        activeChatMetadata,
+        isGroupChat,
+        mpRoomId,
+        messages,
+        getActivePresetForGeneration,
+        beginStreaming,
+        startStreaming,
+        setStreamingError,
+        addToast,
+      } = useStore.getState()
+      if (!activeChatId || useStore.getState().activeChatId !== activeChatId) return
+      const lastAssistant = [...messages].reverse().find((message) => !message.is_user)
+      const targetCharacterId = typeof lastAssistant?.extra?.character_id === 'string'
+        ? lastAssistant.extra.character_id
+        : activeCharacterId
+      const forceResponse = isGroupChat || !!mpRoomId
+      const generationAbortController = new AbortController()
+      beginStreaming(lastAssistant?.id, 'regenerate')
       try {
         const presetId = getActivePresetForGeneration() || undefined
-        const res = await generateApi.regenerate({
+        const res = await startGenerationWithRecovery('regenerate', {
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
-          persona_id: activePersonaId || undefined,
+          persona_id: activeChatMetadata?.temporary ? undefined : activePersonaId || undefined,
           preset_id: presetId,
           force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
           generation_type: 'regenerate',
+          mode: forceResponse ? 'response' : undefined,
+          message_id: lastAssistant?.id,
+          swipe_id: lastAssistant?.swipe_id,
+          target_character_id: targetCharacterId || undefined,
+        }, {
+          forceResponse,
+          signal: generationAbortController.signal,
         })
+        if (useStore.getState().activeChatId !== activeChatId) return
         startStreaming(res.generationId)
-      } catch (err: any) {
-        const msg = err?.body?.error || err?.message || tc('toast.failedRegenerate')
+      } catch (err: unknown) {
+        if (
+          useStore.getState().activeChatId !== activeChatId
+          || (err instanceof DOMException && err.name === 'AbortError')
+        ) return
+        const msg = commandGenerationError(err, tc('toast.failedRegenerate'))
         setStreamingError(msg)
         addToast({ type: 'error', message: msg })
       }
@@ -77,22 +125,54 @@ export const COMMANDS: Command[] = [
     group: 'actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, addToast } = useStore.getState()
-      if (!activeChatId) return
-      beginStreaming()
+      const {
+        activeChatId,
+        activeProfileId,
+        activePersonaId,
+        activeCharacterId,
+        activeChatMetadata,
+        isGroupChat,
+        mpRoomId,
+        messages,
+        getActivePresetForGeneration,
+        beginStreaming,
+        startStreaming,
+        setStreamingError,
+        addToast,
+      } = useStore.getState()
+      if (!activeChatId || useStore.getState().activeChatId !== activeChatId) return
+      const lastAssistant = [...messages].reverse().find((message) => !message.is_user)
+      const targetCharacterId = typeof lastAssistant?.extra?.character_id === 'string'
+        ? lastAssistant.extra.character_id
+        : activeCharacterId
+      const forceResponse = isGroupChat || !!mpRoomId
+      const generationAbortController = new AbortController()
+      beginStreaming(lastAssistant?.id, 'continue')
       try {
         const presetId = getActivePresetForGeneration() || undefined
-        const res = await generateApi.continueGeneration({
+        const res = await startGenerationWithRecovery('continue', {
           chat_id: activeChatId,
           connection_id: activeProfileId || undefined,
-          persona_id: activePersonaId || undefined,
+          persona_id: activeChatMetadata?.temporary ? undefined : activePersonaId || undefined,
           preset_id: presetId,
           force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
+          generation_type: 'continue',
+          mode: forceResponse ? 'response' : undefined,
+          message_id: lastAssistant?.id,
+          swipe_id: lastAssistant?.swipe_id,
+          target_character_id: targetCharacterId || undefined,
+        }, {
+          forceResponse,
+          signal: generationAbortController.signal,
         })
-
+        if (useStore.getState().activeChatId !== activeChatId) return
         startStreaming(res.generationId)
-      } catch (err: any) {
-        const msg = err?.body?.error || err?.message || tc('toast.failedContinue')
+      } catch (err: unknown) {
+        if (
+          useStore.getState().activeChatId !== activeChatId
+          || (err instanceof DOMException && err.name === 'AbortError')
+        ) return
+        const msg = commandGenerationError(err, tc('toast.failedContinue'))
         setStreamingError(msg)
         addToast({ type: 'error', message: msg })
       }

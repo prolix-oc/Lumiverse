@@ -156,12 +156,14 @@
 }
 
 .actionBtn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 30px;
-  height: 26px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
   border: none;
   border-radius: var(--lcs-radius-xs, 6px);
   background: transparent;
@@ -173,14 +175,30 @@
   padding: 0;
 }
 
-.actionBtn:hover {
+.actionBtn:hover:not(:disabled) {
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   background: var(--lumiverse-fill, rgba(255, 255, 255, 0.06));
 }
 
+.actionBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
+  box-shadow: var(--lumiverse-focus-ring);
+}
+
+.actionBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+
 .actionBtnActive {
   color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
   background: var(--lumiverse-fill, rgba(255, 255, 255, 0.08));
+}
+.actionBtnRetry {
+  color: var(--lumiverse-warning, #f59e0b);
+  background: color-mix(in srgb, var(--lumiverse-warning, #f59e0b) 12%, transparent);
 }
 
 /* Persistent state indicator for buttons whose feature is "armed" — e.g.
@@ -418,6 +436,10 @@
 
   .popover {
     animation: none;
+  }
+
+  .actionBtn {
+    transition: none;
   }
 }
 
@@ -951,6 +973,12 @@
   flex-shrink: 0;
 }
 
+.sendBtnShell:has([data-stop-state]),
+.sendBtnShell:has(.sendBtnStop span) {
+  width: auto;
+  min-width: 40px;
+}
+
 .sendBtn {
   display: flex;
   align-items: center;
@@ -1043,6 +1071,47 @@
 
 .sendBtnStop:hover {
   background: var(--lumiverse-danger-hover, #dc2626);
+}
+
+.sendBtnStop:has(span),
+.sendBtn[data-stop-state] {
+  width: auto;
+  min-width: 44px;
+  height: 40px;
+  padding: 0 12px;
+  gap: 6px;
+  overflow: visible;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.abortBadge,
+.requestStatusBadge {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: max-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 88%, black 12%);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-danger, #ef4444) 70%, white 12%);
+  color: #fff;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.15;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.requestStatusBadge {
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 88%, black 12%);
+  border-color: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 70%, white 12%);
 }
 
 .mobileQueueHint {
@@ -1208,10 +1277,16 @@
 
   .actionBtn {
     width: 28px;
+    min-width: 28px;
     flex: 0 0 28px;
   }
 
   .actionBar :global([data-spindle-mount='chat_actions'] > *) {
+    flex-shrink: 0;
+  }
+
+  .actionBar :global([data-spindle-quick-toolbar-action]),
+  .actionBar :global([data-extension-action]) {
     flex-shrink: 0;
   }
 
@@ -1258,6 +1333,33 @@
     height: 38px;
   }
 }
+.actionBar {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  touch-action: pan-x;
+}
+
+.actionBar::-webkit-scrollbar {
+  display: none;
+}
+
+.composerReorderUnit {
+  display: contents;
+}
+
+.composerReorderUnit[data-dragging] > * {
+  cursor: grabbing;
+  opacity: 0.72;
+}
+
+.extensionToolbar,
+.inputToolsSlot {
+  display: contents;
+}
 
 /* ── Composer action-bar customizer (InputAreaCustomizeModal) ── */
 .customizeModal {
@@ -1269,10 +1371,19 @@
     0 0 40px var(--lumiverse-primary-020);
 }
 
+.customizeDialog {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: min(78vh, 720px);
+  outline: none;
+}
+
 .customizeHeader {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 0 0 auto;
   padding: 22px 24px 16px;
   border-bottom: 1px solid var(--lumiverse-border);
 }
@@ -1295,10 +1406,12 @@
 .customizeBody {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   gap: 12px;
-  max-height: min(64vh, 640px);
-  padding: 16px 24px 20px;
-  overflow-y: auto;
+  overflow: auto;
+  padding: 16px 18px 18px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .customizeSectionHeader {
@@ -1312,7 +1425,7 @@
   color: var(--lumiverse-text-secondary, var(--lumiverse-text-muted));
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -1330,23 +1443,20 @@
   margin-top: 3px;
   padding: 7px 9px;
   border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius);
+  border-radius: var(--lumiverse-radius-sm);
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);
+  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
 }
 
 .customizeSearchField:focus-within {
-  border-color: var(--lumiverse-primary);
-  box-shadow: 0 0 0 1px var(--lumiverse-primary);
-}
-
-.customizeSearchField svg {
-  flex-shrink: 0;
+  border-color: var(--lumiverse-primary-050);
+  box-shadow: var(--lumiverse-focus-ring);
 }
 
 .customizeSearchField input {
-  width: 100%;
   min-width: 0;
+  flex: 1 1 auto;
   border: 0;
   outline: 0;
   background: transparent;
@@ -1356,18 +1466,18 @@
 }
 
 .customizeSearchField input::placeholder {
-  color: var(--lumiverse-text-dim);
+  color: var(--lumiverse-text-muted);
 }
 
 .customizeList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 .customizeEmptyState {
   margin: 0;
-  padding: 16px 12px;
+  padding: 30px 18px;
   border: 1px dashed var(--lumiverse-border);
   border-radius: var(--lumiverse-radius-lg);
   color: var(--lumiverse-text-dim);
@@ -1379,22 +1489,30 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 11px;
-  border: 1px solid var(--lumiverse-border);
-  border-radius: var(--lumiverse-radius-lg);
-  background: var(--lumiverse-surface-raised);
-  touch-action: manipulation;
+  min-height: 48px;
+  padding: 7px 10px 7px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-fill-subtle);
+  transition: border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
+}
+
+.customizeRow:hover {
+  border-color: var(--lumiverse-border);
+  background: var(--lumiverse-fill);
 }
 
 .customizeRowDisabled {
-  opacity: 0.58;
+  opacity: 0.62;
 }
 
 .customizeRowDragging {
-  z-index: 5;
-  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-surface-raised));
+  z-index: 1000;
+  border-color: var(--lumiverse-primary);
+  opacity: 0.96;
+  background: var(--lumiverse-surface-elevated);
   box-shadow:
-    var(--lumiverse-shadow-md),
+    0 12px 32px rgba(0, 0, 0, 0.4),
     0 0 0 1px var(--lumiverse-primary);
 }
 
@@ -1403,29 +1521,28 @@
   flex-shrink: 0;
   width: 22px;
   height: 30px;
-  align-items: center;
-  justify-content: center;
   padding: 0;
-  border: none;
-  border-radius: var(--lumiverse-radius-sm);
+  border: 0;
+  border-radius: var(--lumiverse-radius-xs);
   background: transparent;
-  color: var(--lumiverse-text-dim);
+  color: var(--lumiverse-text-muted);
   cursor: grab;
   touch-action: none;
-  user-select: none;
 }
 
 .customizeDragHandle:hover:not(:disabled) {
-  background: var(--lumiverse-primary-015);
   color: var(--lumiverse-text);
+  background: var(--lumiverse-fill-hover);
 }
 
-.customizeDragHandle:active:not(:disabled) {
-  cursor: grabbing;
+.customizeDragHandle:focus-visible,
+.customizeResetButton:focus-visible,
+.customizeDoneButton:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
 }
 
 .customizeDragHandle:disabled {
-  opacity: 0.3;
   cursor: default;
 }
 
@@ -1436,7 +1553,7 @@
   height: 32px;
   align-items: center;
   justify-content: center;
-  border-radius: var(--lumiverse-radius-md);
+  border-radius: var(--lumiverse-radius-sm);
   background: var(--lumiverse-primary-015);
   color: var(--lumiverse-primary);
 }
@@ -1451,8 +1568,9 @@
 .customizeRowTitle {
   overflow: hidden;
   color: var(--lumiverse-text);
-  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
-  font-weight: 600;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1462,8 +1580,8 @@
   overflow: hidden;
   margin: 2px 0 0;
   color: var(--lumiverse-text-dim);
-  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
-  line-height: 1.4;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -1473,7 +1591,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 14px 24px 18px;
+  flex: 0 0 auto;
+  padding: 12px 18px;
   border-top: 1px solid var(--lumiverse-border);
 }
 
@@ -1485,47 +1604,68 @@
   gap: 7px;
   min-height: 34px;
   padding: 0 16px;
-  border-radius: var(--lumiverse-radius);
-  font: inherit;
-  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  border-radius: var(--lumiverse-radius-sm);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
   cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
 }
 
 .customizeResetButton {
   border: 1px solid var(--lumiverse-border);
   background: transparent;
-  color: var(--lumiverse-text-muted);
+  color: var(--lumiverse-text-secondary);
 }
 
 .customizeResetButton:hover {
+  border-color: var(--lumiverse-border-hover);
   background: var(--lumiverse-fill-hover);
   color: var(--lumiverse-text);
 }
 
 .customizeDoneButton {
-  border: 1px solid transparent;
-  background: var(--lumiverse-primary);
-  color: var(--lumiverse-primary-contrast, #fff);
-  font-weight: 600;
+  border: 1px solid var(--lumiverse-primary-040);
+  background: var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary);
 }
 
-.customizeDragHandle:focus-visible,
-.customizeResetButton:focus-visible,
-.customizeDoneButton:focus-visible {
-  outline: 2px solid var(--lumiverse-primary);
-  outline-offset: 2px;
+.customizeDoneButton:hover {
+  background: var(--lumiverse-primary-030);
+  color: var(--lumiverse-text);
 }
 
-@media (max-width: 720px) {
-  .customizeBody {
-    max-height: min(70vh, 720px);
-    padding-left: 14px;
-    padding-right: 14px;
+@media (max-width: 600px) {
+  .customizeModal {
+    width: min(100%, calc(100vw - 16px));
+    max-height: min(86vh, 720px);
   }
 
-  .customizeHeader,
+  .customizeDialog {
+    max-height: min(86vh, 720px);
+  }
+
+  .customizeHeader {
+    padding: 18px 18px 14px;
+  }
+
+  .customizeBody {
+    padding: 14px 12px 16px;
+  }
+
   .customizeFooter {
-    padding-left: 14px;
+    padding: 10px 12px;
+  }
+
+  .customizeRow {
+    padding-right: 8px;
+  }
+
+  .customizeRowDescription {
+    -webkit-line-clamp: 1;
+  }
+
+  .customizeResetButton,
+  .customizeDoneButton {
     padding-right: 14px;
   }
 }

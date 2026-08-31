@@ -3,6 +3,7 @@ import type { Message } from "../types/message";
 import type { Chat } from "../types/chat";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { LlmProvider } from "../llm/provider";
+import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import * as chatsSvc from "./chats.service";
 import * as connectionsSvc from "./connections.service";
 import * as secretsSvc from "./secrets.service";
@@ -24,6 +25,7 @@ const CHAT = "chat-1";
 const GENERATION_ID = "gen-deterministic-1";
 const ASSISTANT_ID = "asst-1";
 const USER_MSG_ID = "user-1";
+const resolveCouncilProfile = councilProfilesSvc.resolveProfile;
 
 const connection: ConnectionProfile = {
   id: "conn-1",
@@ -34,6 +36,8 @@ const connection: ConnectionProfile = {
   preset_id: null,
   is_default: true,
   has_api_key: true,
+  review_required: false,
+  review_code: null,
   metadata: {},
   created_at: 1,
   updated_at: 1,
@@ -66,6 +70,63 @@ const mockProvider = {
   listModels: async () => [],
 } as unknown as LlmProvider;
 
+
+
+function initRuntimeDecisionDb(): void {
+  closeDatabase();
+  initDatabase(":memory:");
+  const db = getDb();
+  db.run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (key, user_id)
+  )`);
+  db.run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    preset_id TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL DEFAULT 1,
+    has_api_key INTEGER NOT NULL DEFAULT 0,
+    user_id TEXT,
+    review_required INTEGER NOT NULL DEFAULT 0,
+    review_code TEXT
+  )`);
+  db.run(`CREATE TABLE secrets (
+    key TEXT NOT NULL,
+    encrypted_value TEXT NOT NULL,
+    iv TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (key, user_id)
+  )`);
+  db.query(`INSERT INTO connection_profiles
+    (id, name, provider, api_url, model, preset_id, is_default, metadata, created_at, updated_at, has_api_key, user_id, review_required, review_code)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    connection.id,
+    connection.name,
+    connection.provider,
+    connection.api_url,
+    connection.model,
+    connection.preset_id,
+    connection.is_default ? 1 : 0,
+    JSON.stringify(connection.metadata),
+    connection.created_at,
+    connection.updated_at,
+    connection.has_api_key ? 1 : 0,
+    USER,
+    connection.review_required ? 1 : 0,
+    connection.review_code,
+  );
+}
 function baseMessage(overrides: Partial<Message> = {}): Message {
   return {
     id: USER_MSG_ID,
@@ -98,6 +159,7 @@ describe("startGeneration edit-and-send", () => {
   }
 
   beforeEach(() => {
+    initRuntimeDecisionDb();
     assistant = baseMessage({
       id: ASSISTANT_ID,
       index_in_chat: 2,
@@ -114,12 +176,13 @@ describe("startGeneration edit-and-send", () => {
     track(spyOn(settingsSvc, "getSetting").mockReturnValue(null));
     track(spyOn(personasSvc, "resolvePersonaOrDefault").mockReturnValue(null));
     track(spyOn(llmRegistry, "getProvider").mockReturnValue(mockProvider));
-    track(spyOn(eventBus, "emit").mockImplementation(() => {}));
-    track(
-      spyOn(councilProfilesSvc, "resolveProfile").mockImplementation(() => {
-        throw new Error("skip-assembly");
-      }),
-    );
+    track(spyOn(eventBus, "emit").mockImplementation(() => true));
+    let councilProfileCallCount = 0;
+    track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation((...args) => {
+      councilProfileCallCount += 1;
+      if (councilProfileCallCount % 2 === 1) return resolveCouncilProfile(...args);
+      throw new Error("skip-assembly");
+    }));
     track(spyOn(chatsSvc, "getChat").mockReturnValue(chat));
     track(spyOn(chatsSvc, "getTrailingVisibleUserMessageIds").mockReturnValue([USER_MSG_ID]));
     track(spyOn(chatsSvc, "getLastMessage").mockImplementation(() =>
@@ -151,11 +214,14 @@ describe("startGeneration edit-and-send", () => {
     }));
   });
 
-  afterEach(() => {
-    stopAllGenerations();
+  afterEach(async () => {
+    await stopAllGenerations();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     pool.clearAllPoolEntries();
     stopGenerationSweep();
+    await chatsSvc.waitForChatChunkMaintenance();
     for (const spy of spies.splice(0)) spy.mockRestore();
+    closeDatabase();
   });
 
   test("passes the branched swipe target exactly once", async () => {
@@ -226,7 +292,8 @@ describe("startGeneration edit-and-send", () => {
     expect(addSwipe).toHaveBeenCalledTimes(1);
     expect(assistant.swipes).toEqual(["reply", ""]);
 
-    stopAllGenerations();
+    await stopAllGenerations();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     pool.removePoolEntry(GENERATION_ID);
 
     const recovered = await startGeneration({

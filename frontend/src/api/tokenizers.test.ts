@@ -1,15 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { createTokenizersApi, type TokenizersApiClient } from './tokenizers'
 
 const post = mock((..._args: unknown[]) => Promise.resolve(undefined))
-
-mock.module('./client', () => ({
+const client = {
   del: mock(),
   get: mock(),
   post,
   put: mock(),
-}))
-
-const { tokenizersApi } = await import('./tokenizers')
+} as unknown as TokenizersApiClient
+const tokenizersApi = createTokenizersApi(client)
 
 describe('tokenizersApi.countForModel', () => {
   beforeEach(() => {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { act, createElement } from 'react'
 import type { Root } from 'react-dom/client'
@@ -25,6 +25,16 @@ type Deferred<T> = {
 
 const countCalls: CountCall[] = []
 const pendingCounts: Array<Deferred<CountResult>> = []
+const tokenizersApiMock = {
+  countForModel(model: string, content: string, options?: { signal?: AbortSignal }): Promise<CountResult> {
+    countCalls.push({ model, content, options })
+    const deferred = createDeferred<CountResult>()
+    pendingCounts.push(deferred)
+    return deferred.promise
+  },
+  testPattern: async () => ({ matched: false, tokenizer_id: null, tokenizer_name: null }),
+}
+
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -35,7 +45,6 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
-mock.module('@/store', () => ({ useStore: useStoreMock }))
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true })
 const globalObject = globalThis as unknown as Record<string, unknown>
@@ -88,18 +97,10 @@ const {
   TOKEN_COUNT_MODEL_EXTENSION,
 } = await import('@/lib/storedTokenCount')
 const { fnv1a32 } = await import('@/lib/tokenCountCache')
-mock.restore()
 
-const { tokenizersApi } = await import('@/api/tokenizers')
-const countForModelSpy = spyOn(tokenizersApi, 'countForModel').mockImplementation(
-  (model: string, content: string, options?: { signal?: AbortSignal }): Promise<CountResult> => {
-    countCalls.push({ model, content, options })
-    const deferred = createDeferred<CountResult>()
-    pendingCounts.push(deferred)
-    return deferred.promise
-  },
-)
-
+beforeEach(() => {
+  resetTokenCountRuntime(tokenizersApiMock)
+})
 type HookOptions = {
   entryId?: string
   content: string
@@ -121,8 +122,8 @@ const mountedRoots = new Set<Root>()
 
 /* eslint-disable react-compiler/react-compiler */
 function HookHarness({ options }: { options: HookOptions }) {
-  activeModel = useActiveTokenizerModel()
-  hookSurface = useTokenCounts(options) as HookSurface
+  activeModel = useActiveTokenizerModel(useStoreMock)
+  hookSurface = useTokenCounts(options, { store: useStoreMock }) as HookSurface
   return null
 }
 /* eslint-enable react-compiler/react-compiler */
@@ -199,7 +200,6 @@ afterEach(async () => {
 })
 
 afterAll(() => {
-  countForModelSpy.mockRestore()
   for (const [key, value] of originalGlobals) {
     if (value === undefined) delete globalObject[key]
     else globalObject[key] = value

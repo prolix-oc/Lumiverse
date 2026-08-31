@@ -3,8 +3,9 @@ import { Hash } from 'lucide-react'
 import clsx from 'clsx'
 import { Spinner } from '@/components/shared/Spinner'
 import { useTokenCounts } from '@/hooks/useTokenCounts'
-import styles from './TokenCountButton.module.css'
+import { useStore } from '@/store'
 
+import styles from './TokenCountButton.module.css'
 interface TokenCountButtonProps {
   text: string
   className?: string
@@ -26,7 +27,7 @@ export default function TokenCountButton({
     content: text,
     extensions,
     enabled: !disabled,
-  })
+  }, { store: useStore })
   const tokenCounting = status === 'counting'
 
   return (

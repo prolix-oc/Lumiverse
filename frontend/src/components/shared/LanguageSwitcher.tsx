@@ -16,18 +16,21 @@ interface LanguageSwitcherProps {
   className?: string
 }
 
-function resolveUiLanguage(resolved?: string): string {
-  if (!resolved) return 'en'
-  if (resolved === 'zh-TW' || resolved.startsWith('zh-TW')) return 'zh-TW'
-  if (resolved.startsWith('zh')) return 'zh'
-  if (resolved.startsWith('ja')) return 'ja'
-  if (resolved.startsWith('fr')) return 'fr'
+type UiLanguage = (typeof LANGUAGES)[number]['code']
+
+function resolveUiLanguage(language?: string, resolvedLanguage?: string): UiLanguage {
+  const normalized = (language || resolvedLanguage || 'en').replaceAll('_', '-').toLowerCase()
+  if (normalized === 'zh-tw' || normalized.startsWith('zh-tw-')) return 'zh-TW'
+  if (normalized === 'zh' || normalized.startsWith('zh-')) return 'zh'
+  if (normalized === 'ja' || normalized.startsWith('ja-')) return 'ja'
+  if (normalized === 'fr' || normalized.startsWith('fr-')) return 'fr'
+  if (normalized === 'it' || normalized.startsWith('it-')) return 'it'
   return 'en'
 }
 
 export default function LanguageSwitcher({ className }: LanguageSwitcherProps) {
   const { t, i18n } = useTranslation('common')
-  const current = resolveUiLanguage(i18n.resolvedLanguage)
+  const current = resolveUiLanguage(i18n.language, i18n.resolvedLanguage)
 
   const setLanguage = (code: string) => {
     void changeUiLanguage(code)

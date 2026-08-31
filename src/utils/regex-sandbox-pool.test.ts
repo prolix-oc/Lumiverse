@@ -1,117 +1,174 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
-  RegexTimeoutError,
-  RegexWorkerPool,
-  RegexWorkerStartupTimeoutError,
-  type RegexWorkerPoolDeps,
-} from "./regex-sandbox";
+  IsolatePoolError,
+  IsolatePoolV1,
+  resetIsolateHealthForTests,
+  type IsolateTransport,
+} from "../services/isolate-pool";
+import {
+  decodeLengthPrefixedJson,
+  isIsolateStartedEnvelopeV1,
+  makeResultEnvelopeV1,
+  makeStartedEnvelopeV1,
+} from "../services/isolate-protocol";
 
-interface ManualTimer {
-  fn: () => void;
-  ms: number;
-  cancelled: boolean;
-}
-
-class FakeWorker {
-  readonly posted: Array<Record<string, unknown>> = [];
+class FakeTransport implements IsolateTransport {
+  readonly kind = "worker" as const;
+  readonly sent: Uint8Array[] = [];
   terminated = false;
-  private messageHandler: ((event: MessageEvent) => void) | null = null;
-  private errorHandler: ((event: ErrorEvent) => void) | null = null;
+  private messageHandler: ((message: unknown) => void) | null = null;
+  private errorHandler: ((error: unknown) => void) | null = null;
 
-  addEventListener(type: "message" | "error", handler: (event: never) => void): void {
-    if (type === "message") {
-      this.messageHandler = handler as unknown as (event: MessageEvent) => void;
-    } else {
-      this.errorHandler = handler as unknown as (event: ErrorEvent) => void;
-    }
+  send(message: unknown): void {
+    if (this.terminated) throw new Error("transport terminated");
+    this.sent.push(message as Uint8Array);
   }
 
-  postMessage(message: Record<string, unknown>): void {
-    this.posted.push(message);
+  onMessage(handler: (message: unknown) => void): () => void {
+    this.messageHandler = handler;
+    return () => {
+      if (this.messageHandler === handler) this.messageHandler = null;
+    };
+  }
+
+  onError(handler: (error: unknown) => void): () => void {
+    this.errorHandler = handler;
+    return () => {
+      if (this.errorHandler === handler) this.errorHandler = null;
+    };
   }
 
   terminate(): void {
     this.terminated = true;
   }
 
-  emitMessage(data: Record<string, unknown>): void {
-    this.messageHandler?.({ data } as MessageEvent);
+  respond(message: unknown): void {
+    this.messageHandler?.(message);
+  }
+
+  requestId(index = this.sent.length - 1): string {
+    return decodeLengthPrefixedJson<{ requestId: string }>(this.sent[index]!).requestId;
   }
 }
 
-function createHarness() {
-  const workers: FakeWorker[] = [];
-  const timers: ManualTimer[] = [];
-  let nextId = 0;
-  const deps: RegexWorkerPoolDeps = {
-    createWorker: () => {
-      const worker = new FakeWorker();
-      workers.push(worker);
-      return worker as unknown as Worker;
+function createHarness(options?: { startTimeoutMs?: number; executionTimeoutMs?: number }) {
+  const transports: FakeTransport[] = [];
+  const pool = new IsolatePoolV1<{ value: string }, string>({
+    name: "regex-test",
+    backend: "worker",
+    maxWorkers: 1,
+    defaultTimeoutMs: options?.executionTimeoutMs ?? 100,
+    workerStartTimeoutMs: options?.startTimeoutMs ?? 50,
+    workerStartAcknowledgement: (message, job) =>
+      isIsolateStartedEnvelopeV1(message) && message.requestId === job.requestId,
+    workerFactory: () => {
+      const transport = new FakeTransport();
+      transports.push(transport);
+      return transport;
     },
-    scheduleTimer: (fn, ms) => {
-      const timer: ManualTimer = { fn, ms, cancelled: false };
-      timers.push(timer);
-      return timer;
-    },
-    cancelTimer: (value) => {
-      (value as ManualTimer).cancelled = true;
-    },
-    createRequestId: () => `request-${++nextId}`,
-    startupTimeoutMs: 5_000,
-  };
-  return {
-    pool: new RegexWorkerPool(1, deps),
-    workers,
-    timers,
-    fire(timer: ManualTimer): void {
-      if (!timer.cancelled) timer.fn();
-    },
-  };
+  });
+  return { pool, transports };
 }
 
-describe("regex worker timing attribution", () => {
-  test("a worker startup timeout is not reported as a regex timeout", async () => {
-    const harness = createHarness();
-    const pending = harness.pool.run<boolean>("test", { pattern: "x" }, 7);
+async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts && !predicate(); attempt++) {
+    await Bun.sleep(1);
+  }
+  expect(predicate()).toBe(true);
+}
 
-    expect(harness.timers).toHaveLength(1);
-    expect(harness.timers[0]?.ms).toBe(5_000);
-    harness.fire(harness.timers[0]!);
+beforeEach(() => resetIsolateHealthForTests());
+
+describe("framed regex isolate timing attribution", () => {
+  test("reports a missing start acknowledgement as startup rather than execution timeout", async () => {
+    const { pool, transports } = createHarness({ startTimeoutMs: 5, executionTimeoutMs: 50 });
+    const pending = pool.submit({
+      userId: "u",
+      operation: "replace",
+      payload: { value: "startup" },
+      timeoutMs: 50,
+    });
 
     const error = await pending.catch((caught) => caught);
-    expect(error).toBeInstanceOf(RegexWorkerStartupTimeoutError);
-    expect(error).not.toBeInstanceOf(RegexTimeoutError);
-    expect(harness.workers[0]?.terminated).toBe(true);
+    expect(error).toBeInstanceOf(IsolatePoolError);
+    expect(error).toMatchObject({
+      code: "worker_timed_out",
+      timeoutPhase: "startup",
+      timeoutMs: 5,
+    });
+    expect(transports[0]?.terminated).toBe(true);
+    await pool.shutdown();
   });
 
-  test("the regex deadline starts only after the worker acknowledges the request", async () => {
-    const harness = createHarness();
-    const pending = harness.pool.run<boolean>("test", { pattern: "x" }, 7);
-    const worker = harness.workers[0]!;
-    const id = worker.posted[0]?.id as string;
+  test("starts the execution deadline only after the framed acknowledgement", async () => {
+    const { pool, transports } = createHarness({ startTimeoutMs: 100, executionTimeoutMs: 20 });
+    const pending = pool.submit({
+      userId: "u",
+      operation: "replace",
+      payload: { value: "execution" },
+      timeoutMs: 10,
+    });
+    await waitFor(() => (transports[0]?.sent.length ?? 0) === 1);
 
-    worker.emitMessage({ id, type: "started" });
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await Bun.sleep(20);
+    expect(settled).toBe(false);
 
-    expect(harness.timers[0]?.cancelled).toBe(true);
-    expect(harness.timers[1]?.ms).toBe(7);
-    harness.fire(harness.timers[1]!);
-    await expect(pending).rejects.toBeInstanceOf(RegexTimeoutError);
-    expect(worker.terminated).toBe(true);
+    transports[0]!.respond(makeStartedEnvelopeV1(transports[0]!.requestId()));
+    const error = await pending.catch((caught) => caught);
+    expect(error).toMatchObject({
+      code: "worker_timed_out",
+      timeoutPhase: "execution",
+      timeoutMs: 10,
+    });
+    await pool.shutdown();
   });
 
-  test("a delayed acknowledgement does not consume the regex execution budget", async () => {
-    const harness = createHarness();
-    const pending = harness.pool.run<string>("replace", { pattern: "x" }, 11);
-    const worker = harness.workers[0]!;
-    const id = worker.posted[0]?.id as string;
+  test("does not consume a queued request's execution budget", async () => {
+    const { pool, transports } = createHarness({ startTimeoutMs: 100, executionTimeoutMs: 100 });
+    const first = pool.submit({
+      userId: "u",
+      operation: "replace",
+      payload: { value: "first" },
+      timeoutMs: 100,
+    });
+    await waitFor(() => (transports[0]?.sent.length ?? 0) === 1);
+    const firstId = transports[0]!.requestId(0);
+    transports[0]!.respond(makeStartedEnvelopeV1(firstId));
 
-    worker.emitMessage({ id, type: "started" });
-    worker.emitMessage({ id, ok: true, result: "done" });
+    const second = pool.submit({
+      userId: "u",
+      operation: "replace",
+      payload: { value: "second" },
+      timeoutMs: 5,
+    });
+    let secondSettled = false;
+    void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+    await Bun.sleep(15);
+    expect(secondSettled).toBe(false);
 
-    await expect(pending).resolves.toBe("done");
-    expect(harness.timers.map(({ ms }) => ms)).toEqual([5_000, 11]);
-    expect(harness.timers.every(({ cancelled }) => cancelled)).toBe(true);
-    harness.pool.shutdown();
+    transports[0]!.respond(makeResultEnvelopeV1(firstId, "first"));
+    expect(await first).toBe("first");
+    await waitFor(() => transports[0]!.sent.length === 2);
+    const secondId = transports[0]!.requestId(1);
+    transports[0]!.respond(makeStartedEnvelopeV1(secondId));
+    transports[0]!.respond(makeResultEnvelopeV1(secondId, "second"));
+    expect(await second).toBe("second");
+    await pool.shutdown();
+  });
+
+  test("rejects a terminal response that arrives before acknowledgement", async () => {
+    const { pool, transports } = createHarness();
+    const pending = pool.submit({
+      userId: "u",
+      operation: "replace",
+      payload: { value: "unordered" },
+    });
+    await waitFor(() => (transports[0]?.sent.length ?? 0) === 1);
+    transports[0]!.respond(makeResultEnvelopeV1(transports[0]!.requestId(), "unordered"));
+    const error = await pending.catch((caught) => caught);
+    expect(error).toMatchObject({ code: "worker_malformed" });
+    await pool.shutdown();
   });
 });

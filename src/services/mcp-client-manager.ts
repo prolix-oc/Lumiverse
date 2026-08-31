@@ -28,6 +28,20 @@ interface McpClientEntry {
   userId: string;
 }
 
+function serializeMcpContentBlock(content: unknown): string {
+  if (
+    content &&
+    typeof content === "object" &&
+    "type" in content &&
+    content.type === "text" &&
+    "text" in content &&
+    typeof content.text === "string"
+  ) {
+    return content.text;
+  }
+  return JSON.stringify(content) ?? String(content);
+}
+
 interface DisconnectOptions {
   reason?: string;
   clearReconnect?: boolean;
@@ -262,43 +276,85 @@ class McpClientManager {
     serverId: string,
     toolName: string,
     args: Record<string, unknown>,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    signal?: AbortSignal,
   ): Promise<string> {
     const entry = this.clients.get(this.key(userId, serverId));
     if (!entry) throw new Error(`MCP server not connected: ${serverId}`);
+    if (signal?.aborted) {
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
 
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    const requestController = new AbortController();
+    const abortRequest = (reason?: unknown): void => {
+      if (!requestController.signal.aborted) {
+        requestController.abort(
+          reason ??
+            signal?.reason ??
+            new DOMException("Aborted", "AbortError"),
+        );
+      }
+    };
+
+    let abortReject!: (reason: unknown) => void;
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortReject = reject;
+    });
+    const onAbort = (): void => {
+      const reason =
+        signal?.reason ?? new DOMException("Aborted", "AbortError");
+      abortRequest(reason);
+      abortReject(reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    let timeoutReject!: (reason: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutReject = reject;
+    });
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      abortRequest(new Error("MCP tool request timed out"));
+      timeoutReject(new Error(`MCP tool "${toolName}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     try {
-      const resultPromise = entry.client.callTool({ name: toolName, arguments: args });
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`MCP tool "${toolName}" timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      });
-
-      const result = await Promise.race([resultPromise, timeoutPromise]);
+      const resultPromise = entry.client.callTool(
+        { name: toolName, arguments: args },
+        undefined,
+        {
+          signal: requestController.signal,
+          maxTotalTimeout: timeoutMs,
+        },
+      );
+      const result = await Promise.race([
+        resultPromise,
+        timeoutPromise,
+        abortPromise,
+      ]);
 
       if (result.isError) {
         const errContent = Array.isArray(result.content)
-          ? result.content.map((c: any) => c.text || JSON.stringify(c)).join("\n")
+          ? result.content.map((content) => serializeMcpContentBlock(content)).join("\n")
           : String(result.content);
         throw new Error(`MCP tool error: ${errContent}`);
       }
 
       // Serialize content blocks to string
       if (Array.isArray(result.content)) {
-        return result.content
-          .map((c: any) => {
-            if (c.type === "text") return c.text;
-            return JSON.stringify(c);
-          })
-          .join("\n");
+        return result.content.map((content) => serializeMcpContentBlock(content)).join("\n");
       }
 
-      return typeof result.content === "string" ? result.content : JSON.stringify(result.content);
-    } catch (err: any) {
-      if (err?.message?.includes("timed out after")) {
+      return typeof result.content === "string"
+        ? result.content
+        : JSON.stringify(result.content);
+    } catch (err: unknown) {
+      const message =
+        err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : undefined;
+      if (timedOut || message?.includes("timed out after")) {
         console.warn(`[MCP] Tool "${toolName}" timed out on server ${serverId}; recycling connection`);
         await this.disconnect(userId, serverId, {
           reason: "timeout",
@@ -309,7 +365,8 @@ class McpClientManager {
       }
       throw err;
     } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 

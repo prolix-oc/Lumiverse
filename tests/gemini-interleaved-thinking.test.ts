@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GoogleProvider } from "../src/llm/providers/google";
 import { GoogleVertexProvider } from "../src/llm/providers/google-vertex";
+import { INVALID_TOOL_ARGUMENTS } from "../src/llm/tool-arguments";
 import { buildInlineToolContinuation } from "../src/services/inline-tool-continuation";
 import type { GenerationRequest, LlmMessage } from "../src/llm/types";
 
@@ -125,6 +126,62 @@ describe("Gemini replays thought_signature on continuation", () => {
         const frPart = userTurn.parts.find((p: any) => p.functionResponse);
         expect(frPart.functionResponse.name).toBe("search");
         expect(frPart.functionResponse.response).toMatchObject({ output: "the answer" });
+      },
+    );
+  });
+
+  test("serializes malformed replay arguments as an empty object", async () => {
+    const [assistantMsg, toolMsg] = buildInlineToolContinuation({
+      structured: true,
+      legacyAssistantOutput: "",
+      roundContent: "",
+      roundReasoning: "",
+      toolCalls: [
+        {
+          name: "agent_delegate",
+          args: INVALID_TOOL_ARGUMENTS,
+          call_id: "bad-call",
+        },
+      ],
+      results: [
+        {
+          callId: "bad-call",
+          qualifiedName: "agent_delegate",
+          toolName: "agent_delegate",
+          toolDisplayName: "Delegate",
+          result: '{"status":"error","errorCode":"invalid_arguments"}',
+        },
+      ],
+    });
+
+    await withMockedFetch(
+      {
+        candidates: [
+          {
+            content: { parts: [{ text: "done" }] },
+            finishReason: "STOP",
+          },
+        ],
+      },
+      async (getRequestBody) => {
+        await google.generate("key", "https://x", {
+          messages: [
+            { role: "user", content: "delegate" },
+            assistantMsg,
+            toolMsg,
+          ],
+          model: "gemini-3-pro",
+          parameters: {},
+          tools: [{ name: "agent_delegate", description: "", parameters: {} }],
+        });
+        const body = getRequestBody();
+        const functionCall = body.contents
+          .flatMap((content: any) => content.parts)
+          .find((part: any) => part.functionCall)?.functionCall;
+        expect(functionCall).toMatchObject({
+          name: "agent_delegate",
+          args: {},
+        });
       },
     );
   });

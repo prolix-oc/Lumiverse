@@ -36,13 +36,11 @@ describe('InputArea edit-and-send contract', () => {
 
   test('edit-and-send lane does not import InputArea or call startGeneration', () => {
     const card = readFileSync(join(here, '../../hooks/useMessageCard.ts'), 'utf8')
-    const swipe = readFileSync(join(here, '../../hooks/useSwipeAction.ts'), 'utf8')
     const api = readFileSync(join(here, '../../api/chats.ts'), 'utf8')
     const inputArea = readFileSync(join(here, 'InputArea.tsx'), 'utf8')
 
     expect(card).not.toMatch(/startGeneration/)
     expect(card).not.toMatch(/from ['"]@\/components\/chat\/InputArea['"]/)
-    expect(swipe).not.toMatch(/startGeneration/)
     expect(api).toContain('edit-and-send')
     expect(inputArea).not.toMatch(/editAndSend|edit-and-send/)
   })

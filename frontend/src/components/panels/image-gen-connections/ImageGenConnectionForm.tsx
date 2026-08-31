@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import type { RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import ModelCombobox from '../connection-manager/ModelCombobox'
@@ -9,6 +10,7 @@ import type {
   ImageGenConnectionProfile,
   CreateImageGenConnectionInput,
 } from '@/types/api'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import styles from '../ConnectionManager.module.css'
 
 interface Props {
@@ -16,10 +18,13 @@ interface Props {
   profile?: ImageGenConnectionProfile
   onSave: (input: CreateImageGenConnectionInput) => void
   onCancel: () => void
+  onReview?: () => Promise<void> | void
+  focusTargetRef?: RefObject<HTMLElement | null>
 }
 
-export default function ImageGenConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+export default function ImageGenConnectionForm({ providers, profile, onSave, onCancel, onReview, focusTargetRef }: Props) {
   const { t } = useTranslation('panels')
+  const reviewRequired = profile?.review_required === true
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'google_gemini')
   const [apiKey, setApiKey] = useState('')
@@ -52,6 +57,7 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
   const isDynamicModelList = capabilities?.modelListStyle !== 'static'
 
   const fetchModels = useCallback(async () => {
+    if (reviewRequired) return
     setModelsLoading(true)
     try {
       const result = await imageGenConnectionsApi.previewModels({
@@ -66,7 +72,7 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, profile?.id, provider])
+  }, [apiKey, apiUrl, profile?.id, provider, reviewRequired])
 
   useEffect(() => {
     if (profile?.id && capabilities?.modelListStyle !== 'static') {
@@ -167,9 +173,10 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
       is_default: isDefault,
     })
   }, [name, provider, apiKey, apiUrl, model, isDefault, onSave])
-
   return (
     <div className={styles.form}>
+      {profile && <ConnectionReviewStatus profile={profile} onReview={onReview ?? (() => undefined)} focusTargetRef={focusTargetRef} />}
+      <fieldset disabled={reviewRequired} style={{ border: 0, padding: 0, margin: 0 }}>
       <FormField label={t('connectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('connectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
@@ -231,6 +238,7 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('imageGenConnectionForm.setAsDefault')} />
       </FormField>
 
+      </fieldset>
       <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('connectionForm.cancel')}</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>

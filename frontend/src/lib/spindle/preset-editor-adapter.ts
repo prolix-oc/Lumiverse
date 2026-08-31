@@ -5,7 +5,7 @@ import type {
   PromptVariableValuesDTO,
 } from 'lumiverse-spindle-types'
 import type { Preset } from '@/types/api'
-import type { LoomPreset, PromptBlock, PromptVariableDef } from '@/lib/loom/types'
+import type { LoomPreset, PromptBlock } from '@/lib/loom/types'
 import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
 import { cloneLoomValue, cloneUnvalidatedLoomGraph, HOST_ONLY_BLOCK_FIELDS, LOOM_DTO_LIMITS } from './loom-dto'
 import type { SpindlePresetEditorDraft } from './preset-editor-types'
@@ -391,13 +391,18 @@ function mergeHostBlockFields(current: PromptBlock | undefined, block: PromptBlo
 }
 
 export function toPresetEditorDraft(preset: LoomPreset): SpindlePresetEditorDraft {
+  const detached = cloneUnvalidatedLoomGraph({
+    blocks: preset.blocks,
+    promptVariableValues: {},
+  })
+  // Validate private sealed provenance before projecting it out of the public draft.
   const raw = marshalUpdate(preset)
   const metadata = structuredClone(raw.metadata ?? {}) as Record<string, unknown>
   delete metadata.promptVariables
   return {
     id: preset.id,
     name: preset.name,
-    blocks: structuredClone(projectPublicBlocks(raw.prompt_order ?? [], 'preset.prompt_order')),
+    blocks: structuredClone(projectPublicBlocks(detached.blocks, 'preset.blocks')),
     parameters: structuredClone(raw.parameters ?? {}),
     prompts: structuredClone(raw.prompts ?? {}),
     metadata,
@@ -470,17 +475,28 @@ export function applyPresetEditorDraft(
     return mergeHostBlockFields(currentBlocksById.get(block.id)?.[occurrence], block)
   })
   const now = Date.now()
+  const metadata: Record<string, unknown> = {
+    ...structuredClone(draftMetadata),
+    promptVariables: structuredClone(detached.promptVariableValues),
+  }
+  delete metadata.portableSealedPreset
+  if (current.portableSealedPreset) {
+    metadata.portableSealedPreset = structuredClone(current.portableSealedPreset)
+  }
   const raw: Preset = {
     id: current.id,
     name: (draftName as string).trim(),
     provider: 'loom',
+    engine: current.engine,
     parameters: structuredClone(draftParameters),
     prompt_order: blocks,
     prompts: structuredClone(draftPrompts),
-    metadata: {
-      ...structuredClone(draftMetadata),
-      promptVariables: structuredClone(detached.promptVariableValues),
-    },
+    metadata,
+    agent_config: structuredClone(current.agentConfig),
+    agent_config_revision: current.agentConfigRevision,
+    agent_config_review: structuredClone(current.agentConfigReview),
+    agent_slot_bindings: structuredClone(current.agentSlotBindings),
+    agent_task_templates: structuredClone(current.agentTaskTemplates),
     created_at: current.createdAt,
     ...(typeof current.cacheRevision === 'number' ? { cache_revision: current.cacheRevision } : {}),
     updated_at: now,

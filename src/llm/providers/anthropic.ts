@@ -1,6 +1,15 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
+import {
+  createBoundedSseReader,
+  ProviderProtocolError,
+  ProviderResponseTooLargeError,
+  PROVIDER_STREAM_LIMITS,
+  fetchWithPreflightAbort,
+  readJsonWithAbort,
+  yieldToEventLoop,
+} from "../stream-utils";
+import { AGENT_PROVIDER_REASONING_CARRIER_MAX_BYTES } from "../../services/agent-runtime-accounting";
 import {
   getTextContent,
   type GenerationUsage,
@@ -12,6 +21,7 @@ import {
   type LlmMessagePart,
   type LlmThinkingBlock,
 } from "../types";
+import { parseModelToolArguments } from "../tool-arguments";
 import {
   fetchProviderJson,
   parseProviderErrorBody,
@@ -44,6 +54,12 @@ export class AnthropicProvider implements LlmProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "anthropic",
+    toolCalling: true,
+    requiredToolChoice: true,
+    nativeToolContinuation: true,
+    toolContinuationMode: "native",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
     // Anthropic preserves reasoning across tool calls via native `thinking`
     // blocks (with opaque signatures) replayed before each turn's `tool_use`.
     // formatContent re-injects them and buildBody sends the interleaved-thinking
@@ -129,17 +145,28 @@ export class AnthropicProvider implements LlmProvider {
    * non-streaming response `content` array, preserving order. These are opaque
    * and must be replayed verbatim on tool-use continuations.
    */
-  protected collectThinkingBlocks(blocks: any[]): LlmThinkingBlock[] {
+  protected collectThinkingBlocks(
+    blocks: any[],
+    displaySuppressed = false,
+  ): LlmThinkingBlock[] {
     const out: LlmThinkingBlock[] = [];
     for (const block of blocks) {
+      if (block?.display_suppressed !== undefined) {
+        throw new ProviderProtocolError("Anthropic thinking provenance is provider-authored");
+      }
       if (block?.type === "thinking") {
         out.push({
           type: "thinking",
           thinking: block.thinking || "",
-          ...(block.signature ? { signature: block.signature } : {}),
+          ...(block.signature !== undefined ? { signature: block.signature } : {}),
+          ...(displaySuppressed ? { display_suppressed: true as const } : {}),
         });
       } else if (block?.type === "redacted_thinking") {
-        out.push({ type: "redacted_thinking", data: block.data });
+        out.push({
+          type: "redacted_thinking",
+          data: block.data,
+          ...(displaySuppressed ? { display_suppressed: true as const } : {}),
+        });
       }
     }
     return out;
@@ -208,18 +235,104 @@ export class AnthropicProvider implements LlmProvider {
     return normalized;
   }
 
-  private buildUsage(data: any): GenerationUsage | undefined {
-    if (!data?.usage) return undefined;
-    const inputTokens =
-      (data.usage.input_tokens || 0) +
-      (data.usage.cache_read_input_tokens || 0) +
-      (data.usage.cache_creation_input_tokens || 0);
-    const outputTokens = data.usage.output_tokens || 0;
+  private validateUsage(
+    value: unknown,
+    context: string,
+    requiredFields: readonly string[] = [],
+  ): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new ProviderProtocolError(`${context} is malformed`);
+    }
+    const usage = value as Record<string, unknown>;
+    const tokenFields = [
+      "input_tokens",
+      "cache_read_input_tokens",
+      "cache_creation_input_tokens",
+      "output_tokens",
+    ];
+    for (const field of tokenFields) {
+      const tokenValue = usage[field];
+      if (
+        tokenValue !== undefined &&
+        (!Number.isSafeInteger(tokenValue) || (tokenValue as number) < 0)
+      ) {
+        throw new ProviderProtocolError(`${context}.${field} is not a safe nonnegative integer`);
+      }
+    }
+    for (const field of requiredFields) {
+      if (!Number.isSafeInteger(usage[field]) || (usage[field] as number) < 0) {
+        throw new ProviderProtocolError(`${context}.${field} is missing or malformed`);
+      }
+    }
+    return usage;
+  }
+
+  private sumUsageTokens(
+    usage: Record<string, unknown>,
+    fields: readonly string[],
+    context: string,
+  ): number {
+    let total = 0;
+    for (const field of fields) {
+      const value = usage[field];
+      if (value === undefined) continue;
+      const next = total + (value as number);
+      if (!Number.isSafeInteger(next)) {
+        throw new ProviderProtocolError(`${context} exceeds safe integer range`);
+      }
+      total = next;
+    }
+    return total;
+  }
+
+  private reserveCarrierBytes(
+    currentBytes: number,
+    fragment: string,
+    label: string,
+  ): number {
+    const fragmentBytes = Buffer.byteLength(fragment, "utf8");
+    const nextBytes = currentBytes + fragmentBytes;
+    if (
+      !Number.isSafeInteger(nextBytes) ||
+      nextBytes > AGENT_PROVIDER_REASONING_CARRIER_MAX_BYTES
+    ) {
+      throw new ProviderResponseTooLargeError(
+        `Anthropic ${label} exceeded its bounded opaque carrier`,
+        AGENT_PROVIDER_REASONING_CARRIER_MAX_BYTES,
+        nextBytes,
+      );
+    }
+    return nextBytes;
+  }
+
+  private buildUsage(data: unknown): GenerationUsage {
+    if (!data || typeof data !== "object" || Array.isArray(data) || !("usage" in data)) {
+      throw new ProviderProtocolError("Anthropic usage is missing or malformed");
+    }
+    const usageValue = data.usage;
+    if (usageValue === undefined) {
+      throw new ProviderProtocolError("Anthropic usage is missing or malformed");
+    }
+    const usage = this.validateUsage(
+      usageValue,
+      "Anthropic usage",
+      ["input_tokens", "output_tokens"],
+    );
+    const inputTokens = this.sumUsageTokens(
+      usage,
+      ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"],
+      "Anthropic input token usage",
+    );
+    const outputTokens = usage.output_tokens as number;
+    const totalTokens = inputTokens + outputTokens;
+    if (!Number.isSafeInteger(totalTokens)) {
+      throw new ProviderProtocolError("Anthropic total token usage exceeds safe integer range");
+    }
     return {
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
-      total_tokens: inputTokens + outputTokens,
-      provider_raw: { ...data.usage },
+      total_tokens: totalTokens,
+      provider_raw: { ...usage },
     };
   }
 
@@ -229,10 +342,22 @@ export class AnthropicProvider implements LlmProvider {
     rawUsage?: Record<string, unknown>,
   ): GenerationUsage | undefined {
     if (!inputTokens && !outputTokens && !rawUsage) return undefined;
+    if (
+      !Number.isSafeInteger(inputTokens) ||
+      inputTokens < 0 ||
+      !Number.isSafeInteger(outputTokens) ||
+      outputTokens < 0
+    ) {
+      throw new ProviderProtocolError("Anthropic streaming usage is malformed");
+    }
+    const totalTokens = inputTokens + outputTokens;
+    if (!Number.isSafeInteger(totalTokens)) {
+      throw new ProviderProtocolError("Anthropic total token usage exceeds safe integer range");
+    }
     return {
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
-      total_tokens: inputTokens + outputTokens,
+      total_tokens: totalTokens,
       provider_raw: rawUsage,
     };
   }
@@ -253,7 +378,11 @@ export class AnthropicProvider implements LlmProvider {
     }, request.signal);
 
     if (!res.ok) {
-      const rawBody = await readBoundedText(res);
+      const rawBody = await readBoundedText(
+        res,
+        request.signal,
+        request.receiveLimitBytes,
+      );
       this.logSystemValidationError(body, rawBody);
       const parsed = parseProviderErrorBody(rawBody);
       throw new ProviderRequestError({
@@ -266,38 +395,97 @@ export class AnthropicProvider implements LlmProvider {
       });
     }
 
-    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
-    const blocks = data.content || [];
+    const data = (await readJsonWithAbort<any>(res, request.signal, request.receiveLimitBytes)) as any;
+    if (!data || typeof data !== "object" || !Array.isArray(data.content)) {
+      throw new ProviderProtocolError("Anthropic response content is malformed");
+    }
+    if (typeof data.stop_reason !== "string") {
+      throw new ProviderProtocolError("Anthropic stop_reason is malformed");
+    }
+    const blocks = data.content;
+    if (blocks.length > PROVIDER_STREAM_LIMITS.maxCalls * 4) {
+      throw new ProviderResponseTooLargeError("Anthropic content block count exceeded its limit", PROVIDER_STREAM_LIMITS.maxCalls * 4, blocks.length);
+    }
     let textContent = "";
     let thinkingContent = "";
+    let reasoningBytes = 0;
+    const seenIds = new Set<string>();
+    const toolUseBlocks: any[] = [];
     for (const block of blocks) {
-      if (block?.type === "text") {
-        textContent += block.text || "";
-      } else if (block?.type === "thinking") {
-        if (suppressThinking) {
-          textContent += block.thinking || "";
-        } else {
-          thinkingContent += block.thinking || "";
+      if (!block || typeof block !== "object" || typeof block.type !== "string") {
+        throw new ProviderProtocolError("Anthropic content block is malformed");
+      }
+      if (block.type === "text") {
+        if (typeof block.text !== "string") throw new ProviderProtocolError("Anthropic text block is malformed");
+        textContent += block.text;
+      } else if (block.type === "thinking") {
+        if (typeof block.thinking !== "string") throw new ProviderProtocolError("Anthropic thinking block is malformed");
+        if (block.signature !== undefined && typeof block.signature !== "string") {
+          throw new ProviderProtocolError("Anthropic thinking signature is malformed");
         }
+        reasoningBytes = this.reserveCarrierBytes(
+          reasoningBytes,
+          block.thinking,
+          "thinking",
+        );
+        reasoningBytes = this.reserveCarrierBytes(
+          reasoningBytes,
+          block.signature || "",
+          "thinking signature",
+        );
+        if (suppressThinking) textContent += block.thinking;
+        else thinkingContent += block.thinking;
+      } else if (block.type === "redacted_thinking") {
+        if (typeof block.data !== "string") throw new ProviderProtocolError("Anthropic redacted thinking block is malformed");
+        reasoningBytes = this.reserveCarrierBytes(
+          reasoningBytes,
+          block.data,
+          "redacted thinking",
+        );
+      } else if (block.type === "tool_use") {
+        if (toolUseBlocks.length >= PROVIDER_STREAM_LIMITS.maxCalls) {
+          throw new ProviderResponseTooLargeError("Anthropic tool call count exceeded its limit", PROVIDER_STREAM_LIMITS.maxCalls, toolUseBlocks.length + 1);
+        }
+        if (typeof block.id !== "string" || block.id.length === 0 || seenIds.has(block.id)) {
+          throw new ProviderProtocolError("Anthropic tool_use requires a unique native ID");
+        }
+        if (typeof block.name !== "string" || block.name.length === 0) {
+          throw new ProviderProtocolError("Anthropic tool_use requires a name");
+        }
+        if (block.input === undefined || !block.input || typeof block.input !== "object" || Array.isArray(block.input)) {
+          throw new ProviderProtocolError("Anthropic tool_use input is malformed");
+        }
+        const argBytes = Buffer.byteLength(JSON.stringify(block.input), "utf8");
+        if (argBytes > PROVIDER_STREAM_LIMITS.maxArgumentsBytes) {
+          throw new ProviderResponseTooLargeError("Anthropic tool arguments exceeded their bounded carrier", PROVIDER_STREAM_LIMITS.maxArgumentsBytes, argBytes);
+        }
+        seenIds.add(block.id);
+        toolUseBlocks.push(block);
+      } else {
+        throw new ProviderProtocolError("Anthropic response contains an unsupported content block");
       }
     }
 
-    const toolUseBlocks = blocks.filter((c: any) => c.type === "tool_use");
     const toolCalls: ToolCallResult[] | undefined =
       toolUseBlocks.length > 0
-        ? toolUseBlocks.map((c: any) => ({
-            name: c.name,
-            args: c.input ?? {},
-            call_id: c.id,
+        ? toolUseBlocks.map((block) => ({
+            name: block.name,
+            args: parseModelToolArguments(block.input),
+            call_id: block.id,
           }))
         : undefined;
+    const stopReason = data.stop_reason;
+    if (toolCalls && stopReason !== "tool_use") {
+      throw new ProviderProtocolError("Anthropic stop_reason does not match tool_use content");
+    }
+    if (!toolCalls && stopReason === "tool_use") {
+      throw new ProviderProtocolError("Anthropic tool_use stop has no tool blocks");
+    }
 
-    // Capture native thinking blocks (with signatures) so the caller can replay
-    // them on tool-use continuations — required for interleaved thinking. Not
-    // collected when thinking is suppressed (it was merged into text above).
-    const thinkingBlocks = suppressThinking
-      ? []
-      : this.collectThinkingBlocks(blocks);
+    const thinkingBlocks = this.collectThinkingBlocks(blocks, suppressThinking);
+    // them on tool-use continuations — required for interleaved thinking. The
+    // display suppression setting only controls reasoning presentation; it must
+    // not discard the opaque carrier required for protocol replay.
 
     return {
       content: textContent,
@@ -325,7 +513,11 @@ export class AnthropicProvider implements LlmProvider {
     }, request.signal);
 
     if (!res.ok) {
-      const rawBody = await readBoundedText(res);
+      const rawBody = await readBoundedText(
+        res,
+        request.signal,
+        request.receiveLimitBytes,
+      );
       this.logSystemValidationError(body, rawBody);
       const parsed = parseProviderErrorBody(rawBody);
       throw new ProviderRequestError({
@@ -338,187 +530,364 @@ export class AnthropicProvider implements LlmProvider {
       });
     }
 
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    const sse = createBoundedSseReader(res, request.signal, {
+      maxResponseBytes: request.receiveLimitBytes,
+      singleDataLineEvents: true,
+    });
+    let eventCount = 0;
     let streamInputTokens = 0;
     let streamUsageRaw: Record<string, unknown> | undefined;
-    const maybeYield = createCooperativeYielder(64, request.signal);
-
-    // Tool call accumulation — Anthropic streams tool_use as content blocks
-    const pendingToolCalls: { id: string; name: string; inputJson: string }[] =
-      [];
-    let currentToolIdx = -1;
-
-    // Native thinking-block accumulation. Thinking blocks carry the model's
-    // reasoning text plus an opaque `signature` (streamed as a signature_delta
-    // just before content_block_stop). They must be replayed verbatim on
-    // tool-use continuations to keep interleaved thinking intact. Skipped when
-    // thinking is suppressed (deltas are merged into text instead).
+    let activeBlockIndex: number | undefined;
+    let activeBlockType: string | undefined;
+    let lastStartedBlockIndex = -1;
+    const startedBlockIndices = new Set<number>();
+    const openBlockIndices = new Set<number>();
+    const closedBlockIndices = new Set<number>();
+    let sawMessageStart = false;
+    let sawMessageDelta = false;
+    let sawStopReason = false;
+    let sawMessageStop = false;
+    const pendingToolCalls: Array<{ id: string; name: string; inputJson: string; index: number }> = [];
+    const seenIds = new Set<string>();
     const thinkingBlocks: LlmThinkingBlock[] = [];
     let currentThinkingIdx = -1;
+    let reasoningBytes = 0;
 
-    let streamDoneNaturally = false;
-    try {
-      while (true) {
-        const { done, value } = await readWithAbort(reader, request.signal);
-        if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
+    for await (const event of sse) {
+      eventCount += 1;
+      if (eventCount % 64 === 0) await yieldToEventLoop(request.signal);
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          await maybeYield();
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          try {
-            const data = JSON.parse(trimmed.slice(6));
-
-            if (data.type === "message_start" && data.message?.usage) {
-              // Capture input token count from message_start (output tokens arrive in message_delta)
-              const u = data.message.usage;
-              streamUsageRaw = { ...u };
-              streamInputTokens = (u.input_tokens || 0) +
-                                  (u.cache_read_input_tokens || 0) +
-                                  (u.cache_creation_input_tokens || 0);
-            } else if (data.type === "content_block_start") {
-              if (data.content_block?.type === "tool_use") {
-                pendingToolCalls.push({
-                  id: data.content_block.id,
-                  name: data.content_block.name,
-                  inputJson: "",
-                });
-                currentToolIdx = pendingToolCalls.length - 1;
-              } else if (
-                !suppressThinking &&
-                data.content_block?.type === "thinking"
-              ) {
-                thinkingBlocks.push({
-                  type: "thinking",
-                  thinking: data.content_block.thinking || "",
-                  ...(data.content_block.signature
-                    ? { signature: data.content_block.signature }
-                    : {}),
-                });
-                currentThinkingIdx = thinkingBlocks.length - 1;
-              } else if (
-                !suppressThinking &&
-                data.content_block?.type === "redacted_thinking"
-              ) {
-                // redacted_thinking is delivered whole (no deltas).
-                thinkingBlocks.push({
-                  type: "redacted_thinking",
-                  data: data.content_block.data,
-                });
-              }
-            } else if (data.type === "content_block_delta") {
-              if (data.delta?.type === "thinking_delta") {
-                if (suppressThinking) {
-                  yield { token: data.delta.thinking };
-                } else {
-                  if (currentThinkingIdx >= 0) {
-                    thinkingBlocks[currentThinkingIdx].thinking =
-                      (thinkingBlocks[currentThinkingIdx].thinking || "") +
-                      (data.delta.thinking || "");
-                  }
-                  yield { token: "", reasoning: data.delta.thinking };
-                }
-              } else if (
-                data.delta?.type === "signature_delta" &&
-                !suppressThinking
-              ) {
-                // The opaque signature for the current thinking block. Create a
-                // block defensively if none was started (e.g. display:"omitted"
-                // where text deltas may be skipped).
-                if (currentThinkingIdx < 0) {
-                  thinkingBlocks.push({ type: "thinking", thinking: "" });
-                  currentThinkingIdx = thinkingBlocks.length - 1;
-                }
-                thinkingBlocks[currentThinkingIdx].signature =
-                  (thinkingBlocks[currentThinkingIdx].signature || "") +
-                  (data.delta.signature || "");
-              } else if (data.delta?.type === "text_delta") {
-                yield { token: data.delta.text };
-              } else if (
-                data.delta?.type === "input_json_delta" &&
-                currentToolIdx >= 0
-              ) {
-                pendingToolCalls[currentToolIdx].inputJson +=
-                  data.delta.partial_json;
-              }
-            } else if (data.type === "message_delta") {
-              const outputTokens = data.usage?.output_tokens || 0;
-              const usageRaw = data.usage
-                ? { ...(streamUsageRaw || {}), ...data.usage }
-                : streamUsageRaw;
-              const usage = this.buildStreamingUsage(
-                streamInputTokens,
-                outputTokens,
-                usageRaw,
-              );
-
-              const stopReason = data.delta?.stop_reason;
-              if (stopReason) {
-                // Build tool_calls defensively. If the model was cut off
-                // (e.g. stop_reason="max_tokens") mid-input_json, the
-                // accumulated partial_json will not be valid JSON. We MUST
-                // still yield the terminal chunk so the host sees
-                // finish_reason + usage; otherwise worker-host's for-await
-                // exits with finishReasonSeen=false and the generation
-                // silent-vanishes downstream.
-                let toolCalls: ToolCallResult[] | undefined;
-                let toolParseError: string | undefined;
-                if (pendingToolCalls.length > 0) {
-                  toolCalls = pendingToolCalls.map((tc) => {
-                    let parsedArgs: unknown = {};
-                    try {
-                      parsedArgs = JSON.parse(tc.inputJson || "{}");
-                    } catch (e) {
-                      toolParseError = `tool '${tc.name}' (call_id=${tc.id}) had unparseable inputJson (likely truncated by stop_reason=${stopReason}). Raw inputJson length=${tc.inputJson.length}, content=${JSON.stringify(tc.inputJson.slice(0, 200))}. Error: ${(e as Error).message}`;
-                      console.warn(`[lumiverse.anthropic.sse] ${toolParseError}`);
-                      parsedArgs = {
-                        _incomplete: true,
-                        _raw_partial_json: tc.inputJson,
-                        _parse_error: (e as Error).message,
-                      };
-                    }
-                    return {
-                      name: tc.name,
-                      args: parsedArgs as Record<string, unknown>,
-                      call_id: tc.id,
-                    };
-                  });
-                }
-                // When stop_reason=max_tokens with a partially-emitted tool
-                // call, "tool_calls" is misleading because the tool args are
-                // incomplete. Surface the real stop_reason so the agent can
-                // react (e.g. retry with higher max_tokens).
-                const finishReason =
-                  toolCalls && stopReason !== "max_tokens" ? "tool_calls" : stopReason;
-                yield {
-                  token: "",
-                  finish_reason: finishReason,
-                  tool_calls: toolCalls,
-                  thinking_blocks:
-                    thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
-                  usage,
-                };
-              } else if (usage) {
-                yield { token: "", usage };
-              }
-            } else if (data.type === "message_stop") {
-              return;
-            }
-          } catch {
-            // Skip malformed SSE lines
-          }
-        }
+      let data: any;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed Anthropic SSE JSON", { cause: error });
       }
-    } finally {
-      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
+      if (!data || typeof data !== "object" || typeof data.type !== "string") {
+        throw new ProviderProtocolError("Anthropic SSE event is malformed");
+      }
+      if (event.event !== undefined && event.event !== data.type) {
+        throw new ProviderProtocolError("Anthropic SSE event name does not match its payload");
+      }
+
+      switch (data.type) {
+        case "message_start": {
+          if (sawMessageStart || sawMessageStop) {
+            throw new ProviderProtocolError("Anthropic stream emitted an invalid message_start");
+          }
+          const message = data.message;
+          if (!message || typeof message !== "object" || Array.isArray(message)) {
+            throw new ProviderProtocolError("Anthropic message_start message is malformed");
+          }
+          const usage = this.validateUsage(
+            message.usage,
+            "Anthropic message_start usage",
+            ["input_tokens"],
+          );
+          sawMessageStart = true;
+          streamUsageRaw = { ...usage };
+          streamInputTokens = this.sumUsageTokens(
+            usage,
+            ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"],
+            "Anthropic message_start input token usage",
+          );
+          break;
+        }
+        case "content_block_start": {
+          if (!sawMessageStart || sawMessageDelta || sawStopReason || sawMessageStop) {
+            throw new ProviderProtocolError("Anthropic content block started outside message content");
+          }
+          if (!Number.isSafeInteger(data.index) || data.index < 0) {
+            throw new ProviderProtocolError("Anthropic content block has an invalid index");
+          }
+          if (activeBlockIndex !== undefined) {
+            throw new ProviderProtocolError("Anthropic content block started before the active block stopped");
+          }
+          if (
+            data.index !== lastStartedBlockIndex + 1 ||
+            startedBlockIndices.has(data.index)
+          ) {
+            throw new ProviderProtocolError("Anthropic content blocks arrived out of order");
+          }
+          const block = data.content_block;
+          if (!block || typeof block !== "object" || typeof block.type !== "string") {
+            throw new ProviderProtocolError("Anthropic content block is malformed");
+          }
+          if (block.display_suppressed !== undefined) {
+            throw new ProviderProtocolError("Anthropic thinking provenance is provider-authored");
+          }
+          if (!["text", "tool_use", "thinking", "redacted_thinking"].includes(block.type)) {
+            throw new ProviderProtocolError("Anthropic response contains an unsupported content block");
+          }
+          let initialChunk: StreamChunk | undefined;
+          if (block.type === "text") {
+            if (block.text !== undefined && typeof block.text !== "string") {
+              throw new ProviderProtocolError("Anthropic text block is malformed");
+            }
+            if (block.text) initialChunk = { token: block.text };
+            currentThinkingIdx = -1;
+          } else if (block.type === "tool_use") {
+            if (pendingToolCalls.length >= PROVIDER_STREAM_LIMITS.maxCalls) {
+              throw new ProviderResponseTooLargeError(
+                `Anthropic call count exceeded ${PROVIDER_STREAM_LIMITS.maxCalls}`,
+                PROVIDER_STREAM_LIMITS.maxCalls,
+                pendingToolCalls.length + 1,
+              );
+            }
+            if (typeof block.id !== "string" || block.id.length === 0 || seenIds.has(block.id)) {
+              throw new ProviderProtocolError("Anthropic tool_use requires a unique native ID");
+            }
+            if (typeof block.name !== "string" || block.name.length === 0) {
+              throw new ProviderProtocolError("Anthropic tool_use requires a name");
+            }
+            seenIds.add(block.id);
+            pendingToolCalls.push({ id: block.id, name: block.name, inputJson: "", index: data.index });
+            currentThinkingIdx = -1;
+          } else if (block.type === "thinking") {
+            if (block.thinking !== undefined && typeof block.thinking !== "string") {
+              throw new ProviderProtocolError("Anthropic thinking block is malformed");
+            }
+            if (block.signature !== undefined && typeof block.signature !== "string") {
+              throw new ProviderProtocolError("Anthropic thinking signature is malformed");
+            }
+            const initialThinking = block.thinking ?? "";
+            reasoningBytes = this.reserveCarrierBytes(
+              reasoningBytes,
+              initialThinking,
+              "thinking",
+            );
+            reasoningBytes = this.reserveCarrierBytes(
+              reasoningBytes,
+              block.signature ?? "",
+              "thinking signature",
+            );
+            currentThinkingIdx = -1;
+            thinkingBlocks.push({
+              type: "thinking",
+              thinking: initialThinking,
+              ...(block.signature !== undefined ? { signature: block.signature } : {}),
+              ...(suppressThinking ? { display_suppressed: true as const } : {}),
+            });
+            currentThinkingIdx = thinkingBlocks.length - 1;
+            if (initialThinking) {
+              initialChunk = suppressThinking
+                ? { token: initialThinking }
+                : { token: "", reasoning: initialThinking };
+            }
+          } else {
+            if (typeof block.data !== "string") {
+              throw new ProviderProtocolError("Anthropic redacted thinking block is malformed");
+            }
+            reasoningBytes = this.reserveCarrierBytes(
+              reasoningBytes,
+              block.data,
+              "redacted thinking",
+            );
+            currentThinkingIdx = -1;
+            thinkingBlocks.push({
+              type: "redacted_thinking",
+              data: block.data,
+              ...(suppressThinking ? { display_suppressed: true as const } : {}),
+            });
+          }
+          activeBlockIndex = data.index;
+          activeBlockType = block.type;
+          lastStartedBlockIndex = data.index;
+          startedBlockIndices.add(data.index);
+          openBlockIndices.add(data.index);
+          if (initialChunk) yield initialChunk;
+          break;
+        }
+        case "content_block_delta": {
+          if (
+            activeBlockIndex === undefined ||
+            data.index !== activeBlockIndex ||
+            !activeBlockType
+          ) {
+            throw new ProviderProtocolError("Anthropic content block delta references no active block");
+          }
+          const delta = data.delta;
+          if (!delta || typeof delta !== "object" || typeof delta.type !== "string") {
+            throw new ProviderProtocolError("Anthropic content block delta is malformed");
+          }
+          if (delta.type === "thinking_delta") {
+            if (activeBlockType !== "thinking") {
+              throw new ProviderProtocolError("Anthropic thinking delta targets a non-thinking block");
+            }
+            if (typeof delta.thinking !== "string") {
+              throw new ProviderProtocolError("Anthropic thinking delta must be a string");
+            }
+            reasoningBytes = this.reserveCarrierBytes(
+              reasoningBytes,
+              delta.thinking,
+              "thinking",
+            );
+            if (currentThinkingIdx < 0) {
+              throw new ProviderProtocolError("Anthropic thinking delta has no active block");
+            }
+            thinkingBlocks[currentThinkingIdx].thinking =
+              `${thinkingBlocks[currentThinkingIdx].thinking || ""}${delta.thinking}`;
+            if (suppressThinking) {
+              yield { token: delta.thinking };
+            } else {
+              yield { token: "", reasoning: delta.thinking };
+            }
+          } else if (delta.type === "signature_delta") {
+            if (activeBlockType !== "thinking") {
+              throw new ProviderProtocolError("Anthropic signature delta targets a non-thinking block");
+            }
+            if (typeof delta.signature !== "string") {
+              throw new ProviderProtocolError("Anthropic signature delta must be a string");
+            }
+            reasoningBytes = this.reserveCarrierBytes(
+              reasoningBytes,
+              delta.signature,
+              "thinking signature",
+            );
+            if (currentThinkingIdx < 0) {
+              throw new ProviderProtocolError("Anthropic signature delta has no active block");
+            }
+            thinkingBlocks[currentThinkingIdx].signature =
+              `${thinkingBlocks[currentThinkingIdx].signature || ""}${delta.signature}`;
+          } else if (delta.type === "text_delta") {
+            if (activeBlockType !== "text") {
+              throw new ProviderProtocolError("Anthropic text delta targets a non-text block");
+            }
+            if (typeof delta.text !== "string") {
+              throw new ProviderProtocolError("Anthropic text delta must be a string");
+            }
+            yield { token: delta.text };
+          } else if (delta.type === "input_json_delta") {
+            if (activeBlockType !== "tool_use") {
+              throw new ProviderProtocolError("Anthropic input JSON delta targets a non-tool block");
+            }
+            const tool = pendingToolCalls.find((call) => call.index === data.index);
+            if (!tool) {
+              throw new ProviderProtocolError("Anthropic input JSON delta references an unknown tool block");
+            }
+            if (typeof delta.partial_json !== "string") {
+              throw new ProviderProtocolError("Anthropic input JSON delta must be a string");
+            }
+            const deltaBytes = Buffer.byteLength(delta.partial_json, "utf8");
+            if (deltaBytes > PROVIDER_STREAM_LIMITS.maxToolDeltaBytes) {
+              throw new ProviderResponseTooLargeError("Anthropic tool argument delta exceeded its bounded carrier", PROVIDER_STREAM_LIMITS.maxToolDeltaBytes, deltaBytes);
+            }
+            const nextBytes = Buffer.byteLength(tool.inputJson, "utf8") + deltaBytes;
+            if (nextBytes > PROVIDER_STREAM_LIMITS.maxArgumentsBytes) {
+              throw new ProviderResponseTooLargeError("Anthropic tool arguments exceeded their bounded carrier", PROVIDER_STREAM_LIMITS.maxArgumentsBytes, nextBytes);
+            }
+            tool.inputJson += delta.partial_json;
+          } else {
+            throw new ProviderProtocolError("Unknown Anthropic content block delta type");
+          }
+          break;
+        }
+        case "content_block_stop": {
+          if (!Number.isSafeInteger(data.index) || data.index < 0) {
+            throw new ProviderProtocolError("Anthropic content block stop has an invalid index");
+          }
+          if (closedBlockIndices.has(data.index)) {
+            throw new ProviderProtocolError("Anthropic content block stop was duplicated");
+          }
+          if (activeBlockIndex === undefined || data.index !== activeBlockIndex) {
+            throw new ProviderProtocolError("Anthropic content block stop does not match the active block");
+          }
+          openBlockIndices.delete(data.index);
+          closedBlockIndices.add(data.index);
+          activeBlockIndex = undefined;
+          activeBlockType = undefined;
+          currentThinkingIdx = -1;
+          break;
+        }
+        case "message_delta": {
+          if (!sawMessageStart || sawMessageStop || sawStopReason) {
+            throw new ProviderProtocolError("Anthropic message_delta arrived outside the active message");
+          }
+          const delta = data.delta;
+          if (
+            delta !== undefined &&
+            (!delta || typeof delta !== "object" || Array.isArray(delta))
+          ) {
+            throw new ProviderProtocolError("Anthropic message_delta delta is malformed");
+          }
+          const stopReason = delta?.stop_reason;
+          if (openBlockIndices.size > 0 || activeBlockIndex !== undefined) {
+            if (stopReason !== "max_tokens") {
+              throw new ProviderProtocolError("Anthropic message_delta arrived before all content blocks stopped");
+            }
+            openBlockIndices.clear();
+            activeBlockIndex = undefined;
+            activeBlockType = undefined;
+            currentThinkingIdx = -1;
+            pendingToolCalls.length = 0;
+          }
+          const messageUsage = this.validateUsage(
+            data.usage,
+            "Anthropic message_delta usage",
+            ["output_tokens"],
+          );
+          const usageRaw = { ...(streamUsageRaw || {}), ...messageUsage };
+          const outputTokens = this.sumUsageTokens(
+            messageUsage,
+            ["output_tokens"],
+            "Anthropic message_delta output token usage",
+          );
+          const usage = this.buildStreamingUsage(
+            streamInputTokens,
+            outputTokens,
+            usageRaw,
+          );
+          if (stopReason !== undefined && stopReason !== null) {
+            if (typeof stopReason !== "string" || sawStopReason) {
+              throw new ProviderProtocolError("Anthropic stream emitted an invalid or duplicate stop reason");
+            }
+            sawStopReason = true;
+            let toolCalls: ToolCallResult[] | undefined;
+            if (stopReason === "tool_use") {
+              if (pendingToolCalls.length === 0) throw new ProviderProtocolError("Anthropic tool_use stop had no tool blocks");
+              toolCalls = pendingToolCalls.map((tool) => ({
+                name: tool.name,
+                args: parseModelToolArguments(tool.inputJson) as Record<string, unknown>,
+                call_id: tool.id,
+              }));
+            } else if (pendingToolCalls.length > 0) {
+              throw new ProviderProtocolError("Anthropic stream stopped with unresolved tool blocks");
+            }
+            yield {
+              token: "",
+              finish_reason: toolCalls ? "tool_calls" : stopReason,
+              tool_calls: toolCalls,
+              thinking_blocks: thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
+              usage,
+            };
+          } else if (usage) {
+            yield { token: "", usage };
+          }
+          sawMessageDelta = true;
+          break;
+        }
+        case "message_stop":
+          if (
+            !sawMessageStart ||
+            !sawMessageDelta ||
+            !sawStopReason ||
+            sawMessageStop
+          ) {
+            throw new ProviderProtocolError("Anthropic message_stop arrived before a complete terminal message");
+          }
+          if (openBlockIndices.size > 0 || activeBlockIndex !== undefined) {
+            throw new ProviderProtocolError("Anthropic message_stop arrived before all content blocks stopped");
+          }
+          sawMessageStop = true;
+          sse.markTerminal();
+          break;
+        case "ping":
+          break;
+        default:
+          throw new ProviderProtocolError(`Unknown Anthropic SSE event type: ${data.type}`);
+      }
     }
+    if (!sawMessageStop) throw new ProviderProtocolError("Anthropic stream ended without message_stop");
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
@@ -586,31 +955,151 @@ export class AnthropicProvider implements LlmProvider {
             thinking: b.thinking ?? "",
             // The signature is opaque and must be sent back unmodified. Omit it
             // only if absent (shouldn't happen for a captured thinking block).
-            ...(b.signature ? { signature: b.signature } : {}),
+            ...(b.signature !== undefined ? { signature: b.signature } : {}),
           },
     );
   }
 
+  private hasSuppressedDisplayOrigin(
+    blocks: LlmThinkingBlock[] | undefined,
+  ): boolean {
+    if (!blocks?.length) return false;
+    let marked = 0;
+    for (const block of blocks) {
+      if (
+        block.display_suppressed !== undefined &&
+        block.display_suppressed !== true
+      ) {
+        throw new ProviderProtocolError("Anthropic thinking provenance is malformed");
+      }
+      if (block.display_suppressed === true) marked += 1;
+    }
+    if (marked !== 0 && marked !== blocks.length) {
+      throw new ProviderProtocolError("Anthropic thinking provenance is incomplete");
+    }
+    return marked === blocks.length;
+  }
+
+  /**
+   * A thinking-disabled response exposes native thinking text as ordinary
+   * output while retaining its carrier for a possible tool continuation. When
+   * that response is serialized again, remove the display copy that overlaps
+   * the carrier so Anthropic sees the text exactly once.
+   */
+  private stripReplayedThinkingText(
+    content: string,
+    blocks: LlmThinkingBlock[] | undefined,
+  ): string {
+    const carrierText = (blocks ?? [])
+      .filter((block) => block.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("");
+    if (!carrierText || !content) return content;
+    return content.startsWith(carrierText)
+      ? content.slice(carrierText.length)
+      : content;
+  }
+
+  private stripReplayedThinkingParts(
+    parts: LlmMessagePart[],
+    blocks: LlmThinkingBlock[] | undefined,
+  ): LlmMessagePart[] {
+    const carrierText = (blocks ?? [])
+      .filter((block) => block.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("");
+    if (!carrierText) return parts;
+
+    const pending: LlmMessagePart[] = [];
+    const output: LlmMessagePart[] = [];
+    let consumed = 0;
+    let matching = true;
+    const flushPending = () => {
+      output.push(...pending);
+      pending.length = 0;
+    };
+    for (const part of parts) {
+      if (!matching || consumed >= carrierText.length) {
+        output.push(part);
+        continue;
+      }
+      if (part.type !== "text") {
+        flushPending();
+        output.push(part);
+        matching = false;
+        continue;
+      }
+      if (!part.text) {
+        pending.push(part);
+        continue;
+      }
+      const remaining = carrierText.slice(consumed);
+      if (remaining.startsWith(part.text)) {
+        pending.push(part);
+        consumed += part.text.length;
+        if (consumed === carrierText.length) {
+          output.push(...pending.map((candidate) => (
+            candidate.type === "text" ? { ...candidate, text: "" } : candidate
+          )));
+          pending.length = 0;
+          matching = false;
+        }
+        continue;
+      }
+      if (part.text.startsWith(remaining)) {
+        output.push(...pending.map((candidate) => (
+          candidate.type === "text" ? { ...candidate, text: "" } : candidate
+        )));
+        pending.length = 0;
+        output.push({ ...part, text: part.text.slice(remaining.length) });
+        consumed = carrierText.length;
+        matching = false;
+        continue;
+      }
+      flushPending();
+      output.push(part);
+      matching = false;
+    }
+    flushPending();
+    return output;
+  }
+
   /** Format message content for the Anthropic API, handling multipart (vision)
    *  content and replaying native thinking blocks for interleaved thinking. */
-  protected formatContent(m: LlmMessage): string | any[] {
+  protected formatContent(
+    m: LlmMessage,
+    suppressThinking = false,
+  ): string | any[] {
     // Native thinking blocks must be replayed verbatim at the START of the
     // assistant turn, before any text or tool_use blocks. When thinking is
     // active, Anthropic requires the assistant turn to begin with them and
     // rejects tool_use turns that drop them.
-    const thinkingParts =
-      m.role === "assistant" ? this.formatThinkingBlocks(m.thinking_blocks) : [];
+    const nativeThinkingBlocks =
+      m.role === "assistant" ? m.thinking_blocks : undefined;
+    const hasSuppressedDisplayOrigin =
+      this.hasSuppressedDisplayOrigin(nativeThinkingBlocks);
+    const deduplicateThinkingDisplay =
+      suppressThinking && hasSuppressedDisplayOrigin;
+    const thinkingParts = nativeThinkingBlocks
+      ? this.formatThinkingBlocks(nativeThinkingBlocks)
+      : [];
 
     if (typeof m.content === "string") {
+      const content = deduplicateThinkingDisplay
+        ? this.stripReplayedThinkingText(m.content, nativeThinkingBlocks)
+        : m.content;
       const hasCacheControl = !!this.normalizeCacheControl(m.cache_control);
-      if (thinkingParts.length === 0 && !hasCacheControl) return m.content;
-      const textParts = m.content
-        ? [this.applyCacheControl({ type: "text", text: m.content }, m.cache_control)]
+      if (thinkingParts.length === 0 && !hasCacheControl) return content;
+      const textParts = content
+        ? [this.applyCacheControl({ type: "text", text: content }, m.cache_control)]
         : [];
       return [...thinkingParts, ...textParts];
     }
 
-    const parts = m.content.map((part: LlmMessagePart) => {
+    const sourceParts = deduplicateThinkingDisplay
+      ? this.stripReplayedThinkingParts(m.content, nativeThinkingBlocks)
+      : m.content;
+    const parts = sourceParts.map((part: LlmMessagePart) => {
       switch (part.type) {
         case "text":
           return this.applyCacheControl({ type: "text", text: part.text }, part.cache_control);
@@ -742,19 +1231,30 @@ export class AnthropicProvider implements LlmProvider {
     if (!/system(?:\.\d+)?\s*:/i.test(err)) return;
     const systemValue = body?.system;
     console.error("[anthropic] system validation failed", {
+      code: "invalid_request_error",
       model: body?.model,
       systemType: Array.isArray(systemValue) ? "array" : typeof systemValue,
-      systemLength: typeof systemValue === "string" ? systemValue.length : null,
-      systemEscaped: JSON.stringify(systemValue),
-      payloadEscaped: JSON.stringify(body),
+      systemUtf8Bytes:
+        typeof systemValue === "string"
+          ? Buffer.byteLength(systemValue, "utf8")
+          : null,
+      systemBlockCount: Array.isArray(systemValue) ? systemValue.length : null,
+      messageCount: Array.isArray(body?.messages) ? body.messages.length : null,
+      toolCount: Array.isArray(body?.tools) ? body.tools.length : null,
     });
   }
 
-  /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
+  /** Keys that are internal to Lumiverse and should never be sent to APIs. */
   private static readonly INTERNAL_PARAMS = new Set([
     "max_context_length",
     "_include_usage",
     "_streaming",
+  ]);
+
+  /** Tool controls are scrubbed only for host-owned feature modes. */
+  private static readonly TOOL_CONTROL_PARAMS = new Set([
+    "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call",
+    "plugins", "web_search", "google_search", "enable_web_search", "enableSearch",
   ]);
 
   /** Keys explicitly handled by Anthropic's buildBody — excluded from passthrough. */
@@ -771,8 +1271,12 @@ export class AnthropicProvider implements LlmProvider {
   ]);
 
   private buildBody(request: GenerationRequest, stream: boolean): any {
+    if (request.toolMode === "required" && !this.capabilities.requiredToolChoice) {
+      throw new Error("Provider does not support required tool choice");
+    }
     const params = request.parameters || {};
     const omitSampling = this.omitsSamplingParams(request.model);
+    const suppressThinking = this.shouldSuppressThinking(request);
     const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{
       role: "user" | "assistant";
@@ -789,7 +1293,7 @@ export class AnthropicProvider implements LlmProvider {
       sawNonSystem = true;
       normalizedMessages.push({
         role: message.role === "assistant" ? "assistant" : "user",
-        content: this.formatContent(message),
+        content: this.formatContent(message, suppressThinking),
       });
     }
 
@@ -878,16 +1382,47 @@ export class AnthropicProvider implements LlmProvider {
       if (body[key] !== undefined) continue;
       if (AnthropicProvider.HANDLED_PARAMS.has(key)) continue;
       if (AnthropicProvider.INTERNAL_PARAMS.has(key)) continue;
+      if (request.toolMode && AnthropicProvider.TOOL_CONTROL_PARAMS.has(key)) continue;
       if (
         omitSampling &&
         (key === "temperature" || key === "top_p" || key === "top_k")
-      )
+      ) {
         continue;
+      }
       body[key] = params[key];
     }
-
-    // Inline council tools: pass as Anthropic tool_use format
-    if (request.tools && request.tools.length > 0) {
+    // Feature-active modes own all tool controls after custom-body merge.
+    if (request.toolMode === "finalization") {
+      body.tools = [];
+      body.tool_choice = { type: "none" };
+    } else if (request.toolMode === "required") {
+      if (!request.tools || request.tools.length === 0) throw new Error("Required tool mode needs at least one admitted host tool");
+      body.tools = request.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.parameters,
+        ...(this.normalizeCacheControl(t.cache_control)
+          ? { cache_control: this.normalizeCacheControl(t.cache_control) }
+          : {}),
+        strict: false,
+      }));
+      body.tool_choice = { type: "any" };
+    } else if (request.toolMode === "ordinary") {
+      if (request.tools && request.tools.length > 0) {
+        body.tools = request.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.parameters,
+          ...(this.normalizeCacheControl(t.cache_control)
+            ? { cache_control: this.normalizeCacheControl(t.cache_control) }
+            : {}),
+          strict: false,
+        }));
+      } else {
+        delete body.tools;
+        body.tool_choice = { type: "none" };
+      }
+    } else if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((t) => ({
         name: t.name,
         description: t.description,

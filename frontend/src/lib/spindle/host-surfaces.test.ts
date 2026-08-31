@@ -1,195 +1,31 @@
-import { describe, expect, mock, test } from 'bun:test'
-import type { ExtensionCommandState, InputBarActionState } from '@/store/slices/spindle-placement'
+import { expect, test } from 'bun:test'
 
-const COMMANDS = [
-  ['action-new-chat', 'global'],
-  ['action-delete-last-message', 'chat'],
-  ['action-regenerate', 'chat-idle'],
-].map(([id, scope]) => ({
-  id,
-  label: id,
-  description: id,
-  icon: () => null,
-  keywords: id.split('-'),
-    group: 'actions' as const,
-    scope: scope as 'global' | 'chat' | 'chat-idle',
-  run: () => {},
-}))
-
-const testStore = {
-  user: null,
-  drawerTabs: [],
-  extensionCommands: [],
-  inputBarActions: [],
-  pendingWorldBookEditEntryId: null as string | null,
-  activeModal: null as string | null,
-  modalProps: {} as Record<string, unknown>,
-  setPendingWorldBookEditEntryId(id: string | null) {
-    testStore.pendingWorldBookEditEntryId = id
-  },
-  openModal(id: string, props: Record<string, unknown>) {
-    testStore.activeModal = id
-    testStore.modalProps = props
-  },
-}
-
-mock.module('@/lib/commands', () => ({ COMMANDS }))
-mock.module('@/lib/drawer-tab-registry', () => ({
-  DRAWER_TABS: [],
-  extensionTabsToCommands: () => [],
-}))
-mock.module('@/lib/settings-tab-registry', () => ({
-  getVisibleSettingsTabs: () => [],
-  settingsRegistryToCommands: () => [],
-}))
-mock.module('@/router', () => ({ router: { navigate: () => {} } }))
-mock.module('@/store', () => ({
-  useStore: Object.assign(() => testStore, {
-    getState: () => testStore,
-    subscribe: () => () => {},
-  }),
-}))
-mock.module('@/ws/client', () => ({ wsClient: { send: () => {} } }))
-
-const { buildHostSurfaceCatalog, createHostSurfaceAPI } = await import('./host-surfaces')
-
-const drawer = (id: string) => ({ id, tabName: id, tabDescription: `${id} panel`, shortName: id, keywords: [id] }) as any
-const settings = (id: string, role?: 'admin' | 'owner') => ({ id, tabName: id, tabDescription: `${id} settings`, shortName: id, keywords: [id], role }) as any
-
-function input(id: string, extensionId: string, externallyInvocable = true): InputBarActionState {
-  return {
-    id,
-    extensionId,
-    extensionName: extensionId,
-    label: id,
-    enabled: true,
-    externallyInvocable,
-    clickHandlers: new Set(),
-  }
-}
-
-describe('H4 host surface catalog and invocation', () => {
-  test('catalog assembly is deduplicated and keeps route/modal allowlists', () => {
-    const catalog = buildHostSurfaceCatalog({
-      drawerTabs: [drawer('profile'), drawer('profile')],
-      settingsTabs: [settings('voice')],
-      commands: [COMMANDS.find((command) => command.id === 'action-new-chat')!],
-    })
-    expect(catalog.filter((surface) => surface.kind === 'drawer_tab' && surface.id === 'profile')).toHaveLength(1)
-    expect(catalog.filter((surface) => surface.kind === 'route').map((surface) => surface.id)).toEqual([
-      '/', '/chat/:chatId', '/characters', '/characters/:id',
-    ])
-    expect(catalog.filter((surface) => surface.kind === 'modal').map((surface) => surface.id)).toEqual(['character_editor', 'world_book_editor'])
+// Catalog tests replace command, drawer, store, router, and websocket modules.
+// Run the full contract fixture in a child process to prevent mock pollution.
+test('host surface catalog cases pass in an isolated module graph', async () => {
+  const child = Bun.spawn([
+    process.execPath,
+    'test',
+    './src/lib/spindle/host-surfaces.isolated.ts',
+  ], {
+    cwd: `${import.meta.dir}/../../../`,
+    stdout: 'pipe',
+    stderr: 'pipe',
   })
-
-  test('authority is checked per action id and unknown command ids fail closed', () => {
-    const calls: string[] = []
-    const api = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => ['generation'],
-      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
-      runtime: {
-        runCommand: (id) => { calls.push(id) },
-      },
-    })
-    expect(() => api.invoke({ kind: 'command', id: 'action-delete-last-message' })).toThrow('PERMISSION_DENIED:chats')
-    expect(() => api.invoke({ kind: 'command', id: 'not-in-the-map' })).toThrow('HOST_ACTION_UNMAPPED')
-    api.invoke({ kind: 'command', id: 'action-regenerate' })
-    expect(calls).toEqual(['action-regenerate'])
-  })
-
-  test('world-book editor invocation requires permission and forwards the entry target', () => {
-    const calls: Array<[string, string | undefined]> = []
-    const denied = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => [],
-      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
-    })
-    expect(() => denied.invoke(
-      { kind: 'modal', id: 'world_book_editor' },
-      { id: 'book-1', entryId: 'entry-1' },
-    )).toThrow('PERMISSION_DENIED:world_books')
-
-    const allowed = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => ['world_books'],
-      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
-      runtime: {
-        openWorldBookEditor: (id, entryId) => { calls.push([id, entryId]) },
-      },
-    })
-    allowed.invoke(
-      { kind: 'modal', id: 'world_book_editor' },
-      { id: 'book-1', entryId: 'entry-1' },
-    )
-    expect(calls).toEqual([['book-1', 'entry-1']])
-  })
-
-  test('default world-book action opens the native editor at the requested book and entry', () => {
-    testStore.pendingWorldBookEditEntryId = 'stale-entry'
-    testStore.activeModal = null
-    testStore.modalProps = {}
-    const api = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => ['world_books'],
-      getInputs: () => ({ userRole: 'user', inputBarActions: [], extensionCommands: [] }),
-    })
-
-    api.invoke(
-      { kind: 'modal', id: 'world_book_editor' },
-      { id: 'book-1', entryId: 'entry-1' },
-    )
-
-    expect(testStore.activeModal).toBe('worldBookEditor')
-    expect(testStore.modalProps).toEqual({ bookId: 'book-1' })
-    expect(testStore.pendingWorldBookEditEntryId).toBe('entry-1')
-  })
-
-  test('self input actions are free, cross-extension actions require app_manipulation, and opt-out is honored', async () => {
-    const calls: string[] = []
-    const actions = [input('a-action', 'ext-a'), input('b-action', 'ext-b', false)]
-    const api = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => [],
-      getInputs: () => ({ userRole: 'user', inputBarActions: actions, extensionCommands: [] }),
-      runtime: { invokeInputBarAction: (id) => { calls.push(id) } },
-    })
-    await api.invoke({ kind: 'input_bar_action', id: 'a-action' })
-    expect(calls).toEqual(['a-action'])
-    expect(() => api.invoke({ kind: 'input_bar_action', id: 'b-action' })).toThrow('HOST_ACTION_NOT_EXTERNALLY_INVOCABLE')
-
-    const crossApi = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getGrantedPermissions: () => ['app_manipulation'],
-      getInputs: () => ({ userRole: 'user', inputBarActions: [input('b-action', 'ext-b')], extensionCommands: [] }),
-      runtime: { invokeInputBarAction: (id) => { calls.push(id) } },
-    })
-    await crossApi.invoke({ kind: 'input_bar_action', id: 'b-action' })
-    expect(calls).toEqual(['a-action', 'b-action'])
-  })
-
-  test('role-filtered settings remain absent for invocation and snapshot', () => {
-    const api = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      getInputs: () => ({ userRole: 'user', settingsTabs: [settings('operator', 'owner')], inputBarActions: [], extensionCommands: [] }),
-    })
-    expect(api.list(['settings_tab']).some((surface) => surface.id === 'operator')).toBeFalse()
-    expect(() => api.invoke({ kind: 'settings_tab', id: 'operator' })).toThrow('HOST_ACTION_UNAVAILABLE')
-  })
-
-  test('subscriptions and target handlers are disposed with the generation', () => {
-    const teardown: Array<() => void> = []
-    const api = createHostSurfaceAPI({
-      extensionId: 'ext-a',
-      onTeardown: (handler) => { teardown.push(handler); return () => {} },
-      getInputs: () => ({ userRole: 'user', drawerTabs: [drawer('profile')], inputBarActions: [], extensionCommands: [] }),
-    })
-    const events: unknown[] = []
-    api.subscribe((surfaces) => events.push(surfaces))
-    const target = api.registerDeepLinkTarget('lorebook', 'entry', (value) => events.push(value))
-    target()
-    teardown[0]()
-    expect(() => api.list()).toThrow('SPINDLE_FRONTEND_INACTIVE')
-    expect(events).toHaveLength(0)
-  })
-})
+  let timedOut = false
+  const watchdog = setTimeout(() => {
+    timedOut = true
+    child.kill()
+  }, 20_000)
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  clearTimeout(watchdog)
+  const summary = `${stdout}\n${stderr}`
+  expect(timedOut).toBe(false)
+  expect(exitCode).toBe(0)
+  expect(summary).toMatch(/\b[1-9]\d* pass\b/)
+  expect(summary).toMatch(/\b0 fail\b/)
+}, 25_000)

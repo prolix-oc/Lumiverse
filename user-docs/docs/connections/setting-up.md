@@ -26,7 +26,7 @@ This guide walks you through creating your first connection to an AI provider.
 | Field | Description |
 |-------|-------------|
 | **Model** | The model to use — you can type it or select from the model list |
-| **API URL** | Override the default endpoint (useful for proxies or self-hosted models) |
+| **API URL** | Override the provider's default endpoint (useful for proxies or self-hosted models). Leave it blank to use the provider default. |
 | **API Key** | Your provider's API key |
 | **Preset** | A default preset to use with this connection |
 | **Default** | Whether this is your primary connection |

@@ -132,6 +132,160 @@
   font-family: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
 }
 
+.activityPanel,
+.summaryPanel {
+  border-top: 1px solid var(--lcs-glass-border);
+  background: var(--lumiverse-fill-subtle);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.activityList,
+.activityChildren {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.activityItem + .activityItem {
+  margin-top: 8px;
+}
+
+.activityChildren {
+  margin: 8px 0 0 7px;
+  padding-left: 13px;
+  border-left: 1px solid var(--lumiverse-border);
+}
+
+.activityRow {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "icon profile status elapsed"
+    ". detail detail detail";
+  align-items: center;
+  column-gap: 7px;
+  row-gap: 3px;
+  min-width: 0;
+}
+
+.activityStatusIcon {
+  grid-area: icon;
+  display: inline-flex;
+  color: var(--lumiverse-primary-muted);
+}
+
+.activityStatusIcon svg,
+.activityDetail svg,
+.summaryStatus svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.activitySpinner {
+  animation: activity-spin 1s linear infinite;
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.activityProfile {
+  grid-area: profile;
+  min-width: 0;
+  color: var(--lumiverse-text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.activityDetail {
+  grid-area: detail;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.activityStatus {
+  grid-area: status;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+}
+
+.activityElapsed {
+  grid-area: elapsed;
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.activityRow[data-status='succeeded'] .activityStatusIcon,
+.summaryStatus[data-status='succeeded'] {
+  color: var(--lumiverse-success);
+}
+
+.activityRow[data-status='failed'] .activityStatusIcon,
+.summaryStatus[data-status='failed'] {
+  color: var(--lumiverse-danger);
+}
+
+.activityRow[data-status='timed_out'] .activityStatusIcon,
+.summaryStatus[data-status='timed_out'] {
+  color: var(--lumiverse-warning);
+}
+
+.activityRow[data-status='cancelled'] .activityStatusIcon,
+.summaryStatus[data-status='cancelled'] {
+  color: var(--lumiverse-text-dim);
+}
+
+.activityUsage {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--lcs-glass-border);
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.summaryPanel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.summaryStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  color: var(--lumiverse-text-muted);
+  font-weight: 600;
+}
+
+.summaryCounts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px 10px;
+  flex-wrap: wrap;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
 /* ── Prose styles (mirrors MessageContent prose) ── */
 .body p {
   margin: 0 0 0.5em;
@@ -306,6 +460,17 @@
   color: var(--lumiverse-text-dim, rgba(255, 255, 255, 0.45));
 }
 
+.bubble .activityPanel,
+.bubble .summaryPanel {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-fill-heavy);
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono);
+}
+
 :global([data-theme-mode='light']) .bubble .body {
   background: var(--lumiverse-fill-subtle);
   border-color: var(--lumiverse-fill-subtle);
@@ -326,5 +491,34 @@
 
   .bubble {
     margin: 8px 12px 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .summaryPanel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .summaryCounts {
+    justify-content: flex-start;
+  }
+
+  .activityChildren {
+    margin-left: 4px;
+    padding-left: 9px;
+  }
+
+  .activityRow {
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon profile elapsed"
+      ". status status"
+      ". detail detail";
+    align-items: start;
+  }
+
+  .activityUsage {
+    text-align: start;
   }
 }

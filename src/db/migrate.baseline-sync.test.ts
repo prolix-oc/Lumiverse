@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { runMigrations } from "./migrate";
 
 // Hard invariant: a fresh database bootstrapped from baseline.sql must have
 // exactly the same schema as a database built by replaying every migration
@@ -57,14 +58,14 @@ describe("baseline sync", () => {
           .filter((f) => f.endsWith(".sql"))
           .sort();
         expect(files.length).toBeGreaterThan(100);
-        // FK enforcement does not affect recorded schema objects, but table
-        // rebuilds (e.g. extension_grants) need it disabled to avoid cascades
-        // on empty tables anyway; flip globally for the replay.
-        dbB.run("PRAGMA foreign_keys = OFF");
-        for (const file of files) {
-          const sql = await Bun.file(join(dir, file)).text();
-          dbB.run(sql);
-        }
+        // Exercise the same replay semantics as production without triggering
+        // fresh-baseline bootstrap: the sentinel makes this an existing DB,
+        // while the runner still applies every shipped migration in order,
+        // including canonical foreign-key-off and baseline-drift handling.
+        dbB.run("CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
+        dbB.run("INSERT INTO _migrations (name) VALUES ('000_raw_replay_sentinel.sql')");
+        await runMigrations(dbB, dir);
+        dbB.run("DROP TABLE _migrations");
 
         const schemaA = extractSchema(dbA);
         const schemaB = extractSchema(dbB);
@@ -124,6 +125,42 @@ describe("baseline sync", () => {
          VALUES ('g2', 'ext-1', 'providers.embedding.register', 'user:alice')`,
       );
       expect(db.query("SELECT COUNT(*) AS count FROM extension_grants").get()).toEqual({ count: 2 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("baseline carries the bounded WORK segment contract", async () => {
+    const db = new Database(":memory:");
+    try {
+      const baselineSql = await Bun.file(join(import.meta.dir, "baseline.sql")).text();
+      db.run(baselineSql);
+      const tables = db.query(
+        `SELECT name FROM sqlite_schema
+          WHERE type = 'table' AND name LIKE 'agent_work_segment%'
+          ORDER BY name`,
+      ).all() as Array<{ name: string }>;
+      expect(tables.map((row) => row.name)).toEqual([
+        "agent_work_segment_dispatches",
+        "agent_work_segment_recovery",
+        "agent_work_segment_transitions",
+        "agent_work_segments",
+      ]);
+      for (const table of tables) {
+        const columns = db.query(`PRAGMA table_info(${table.name})`).all() as ColumnInfo[];
+        expect(columns.map((column) => column.name)).toContain("schema_version");
+        expect(columns.map((column) => column.name)).toContain("record_complete");
+        expect(columns.map((column) => column.name)).toContain("payload_digest");
+      }
+      const receiptColumns = db.query("PRAGMA table_info(agent_work_workspace_receipts)").all() as ColumnInfo[];
+      for (const required of ["segment_id", "logical_dispatch", "frame_id"]) {
+        expect(receiptColumns.find((column) => column.name === required)?.notnull).toBe(1);
+      }
+      const receiptDispatchIndex = db.query(
+        "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_work_workspace_receipts_dispatch'",
+      ).get() as { sql: string };
+      expect(receiptDispatchIndex.sql).toContain("segment_id, logical_dispatch");
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
     }

@@ -3,7 +3,7 @@ import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { initIdentity } from "../crypto/init";
 import * as svc from "../services/illarin-instance.service";
-import { EXCLUDED_TABLES } from "../services/user-data/table-registry";
+import { getArchiveTableSpec } from "../services/user-data/table-registry";
 import { buildDeclaration, buildDeclarationUpdate } from "./declaration";
 import { getValidAccessToken, handleTerminalUnauthorized } from "./tokens";
 import { refreshTokens, updateInstanceDeclaration, type IllarinFetch, type IllarinRequestOptions } from "./api";
@@ -115,9 +115,9 @@ describe("illarin protocol conformance checklist", () => {
     }
   });
 
-  test("illarin_instance credentials are excluded from export/import", () => {
-    expect(EXCLUDED_TABLES.has("illarin_instance")).toBe(true);
-    expect(EXCLUDED_TABLES.has("illarin_delivery_receipt")).toBe(true);
+  test("illarin credentials are forbidden from export/import", () => {
+    expect(getArchiveTableSpec("illarin_instance")?.kind).toBe("forbidden");
+    expect(getArchiveTableSpec("illarin_delivery_receipt")?.kind).toBe("forbidden");
   });
 
   test("delivery receipts remain pending until a successful acknowledgement", () => {

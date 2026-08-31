@@ -4,13 +4,13 @@
  * deleteTemporaryChats sweep, and the synthetic "Assistant" + persona-less
  * macro environment used during generation.
  */
-
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
 import { join } from "path";
-import { closeDatabase, getDb, initDatabase } from "../src/db/connection";
+import { closeDatabaseAsync, getDb, initDatabase } from "../src/db/connection";
 import * as charactersSvc from "../src/services/characters.service";
 import * as chatsSvc from "../src/services/chats.service";
+import * as embeddingsSvc from "../src/services/embeddings.service";
 import * as personasSvc from "../src/services/personas.service";
 import * as presetsSvc from "../src/services/presets.service";
 import * as settingsSvc from "../src/services/settings.service";
@@ -40,7 +40,8 @@ function createTempChat() {
 
 describe("temporary character-less chats", () => {
   beforeEach(async () => {
-    closeDatabase();
+    spyOn(embeddingsSvc, "deleteChatChunkEmbeddings").mockResolvedValue(undefined);
+    await closeDatabaseAsync();
     initDatabase(":memory:");
     await applyBaseline();
   });

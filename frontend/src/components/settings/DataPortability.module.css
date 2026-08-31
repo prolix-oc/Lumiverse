@@ -28,6 +28,14 @@
   line-height: 1.5;
 }
 
+.schemaVersion {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  margin: 0;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
 .checkboxRow {
   display: flex;
   align-items: center;
@@ -161,4 +169,36 @@
   color: rgb(245, 158, 11);
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
+}
+.jobCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--lumiverse-bg);
+  border: 1px solid var(--lumiverse-border);
+}
+
+.jobHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.jobId {
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono, monospace);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jobMeta {
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }

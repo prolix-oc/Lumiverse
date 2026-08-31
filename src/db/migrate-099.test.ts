@@ -71,6 +71,7 @@ describe("099 character library scope", () => {
       ).toEqual({ count: 1 });
 
       db.run("INSERT INTO characters (id, name) VALUES ('existing', 'Existing')");
+
       expect(db.query("SELECT library_scope FROM characters WHERE id = 'existing'").get()).toEqual({
         library_scope: "mine",
       });

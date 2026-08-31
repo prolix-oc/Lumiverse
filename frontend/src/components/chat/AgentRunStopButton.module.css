@@ -1,0 +1,59 @@
+.wrapper {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--lumiverse-danger-050);
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-danger-015);
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--lumiverse-danger);
+  background: var(--lumiverse-danger-020);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--lumiverse-danger-050);
+  outline-offset: 2px;
+  box-shadow: var(--lumiverse-focus-ring);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.button[data-stop-state="too_late"],
+.button[data-stop-state="terminal"] {
+  border-color: var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+}
+
+.compact .button {
+  padding: 0;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+}

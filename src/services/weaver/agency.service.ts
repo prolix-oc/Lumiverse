@@ -136,7 +136,7 @@ function setAgencyEntriesEnabled(
   const match = new Set([module.governanceComment, module.dataEntryComment]);
   for (const entry of entries) {
     if (match.has(entry.comment) && entry.disabled !== !enabled) {
-      updateEntry(userId, entry.id, { disabled: !enabled });
+      updateEntry(userId, entry.world_book_id, entry.id, { disabled: !enabled });
     }
   }
 }
@@ -184,7 +184,7 @@ export function updateAgency(
   const entries = governanceEntries(userId, character);
   const data = entries.find((e) => e.comment === module.dataEntryComment);
   if (data && data.content !== dataContent) {
-    updateEntry(userId, data.id, { content: dataContent });
+    updateEntry(userId, data.world_book_id, data.id, { content: dataContent });
   }
   setAgencyEntriesEnabled(userId, module, entries, true);
 

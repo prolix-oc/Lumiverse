@@ -7,6 +7,9 @@ export interface ConnectionProfile {
   preset_id: string | null;
   is_default: boolean;
   has_api_key: boolean;
+  /** Imported profiles remain visible but inert until explicitly reviewed. */
+  review_required: boolean;
+  review_code: string | null;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -24,4 +27,11 @@ export interface CreateConnectionProfileInput {
   api_key?: string;
 }
 
-export type UpdateConnectionProfileInput = Partial<CreateConnectionProfileInput>;
+export interface UpdateConnectionProfileInput extends Partial<CreateConnectionProfileInput> {
+  /**
+   * Explicitly acknowledge an imported profile. Ordinary edits must not
+   * reactivate a profile that is still awaiting owner review.
+   */
+  reviewed?: boolean;
+}
+

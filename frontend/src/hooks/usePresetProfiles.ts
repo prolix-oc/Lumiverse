@@ -724,6 +724,7 @@ export function usePresetProfiles(
         coordinator: mutationCoordinator,
         scope,
         operation: () => updatePresetProfilePromptVariables(presetProfilesApi, target, values),
+        authorityCommittedByOperation: true,
         canStart: () => authUserIdRef.current === authUserId
           && presetIdRef.current === presetId
           && contextIsCurrent(),

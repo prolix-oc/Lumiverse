@@ -126,6 +126,7 @@ const storeState = {
   streamingReasoning: '',
   streamingReasoningDuration: null,
   streamingReasoningStartedAt: null,
+  agentActivityRunsByGeneration: {},
   isGroupChat: false,
   beginStreaming,
   startStreaming,

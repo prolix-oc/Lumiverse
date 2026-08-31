@@ -8,7 +8,7 @@ const SOURCE_ROOTS = [
   join(ROOT, "frontend", "src"),
 ];
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
-const TEST_FILE_RE = /\.test\.[cm]?[jt]sx?$/;
+const TEST_FILE_RE = /\.(test|isolated)\.[cm]?[jt]sx?$/;
 const QUEUE_MICROTASK_RE = /\bqueueMicrotask\s*\(/;
 
 function collectOffenders(dir: string, acc: string[]): void {

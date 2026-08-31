@@ -3,7 +3,6 @@ import {
   listCortexSidecarEndpoints,
   type MemoryCortexConfig,
 } from "./config";
-import { getToolChoiceParams } from "./salience-sidecar";
 import { waitForCortexSidecarRpmSlot } from "./sidecar-rpm-gate";
 import {
   providerRegistry,
@@ -236,9 +235,6 @@ export function createCortexSidecarGenerateRawAdapter(options: {
     });
 
     const { quietGenerate } = await import("../generate.service");
-    const toolChoiceParams = opts.tools?.length
-      ? getToolChoiceParams(sidecarProvider)
-      : {};
     const defaultModel = cortexConfig.queryGeneration?.primary?.model
       ?? cortexConfig.sidecar?.model
       ?? null;
@@ -246,7 +242,6 @@ export function createCortexSidecarGenerateRawAdapter(options: {
       temperature: cortexConfig.sidecar?.temperature ?? 0.1,
       top_p: cortexConfig.sidecar?.topP ?? 1.0,
       max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
-      ...toolChoiceParams,
       ...opts.parameters,
     };
     if (defaultModel && sidecarParams.model == null) sidecarParams.model = defaultModel;
@@ -257,6 +252,7 @@ export function createCortexSidecarGenerateRawAdapter(options: {
       parameters: sidecarParams,
       tools: opts.tools,
       signal: opts.signal,
+      ...(opts.tools?.length ? { toolMode: "required" as const } : {}),
     });
 
     return {

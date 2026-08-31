@@ -21,11 +21,23 @@ const {
   stampExtensionRoot,
 } = await import('./extension-root-stamp')
 
+function createAttributeRoot(): Element {
+  const attributes = new Map<string, string>()
+  return {
+    getAttribute(name) {
+      return attributes.get(name) ?? null
+    },
+    setAttribute(name, value) {
+      attributes.set(name, value)
+    },
+  } as unknown as Element
+}
+
 const extensionId = '00000000-0000-0000-0000-000000000001'
 
 describe('extension root stamping', () => {
   test('writes UUID ownership and identifier metadata without making metadata authoritative', () => {
-    const root = document.createElement('section')
+    const root = createAttributeRoot()
     registerExtensionIdentity(extensionId, 'lumiverse_suite')
     stampExtensionRoot(root, extensionId, 'data-spindle-extension-id')
 
@@ -33,7 +45,7 @@ describe('extension root stamping', () => {
     expect(root.getAttribute('data-spindle-ext-id')).toBe('lumiverse_suite')
 
     forgetExtensionIdentity(extensionId)
-    const unloadedRoot = document.createElement('section')
+    const unloadedRoot = createAttributeRoot()
     stampExtensionRoot(unloadedRoot, extensionId, 'data-spindle-ext')
     expect(unloadedRoot.getAttribute('data-spindle-ext')).toBe(extensionId)
     expect(unloadedRoot.getAttribute('data-spindle-ext-id')).toBeNull()

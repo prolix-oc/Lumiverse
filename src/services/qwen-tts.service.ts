@@ -35,7 +35,7 @@ function qwenHeaders(apiKey: string): Record<string, string> {
 }
 
 function requireQwenConnection(userId: string, connectionId: string) {
-  const profile = ttsConnectionsSvc.getConnection(userId, connectionId);
+  const profile = ttsConnectionsSvc.getUsableConnection(userId, connectionId);
   if (!profile) {
     throw new Error("TTS connection not found");
   }

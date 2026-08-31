@@ -13,6 +13,7 @@ import {
 } from './preset-save-coordinator'
 import { unmarshalPreset } from './service'
 import { presetsApi } from '@/api/presets'
+import { getRuntimeAuthorityRevision } from '@/lib/agentRuntimeSelection'
 
 function rawPreset(overrides: Partial<Preset> = {}): Preset {
   return {
@@ -26,12 +27,14 @@ function rawPreset(overrides: Partial<Preset> = {}): Preset {
     created_at: 1,
     updated_at: 2,
     ...overrides,
+    engine: overrides.engine ?? 'classic',
   }
 }
 
 function persistedFromUpdate(presetId: string, input: UpdatePresetInput): Preset {
   return rawPreset({
     id: presetId,
+    engine: input.engine ?? 'classic',
     name: input.name ?? 'Coordinator test',
     parameters: input.parameters ?? {},
     prompt_order: input.prompt_order ?? [],
@@ -98,6 +101,76 @@ describe('preset save coordinator', () => {
     expect(writes[1].prompt_order).toHaveLength(1)
     expect(writes[1].metadata?.promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
   })
+
+  test('commits runtime authority only when the server advances preset revision', async () => {
+    const before = getRuntimeAuthorityRevision()
+    const advanced = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return rawPreset({ ...persistedFromUpdate(presetId, input), cache_revision: 2 })
+      },
+    })
+    const revisionOne = unmarshalPreset(rawPreset({ cache_revision: 1 }))
+    advanced.hydrate(revisionOne)
+    advanced.mutate(revisionOne.id, revisionOne, (preset) => ({ ...preset, name: 'Advanced' }), { immediate: true })
+    await advanced.flush(revisionOne.id)
+    expect(getRuntimeAuthorityRevision()).toBe(before + 1)
+
+    const unchanged = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return rawPreset({ ...persistedFromUpdate(presetId, input), cache_revision: 2 })
+      },
+    })
+    const revisionTwo = unmarshalPreset(rawPreset({ cache_revision: 2 }))
+    unchanged.hydrate(revisionTwo)
+    unchanged.mutate(revisionTwo.id, revisionTwo, (preset) => ({ ...preset, name: 'No-op response' }), { immediate: true })
+    await unchanged.flush(revisionTwo.id)
+    expect(getRuntimeAuthorityRevision()).toBe(before + 1)
+  })
+  test('commits an advanced stale-scope success before suppressing local publication', async () => {
+    const before = getRuntimeAuthorityRevision()
+    let resolveUpdate!: (preset: Preset) => void
+    const pendingUpdate = new Promise<Preset>((resolve) => { resolveUpdate = resolve })
+    const updateStarted = Promise.withResolvers<void>()
+    const coordinator = createPresetSaveCoordinator({
+      async update() {
+        updateStarted.resolve()
+        return pendingUpdate
+      },
+    })
+    const presetId = 'stale-authority-preset'
+    const scopeA = unmarshalPreset(rawPreset({ id: presetId, name: 'Scope A', cache_revision: 1 }))
+    const scopeB = unmarshalPreset(rawPreset({ id: presetId, name: 'Scope B', cache_revision: 9 }))
+
+    coordinator.setScope('user-a')
+    coordinator.hydrate(scopeA)
+    coordinator.mutate(presetId, scopeA, (preset) => ({ ...preset, name: 'Pending A' }), { immediate: true })
+    const flush = coordinator.flush(presetId)
+    await updateStarted.promise
+
+    coordinator.setScope('user-b')
+    let scopeBPublications = 0
+    coordinator.subscribe(presetId, () => { scopeBPublications += 1 })
+    coordinator.hydrate(scopeB)
+    scopeBPublications = 0
+    resolveUpdate(rawPreset({ id: presetId, name: 'Persisted A', cache_revision: 2 }))
+    await flush
+
+    expect(getRuntimeAuthorityRevision()).toBe(before + 1)
+    expect(coordinator.getDraft(presetId)?.name).toBe('Scope B')
+    expect(scopeBPublications).toBe(0)
+  })
+  test('does not commit runtime authority for a failed save', async () => {
+    const before = getRuntimeAuthorityRevision()
+    const coordinator = createPresetSaveCoordinator({
+      async update() { throw new Error('save failed') },
+    })
+    const base = unmarshalPreset(rawPreset({ cache_revision: 1 }))
+    coordinator.hydrate(base)
+    coordinator.mutate(base.id, base, (preset) => ({ ...preset, name: 'Rejected' }), { immediate: true })
+    await expect(coordinator.flush(base.id)).rejects.toThrow('save failed')
+    expect(getRuntimeAuthorityRevision()).toBe(before)
+  })
+
   test('retains same-tick functional block updates over the coordinator draft', async () => {
     const writes: UpdatePresetInput[] = []
     const coordinator = createPresetSaveCoordinator({
@@ -803,353 +876,103 @@ describe('preset save coordinator', () => {
       vi.useRealTimers()
     }
   })
-  test('rebases local edits after a revision conflict before retrying', async () => {
+  test('rejects a stale second client without retrying or overwriting an own save', async () => {
     localStorage.clear()
-    const base = unmarshalPreset(rawPreset({
-      name: 'Base name',
-      metadata: { external: { value: 'base' } },
-      cache_revision: 3,
-    }))
-    const latestPersisted = rawPreset({
-      name: 'Remote name',
-      metadata: {
-        external: { value: 'remote' },
-        remoteOnly: { enabled: true },
-      },
-      cache_revision: 4,
-      updated_at: 5,
-    })
-    const writes: UpdatePresetInput[] = []
-    let updateCalls = 0
-    let getCalls = 0
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    const coordinator = createPresetSaveCoordinator({
-      async update(presetId, input) {
-        writes.push(structuredClone(input))
-        updateCalls += 1
-        if (updateCalls === 1) throw conflict
-        return rawPreset({
-          ...latestPersisted,
-          id: presetId,
-          name: input.name ?? latestPersisted.name,
-          parameters: input.parameters ?? latestPersisted.parameters,
-          prompt_order: input.prompt_order ?? latestPersisted.prompt_order,
-          prompts: input.prompts ?? latestPersisted.prompts,
-          metadata: input.metadata ?? latestPersisted.metadata,
-          cache_revision: 5,
-        })
-      },
-      async get(presetId) {
-        getCalls += 1
-        expect(presetId).toBe(base.id)
-        return latestPersisted
-      },
-    })
-
-    const unsubscribe = coordinator.subscribe(base.id, () => {})
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({ ...preset, name: 'Local name' }),
-      { immediate: true },
-    )
-
-    const saved = await coordinator.flush(base.id)
-    const draft = coordinator.getDraft(base.id)
-
-    expect(getCalls).toBe(1)
-    expect(writes).toHaveLength(2)
-    expect(writes.map((input) => input.expected_cache_revision)).toEqual([3, 4])
-    expect(saved?.name).toBe('Local name')
-    expect(saved?.cacheRevision).toBe(5)
-    expect(draft?.name).toBe('Local name')
-    expect(draft?.passthroughMetadata.external).toEqual({ value: 'remote' })
-    expect(draft?.passthroughMetadata.remoteOnly).toEqual({ enabled: true })
-    unsubscribe()
-    localStorage.clear()
-  })
-
-  test('retries block edits when a revision conflict changed unrelated fields only', async () => {
-    localStorage.clear()
-    const block = {
-      id: 'block-a',
-      name: 'Block A',
-      content: 'base',
-      role: 'system' as const,
-      enabled: true,
-      position: 'pre_history' as const,
-      depth: 0,
-      marker: null,
-      isLocked: false,
-      color: null,
-      injectionTrigger: [],
-    }
-    const base = unmarshalPreset(rawPreset({
-      prompt_order: [block],
+    let canonical = rawPreset({
       cache_revision: 1,
-    }))
-    const latest = rawPreset({
-      name: 'Remote name',
-      prompt_order: [block],
-      cache_revision: 2,
+      metadata: { promptVariables: { fixture: { bank: 'A', nonce: 'original' } } },
+      prompt_order: [{
+        id: 'fixture',
+        name: 'Fixture',
+        content: '',
+        role: 'system',
+        enabled: true,
+        position: 'pre_history',
+        depth: 0,
+        marker: null,
+        isLocked: false,
+        color: null,
+        injectionTrigger: [],
+        characterTagTrigger: [],
+        group: null,
+        categoryMode: null,
+        variables: [
+          { id: 'bank', name: 'bank', label: 'Bank', type: 'text', defaultValue: '' },
+          { id: 'nonce', name: 'nonce', label: 'Nonce', type: 'text', defaultValue: '' },
+        ],
+      }],
     })
-    const conflict = Object.assign(new Error('preset revision conflict'), {
+    const updateCalls = { profileA: 0, profileB: 0 }
+    const conflict = (expected: number) => Object.assign(new Error('preset revision conflict'), {
       status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
+      body: {
+        code: 'PRESET_REVISION_CONFLICT',
+        expected_cache_revision: expected,
+        actual_cache_revision: canonical.cache_revision,
+      },
     })
-    const writes: UpdatePresetInput[] = []
-    let updateCalls = 0
-    const coordinator = createPresetSaveCoordinator({
+    const adapter = (client: keyof typeof updateCalls): PresetSaveAdapter => ({
       async update(presetId, input) {
-        writes.push(structuredClone(input))
-        updateCalls += 1
-        if (updateCalls === 1) throw conflict
-        return rawPreset({
-          ...latest,
-          id: presetId,
-          prompt_order: input.prompt_order ?? latest.prompt_order,
-          cache_revision: 3,
-        })
-      },
-      async get() {
-        return latest
-      },
-    })
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({
-        ...preset,
-        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'local' })),
-      }),
-      { immediate: true },
-    )
-
-    await coordinator.flush(base.id)
-    expect(writes).toHaveLength(2)
-    expect(writes[1].prompt_order?.[0]?.content).toBe('local')
-    localStorage.clear()
-  })
-
-  test('merges non-overlapping block edits after a revision conflict', async () => {
-    localStorage.clear()
-    const firstBlock = {
-      id: 'block-a',
-      name: 'Block A',
-      content: 'base',
-      role: 'system' as const,
-      enabled: true,
-      position: 'pre_history' as const,
-      depth: 0,
-      marker: null,
-      isLocked: false,
-      color: null,
-      injectionTrigger: [],
-    }
-    const base = unmarshalPreset(rawPreset({
-      prompt_order: [firstBlock],
-      cache_revision: 18,
-    }))
-    const latest = rawPreset({
-      prompt_order: [{ ...firstBlock, content: 'remote stash edit' }],
-      cache_revision: 19,
-    })
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    const writes: UpdatePresetInput[] = []
-    let updateCalls = 0
-    const coordinator = createPresetSaveCoordinator({
-      async update(presetId, input) {
-        writes.push(structuredClone(input))
-        updateCalls += 1
-        if (updateCalls === 1) throw conflict
-        return rawPreset({
-          ...latest,
-          id: presetId,
-          prompt_order: input.prompt_order ?? latest.prompt_order,
-          cache_revision: 20,
-        })
-      },
-      async get() {
-        return latest
-      },
-    })
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({
-        ...preset,
-        blocks: preset.blocks.map((block) => (
-          block.id === firstBlock.id ? { ...block, enabled: false } : block
-        )),
-      }),
-      { immediate: true },
-    )
-
-    const saved = await coordinator.flush(base.id)
-
-    expect(writes.map((input) => input.expected_cache_revision)).toEqual([18, 19])
-    expect(writes[1].prompt_order?.map((block) => block.id)).toEqual(['block-a'])
-    expect(writes[1].prompt_order?.[0]).toMatchObject({ content: 'remote stash edit', enabled: false })
-    expect(saved?.blocks).toEqual(writes[1].prompt_order)
-    localStorage.clear()
-  })
-
-  test('surfaces a block conflict instead of replaying a stale array', async () => {
-    localStorage.clear()
-    const baseBlock = {
-      id: 'block-a',
-      name: 'Block A',
-      content: 'base',
-      role: 'system' as const,
-      enabled: true,
-      position: 'pre_history' as const,
-      depth: 0,
-      marker: null,
-      isLocked: false,
-      color: null,
-      injectionTrigger: [],
-    }
-    const remoteBlock = { ...baseBlock, content: 'remote' }
-    const base = unmarshalPreset(rawPreset({
-      prompt_order: [baseBlock],
-      cache_revision: 1,
-    }))
-    const latest = rawPreset({
-      prompt_order: [remoteBlock],
-      cache_revision: 2,
-    })
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    const writes: UpdatePresetInput[] = []
-    const coordinator = createPresetSaveCoordinator({
-      async update(_presetId, input) {
-        writes.push(structuredClone(input))
-        throw conflict
-      },
-      async get() {
-        return latest
-      },
-    })
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({
-        ...preset,
-        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'local' })),
-      }),
-      { immediate: true },
-    )
-
-    await expect(coordinator.flush(base.id)).rejects.toBe(conflict)
-    expect(writes).toHaveLength(1)
-    localStorage.clear()
-  })
-
-  test('uses the post-queue block revision as the retry base', async () => {
-    localStorage.clear()
-    const block = {
-      id: 'block-a',
-      name: 'Block A',
-      content: 'base',
-      role: 'system' as const,
-      enabled: true,
-      position: 'pre_history' as const,
-      depth: 0,
-      marker: null,
-      isLocked: false,
-      color: null,
-      injectionTrigger: [],
-    }
-    const base = unmarshalPreset(rawPreset({
-      prompt_order: [block],
-      cache_revision: 1,
-    }))
-    const firstSaved = rawPreset({
-      ...base,
-      prompt_order: [{ ...block, content: 'first' }],
-      cache_revision: 2,
-    })
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    const writes: UpdatePresetInput[] = []
-    let updateCalls = 0
-    let markFirstStarted!: () => void
-    let resolveFirst!: (preset: Preset) => void
-    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve })
-    const coordinator = createPresetSaveCoordinator({
-      async update(presetId, input) {
-        writes.push(structuredClone(input))
-        updateCalls += 1
-        if (updateCalls === 1) {
-          markFirstStarted()
-          return new Promise<Preset>((resolve) => { resolveFirst = resolve })
+        updateCalls[client] += 1
+        const expected = input.expected_cache_revision ?? 0
+        if (expected !== canonical.cache_revision) throw conflict(expected)
+        canonical = {
+          ...persistedFromUpdate(presetId, input),
+          cache_revision: expected + 1,
         }
-        if (updateCalls === 2) throw conflict
-        return rawPreset({
-          ...firstSaved,
-          id: presetId,
-          prompt_order: input.prompt_order ?? firstSaved.prompt_order,
-          cache_revision: 3,
-        })
-      },
-      async get() {
-        return firstSaved
+        return structuredClone(canonical)
       },
     })
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({
-        ...preset,
-        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'first' })),
-      }),
-      { immediate: true },
-    )
-    await firstStarted
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({
-        ...preset,
-        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'second' })),
-      }),
-      { immediate: true },
-    )
-    resolveFirst(firstSaved)
-    expect(() => coordinator.hydrate(unmarshalPreset(firstSaved))).not.toThrow()
+    const base = unmarshalPreset(canonical)
+    const profileA = createPresetSaveCoordinator(adapter('profileA'))
+    const profileB = createPresetSaveCoordinator(adapter('profileB'))
+    profileA.hydrate(base)
+    profileB.hydrate(base)
 
-    await coordinator.flush(base.id)
-    expect(writes).toHaveLength(3)
-    expect(writes.map((input) => input.expected_cache_revision)).toEqual([1, 2, 2])
-    expect(writes[2].prompt_order?.[0]?.content).toBe('second')
-    const hydrationToken = coordinator.beginHydration(base.id)
-    expect(coordinator.hydrate(unmarshalPreset(firstSaved)).blocks[0]?.content).toBe('second')
-    const newerPersisted = unmarshalPreset(rawPreset({
-      ...firstSaved,
-      name: 'newer',
-      cache_revision: 4,
-      prompt_order: firstSaved.prompt_order?.map((candidate) => ({ ...candidate, content: 'second' })),
-    }))
-    const hydratedNewer = coordinator.hydrate(newerPersisted, hydrationToken)
-    expect(hydratedNewer.name).toBe('newer')
-    expect(hydratedNewer.blocks[0]?.content).toBe('second')
+    profileA.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        promptVariables: { fixture: { bank: 'B', nonce: 'profile-a' } },
+      }),
+      { immediate: true },
+    )
+    const ownSave = await profileA.flush(base.id)
+
+    expect(updateCalls.profileA).toBe(1)
+    expect(ownSave?.cacheRevision).toBe(2)
+    expect(ownSave?.promptVariables).toEqual({ fixture: { bank: 'B', nonce: 'profile-a' } })
+    expect(profileA.hasPendingChanges(base.id)).toBe(false)
+
+    profileB.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        promptVariables: { fixture: { bank: 'A', nonce: 'profile-b-stale' } },
+      }),
+      { immediate: true },
+    )
+    await expect(profileB.flush(base.id)).rejects.toMatchObject({
+      status: 409,
+      body: { code: 'PRESET_REVISION_CONFLICT' },
+    })
+
+    expect(updateCalls.profileB).toBe(1)
+    expect(canonical.metadata?.promptVariables).toEqual({ fixture: { bank: 'B', nonce: 'profile-a' } })
+    expect(profileB.getDraft(base.id)?.promptVariables).toEqual({ fixture: { bank: 'A', nonce: 'profile-b-stale' } })
+    expect(profileB.hasPendingChanges(base.id)).toBe(true)
+
+    const reviewed = profileB.acceptPersisted(unmarshalPreset(canonical))
+    expect(reviewed.promptVariables).toEqual({ fixture: { bank: 'B', nonce: 'profile-a' } })
+    expect(profileB.hasPendingChanges(base.id)).toBe(false)
     localStorage.clear()
   })
+
+
+
+
 
   test('rebases local edits when a stale echo follows clean eviction', () => {
     localStorage.clear()
@@ -1320,143 +1143,7 @@ describe('preset save coordinator', () => {
     localStorage.clear()
   })
 
-  test('does not mutate a recreated entry after an in-flight conflict read', async () => {
-    localStorage.clear()
-    const base = unmarshalPreset(rawPreset({ cache_revision: 1 }))
-    const latest = rawPreset({ name: 'Latest persisted', cache_revision: 2 })
-    const replacement = unmarshalPreset(rawPreset({ name: 'Replacement', cache_revision: 9 }))
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    let updateCalls = 0
-    let getCalls = 0
-    let markUpdateStarted!: () => void
-    let markGetStarted!: () => void
-    let resolveGet!: (preset: Preset) => void
-    let resolveGetRow!: (preset: Preset) => void
-    const updateStarted = new Promise<void>((resolve) => { markUpdateStarted = resolve })
-    const getStarted = new Promise<void>((resolve) => { markGetStarted = resolve })
-    const getFinished = new Promise<void>((resolve) => {
-      resolveGet = (preset) => { resolveGetRow(preset); resolve() }
-    })
-    const coordinator = createPresetSaveCoordinator({
-      async update() {
-        updateCalls += 1
-        markUpdateStarted()
-        throw conflict
-      },
-      async get() {
-        getCalls += 1
-        markGetStarted()
-        return new Promise<Preset>((resolve) => { resolveGetRow = resolve })
-      },
-    })
 
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({ ...preset, name: 'Local name' }),
-      { immediate: true },
-    )
-    await updateStarted
-    await getStarted
-
-    coordinator.remove(base.id)
-    coordinator.subscribe(base.id, () => {})
-    coordinator.hydrate(replacement)
-    resolveGet(latest)
-    await getFinished
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(updateCalls).toBe(1)
-    expect(getCalls).toBe(1)
-    expect(coordinator.getDraft(base.id)?.name).toBe('Replacement')
-    localStorage.clear()
-  })
-  test('keeps conflict-recovered fields against an older tokenless echo', async () => {
-    localStorage.clear()
-    const base = unmarshalPreset(rawPreset({
-      cache_revision: 1,
-      metadata: { description: 'Base description' },
-    }))
-    const latest = rawPreset({
-      cache_revision: 3,
-      metadata: { description: 'Remote description' },
-    })
-    const stale = unmarshalPreset(rawPreset({
-      cache_revision: 2,
-      metadata: { description: 'Stale description' },
-    }))
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    let updateCalls = 0
-    let markRetryStarted!: () => void
-    let rejectRetry!: (error: Error) => void
-    const retryStarted = new Promise<void>((resolve) => { markRetryStarted = resolve })
-    const coordinator = createPresetSaveCoordinator({
-      async update() {
-        updateCalls += 1
-        if (updateCalls === 1) throw conflict
-        markRetryStarted()
-        return new Promise<Preset>((_resolve, reject) => { rejectRetry = reject })
-      },
-      async get() {
-        return latest
-      },
-    })
-
-    coordinator.hydrate(base)
-    coordinator.mutate(base.id, base, (preset) => ({ ...preset, name: 'Local name' }), { immediate: true })
-    await retryStarted
-
-    const echoed = coordinator.hydrate(stale)
-    expect(echoed.name).toBe('Local name')
-    expect(echoed.description).toBe('Remote description')
-    const retryFailure = new Error('retry failed')
-    rejectRetry(retryFailure)
-    await expect(coordinator.flush(base.id)).rejects.toThrow('retry failed')
-    localStorage.clear()
-  })
-
-  test('bounds recoverable revision conflict retries', async () => {
-    localStorage.clear()
-    const base = unmarshalPreset(rawPreset({ cache_revision: 1 }))
-    const latest = rawPreset({ cache_revision: 2 })
-    const conflict = Object.assign(new Error('preset revision conflict'), {
-      status: 409,
-      body: { code: 'PRESET_REVISION_CONFLICT' },
-    })
-    let updateCalls = 0
-    let getCalls = 0
-    const coordinator = createPresetSaveCoordinator({
-      async update() {
-        updateCalls += 1
-        throw conflict
-      },
-      async get() {
-        getCalls += 1
-        return latest
-      },
-    })
-
-    coordinator.hydrate(base)
-    coordinator.mutate(
-      base.id,
-      base,
-      (preset) => ({ ...preset, name: 'Local name' }),
-      { immediate: true },
-    )
-
-    await expect(coordinator.flush(base.id)).rejects.toBe(conflict)
-    expect(updateCalls).toBe(4)
-    expect(getCalls).toBe(3)
-    localStorage.clear()
-  })
   test('isolates durable storage scopes per coordinator instance', () => {
     localStorage.clear()
     const first = createPresetSaveCoordinator({
@@ -1550,5 +1237,53 @@ describe('preset save coordinator', () => {
       presetSaveCoordinator.setScope(null)
       localStorage.clear()
     }
+  })
+  test('uses response-hydrated preset revision without coupling an ordinary save to config CAS', async () => {
+    localStorage.clear()
+    const writes: UpdatePresetInput[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return rawPreset({
+          id: presetId,
+          name: input.name ?? 'Hydrated owner',
+          cache_revision: 8,
+          agent_config_revision: 10,
+        })
+      },
+    })
+    coordinator.setScope('regex-cas-user')
+    const base = unmarshalPreset(rawPreset({
+      id: 'regex-owner-cas',
+      name: 'Before regex mutation',
+      cache_revision: 2,
+      agent_config_revision: 3,
+    }))
+    const published: LoomPreset[] = []
+    const unsubscribe = coordinator.subscribe(base.id, (preset) => published.push(preset))
+    coordinator.hydrate(base)
+    const authority = unmarshalPreset(rawPreset({
+      id: base.id,
+      name: 'After regex mutation',
+      cache_revision: 7,
+      agent_config_revision: 9,
+    }))
+    expect(coordinator.observeAuthority(authority)).toBe(true)
+    expect(published.at(-1)).toMatchObject({ cacheRevision: 7, agentConfigRevision: 9 })
+
+    const hydrated = coordinator.getDraft(base.id)!
+    coordinator.mutate(base.id, hydrated, (preset) => ({ ...preset, description: 'ordinary save' }), { immediate: true })
+    await coordinator.flush(base.id)
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({
+      expected_cache_revision: 7,
+      metadata: { description: 'ordinary save' },
+    })
+    expect(writes[0]).not.toHaveProperty('agent_config')
+    expect(writes[0]).not.toHaveProperty('expected_config_revision')
+    unsubscribe()
+    coordinator.setScope(null)
+    localStorage.clear()
   })
 })

@@ -4,43 +4,53 @@ import type { TtsConnectionProfile } from '@/types/api'
 import { persistKey } from './settings'
 import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
-export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnectionsSlice> = (set) => ({
+export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnectionsSlice> = (set, get) => ({
   ttsProfiles: [],
   ttsProviders: [],
 
-  setTtsProfiles: (profiles) =>
-    set((state) => ({
-      ttsProfiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).tts),
-    })),
-
-  addTtsProfile: (profile) => {
-    let orderToPersist: AppStore['connectionsOrder'] | null = null
-    set((state) => {
-      const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
-      const order = connectionsOrder.tts
-      const existingIndex = state.ttsProfiles.findIndex((candidate) => candidate.id === profile.id)
-      const nextOrder = order.includes(profile.id) ? order : [profile.id, ...order]
-      const nextConnectionsOrder = { ...connectionsOrder, tts: nextOrder }
-      if (nextOrder !== order) orderToPersist = nextConnectionsOrder
-      return {
-        ttsProfiles: existingIndex === -1
-          ? [profile, ...state.ttsProfiles]
-          : state.ttsProfiles.map((candidate, index) => index === existingIndex ? profile : candidate),
-        connectionsOrder: nextConnectionsOrder,
-      }
-    })
-    if (orderToPersist) persistKey('connectionsOrder', orderToPersist, 'state-sync')
+  setTtsProfiles: (profiles) => {
+    const state = get()
+    const ttsProfiles = reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).tts)
+    const selectedId = state.voiceSettings.ttsConnectionId
+    const ttsConnectionId = selectedId && ttsProfiles.some((profile) => profile.id === selectedId && profile.review_required !== true)
+      ? selectedId
+      : null
+    set({ ttsProfiles })
+    if (ttsConnectionId !== selectedId) get().setVoiceSettings({ ttsConnectionId })
   },
 
-  updateTtsProfile: (id, updates) =>
-    set((state) => ({
-      ttsProfiles: state.ttsProfiles.map((p) => (p.id === id ? { ...p, ...updates } : p)),
-    })),
+  addTtsProfile: (profile) => {
+    const state = get()
+    const existingIndex = state.ttsProfiles.findIndex((candidate) => candidate.id === profile.id)
+    const ttsProfiles = existingIndex === -1
+      ? [profile, ...state.ttsProfiles]
+      : state.ttsProfiles.map((candidate, index) => index === existingIndex ? profile : candidate)
+    const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
+    const order = connectionsOrder.tts
+    const nextOrder = order.includes(profile.id) ? order : [profile.id, ...order]
+    const nextConnectionsOrder = { ...connectionsOrder, tts: nextOrder }
+    const selectedId = state.voiceSettings.ttsConnectionId
+    const ttsConnectionId = selectedId && ttsProfiles.some((candidate) => candidate.id === selectedId && candidate.review_required !== true)
+      ? selectedId
+      : null
+    set({ ttsProfiles, connectionsOrder: nextConnectionsOrder })
+    if (nextOrder !== order) persistKey('connectionsOrder', nextConnectionsOrder, 'state-sync')
+    if (ttsConnectionId !== selectedId) get().setVoiceSettings({ ttsConnectionId })
+  },
 
-  removeTtsProfile: (id) =>
-    set((state) => ({
-      ttsProfiles: state.ttsProfiles.filter((p) => p.id !== id),
-    })),
+  updateTtsProfile: (id, updates) => {
+    const state = get()
+    const ttsProfiles = state.ttsProfiles.map((p) => (p.id === id ? { ...p, ...updates } : p))
+    set({ ttsProfiles })
+    if (state.voiceSettings.ttsConnectionId === id && ttsProfiles.some((profile) => profile.id === id && profile.review_required !== true)) return
+    if (state.voiceSettings.ttsConnectionId === id) get().setVoiceSettings({ ttsConnectionId: null })
+  },
+
+  removeTtsProfile: (id) => {
+    const state = get()
+    set({ ttsProfiles: state.ttsProfiles.filter((p) => p.id !== id) })
+    if (state.voiceSettings.ttsConnectionId === id) get().setVoiceSettings({ ttsConnectionId: null })
+  },
 
   applyTtsProfileOrder: (orderedIds) =>
     set((state) => ({

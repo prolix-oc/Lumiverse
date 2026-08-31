@@ -118,7 +118,7 @@ export class WorkerHostImageGenApi {
 
     const connectionId = typeof input?.connection_id === "string" ? input.connection_id : null;
     const connection = connectionId
-      ? imageGenConnSvc.getConnection(userId, connectionId)
+      ? imageGenConnSvc.getUsableConnection(userId, connectionId)
       : imageGenConnSvc.getDefaultConnection(userId);
     if (!connection) {
       throw new Error(connectionId ? "Image gen connection not found" : "No default image gen connection configured");
@@ -239,7 +239,7 @@ export class WorkerHostImageGenApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.context.enforceScopedUser(resolvedUserId);
       const result = imageGenConnSvc.listConnections(resolvedUserId, { limit: 100, offset: 0 });
-      this.postResponse(requestId, result.data);
+      this.postResponse(requestId, result.data.map((connection) => imageGenConnSvc.toPublicImageGenConnection(connection)));
     } catch (err: any) {
       this.postResponse(requestId, undefined, err?.message ?? String(err));
     }
@@ -251,7 +251,8 @@ export class WorkerHostImageGenApi {
       const resolvedUserId = this.context.resolveEffectiveUserId(userId);
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.context.enforceScopedUser(resolvedUserId);
-      this.postResponse(requestId, imageGenConnSvc.getConnection(resolvedUserId, connectionId));
+      const connection = imageGenConnSvc.getConnection(resolvedUserId, connectionId);
+      this.postResponse(requestId, connection ? imageGenConnSvc.toPublicImageGenConnection(connection) : null);
     } catch (err: any) {
       this.postResponse(requestId, undefined, err?.message ?? String(err));
     }

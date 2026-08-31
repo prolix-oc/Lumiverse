@@ -4,11 +4,14 @@ import { useNavigate, useParams } from 'react-router'
 import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
+import { agentRunsApi } from '@/api/agent-runs'
+import { generateApi } from '@/api/generate'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { memoryCortexApi, type CortexIngestionStatus } from '@/api/memory-cortex'
-import { generateApi } from '@/api/generate'
+
 import { loadoutsApi } from '@/api/loadouts'
-import { recoverPooledGeneration } from '@/lib/generation-recovery'
+import { recoverPooledGeneration, recoverAgentActivityRuns } from '@/lib/generation-recovery'
+import { recoverAgentRuns } from '@/lib/agent-run-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
 import { expressionsApi } from '@/api/expressions'
@@ -23,16 +26,19 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
-import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
+import { AgentRunLiveRegion, AgentRunProvisionalLocator } from './AgentRunActivity'
+import { chatLoreDockMode, effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import { CHAT_REVEAL_SETTLE_CAP_MS, getChatDisplaySettleDiagnostics } from '@/lib/chatDisplaySettle'
 import MessageList from './MessageList'
+import StreamingIndicator from './StreamingIndicator'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
 import ChatFindBar, { type ChatFindNavigationTarget } from './ChatFindBar'
 import ScrollToBottom from './ScrollToBottom'
 import MessageNavigator from './MessageNavigator'
+import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import CouncilPill from './CouncilPill'
 import PortraitPanel from './PortraitPanel'
 import ExpressionDisplay from './expressions/ExpressionDisplay'
@@ -44,7 +50,6 @@ import {
   isShowNativeSelectMessages,
   readQuickToolbarPlacement,
 } from '../quick-toolbar/quickToolbarDock'
-import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import {
   OLDEST_MESSAGE_ACTION_ID,
   quickToolbarOwnsOldestMessage,
@@ -257,6 +262,14 @@ export default function ChatView() {
   const messages = useStore((s) => s.messages)
   const isStreaming = useStore((s) => s.isStreaming)
   const activeChatId = useStore((s) => s.activeChatId)
+  const streamingError = useStore((s) => s.streamingError)
+  const lastGenerationTerminalStatus = useStore((s) => s.lastGenerationTerminalStatus)
+  const showTerminalGenerationStatus = !isStreaming && (
+    Boolean(streamingError)
+    || lastGenerationTerminalStatus === 'completed'
+    || lastGenerationTerminalStatus === 'stopped'
+    || lastGenerationTerminalStatus === 'error'
+  )
   const messageEditDraft = useStore((s) => s.messageEditDraft)
   const resumeMessageEdit = useStore((s) => s.resumeMessageEdit)
   const totalChatLength = useStore((s) => s.totalChatLength)
@@ -381,6 +394,16 @@ export default function ChatView() {
     }
   }, [chatId, loadingOldestMessage])
 
+  const openMessageNavigator = useCallback(() => {
+    setMessageNavigatorOpen(true)
+  }, [])
+
+  useEffect(() => registerChatDockerActionOwners({
+    navigateToOldestMessage,
+    navigateToOldestMessageLoading: loadingOldestMessage,
+    openMessageNavigator,
+  }), [loadingOldestMessage, navigateToOldestMessage, openMessageNavigator])
+
   const returnToEditedMessage = useCallback(() => {
     if (!chatId || !messageEditDraft || messageEditDraft.chatId !== chatId) return
     resumeMessageEdit()
@@ -393,12 +416,6 @@ export default function ChatView() {
     })
   }, [chatId, messageEditDraft, resumeMessageEdit, totalChatLength])
 
-  useEffect(() => {
-    return registerChatDockerActionOwners({
-      navigateToOldestMessage,
-      openMessageNavigator: () => setMessageNavigatorOpen(true),
-    })
-  }, [navigateToOldestMessage])
 
   useEffect(() => {
     const handleFindShortcut = (event: KeyboardEvent) => {
@@ -870,6 +887,10 @@ export default function ChatView() {
         // also invoked on visibilitychange and WS reconnect so that any path
         // back to this chat re-syncs pooled tokens.
         if (!cancelled) await recoverPooledGeneration(chatId)
+        // A terminal run may have no target message or the pool entry may have
+        // expired before reload. Merge the authenticated status-only fallback.
+        if (!cancelled) await recoverAgentActivityRuns(chatId)
+        if (!cancelled) await recoverAgentRuns(chatId, agentRunsApi, useStore)
 
         // Opening a chat acknowledges any terminal chat-head state globally so
         // other devices stop showing a stale completed/stopped/error badge too.
@@ -1225,6 +1246,7 @@ export default function ChatView() {
       )}
       data-streaming={isStreaming || undefined}
     >
+      <AgentRunLiveRegion chatId={chatId} />
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
       <WallpaperLayer
         wallpaper={displayedWallpaper}
@@ -1269,6 +1291,7 @@ export default function ChatView() {
         )}
 
         <div className={styles.chatColumn} data-lumiverse-surface="chat-column">
+          <AgentRunProvisionalLocator chatId={chatId} />
           {(spindleNotice || cortexNotice) && (
             <div className={styles.noticeDock} aria-live="polite" aria-atomic="true">
               {spindleNotice && (
@@ -1325,7 +1348,7 @@ export default function ChatView() {
                   </button>
                 )}
                 {showNativeBrowseMessages && totalChatLength > 0 && (
-                  <button type="button" className={styles.toolbarBtn} onClick={() => setMessageNavigatorOpen(true)} title={t('messageNavigator.open')} aria-label={t('messageNavigator.open')}>
+                  <button type="button" className={styles.toolbarBtn} onClick={openMessageNavigator} title={t('messageNavigator.open')} aria-label={t('messageNavigator.open')}>
                     <List size={14} />
                   </button>
                 )}
@@ -1363,6 +1386,7 @@ export default function ChatView() {
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <div data-spindle-mount="chat_bottom_dock" data-spindle-scope={`chat:${chatId}:bottom-dock`} data-dock-request="strip" />
+            {isStreaming || showTerminalGenerationStatus ? <StreamingIndicator /> : null}
             <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>

@@ -5,6 +5,8 @@ import {
   _resetForTests,
   countBreakdown,
   countWithTokenizer,
+  resolveCounter,
+  resolveStrictCounter,
   prewarm,
   releaseTokenizerMemory,
 } from "./tokenizer.service";
@@ -182,5 +184,65 @@ describe("prompt breakdown accounting", () => {
 
     expect(result.total_tokens).toBe(4);
     expect(result.breakdown.map((entry) => entry.tokens)).toEqual([2, 2]);
+  });
+});
+
+describe("model token counters", () => {
+  test("separates concrete counters from resilient approximate fallback", async () => {
+    insertApproximateTokenizer("tok-selected");
+    insertPattern("pat-selected", "tok-selected", "^selected-model$", 100);
+    getDb()
+      .query(
+        "INSERT INTO tokenizer_configs (id, name, type, config, is_built_in, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0)"
+      )
+      .run(
+        "tok-concrete",
+        "Concrete OpenAI",
+        "openai",
+        JSON.stringify({ encoding: "cl100k_base" }),
+      );
+    insertPattern("pat-concrete", "tok-concrete", "^concrete-model$", 100);
+
+    const first = await resolveCounter("selected-model");
+    expect(first.count("abcd")).toBe(1);
+    expect(_getCachedTokenizerIdsForTests()).toEqual(["tok-selected"]);
+
+    const second = await resolveCounter("selected-model");
+    expect(second.count("abcdefgh")).toBe(2);
+    expect(_getCachedTokenizerIdsForTests()).toEqual(["tok-selected"]);
+    expect(await resolveStrictCounter("selected-model")).toBeNull();
+
+    const concrete = await resolveStrictCounter("concrete-model");
+    expect(concrete?.name).toBe("Concrete OpenAI");
+    expect(concrete?.count("concrete tokenizer")).toBeGreaterThan(0);
+
+    const unmatched = await resolveCounter("unmatched-model");
+    expect(unmatched.name).toBe("approximate");
+    expect(unmatched.count("abcdefgh")).toBe(2);
+    expect(await resolveStrictCounter("unmatched-model")).toBeNull();
+
+    insertPattern("pat-missing", "tok-missing", "^missing-model$", 100);
+    _resetForTests();
+    const missing = await resolveCounter("missing-model");
+    expect(missing.name).toBe("approximate");
+    expect(missing.count("abcdefgh")).toBe(2);
+    expect(await resolveStrictCounter("missing-model")).toBeNull();
+  });
+
+  test("approximates the reproduced reasoning payload when the selected tokenizer fails", async () => {
+    getDb()
+      .query(
+        "INSERT INTO tokenizer_configs (id, name, type, config, is_built_in, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0)"
+      )
+      .run("tok-broken", "broken", "huggingface", JSON.stringify({}));
+    insertPattern("pat-broken", "tok-broken", "^broken-model$", 100);
+
+    const fallback = await resolveCounter("broken-model");
+    expect(fallback.name).toBe("approximate");
+    const observed = fallback.count("r".repeat(397));
+    expect(observed).toBe(100);
+    expect(observed).toBeLessThanOrEqual(128);
+    expect(_getCachedTokenizerIdsForTests()).toEqual([]);
+    await expect(resolveStrictCounter("broken-model")).rejects.toThrow();
   });
 });

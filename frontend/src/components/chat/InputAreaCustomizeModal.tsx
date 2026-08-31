@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ComponentType } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import clsx from 'clsx'
 import {
   Compass,
@@ -19,6 +19,7 @@ import {
   Waypoints,
   Wrench,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { useQuickToolbarActions, type ToolbarAction } from '@/components/quick-toolbar/useQuickToolbarActions'
 import { IconPlaylistAdd } from '@tabler/icons-react'
@@ -54,6 +55,7 @@ export const COMPOSER_ACTION_IDS = [
   'home',
   'regen',
   'continue',
+  'agentRetry',
   'oneliner',
   'persona',
   'connections',
@@ -89,24 +91,25 @@ export interface ComposerActionItem {
 }
 
 export const COMPOSER_ACTION_CATALOG: ComposerActionItem[] = [
-  { id: 'home', label: 'Home', description: 'Return to the home screen', icon: Home },
-  { id: 'regen', label: 'Regenerate', description: 'Regenerate the last assistant reply', icon: RotateCw },
-  { id: 'continue', label: 'Continue', description: 'Continue the last assistant reply', icon: CornerDownLeft },
-  { id: 'oneliner', label: 'One-liner', description: 'Generate a one-liner as the user', icon: MessageSquare },
-  { id: 'persona', label: 'Persona', description: 'Send as or switch the active persona', icon: UserCircle },
-  { id: 'connections', label: 'Connections', description: 'Switch the active connection profile', icon: Link2 },
-  { id: 'connectionsPicker', label: 'Connections Picker', description: 'Open the Waypoints connections picker', icon: Waypoints },
-  { id: 'altFields', label: 'Alternate fields', description: 'Bind alternate character fields', icon: Layers },
-  { id: 'addons', label: 'Addons', description: 'Persona addons for this chat', icon: IconPlaylistAdd },
-  { id: 'guides', label: 'Guides', description: 'Guided generations', icon: Compass },
-  { id: 'quickReplies', label: 'Quick replies', description: 'Insert a saved quick reply', icon: MessageSquareQuote },
-  { id: 'promptVariables', label: 'Prompt variables', description: 'Configure prompt variables for the active preset', icon: Sliders },
-  { id: 'tools', label: 'Tools', description: 'Chat tools and settings', icon: Wrench },
-  { id: 'extras', label: 'Extras', description: 'Extra composer actions', icon: MoreHorizontal },
+  { id: 'home', label: 'composerCustomize.actions.home.label', description: 'composerCustomize.actions.home.description', icon: Home },
+  { id: 'regen', label: 'composerCustomize.actions.regen.label', description: 'composerCustomize.actions.regen.description', icon: RotateCw },
+  { id: 'continue', label: 'composerCustomize.actions.continue.label', description: 'composerCustomize.actions.continue.description', icon: CornerDownLeft },
+  { id: 'agentRetry', label: 'composerCustomize.actions.agentRetry.label', description: 'composerCustomize.actions.agentRetry.description', icon: RotateCw },
+  { id: 'oneliner', label: 'composerCustomize.actions.oneliner.label', description: 'composerCustomize.actions.oneliner.description', icon: MessageSquare },
+  { id: 'persona', label: 'composerCustomize.actions.persona.label', description: 'composerCustomize.actions.persona.description', icon: UserCircle },
+  { id: 'connections', label: 'composerCustomize.actions.connections.label', description: 'composerCustomize.actions.connections.description', icon: Link2 },
+  { id: 'connectionsPicker', label: 'composerCustomize.actions.connectionsPicker.label', description: 'composerCustomize.actions.connectionsPicker.description', icon: Waypoints },
+  { id: 'altFields', label: 'composerCustomize.actions.altFields.label', description: 'composerCustomize.actions.altFields.description', icon: Layers },
+  { id: 'addons', label: 'composerCustomize.actions.addons.label', description: 'composerCustomize.actions.addons.description', icon: IconPlaylistAdd },
+  { id: 'guides', label: 'composerCustomize.actions.guides.label', description: 'composerCustomize.actions.guides.description', icon: Compass },
+  { id: 'quickReplies', label: 'composerCustomize.actions.quickReplies.label', description: 'composerCustomize.actions.quickReplies.description', icon: MessageSquareQuote },
+  { id: 'promptVariables', label: 'composerCustomize.actions.promptVariables.label', description: 'composerCustomize.actions.promptVariables.description', icon: Sliders },
+  { id: 'tools', label: 'composerCustomize.actions.tools.label', description: 'composerCustomize.actions.tools.description', icon: Wrench },
+  { id: 'extras', label: 'composerCustomize.actions.extras.label', description: 'composerCustomize.actions.extras.description', icon: MoreHorizontal },
   {
     id: 'selectMessages',
-    label: 'Select messages',
-    description: 'Toggle message selection mode in the current chat.',
+    label: 'composerCustomize.actions.selectMessages.label',
+    description: 'composerCustomize.actions.selectMessages.description',
     icon: ListChecks,
     keywords: ['select', 'messages', 'bulk', 'list-checks'],
   },
@@ -277,6 +280,7 @@ function SortableActionRow({
   enabled: boolean
   onToggle: (id: string) => void
 }) {
+  const { t } = useTranslation('chat')
   const {
     attributes,
     listeners,
@@ -297,8 +301,8 @@ function SortableActionRow({
       <button
         type="button"
         className={styles.customizeDragHandle}
-        title={enabled ? 'Drag to reorder' : 'Enable this icon to reorder it'}
-        aria-label={`Drag ${action.label}`}
+        title={enabled ? t('composerCustomize.dragToReorder') : t('composerCustomize.enableToReorder')}
+        aria-label={t('composerCustomize.dragAction', { label: action.label })}
         disabled={!enabled}
         {...attributes}
         {...listeners}
@@ -318,7 +322,7 @@ function SortableActionRow({
       <Toggle.Switch
         checked={enabled}
         onChange={() => onToggle(action.id)}
-        aria-label={`${enabled ? 'Hide' : 'Show'} ${action.label}`}
+        aria-label={t(enabled ? 'composerCustomize.hideAction' : 'composerCustomize.showAction', { label: action.label })}
       />
     </div>
   )
@@ -342,18 +346,73 @@ export default function InputAreaCustomizeModal({
   onReset,
 }: InputAreaCustomizeModalProps) {
   const [query, setQuery] = useState('')
+  const { t } = useTranslation('chat')
   const { actionCatalog } = useQuickToolbarActions()
   const hasLumiverseSuite = useStore((state) => hasEnabledFrontendExtension(state.extensions, 'lumiverse_suite'))
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const restoreTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ))
+    const initial = dialog.querySelector<HTMLElement>('[data-dialog-initial-focus]')
+      ?? focusable()[0]
+      ?? dialog
+    initial.focus()
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const elements = focusable()
+      if (elements.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    dialog.addEventListener('keydown', handleKeyDown)
+    return () => {
+      dialog.removeEventListener('keydown', handleKeyDown)
+      if (restoreTarget?.isConnected) restoreTarget.focus()
+    }
+  }, [])
+
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  const actionById = useMemo(
-    () => buildComposerActionMap(actionCatalog, hasLumiverseSuite),
-    [actionCatalog, hasLumiverseSuite],
-  )
+  const actionById = useMemo<Map<string, ComposerActionItem>>(() => {
+    const map = buildComposerActionMap(actionCatalog, hasLumiverseSuite)
+    for (const action of COMPOSER_ACTION_CATALOG) {
+      if (!map.has(action.id)) continue
+      map.set(action.id, {
+        ...action,
+        label: t(action.label),
+        description: t(action.description),
+      })
+    }
+    return map
+  }, [actionCatalog, hasLumiverseSuite, t])
   const listedOrder = useMemo(() => {
     const availableQuickToolbarActions = hasLumiverseSuite ? actionCatalog : []
     const seen = new Set(order)
@@ -394,60 +453,71 @@ export default function InputAreaCustomizeModal({
 
   return (
     <ModalShell data-component="InputAreaCustomizeModal" isOpen onClose={onClose} maxWidth={560} className={styles.customizeModal}>
-      <CloseButton onClick={onClose} variant="solid" position="absolute" />
+      <div
+        id="input-area-customize-dialog"
+        ref={dialogRef}
+        className={styles.customizeDialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="input-area-customize-title"
+        tabIndex={-1}
+      >
+        <CloseButton onClick={onClose} variant="solid" position="absolute" />
 
-      <div className={styles.customizeHeader}>
-        <h3 className={styles.customizeTitle}>Customize composer</h3>
-        <p className={styles.customizeSubtitle}>
-          {hasLumiverseSuite
-            ? 'Drag to reorder composer icons. Toggle to add or hide Quick Toolbar actions and native icons. Changes apply immediately.'
-            : 'Drag to reorder composer icons. Toggle to add or hide native icons. Changes apply immediately.'}
-        </p>
-      </div>
-
-      <div className={styles.customizeBody}>
-        <div className={styles.customizeSectionHeader}>
-          <h4 className={styles.customizeSectionTitle}>Composer icons</h4>
-          <p className={styles.customizeSectionDescription}>
-            {filtering
-              ? `${filteredRows.length} of ${rows.length} match, ${filteredEnabledCount} of those shown on the bar.`
-              : `${visibleIds.length} of ${rows.length} shown, in bar order.`}
-          </p>
-          <label className={styles.customizeSearchField}>
-            <Search size={14} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search icons..."
-              aria-label="Search composer icons"
-            />
-          </label>
+        <div className={styles.customizeHeader}>
+          <h3 id="input-area-customize-title" className={styles.customizeTitle}>{t('composerCustomize.title')}</h3>
+          <p className={styles.customizeSubtitle}>{t('composerCustomize.subtitle')}</p>
         </div>
 
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-            <div className={styles.customizeList}>
-              {filtering && filteredRows.length === 0 ? (
-                <p className={styles.customizeEmptyState}>No composer icons match “{query.trim()}”.</p>
-              ) : filteredRows.map((action) => (
-                <SortableActionRow
-                  key={action.id}
-                  action={action}
-                  enabled={visibleIds.includes(action.id)}
-                  onToggle={onToggle}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </div>
+        <div className={styles.customizeBody}>
+          <div className={styles.customizeSectionHeader}>
+            <h4 className={styles.customizeSectionTitle}>{t('composerCustomize.sectionTitle')}</h4>
+            <p className={styles.customizeSectionDescription}>
+              {filtering
+                ? t('composerCustomize.summaryFiltered', {
+                  matches: filteredRows.length,
+                  total: rows.length,
+                  shown: filteredEnabledCount,
+                })
+                : t('composerCustomize.summaryShown', { shown: visibleIds.length, total: rows.length })}
+            </p>
+            <label className={styles.customizeSearchField}>
+              <Search size={14} />
+              <input
+                data-dialog-initial-focus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('composerCustomize.searchPlaceholder')}
+                aria-label={t('composerCustomize.searchAria')}
+              />
+            </label>
+          </div>
 
-      <div className={styles.customizeFooter}>
-        <button type="button" className={styles.customizeResetButton} onClick={onReset}>
-          <RotateCcw size={14} />
-          Reset icons
-        </button>
-        <button type="button" className={styles.customizeDoneButton} onClick={onClose}>Done</button>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+              <div className={styles.customizeList}>
+                {filtering && filteredRows.length === 0 ? (
+                  <p className={styles.customizeEmptyState}>{t('composerCustomize.empty', { query: query.trim() })}</p>
+                ) : filteredRows.map((action) => (
+                  <SortableActionRow
+                    key={action.id}
+                    action={action}
+                    enabled={visibleIds.includes(action.id)}
+                    onToggle={onToggle}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </div>
+
+        <div className={styles.customizeFooter}>
+          <button type="button" className={styles.customizeResetButton} onClick={onReset}>
+            <RotateCcw size={14} />
+            {t('composerCustomize.reset')}
+          </button>
+          <button type="button" className={styles.customizeDoneButton} onClick={onClose}>{t('composerCustomize.done')}</button>
+        </div>
       </div>
     </ModalShell>
   )

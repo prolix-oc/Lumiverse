@@ -43,7 +43,7 @@
     "i18next": "^26.2.0",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.6.23",
+    "lumiverse-spindle-types": "git+https://github.com/TheLiquorPriest/lumiverse-spindle-types.git#aa859b50c3f6baacd03970e8d5cee20e3cbe6e84",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.2.6",

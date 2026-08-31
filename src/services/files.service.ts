@@ -1,12 +1,12 @@
 import { env } from "../env";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname, resolve, sep } from "path";
+import { withUserDataMutation } from "./user-data/snapshot";
 
 function ensureDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
-
-export async function saveUpload(file: File, userId: string, subdir: string = "uploads"): Promise<string> {
+async function saveUploadUnsafe(file: File, userId: string, subdir: string = "uploads"): Promise<string> {
   const dir = join(env.dataDir, subdir, userId);
   ensureDir(dir);
 
@@ -18,8 +18,11 @@ export async function saveUpload(file: File, userId: string, subdir: string = "u
   return filename;
 }
 
-export async function saveAvatar(file: File): Promise<string> {
-  // Avatars remain global (not user-scoped) — they're referenced by characters/personas
+export async function saveUpload(file: File, userId: string, subdir: string = "uploads"): Promise<string> {
+  return withUserDataMutation(userId, () => saveUploadUnsafe(file, userId, subdir));
+}
+
+async function saveAvatarUnsafe(file: File): Promise<string> {
   const dir = join(env.dataDir, "avatars");
   ensureDir(dir);
 
@@ -31,6 +34,10 @@ export async function saveAvatar(file: File): Promise<string> {
   return filename;
 }
 
+export async function saveAvatar(file: File, userId: string): Promise<string> {
+  return withUserDataMutation(userId, () => saveAvatarUnsafe(file));
+}
+
 /** Get avatar file path (global, not user-scoped) */
 export async function getAvatarPath(filename: string): Promise<string | null> {
   const base = resolve(env.dataDir, "avatars");
@@ -39,9 +46,7 @@ export async function getAvatarPath(filename: string): Promise<string | null> {
   if (!(await Bun.file(filepath).exists())) return null;
   return filepath;
 }
-
-/** Delete avatar file (global, not user-scoped) */
-export async function deleteAvatar(filename: string): Promise<boolean> {
+async function deleteAvatarUnsafe(filename: string): Promise<boolean> {
   const base = resolve(env.dataDir, "avatars");
   const filepath = resolve(base, filename);
   if (!filepath.startsWith(base + sep) && filepath !== base) return false;
@@ -50,8 +55,10 @@ export async function deleteAvatar(filename: string): Promise<boolean> {
   return true;
 }
 
+export async function deleteAvatar(filename: string, userId: string): Promise<boolean> {
+  return withUserDataMutation(userId, () => deleteAvatarUnsafe(filename));
+}
 export async function getFilePath(userId: string, filename: string, subdir: string = "uploads"): Promise<string | null> {
-  // Try user-scoped path first
   const scopedBase = resolve(env.dataDir, subdir, userId);
   const scopedPath = resolve(scopedBase, filename);
   if (
@@ -61,7 +68,6 @@ export async function getFilePath(userId: string, filename: string, subdir: stri
     return scopedPath;
   }
 
-  // Fall back to legacy flat path for pre-migration files
   const legacyBase = resolve(env.dataDir, subdir);
   const legacyPath = resolve(legacyBase, filename);
   if (!legacyPath.startsWith(legacyBase + sep) && legacyPath !== legacyBase) return null;
@@ -69,8 +75,7 @@ export async function getFilePath(userId: string, filename: string, subdir: stri
   return legacyPath;
 }
 
-export async function deleteFile(userId: string, filename: string, subdir: string = "uploads"): Promise<boolean> {
-  // Try user-scoped path first
+async function deleteFileUnsafe(userId: string, filename: string, subdir: string = "uploads"): Promise<boolean> {
   const scopedBase = resolve(env.dataDir, subdir, userId);
   const scopedPath = resolve(scopedBase, filename);
   if (
@@ -81,11 +86,14 @@ export async function deleteFile(userId: string, filename: string, subdir: strin
     return true;
   }
 
-  // Fall back to legacy flat path
   const legacyBase = resolve(env.dataDir, subdir);
   const legacyPath = resolve(legacyBase, filename);
   if (!legacyPath.startsWith(legacyBase + sep) && legacyPath !== legacyBase) return false;
   if (!(await Bun.file(legacyPath).exists())) return false;
   unlinkSync(legacyPath);
   return true;
+}
+
+export async function deleteFile(userId: string, filename: string, subdir: string = "uploads"): Promise<boolean> {
+  return withUserDataMutation(userId, () => deleteFileUnsafe(userId, filename, subdir));
 }

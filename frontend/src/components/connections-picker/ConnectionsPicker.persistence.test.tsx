@@ -25,6 +25,8 @@ function profile(id: string, model = 'gpt-4'): ConnectionProfile {
     preset_id: null,
     is_default: false,
     has_api_key: false,
+    review_required: false,
+    review_code: null,
     metadata: {},
     created_at: 1,
     updated_at: 1,

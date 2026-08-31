@@ -11,6 +11,8 @@ const connection: ImageGenConnectionProfile = {
   model: "google/gemini-2.5-flash-image",
   is_default: false,
   has_api_key: true,
+  review_required: false,
+  review_code: null,
   default_parameters: { imageSize: "2K" },
   metadata: {},
   created_at: 1,

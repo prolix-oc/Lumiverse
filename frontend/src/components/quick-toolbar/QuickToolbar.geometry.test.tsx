@@ -1165,9 +1165,9 @@ describe('QuickToolbar geometry', () => {
       frames.splice(0).forEach((frame) => frame(0))
     })
 
-    const nav = host.querySelector('nav[aria-label="Quick access toolbar"]')
+    const nav = document.querySelector('[data-component="QuickToolbar"] nav[data-fit]')
     expect(nav?.getAttribute('data-fit')).toBe('ready')
-    expect(host.querySelectorAll('[data-toolbar-action]').length).toBeGreaterThan(0)
+    expect(nav?.querySelectorAll('[data-toolbar-action]').length).toBeGreaterThan(0)
 
     await act(async () => root.unmount())
     dock.remove()
@@ -1202,12 +1202,12 @@ describe('QuickToolbar geometry', () => {
       root.render(<QuickToolbar />)
       await Promise.resolve()
     })
-    const nav = host.querySelector('nav[aria-label="Quick access toolbar"]')
+    const nav = document.querySelector('[data-component="QuickToolbar"] nav[data-fit]')
     expect(nav?.getAttribute('data-fit')).toBe('ready')
     expect(nav?.querySelector('[data-toolbar-action="loom"]')).not.toBeNull()
     expect(nav?.querySelector('[data-toolbar-action="extensions"]')).not.toBeNull()
     expect(nav?.querySelector('button[aria-controls="quick-toolbar-overflow"]')).toBeNull()
-    expect(nav?.querySelector('button[aria-label="Customize toolbar"]')).not.toBeNull()
+    expect(nav?.querySelector('button[aria-expanded]')).not.toBeNull()
 
     await act(async () => root.unmount())
     dock.remove()

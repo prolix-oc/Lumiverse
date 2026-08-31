@@ -12,6 +12,14 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import type { TtsVoice } from "../tts/types";
 import { describeProviderError } from "../utils/provider-errors";
+import {
+  clearImportedConnectionReview,
+  importedConnectionReviewCode,
+  isImportedConnectionReviewRequired,
+  markImportedConnectionForReview,
+  sanitizeConnectionMetadata,
+} from "./connection-authority";
+
 import { QWEN_TTS_PROVIDER, mergeQwenVoiceOptions } from "../tts/providers/qwen3-utils";
 
 /** Secret key for a TTS connection's API key. */
@@ -45,13 +53,31 @@ function mergeStoredVoices(
 }
 
 function rowToProfile(row: any): TtsConnectionProfile {
+  const metadata = JSON.parse(row.metadata || "{}") as Record<string, unknown>;
   return {
     ...row,
     is_default: !!row.is_default,
     has_api_key: !!row.has_api_key,
+    review_required: isImportedConnectionReviewRequired(metadata),
+    review_code: importedConnectionReviewCode(metadata),
     default_parameters: JSON.parse(row.default_parameters || "{}"),
-    metadata: JSON.parse(row.metadata || "{}"),
+    metadata,
   };
+}
+
+export function toPublicTtsConnection(profile: TtsConnectionProfile): TtsConnectionProfile {
+  return { ...profile, metadata: sanitizeConnectionMetadata(profile.metadata) };
+}
+
+export function isTtsConnectionUsable(
+  profile: Pick<TtsConnectionProfile, "review_required"> | null | undefined,
+): boolean {
+  return profile?.review_required !== true;
+}
+
+export function getUsableConnection(userId: string, id: string): TtsConnectionProfile | null {
+  const profile = getConnection(userId, id);
+  return isTtsConnectionUsable(profile) ? profile : null;
 }
 
 export function listConnections(userId: string, pagination: PaginationParams): PaginatedResult<TtsConnectionProfile> {
@@ -75,9 +101,9 @@ export function getDefaultConnection(userId: string): TtsConnectionProfile | nul
   const row = getDb()
     .query("SELECT * FROM tts_connections WHERE is_default = 1 AND user_id = ? LIMIT 1")
     .get(userId) as any;
-  return row ? rowToProfile(row) : null;
+  const profile = row ? rowToProfile(row) : null;
+  return isTtsConnectionUsable(profile) ? profile : null;
 }
-
 export async function createConnection(
   userId: string,
   input: CreateTtsConnectionInput
@@ -114,13 +140,13 @@ export async function createConnection(
       input.is_default ? 1 : 0,
       hasApiKey,
       JSON.stringify(input.default_parameters || {}),
-      JSON.stringify(input.metadata || {}),
+      JSON.stringify(clearImportedConnectionReview(input.metadata || {})),
       now,
       now
     );
 
   const profile = getConnection(userId, id)!;
-  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id, profile }, userId);
+  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id, profile: toPublicTtsConnection(profile) }, userId);
   return profile;
 }
 
@@ -131,46 +157,48 @@ export async function updateConnection(
 ): Promise<TtsConnectionProfile | null> {
   const existing = getConnection(userId, id);
   if (!existing) return null;
+  const reviewRequested = input.reviewed === true;
+  const canSetDefault = !existing.review_required || reviewRequested;
 
-  if (input.is_default) {
+  if (input.is_default && canSetDefault) {
     getDb()
       .query("UPDATE tts_connections SET is_default = 0 WHERE is_default = 1 AND user_id = ?")
       .run(userId);
   }
 
   if (input.api_key !== undefined) {
-    if (input.api_key) {
-      await setConnectionApiKey(userId, id, input.api_key);
-    } else {
-      await clearConnectionApiKey(userId, id);
-    }
+    if (input.api_key) await setConnectionApiKey(userId, id, input.api_key);
+    else await clearConnectionApiKey(userId, id);
   }
 
   const fields: string[] = [];
   const values: any[] = [];
-
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
   if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
   if (input.api_url !== undefined) { fields.push("api_url = ?"); values.push(input.api_url); }
   if (input.model !== undefined) { fields.push("model = ?"); values.push(input.model); }
   if (input.voice !== undefined) { fields.push("voice = ?"); values.push(input.voice); }
-  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default ? 1 : 0); }
+  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default && canSetDefault ? 1 : 0); }
   if (input.default_parameters !== undefined) { fields.push("default_parameters = ?"); values.push(JSON.stringify(input.default_parameters)); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
-
+  if (input.metadata !== undefined) {
+    fields.push("metadata = ?");
+    values.push(JSON.stringify(reviewRequested
+      ? clearImportedConnectionReview(input.metadata)
+      : existing.review_required
+        ? markImportedConnectionForReview(input.metadata, existing.review_code || "foreign_import")
+        : clearImportedConnectionReview(input.metadata)));
+  } else if (reviewRequested) {
+    fields.push("metadata = ?");
+    values.push(JSON.stringify(clearImportedConnectionReview(existing.metadata)));
+  }
   if (fields.length === 0 && input.api_key === undefined) return existing;
 
   fields.push("updated_at = ?");
-  values.push(Math.floor(Date.now() / 1000));
-  values.push(id);
-  values.push(userId);
-
-  getDb()
-    .query(`UPDATE tts_connections SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`)
-    .run(...values);
+  values.push(Math.floor(Date.now() / 1000), id, userId);
+  getDb().query(`UPDATE tts_connections SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
 
   const updated = getConnection(userId, id)!;
-  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id, profile: updated }, userId);
+  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id, profile: toPublicTtsConnection(updated) }, userId);
   return updated;
 }
 
@@ -180,9 +208,9 @@ export async function duplicateConnection(userId: string, id: string): Promise<T
 
   const newId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-
+  const reviewRequired = existing.review_required;
   let hasApiKey = 0;
-  if (existing.has_api_key) {
+  if (!reviewRequired && existing.has_api_key) {
     try {
       const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
       if (apiKey) {
@@ -190,9 +218,10 @@ export async function duplicateConnection(userId: string, id: string): Promise<T
         hasApiKey = 1;
       }
     } catch {
-      // If key read fails, duplicate without the key
+      // If key read fails, duplicate without the key.
     }
   }
+  const metadata = reviewRequired ? existing.metadata : clearImportedConnectionReview(existing.metadata);
 
   getDb()
     .query(
@@ -203,15 +232,13 @@ export async function duplicateConnection(userId: string, id: string): Promise<T
     .run(
       newId, userId, `${existing.name} (Copy)`, existing.provider,
       existing.api_url, existing.model, existing.voice,
-      0, // never default
-      hasApiKey,
+      0, hasApiKey,
       JSON.stringify(existing.default_parameters),
-      JSON.stringify(existing.metadata),
-      now, now
+      JSON.stringify(metadata), now, now
     );
 
   const profile = getConnection(userId, newId)!;
-  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id: newId, profile }, userId);
+  eventBus.emit(EventType.TTS_CONNECTION_CHANGED, { id: newId, profile: toPublicTtsConnection(profile) }, userId);
   return profile;
 }
 
@@ -245,8 +272,8 @@ export async function testConnection(
   userId: string,
   id: string
 ): Promise<{ success: boolean; message: string; provider: string }> {
-  const profile = getConnection(userId, id);
-  if (!profile) return { success: false, message: "Connection not found", provider: "" };
+  const profile = getUsableConnection(userId, id);
+  if (!profile) return { success: false, message: "Connection requires owner review", provider: "" };
 
   const provider = getTtsProvider(profile.provider, userId);
   if (!provider) {
@@ -278,8 +305,8 @@ export async function listConnectionModels(
   userId: string,
   id: string
 ): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
-  const profile = getConnection(userId, id);
-  if (!profile) return { models: [], provider: "", error: "Connection not found" };
+  const profile = getUsableConnection(userId, id);
+  if (!profile) return { models: [], provider: "", error: "Connection requires owner review" };
 
   const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
   return listConnectionModelsPreview(userId, {
@@ -290,11 +317,15 @@ export async function listConnectionModels(
   });
 }
 
+
 export async function listConnectionModelsPreview(
   userId: string,
   input: TtsConnectionModelsPreviewInput
 ): Promise<{ models: Array<{ id: string; label: string }>; provider: string; error?: string }> {
   const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  if (existing && !isTtsConnectionUsable(existing)) {
+    return { models: [], provider: input.provider, error: "Connection requires owner review" };
+  }
   const providerId = input.provider;
 
   let apiKey = input.api_key;
@@ -326,8 +357,8 @@ export async function listConnectionVoices(
   userId: string,
   id: string
 ): Promise<{ voices: TtsVoice[]; provider: string; error?: string }> {
-  const profile = getConnection(userId, id);
-  if (!profile) return { voices: [], provider: "", error: "Connection not found" };
+  const profile = getUsableConnection(userId, id);
+  if (!profile) return { voices: [], provider: "", error: "Connection requires owner review" };
 
   const apiKey = await secretsSvc.getSecret(userId, ttsConnectionSecretKey(id));
   return listConnectionVoicesPreview(userId, {
@@ -343,6 +374,9 @@ export async function listConnectionVoicesPreview(
   input: TtsConnectionVoicesPreviewInput
 ): Promise<{ voices: TtsVoice[]; provider: string; error?: string }> {
   const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  if (existing && !isTtsConnectionUsable(existing)) {
+    return { voices: [], provider: input.provider, error: "Connection requires owner review" };
+  }
   const providerId = input.provider;
 
   let apiKey = input.api_key;

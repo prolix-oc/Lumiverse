@@ -13,6 +13,7 @@ import { Spinner } from '@/components/shared/Spinner'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useDragHandleBlur } from '../connection-manager/useDragHandleBlur'
 import ProviderIcon from '@/components/shared/ProviderIcon'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
@@ -81,6 +82,7 @@ export default function ImageGenConnectionItem({
   const isNanoGpt = profile.provider === 'nanogpt'
   const isComfyUI = profile.provider === 'comfyui'
   const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
+  const reviewRequired = profile.review_required === true
   const nanoGptSubscriptionInactive = nanoGptUsage ? isNanoGptSubscriptionInactive(nanoGptUsage) : false
   const nanoGptUsageRows = nanoGptUsage
     ? [
@@ -112,9 +114,10 @@ export default function ImageGenConnectionItem({
       .then(setLocalNanoGptUsage)
       .catch(() => setLocalNanoGptUsage(null))
       .finally(() => setLocalNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id, onRefreshNanoGptUsage])
+  }, [onRefreshNanoGptUsage, profile.id, showNanoGptUsage])
 
   const handleTest = useCallback(async () => {
+    if (reviewRequired) return
     setTesting(true)
     setTestResult(null)
     try {
@@ -125,7 +128,7 @@ export default function ImageGenConnectionItem({
     } finally {
       setTesting(false)
     }
-  }, [profile.id, t])
+  }, [profile.id, reviewRequired, t])
 
   const refreshComfyProfile = useCallback(async () => {
     try {
@@ -161,7 +164,6 @@ export default function ImageGenConnectionItem({
     await refreshComfyProfile()
     return response.config
   }, [profile.id, refreshComfyProfile])
-
   const handleSaveEdit = useCallback(async (input: CreateImageGenConnectionInput) => {
     try {
       const updated = await imageGenConnectionsApi.update(profile.id, input)
@@ -172,10 +174,14 @@ export default function ImageGenConnectionItem({
     }
   }, [profile.id, onUpdate])
 
+  const handleReview = useCallback(async () => {
+    const updated = await imageGenConnectionsApi.update(profile.id, { reviewed: true })
+    onUpdate(updated)
+  }, [onUpdate, profile.id])
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
   const handleRef = useDragHandleBlur(isDragging)
+
 
   return (
     <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)}>
@@ -185,9 +191,12 @@ export default function ImageGenConnectionItem({
           profile={profile}
           onSave={handleSaveEdit}
           onCancel={() => setEditing(false)}
+          onReview={handleReview}
+          focusTargetRef={handleRef}
         />
       ) : (
         <>
+          <ConnectionReviewStatus profile={profile} onReview={handleReview} focusTargetRef={handleRef} />
           <div className={styles.itemRow}>
             <button
               ref={handleRef}
@@ -200,7 +209,7 @@ export default function ImageGenConnectionItem({
             >
               <GripVertical size={16} />
             </button>
-            <button type="button" className={styles.itemBtn} onClick={onSelect}>
+            <button type="button" className={styles.itemBtn} onClick={onSelect} disabled={reviewRequired} aria-disabled={reviewRequired}>
               <ProviderIcon kind="imageGen" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
               <div className={styles.itemInfo}>
                 <span className={styles.itemName}>
@@ -214,12 +223,13 @@ export default function ImageGenConnectionItem({
               {isActive && <Check size={14} className={styles.activeCheck} />}
             </button>
             <div className={styles.itemActions}>
-              <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')}>
+              <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')} disabled={reviewRequired}>
                 <Edit3 size={13} />
               </button>
               <button
                 type="button"
                 className={styles.actionBtn}
+                disabled={reviewRequired}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect()
                   setMenuPos({ x: rect.right, y: rect.bottom + 4 })
@@ -232,8 +242,8 @@ export default function ImageGenConnectionItem({
                 position={menuPos}
                 onClose={() => setMenuPos(null)}
                 items={[
-                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
-                  ...(isComfyUI ? [{ key: 'workflow', label: t('connectionItem.comfyWorkflow'), icon: <Workflow size={14} />, onClick: openWorkflowEditor }] : []),
+                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing || reviewRequired },
+                  ...(isComfyUI ? [{ key: 'workflow', label: t('connectionItem.comfyWorkflow'), icon: <Workflow size={14} />, onClick: openWorkflowEditor, disabled: reviewRequired }] : []),
                   { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
                   { key: 'div', type: 'divider' as const },
                   { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },

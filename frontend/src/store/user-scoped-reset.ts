@@ -1,5 +1,6 @@
 import type { AppStore } from '@/types/store'
 import { clearChatHeadsPersistence } from './slices/chat-heads'
+import { clearUserDataJobPersistence } from './slices/user-data'
 import { resetSettingsPersistence } from './slices/settings'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { clearLandingPageSnapshot } from '@/lib/landingPageSnapshot'
@@ -29,6 +30,7 @@ export function resetUserScopedStoreState(): void {
   setPresetSaveCoordinatorScope(null)
   clearLandingPageSnapshot()
   if (!storeApi || !initialState) return
+  clearUserDataJobPersistence(storeApi.getState().user?.id ?? null)
 
   const patch: Partial<AppStore> = {}
 

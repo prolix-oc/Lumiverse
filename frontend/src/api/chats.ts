@@ -4,6 +4,7 @@ import type {
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
   GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
+import type { AgentActivityRunV1 } from '@/types/agent-runtime'
 import type { RegexActionEffect } from '@/types/regex'
 
 export interface EditAndSendInput {
@@ -84,6 +85,10 @@ export const chatsApi = {
 
   get(id: string, params?: { messages?: boolean }) {
     return get<Chat>(`/chats/${id}`, params)
+  },
+
+  listAgentActivityRuns(chatId: string, options?: RequestOptions) {
+    return get<{ runs: AgentActivityRunV1[] }>(`/chats/${chatId}/agent-activity-runs`, undefined, options)
   },
 
   create(input: CreateChatInput) {

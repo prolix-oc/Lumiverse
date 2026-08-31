@@ -1,4 +1,15 @@
 {
+  "connectionReview": {
+    "title": "Revisione richiesta",
+    "description": "Questa connessione importata è disabilitata finché non viene verificata e abilitata.",
+    "enable": "Abilita connessione",
+    "enabling": "Abilitazione…",
+    "reasons": {
+      "foreignImport": "La connessione importata richiede l'approvazione locale.",
+      "repairRequired": "I dati della connessione devono essere riparati prima dell'abilitazione.",
+      "unknown": "La connessione richiede una revisione prima di poter essere abilitata."
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "Profilo",
@@ -1401,6 +1412,10 @@
     "openChatToAdd": "Apri una chat per aggiungere worldbook limitati alla chat",
     "removeFromChat": "Rimuovi da questa chat",
     "noChatActive": "Nessun worldbook attivo per questa chat",
+    "chatAttachmentSaveFailed": "Impossibile salvare i worldbook di questa chat.",
+    "entrySaveFailed": "Impossibile salvare questa voce del worldbook.",
+    "entryDeleteFailed": "Impossibile eliminare questa voce del worldbook.",
+    "entryMutationFailed": "Impossibile aggiornare questa voce del worldbook.",
     "activationSettings": "Impostazioni attivazione",
     "selectBook": "Seleziona un libro...",
     "selectWorldBookAria": "Seleziona worldbook",
@@ -2828,7 +2843,9 @@
     "fuseFailed": "Errore nell'unione degli archivi dati",
     "scrapeFailed": "Errore nello scraping dell'URL",
     "loadDocFailed": "Errore nel caricamento del contenuto del documento",
-    "saveDocFailed": "Errore nel salvataggio del documento"
+    "saveDocFailed": "Errore nel salvataggio del documento",
+    "remoteDocumentRemoved": "Questo documento è stato rimosso.",
+    "remoteDatabankRemoved": "Questo archivio dati è stato rimosso."
   },
   "creatorWorkshop": {
     "shared": {
@@ -3091,7 +3108,8 @@
     "unknownProvider": "Sconosciuto",
     "editorTabs": {
       "ariaLabel": "Schede dell'editor dei preset",
-      "preset": "Preset"
+      "preset": "Preset",
+      "agenticRuntime": "Runtime agentico"
     },
     "tokens": " token",
     "category": {
@@ -3140,6 +3158,14 @@
       "emptyOutput": "(Output vuoto)",
       "noPreview": "Nessun contenuto da anteprimere",
       "lockBlock": "Blocca blocco (previeni modifiche accidentali)",
+      "sealedBlockTitle": "Blocco sigillato di LumiHub",
+      "sealedBlockHint": "Opzione di pubblicazione avanzata. Quando questo preset viene caricato su LumiHub, il contenuto del blocco viene rimosso dal JSON pubblico e memorizzato come blocco privato sul lato Hub. Le copie locali mantengono il testo fino al caricamento.",
+      "sealedBlockInstalledHint": "Installato da LumiHub. Puoi visualizzare e modificare questo blocco localmente, ma Lumiverse rimuove sempre questo contenuto dalle esportazioni e dai dati condivisi.",
+      "sealedBlockKey": "Chiave del blocco sigillato",
+      "sealedBlockKeyPlaceholder": "dialogue.frame",
+      "sealedBlockKeyHint": "Chiave di risoluzione stabile. Usa lettere, numeri, punti, trattini, trattini bassi o due punti.",
+      "sealedBlockEnable": "Ho compreso che questa funzione serve alla pubblicazione su LumiHub e voglio che questo blocco venga sigillato al caricamento.",
+      "sealedBlockInstalledEnable": "Sempre sigillato per l'esportazione perché questo blocco è stato installato da LumiHub.",
       "categoryMode": "Modalità categoria",
       "categoryModeNormal": "Interruttori normali",
       "categoryModeMulti": "Selezione multipla",
@@ -3339,6 +3365,601 @@
       "reapplied": "Profilo predefinito riapplicato",
       "alreadyDefault": "Gli stati dei blocchi corrispondono già ai predefiniti"
     },
+    "agenticRuntime": {
+      "eyebrow": "Runtime della preimpostazione",
+      "title": "Runtime agentico",
+      "description": "Definisci l'attivazione, gli agenti secondari, le istruzioni per fasi, il contesto, le attività, i criteri dello spazio di lavoro e le riparazioni locali in un'unica bozza con controllo delle versioni.",
+      "nativeContextNotice": "World Info e Databank restano fonti native attive al di fuori di Loom. Loom non le copia, non le fissa a una revisione e non le ripara.",
+      "status": {
+        "enabled": "Abilitato",
+        "disabled": "Disabilitato"
+      },
+      "navigation": {
+        "ariaLabel": "Sezioni del Runtime agentico",
+        "saveBeforePresetAction": "Salva o risolvi la bozza del Runtime agentico prima di modificare, importare o esportare le preimpostazioni."
+      },
+      "sections": {
+        "activation": {
+          "nav": "Attivazione e modalità",
+          "title": "Attivazione e modalità",
+          "description": "Scegli quali modalità consente questa preimpostazione. La scelta per una chat o un singolo turno viene determinata separatamente e non modifica mai questa preimpostazione."
+        },
+        "agents": {
+          "nav": "Agenti",
+          "title": "Agenti",
+          "description": "Definisci profili secondari riutilizzabili e riferimenti portabili agli slot di connessione."
+        },
+        "tools": {
+          "nav": "Strumenti principali e dipendenze",
+          "title": "Strumenti principali e dipendenze",
+          "description": "Concedi solo gli strumenti di recupero gestiti dall'host e i budget richiesti da questa preimpostazione."
+        },
+        "phases": {
+          "nav": "Istruzioni per fasi",
+          "title": "Istruzioni per fasi",
+          "description": "Seleziona le revisioni esatte dei blocchi Loom, la consegna del contesto e le destinazioni fisse del runtime per fasi. Agentic non aggiunge un secondo sistema di prompt in formato libero."
+        },
+        "tasks": {
+          "nav": "Attività dinamiche",
+          "title": "Attività dinamiche",
+          "description": "Definisci modelli di attività circoscritti, chiusura delle dipendenze, obbligatorietà e attivazione."
+        },
+        "workspace": {
+          "nav": "Conservazione e condivisione dello spazio di lavoro",
+          "title": "Conservazione e condivisione dello spazio di lavoro",
+          "description": "Scegli la conservazione e la condivisione in sola visualizzazione entro i limiti imposti dall'host."
+        },
+        "repair": {
+          "nav": "Portabilità e riparazione",
+          "title": "Portabilità e riparazione",
+          "description": "Risolvi gli slot locali, le revisioni obsolete, gli elementi importati da esaminare e le incompatibilità delle funzionalità prima dell'attivazione."
+        }
+      },
+      "activation": {
+        "reviewTitle": "La verifica locale non è completa",
+        "reviewDescription": "Conferma ogni elemento da esaminare e completa ciascuna riparazione richiesta prima di abilitare questa configurazione importata.",
+        "enable": "Abilita gli agenti della preimpostazione",
+        "enableHint": "Rende la configurazione definita idonea per la modalità Risposta e, quando è completamente pronta, per la modalità Agentico.",
+        "allowedModes": "Modalità consentite",
+        "defaultMode": "Modalità predefinita della preimpostazione"
+      },
+      "modes": {
+        "response": "Risposta",
+        "responseHint": "Utilizza il percorso di generazione consolidato e rimane disponibile per la riparazione o la compatibilità.",
+        "agentic": "Agentico",
+        "agenticHint": "Utilizza la macchina a fasi chiusa a turno singolo solo quando ogni controllo del runtime effettivo è pronto."
+      },
+      "agents": {
+        "connectionRef": "Slot di connessione portabile"
+      },
+      "generationTypes": {
+        "normal": "Normale",
+        "continue": "Continua",
+        "regenerate": "Rigenera",
+        "swipe": "Scorri"
+      },
+      "phases": {
+        "names": {
+          "assemble": "Assembla",
+          "work": "Elabora",
+          "complete": "Completa",
+          "render": "Esegui il rendering",
+          "prepare_commit": "Prepara commit",
+          "committing": "Commit in corso",
+          "committed": "Eseguito",
+          "commit_failed": "Commit non riuscito",
+          "exhausted": "Esaurito",
+          "failed": "Non riuscito",
+          "cancelled": "Annullato",
+          "timed_out": "Timeout"
+        },
+        "workPolicy": {
+          "title": "Criteri di elaborazione",
+          "description": "Istruzioni disponibili solo durante l'elaborazione privata dell'agente."
+        },
+        "workspaceUsage": {
+          "title": "Utilizzo dello spazio di lavoro",
+          "description": "Istruzioni per l'utilizzo di attività circoscritte, record e invii."
+        },
+        "completionCriteria": {
+          "title": "Criteri di completamento",
+          "description": "Istruzioni valutate prima che l'host accetti il completamento."
+        },
+        "renderPolicy": {
+          "title": "Criteri di rendering",
+          "description": "Istruzioni utilizzate solo per il rendering finale con strumenti disabilitati."
+        },
+        "source": "Blocco sorgente",
+        "sourceRevision": "Revisione preset {{presetRevision}} · revisione blocco {{blockRevision}} · posizione nel prompt {{promptOrder}}",
+        "notSelected": "Non selezionato",
+        "stale": "La revisione del blocco è cambiata — selezionala nuovamente prima di salvare",
+        "required": "Obbligatorio",
+        "requiredHint": "Le voci obbligatorie devono essere disponibili per completare.",
+        "requiredFor": "Rendi obbligatorio {{name}}",
+        "condition": "Condizione",
+        "conditionHint": "Se abilitata, include questo blocco solo quando la condizione tipizzata è vera.",
+        "conditionFor": "Condizione per {{name}}",
+        "routing": "Instradamento fisso",
+        "routingHint": "Ogni sezione della policy ha una destinazione e un checkpoint fissi.",
+        "routingValue": "Destinazione: {{destination}} · checkpoint: {{checkpoint}}",
+        "destinations": {
+          "root_work": "WORK radice",
+          "completion_handoff": "Passaggio di completamento",
+          "render": "RENDER senza strumenti"
+        },
+        "checkpoints": {
+          "WORK": "WORK",
+          "PREPARE_COMMIT": "Prepara commit",
+          "RENDER": "RENDER"
+        },
+        "responseOmissionTitle": "La modalità Response omette le istruzioni Agentic",
+        "responseOmissionHint": "Queste voci della policy Loom e le istruzioni delle fasi personalizzate sono riservate alle esecuzioni Agentic e non sono incluse nella modalità Response.",
+        "responseOmissionRoute": "Destinazione: {{destination}} · checkpoint: {{checkpoint}}",
+        "responseOmissionEntry": "Voce della policy {{id}}",
+        "responseOmissionPhaseInstruction": "Istruzione della fase {{blockId}} · revisione esatta del blocco {{blockRevision}}"
+      },
+      "customPhases": {
+        "title": "Fasi personalizzate",
+        "description": "Aggiungi fasi circoscritte con istruzioni esatte, condizioni, capacità e transizioni.",
+        "defaultLabel": "Fase {{number}}",
+        "add": "Aggiungi fase personalizzata",
+        "empty": "Nessuna fase personalizzata configurata.",
+        "summary": "Fase {{number}} · {{id}}",
+        "order": "Ordine {{number}}",
+        "orderHint": "Le fasi precedenti vengono eseguite per prime; le transizioni possono ripetere o avanzare.",
+        "moveUp": "Sposta {{label}} in alto",
+        "moveDown": "Sposta {{label}} in basso",
+        "id": "ID fase",
+        "idFor": "ID fase per {{label}}",
+        "label": "Etichetta visualizzata",
+        "labelFor": "Etichetta visualizzata per la fase {{id}}",
+        "required": "Fase obbligatoria",
+        "requiredHint": "Una fase obbligatoria deve completarsi prima che l'esecuzione possa terminare.",
+        "requiredFor": "Rendi obbligatoria {{label}}",
+        "repeatLimit": "Limite di ripetizione",
+        "repeatLimitFor": "Limite di ripetizione per {{label}}",
+        "repeatLimitHint": "Numero massimo di volte in cui questa fase può ripetersi.",
+        "instructions": "Istruzioni",
+        "instructionsHint": "Seleziona blocchi Loom esistenti in base alla revisione esatta del preset e del blocco.",
+        "notSelected": "Non selezionato",
+        "unavailableInstruction": "Blocco di istruzioni non disponibile {{id}}",
+        "removeInstruction": "Rimuovi blocco di istruzioni {{id}}",
+        "childInstructionSubsets": "Sottoinsiemi di fase degli agenti secondari delegati",
+        "childInstructionSubsetsHint": "Assegna solo i blocchi di istruzioni di fase selezionati a ciascun profilo secondario creato. Un sottoinsieme vuoto non invia istruzioni di fase.",
+        "childInstructionSubsetsNoProfiles": "Crea prima un profilo secondario, quindi assegna le istruzioni di fase.",
+        "childSubsetAssign": "Assegna sottoinsieme",
+        "childSubsetAssignFor": "Assegna il sottoinsieme di fase a {{id}}",
+        "childSubsetProfileId": "ID profilo: {{id}}",
+        "childSubsetUnassigned": "Non assegnato — questo agente riceve solo il prompt di sistema del proprio profilo.",
+        "childSubsetEmpty": "Sottoinsieme vuoto — questo agente riceve solo il prompt di sistema del proprio profilo.",
+        "childSubsetCount": "{{count}} blocco/blocchi di istruzioni di fase assegnato/i.",
+        "childSubsetRepair": "Riparazione richiesta — questa assegnazione non corrisponde all’origine esatta della fase.",
+        "childSubsetUnknownProfile": "Profilo secondario sconosciuto {{id}}",
+        "childSubsetRemove": "Rimuovi il sottoinsieme del profilo secondario {{id}}",
+        "enter": "Condizione di ingresso",
+        "enterHint": "La fase inizia quando questa condizione è vera.",
+        "exit": "Condizione di uscita",
+        "exitHint": "La fase termina quando questa condizione è vera.",
+        "skip": "Condizione di salto",
+        "skipEnabled": "Consenti il salto della fase",
+        "skipHint": "Quando abilitato, salta questa fase se la condizione è vera.",
+        "skipFor": "Consenti di saltare {{label}}",
+        "capabilities": "Capacità richieste",
+        "capabilitiesHint": "Richiedi solo le capacità dell'host necessarie a questa fase.",
+        "capabilitiesList": {
+          "core_retrieval": "Recupero principale",
+          "workspace_read": "Leggi lo spazio di lavoro",
+          "workspace_write": "Scrivi nello spazio di lavoro",
+          "delegation": "Delega agli agenti secondari",
+          "council": "Council",
+          "cortex": "Memory Cortex"
+        },
+        "transitions": "Fasi successive",
+        "transitionsHint": "Scegli in quali fasi questa fase può entrare successivamente.",
+        "transitionAutomatic": "Sequenza automatica",
+        "transitionAutomaticHint": "Un elenco di transizioni vuoto consente ripetizioni entro il limite, quindi avanza alla fase immediatamente successiva.",
+        "transitionAutomaticNext": "Fase successiva automatica: {{label}}",
+        "transitionAutomaticTerminal": "Nessuna fase successiva. Il completamento di questa fase termina la sequenza.",
+        "transitionExplicit": "Transizioni esplicite",
+        "transitionExplicitHint": "Sono consentite solo la ripetizione e la fase immediatamente successiva selezionate.",
+        "useExplicitTransitions": "Usa transizioni esplicite",
+        "useAutomaticTransition": "Usa sequenza automatica",
+        "repeatTarget": "Ripeti questa fase",
+        "nextTarget": "Fase successiva: {{label}}",
+        "invalidTarget": "Fase non disponibile: {{id}}",
+        "remove": "Rimuovi fase personalizzata"
+      },
+      "tasks": {
+        "add": "Aggiungi modello di attività",
+        "defaultName": "Attività {{number}}",
+        "id": "ID modello",
+        "label": "Etichetta",
+        "description": "Descrizione dell'attività",
+        "required": "Obbligatoria",
+        "optional": "Facoltativa",
+        "requiredHint": "Le attività obbligatorie attivate devono concludersi prima del completamento. Le attività create dal modello rimangono facoltative.",
+        "dependencies": "Modelli di dipendenza",
+        "quarantined": "Modello di attività in quarantena",
+        "quarantinedHint": "Questo modello di attività importato non è valido e non può essere modificato finché non viene eliminato.",
+        "discardQuarantined": "Elimina il modello di attività in quarantena",
+        "remove": "Rimuovi modello"
+      },
+      "workspace": {
+        "retention": "Conservazione",
+        "sharing": "Condivisione",
+        "retentionOptions": {
+          "turn_terminal": "Fine del turno",
+          "chat_lifetime": "Durata della chat"
+        },
+        "retentionHints": {
+          "turn_terminal": "Mantieni lo spazio di lavoro in sola visualizzazione solo per la finestra di conservazione finale del turno.",
+          "chat_lifetime": "Conserva i metadati autorizzati e pubblicati dello spazio di lavoro per la durata della chat."
+        },
+        "sharingOptions": {
+          "root_only": "Solo agente radice",
+          "view_only": "Partecipanti con sola visualizzazione"
+        },
+        "sharingHints": {
+          "root_only": "Solo l'agente radice riceve le funzionalità dello spazio di lavoro.",
+          "view_only": "Le persone possono esaminare lo spazio di lavoro con i dati sensibili oscurati, che rimane non modificabile."
+        },
+        "ceilings": "Limiti effettivi dell'host",
+        "ceilingsHint": "Misure di sicurezza informative applicate da questo host. Le preimpostazioni e le importazioni non possono aumentarle.",
+        "readOnly": "Sola lettura",
+        "loading": "Caricamento dei limiti dell'host…",
+        "ceilingLabels": {
+          "childAdmissions": "Ammissioni di agenti secondari",
+          "aggregateToolCalls": "Chiamate agli strumenti aggregate",
+          "logicalProviderRequests": "Richieste logiche al provider",
+          "physicalDispatchAttempts": "Tentativi di distribuzione fisici",
+          "childOutputTokens": "Token di output degli agenti secondari",
+          "workAttemptOutputTokens": "Token di output per tentativo di lavoro",
+          "workAttemptProviderDispatches": "Invii al provider per tentativo di lavoro",
+          "workAttemptUnsignedBoundaries": "Confini non firmati per tentativo di lavoro",
+          "workAttemptToolCalls": "Chiamate agli strumenti per tentativo di lavoro",
+          "workAttemptWorkspaceOperations": "Operazioni nello spazio di lavoro per tentativo",
+          "workSegmentOutputTokens": "Token di output per segmento di lavoro",
+          "workSegmentProviderDispatches": "Invii al provider per segmento di lavoro",
+          "workSegmentUnsignedBoundaries": "Confini non firmati per segmento di lavoro",
+          "workSegmentToolCalls": "Chiamate agli strumenti per segmento di lavoro",
+          "workSegmentWorkspaceOperations": "Operazioni nello spazio di lavoro per segmento",
+          "workDispatchOutputTokens": "Token di output per invio di lavoro",
+          "workRecoveryReserveOutputTokens": "Token di output riservati al recupero del lavoro",
+          "workFuturePhaseReserveOutputTokens": "Token di output riservati alle fasi di lavoro future",
+          "rootWallClockMs": "Tempo reale della radice (ms)",
+          "activityEvents": "Eventi di attività",
+          "activityBytes": "Byte di attività",
+          "lifecycleLogRecords": "Record del registro del ciclo di vita",
+          "activeRootsPerUser": "Radici attive per utente",
+          "activeRootsProcess": "Radici attive per processo",
+          "providerDispatchesPerUser": "Distribuzioni del provider per utente",
+          "providerDispatchesProcess": "Distribuzioni del provider per processo",
+          "toolExecutionsPerUser": "Esecuzioni degli strumenti per utente",
+          "toolExecutionsProcess": "Esecuzioni degli strumenti per processo"
+        }
+      },
+      "limits": {
+        "customPhases": "Una preimpostazione può definire al massimo 64 fasi personalizzate.",
+        "policyBucket": "Un gruppo della politica Loom può contenere al massimo 64 voci.",
+        "policyTotal": "Una preimpostazione può contenere al massimo 128 voci della politica Loom.",
+        "tasks": "Una preimpostazione può definire al massimo 256 modelli di attività.",
+        "invalidBlockRevision": "Questo blocco Loom ha una revisione non valida e non può essere selezionato."
+      },
+      "repair": {
+        "acknowledge": "Ho esaminato questo elemento",
+        "chooseConnection": "Scegli una connessione locale",
+        "searchConnections": "Cerca connessioni…",
+        "noConnections": "Nessuna connessione compatibile",
+        "mapSlot": "Associa {{name}} a una connessione locale",
+        "ready": "Nessun elemento di portabilità o riparazione richiede un intervento.",
+        "selectCurrentLoomRevisions": "Seleziona le revisioni Loom attuali",
+        "selectCurrentLoomRevisionsHint": "Prepara le revisioni attuali valide dei blocchi Loom, della preimpostazione e dell’ordine dei prompt per esame e salvataggio. I blocchi mancanti o non validi restano non riparati. Le revisioni più recenti non vengono accettate automaticamente.",
+        "selectCurrentLoomRevisionsPending": "Le revisioni Loom attuali sono pronte. Salva per rendere persistente il runtime redatto, oppure reimposta per scartarle.",
+        "boundary": "Qui sono disponibili solo gli agenti della preimpostazione, gli strumenti principali di recupero, i blocchi Loom, i pacchetti di contesto, le attività e i criteri dello spazio di lavoro. Gli strumenti di estensione, gli hook, le autorizzazioni di uscita e gli editor dei ruoli non fanno parte di questo runtime.",
+        "kinds": {
+          "unresolved_slot": "Slot di connessione non risolto",
+          "stale_slot": "Associazione della connessione obsoleta",
+          "disabled_import": "Configurazione importata disabilitata",
+          "capability_mismatch": "Incompatibilità delle funzionalità del provider",
+          "stale_block": "Revisione del blocco Loom obsoleta",
+          "unknown": "Elemento runtime da riparare"
+        },
+        "actions": {
+          "acknowledge": "Esamina",
+          "map_slot": "Associa una connessione",
+          "select_revision": "Seleziona una revisione",
+          "discard": "Elimina il valore definito non valido",
+          "choose_response": "Usa Risposta",
+          "unknown": "Gestisci questo elemento"
+        },
+        "reasons": {
+          "unresolved_slot": "Scegli una connessione locale autenticata.",
+          "stale_slot": "Conferma o sostituisci l'associazione locale precedente.",
+          "repair_required": "Ripara i dati definiti prima dell'attivazione.",
+          "capability_mismatch": "Il provider associato non dispone di una funzionalità richiesta.",
+          "stale_policy_source": "Seleziona la revisione e l'ordine correnti del blocco Loom prima di salvare.",
+          "invalid_runtime_policy": "La politica runtime Loom canonica non è valida.",
+          "invalid_policy_entry": "Una voce della politica Loom non è valida.",
+          "invalid_predicate": "Una condizione cognitiva è incompleta.",
+          "predicate_limit_exceeded": "La condizione cognitiva supera i limiti di profondità o dimensione dell'host.",
+          "unknown": "Questo elemento runtime richiede una riparazione."
+        }
+      },
+      "predicate": {
+        "kind": "Tipo di condizione",
+        "add": "Aggiungi condizione",
+        "remove": "Rimuovi condizione",
+        "generationType": "Tipo di generazione",
+        "phase": "Fase",
+        "variableKey": "Nome della variabile della preimpostazione",
+        "factKey": "Nome del dato del partecipante",
+        "operator": "Operatore",
+        "value": "Valore",
+        "valueType": "Tipo di valore",
+        "values": "Valori di appartenenza",
+        "addValue": "Aggiungi valore",
+        "removeValue": "Rimuovi valore {{number}}",
+        "valueTypes": { "string": "Testo", "number": "Numero", "boolean": "Booleano", "stringList": "Elenco di testi" },
+        "boolean": { "true": "Vero", "false": "Falso" },
+        "tool": "Strumento",
+        "available": "Lo strumento deve essere disponibile",
+        "task": "Modello di attività",
+        "chooseTask": "Scegli un'attività",
+        "transition": "Transizione",
+        "kinds": {
+          "all": "Tutte le condizioni",
+          "any": "Qualsiasi condizione",
+          "not": "Non",
+          "generation_type": "Tipo di generazione",
+          "phase": "Fase corrente",
+          "preset_variable": "Variabile della preimpostazione",
+          "participant_fact": "Dato del partecipante",
+          "tool_available": "Disponibilità dello strumento",
+          "task_transition": "Transizione dell'attività"
+        },
+        "operators": {
+          "equals": "Uguale a",
+          "in": "Nell'elenco",
+          "includes": "Include",
+          "present": "È presente"
+        },
+        "transitions": {
+          "pending": "In attesa",
+          "active": "Attiva",
+          "blocked": "Bloccata",
+          "completed": "Completata",
+          "cancelled": "Annullata",
+          "failed": "Non riuscita"
+        }
+      },
+      "load": {
+        "loading": "Caricamento del runtime agentico…",
+        "error": "Impossibile caricare il runtime agentico. La modifica e il salvataggio sono disabilitati.",
+        "retry": "Riprova caricamento"
+      },
+
+      "save": {
+        "action": "Salva Runtime agentico",
+        "saving": "Salvataggio della bozza completa del runtime…",
+        "saved": "Runtime agentico salvato",
+        "unsaved": "Modifiche al Runtime agentico non salvate",
+        "reset": "Reimposta la bozza",
+        "conflict": "La preimpostazione o il runtime è stato modificato altrove. Ricarica ed esamina prima di salvare.",
+        "conflictHint": "Ricarica la preimpostazione e la configurazione Agentic canoniche prima di esaminarle o riprovare. La bozza locale non sovrascriverà la revisione più recente.",
+        "reloadLatest": "Ricarica l’ultima versione per esaminarla",
+        "reloadingLatest": "Ricaricamento dell’ultima versione…",
+        "reloadError": "Impossibile caricare l’ultimo stato canonico. La bozza locale è ancora conservata.",
+        "latestReady": "L’ultimo stato canonico è pronto. Esaminalo prima di modificarlo e riprovare.",
+        "reviewLatest": "Esamina l’ultima versione",
+        "error": "Impossibile salvare il Runtime agentico. La bozza è ancora disponibile."
+      },
+      "validation": {
+        "invalid_config": "La configurazione del runtime non è valida.",
+        "invalid_modes": "Le modalità consentite devono essere univoche, ordinate e includere Risposta come prima voce.",
+        "invalid_default_mode": "La modalità predefinita deve essere consentita.",
+        "invalid_profile": "Un profilo secondario è incompleto o utilizza un ID duplicato.",
+        "invalid_slot": "Uno slot di connessione portabile non è valido.",
+        "unresolved_slot": "Associa ogni slot di connessione obbligatorio.",
+        "invalid_block_reference": "Un blocco Loom selezionato non esiste più.",
+        "stale_block_revision": "La revisione di un blocco Loom selezionato è cambiata.",
+        "invalid_runtime_policy": "La politica runtime Loom canonica non è valida.",
+        "invalid_policy_entry": "Una voce della politica Loom non è valida.",
+        "stale_policy_source": "La sorgente della politica Loom non corrisponde più alla revisione o all'ordine del blocco corrente. Seleziona la revisione corrente prima di salvare.",
+        "invalid_predicate": "Una condizione cognitiva è incompleta.",
+        "predicate_limit_exceeded": "La condizione cognitiva supera i limiti di profondità o dimensione dell'host.",
+        "invalid_task_template": "Un modello di attività non è valido.",
+        "invalid_task_policy": "I riferimenti della politica delle attività devono corrispondere ai modelli dichiarati.",
+        "missing_task_dependency": "Una dipendenza dell'attività non esiste più.",
+        "cyclic_task_dependency": "Le dipendenze delle attività devono essere acicliche.",
+        "review_acknowledgement_unknown": "Rimuovi le conferme che non appartengono alla revisione corrente.",
+        "review_acknowledgement_required": "Conferma ogni elemento importato da esaminare prima dell'abilitazione."
+      }
+    },
+    "agentsTools": {
+      "eyebrow": "Funzionalità del preset",
+      "title": "Agenti e strumenti",
+      "description": "Autorizza agenti secondari riutilizzabili e gli strumenti di ricerca integrati che il preset può usare. Nulla viene eseguito finché la configurazione non è abilitata e salvata.",
+      "limits": {
+        "title": "Limiti di esecuzione dell’host",
+        "description": "Limiti effettivi di sola lettura imposti da questo host Lumiverse. I budget del preset restano portabili, ma l’esecuzione non può superare questi valori.",
+        "readOnly": "Sola lettura",
+        "loading": "Caricamento dei limiti dell’host…",
+        "rows": {
+          "childAdmissions": "Ammissioni di agenti secondari",
+          "aggregateToolCalls": "Chiamate agli strumenti aggregate",
+          "logicalProviderRequests": "Richieste logiche al provider",
+          "physicalDispatchAttempts": "Tentativi di dispatch fisico",
+          "childOutputTokens": "Token di output degli agenti secondari",
+          "rootWallClockMs": "Tempo reale della radice (ms)",
+          "activityEvents": "Eventi di attività",
+          "activityBytes": "Byte di attività",
+          "lifecycleLogRecords": "Record del log del ciclo di vita",
+          "activeRootsPerUser": "Radici attive per utente",
+          "activeRootsProcess": "Radici attive per processo",
+          "providerDispatchesPerUser": "Dispatch del provider per utente",
+          "providerDispatchesProcess": "Dispatch del provider per processo",
+          "toolExecutionsPerUser": "Esecuzioni degli strumenti per utente",
+          "toolExecutionsProcess": "Esecuzioni degli strumenti per processo"
+        }
+      },
+      "maxInvocations": {
+        "label": "Invocazioni massime degli agenti secondari",
+        "hint": "Numero massimo di esecuzioni di agenti secondari per generazione. Predefinito: 64; minimo: 1; nessun limite massimo imposto dal preset. Inserisci un intero sicuro.",
+        "error": "Inserisci un intero sicuro maggiore o uguale a 1."
+      },
+      "maxToolCalls": {
+        "label": "Numero massimo di chiamate agli strumenti",
+        "hint": "Numero massimo di tentativi cumulativi di chiamata agli strumenti per generazione. Predefinito: 64; minimo: 1; nessun limite massimo imposto dal preset. Inserisci un intero sicuro.",
+        "error": "Inserisci un intero sicuro maggiore o uguale a 1."
+      },
+      "enabled": "Abilitato",
+      "disabled": "Disabilitato",
+      "enableAria": "Abilita agenti e strumenti per questo preset",
+      "review": {
+        "title": "Controlla le funzionalità importate",
+        "description": "Le configurazioni importate sono disabilitate per sicurezza. Controlla profili, connessioni, strumenti e accesso alla lore prima di abilitarli su questo dispositivo.",
+        "action": "Segna come controllato"
+      },
+      "unsupported": {
+        "title": "Configurazione agenti non supportata",
+        "description": "Il preset contiene impostazioni che l’editor non può leggere in sicurezza. Una modifica crea una nuova configurazione disabilitata; i metadati esistenti restano invariati fino al salvataggio."
+      },
+      "main": {
+        "title": "Strumenti del modello principale",
+        "description": "Scegli gli strumenti di ricerca disponibili direttamente al modello principale, indipendentemente dai profili secondari."
+      },
+      "tools": {
+        "legend": "Strumenti principali consentiti",
+        "lore_list_books": {
+          "label": "Elenca libri di lore",
+          "description": "Esplora i libri di lore disponibili e la loro provenienza."
+        },
+        "lore_get_book": {
+          "label": "Ottieni libro di lore",
+          "description": "Leggi un libro abilitato tramite pagine limitate."
+        },
+        "lore_list_entries": {
+          "label": "Elenca voci di lore",
+          "description": "Esplora le voci abilitate nel libro selezionato."
+        },
+        "lore_get_entry": {
+          "label": "Ottieni voce di lore",
+          "description": "Leggi una voce abilitata tramite l’identificatore esatto."
+        },
+        "lore_search_entries": {
+          "label": "Cerca nella lore",
+          "description": "Cerca contenuti di lore abilitati nell’ambito concesso."
+        },
+        "chat_search_history": {
+          "label": "Cerca nella chat attuale",
+          "description": "Cerca nella cronologia immutabile selezionata per questa generazione."
+        }
+      },
+      "scope": {
+        "label": "Limite di accesso alla lore",
+        "active": "Lore attiva",
+        "all_owned": "Tutta la lore posseduta",
+        "activeHint": "Solo la lore già disponibile per questa generazione.",
+        "all_ownedHint": "Può cercare in tutti i libri di lore abilitati dell’utente locale."
+      },
+      "profiles": {
+        "title": "Profili degli agenti secondari",
+        "description": "I profili definiscono un modello subordinato riutilizzabile, i suoi permessi e i limiti di errore.",
+        "add": "Aggiungi profilo",
+        "defaultName": "Agente {{number}}",
+        "listAria": "Profili degli agenti secondari",
+        "moveUp": "Sposta {{name}} su",
+        "moveDown": "Sposta {{name}} giù",
+        "delete": "Elimina {{name}}",
+        "confirmDeleteTitle": "Eliminare questo profilo?",
+        "confirmDeleteDescription": "I blocchi che fanno riferimento a questo profilo diventeranno non validi. La modifica viene applicata solo al salvataggio.",
+        "name": "Nome visualizzato",
+        "id": "ID profilo",
+        "idHint": "ID snake_case stabile usato nella sintassi. Rinominare il profilo non lo modifica.",
+        "connection": "Profilo di connessione",
+        "selectConnection": "Seleziona una connessione",
+        "searchConnections": "Cerca connessioni…",
+        "noConnections": "Nessun profilo di connessione configurato",
+        "useMainConnection": "Usa la connessione principale",
+        "connectionHint": "Usa la connessione principale corrente o associa questo agente a un profilo esistente.",
+        "systemPrompt": "Prompt di sistema",
+        "systemPromptPlaceholder": "Definisci ruolo, limiti e risultato previsto dell’agente.",
+        "systemPromptHint": "Istruzione letterale dell’agente. Le macro del preset non vengono valutate qui.",
+        "tools": "Strumenti consentiti",
+        "workspaceCapabilities": "Operazioni dell’area di lavoro",
+        "workspaceCapabilitiesHint": "Concedi solo le operazioni necessarie a questo agente. Una selezione vuota non concede alcuna operazione.",
+        "delegation": "Consenti delega dal modello principale",
+        "delegationHint": "Permette al modello principale di scegliere questo profilo tramite agent_delegate.",
+        "activity": "Consenti attività in tempo reale",
+        "activityHint": "Consente stato e attività degli strumenti quando la sintassi richiede lo streaming. Il testo dell’agente non viene mai trasmesso.",
+        "failurePolicy": "Gestione errori",
+        "failureRequired": "Obbligatorio — interrompi la generazione",
+        "failureOptional": "Facoltativo — continua con un risultato vuoto",
+        "failureHint": "Controlla gli errori dei blocchi deterministici.",
+        "maxOutputTokens": "Token massimi in uscita",
+        "timeout": "Timeout (secondi)",
+        "timeoutHint": "Limite per invocazione in secondi interi (minimo 5 secondi, nessun limite massimo del preset).",
+        "empty": "Aggiungi un profilo secondario per definirne connessione, strumenti e prompt."
+      },
+      "syntax": {
+        "title": "Sintassi del prompt",
+        "description": "Copia un produttore di risultati con nome per la creazione manuale, oppure crea un blocco utente diretto e abilitato riutilizzabile senza conflitti tra i nomi dei risultati.",
+        "taskPlaceholder": "Descrivi l’attività per questo agente.",
+        "copy": "Copia sintassi agente",
+        "copied": "Copiato",
+        "copyFailed": "Accesso agli appunti non riuscito. Seleziona e copia manualmente la sintassi.",
+        "createBlock": "Crea un blocco prompt con questo agente",
+        "saveFirst": "Salva la configurazione prima di creare un blocco.",
+        "blockName": "Agente: {{name}}"
+      },
+      "navigation": {
+        "saveBeforePresetAction": "Salva la configurazione Agenti e strumenti prima di cambiare, importare o esportare preset."
+      },
+      "actions": {
+        "cancel": "Annulla",
+        "delete": "Elimina"
+      },
+      "save": {
+        "reviewFirst": "Controlla le funzionalità importate prima di salvarle o abilitarle.",
+        "notConfigured": "Agenti e strumenti non sono configurati per questo preset.",
+        "unsaved": "Configurazione agenti non salvata",
+        "saved": "Configurazione agenti salvata",
+        "action": "Salva configurazione"
+      },
+      "validation": {
+        "invalid_config": "La configurazione agenti deve essere un oggetto.",
+        "unknown_config_key": "La configurazione contiene campi non supportati.",
+        "invalid_version": "È supportata solo la versione 1 della configurazione.",
+        "invalid_enabled": "Lo stato di abilitazione non è valido.",
+        "invalid_max_invocations": "Il numero massimo di invocazioni degli agenti secondari deve essere un intero sicuro finito.",
+        "max_invocations_below_minimum": "Il numero massimo di invocazioni degli agenti secondari deve essere almeno 1.",
+        "invalid_main_tools": "La selezione degli strumenti principali non è valida.",
+        "invalid_profiles": "L’elenco dei profili non è valido.",
+        "too_many_profiles": "Un preset può contenere al massimo {{profileLimit}} profili secondari.",
+        "unknown_profile_key": "Questo profilo contiene campi non supportati.",
+        "unknown_tool": "È selezionato uno strumento principale sconosciuto.",
+        "duplicate_tool": "Uno strumento può essere selezionato una sola volta.",
+        "invalid_main_scope": "L’ambito lore del modello principale non è valido.",
+        "invalid_scope": "L’ambito lore non è valido.",
+        "scope_requires_lore_tool": "Tutta la lore posseduta richiede almeno uno strumento lore.",
+        "invalid_id": "Usa 1–64 lettere minuscole, numeri o trattini bassi, iniziando con una lettera.",
+        "duplicate_id": "Gli ID dei profili devono essere univoci.",
+        "invalid_name": "Il nome del profilo non è valido.",
+        "name_too_long": "Il nome visualizzato deve avere al massimo {{nameMax}} caratteri.",
+        "invalid_system_prompt": "Il prompt di sistema deve essere testo.",
+        "system_prompt_too_long": "Il prompt di sistema deve avere al massimo {{promptMax}} byte UTF-8.",
+        "invalid_connection": "Scegli un profilo valido o usa la connessione principale.",
+        "connection_not_found": "Questo profilo di connessione è stato eliminato o non è più disponibile.",
+        "main_connection_unavailable": "Seleziona una connessione esistente perché non è attiva una connessione principale.",
+        "invalid_delegation": "L’impostazione della delega non è valida.",
+        "invalid_failure_policy": "Scegli la gestione obbligatoria o facoltativa.",
+        "invalid_stream_activity": "L’impostazione dell’attività non è valida.",
+        "invalid_max_output_tokens": "I token massimi devono essere un numero intero.",
+        "max_output_tokens_out_of_range": "I token massimi devono essere tra {{tokenMin}} e {{tokenMax}}.",
+        "invalid_timeout": "Il timeout deve essere un numero intero di secondi.",
+        "timeout_below_minimum": "Il timeout deve essere di almeno {{timeoutMin}} secondi."
+      }
+    },
     "empty": {
       "loading": "Caricamento...",
       "noPresetTitle": "Nessun preset selezionato",
@@ -3367,6 +3988,26 @@
     },
     "toast": {
       "exportFailed": "Impossibile esportare il preset",
+      "importHydrationWarning": "Preset importato, ma non è stato possibile aggiornare i dettagli dell’editor. La copia salvata è disponibile.",
+      "portableErrors": {
+        "PORTABLE_PRESET_INVALID": "Il preset portatile non è valido.",
+        "PORTABLE_PROMPT_BLOCK_INVALID": "Il preset contiene un blocco prompt non valido.",
+        "PORTABLE_EXPORT_UNSTABLE": "Il preset è cambiato durante l’esportazione. Riprova.",
+        "AGENT_RUNTIME_PORTABLE_INVALID": "I dati runtime portabili non sono validi.",
+        "AGENT_RUNTIME_PORTABLE_STALE": "I dati runtime portabili sono obsoleti. Esporta di nuovo.",
+        "AGENT_RUNTIME_PORTABLE_CONTRADICTORY": "I dati runtime portabili sono contraddittori.",
+        "AGENT_RUNTIME_PORTABLE_REGEX_INVALID": "I dati regex portabili non sono validi.",
+        "AGENT_RUNTIME_PORTABLE_PRESET_INVALID": "I dati del preset portatile non sono validi.",
+        "AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID": "Il runtime portatile fa riferimento a dati di contesto non disponibili.",
+        "AGENT_RUNTIME_PORTABLE_RULE_INVALID": "La regola di contesto portatile non è valida.",
+        "AGENT_RUNTIME_PORTABLE_SELECTION_INVALID": "La selezione di contesto portatile non è valida.",
+        "LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE": "Un blocco sigillato non contiene una provenienza LumiHub attendibile.",
+        "LUMIHUB_LINK_UNAVAILABLE": "Collega LumiHub prima di importare blocchi di preset sigillati.",
+        "LUMIHUB_SEALED_RESOLUTION_FAILED": "LumiHub non ha potuto risolvere i blocchi sigillati.",
+        "LUMIHUB_SEALED_DIGEST_MISMATCH": "Il contenuto sigillato restituito da LumiHub non ha superato la verifica.",
+        "PRESET_REVISION_CONFLICT": "Il preset è stato modificato altrove. Aggiorna e riprova.",
+        "PRESET_REVISION_REQUIRED": "È necessaria la revisione del preset. Aggiorna e riprova."
+      },
       "importedRegexFromPreset": "Importato {{count}} script regex dal preset",
       "importedRegexFromPreset_plural": "Importati {{count}} script regex dal preset",
       "regexImportFailed": "{{count}} script regex non è riuscito a importare",

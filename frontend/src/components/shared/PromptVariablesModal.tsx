@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, RotateCcw, Sliders } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Sliders } from 'lucide-react'
+import { ApiError } from '@/api/client'
 import { ModalShell } from '@/components/shared/ModalShell'
 import NumberStepper from '@/components/shared/NumberStepper'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
@@ -13,6 +14,7 @@ interface PromptVariablesModalProps {
   blocks: PromptBlock[]
   values: PromptVariableValues
   onSave: (values: PromptVariableValues) => void | Promise<void>
+  onReloadLatest: () => Promise<PromptVariableValues>
   onClose: () => void
 }
 
@@ -84,36 +86,54 @@ function placementForSelection(
   return placement
 }
 
+function seedDraft(eligible: EligibleBlock[], values: PromptVariableValues): PromptVariableValues {
+  const seeded: PromptVariableValues = {}
+  for (const { block, variables } of eligible) {
+    const bucket: Record<string, PromptVariableValue> = {}
+    const stored = values[block.id] ?? {}
+    for (const def of variables) {
+      bucket[def.name] = resolveInitialValue(def, stored[def.name])
+    }
+    seeded[block.id] = bucket
+  }
+  return seeded
+}
+
+function isPresetRevisionConflict(error: unknown): boolean {
+  return error instanceof ApiError
+    && error.status === 409
+    && error.body?.code === 'PRESET_REVISION_CONFLICT'
+}
+
+type ConflictRecoveryState = 'idle' | 'conflict' | 'reloading' | 'reload-error' | 'latest'
+
 export function PromptVariablesModal({
   isOpen,
   blocks,
   values,
   onSave,
+  onReloadLatest,
   onClose,
 }: PromptVariablesModalProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'promptVariables' })
   const { t: tc } = useTranslation('common')
+  const { t: ts } = useTranslation('panels', { keyPrefix: 'loomBuilder.agenticRuntime.save' })
   const eligible = useMemo(() => collectEligibleBlocks(blocks), [blocks])
 
   // Local draft keyed by blockId → varName. Seeded from stored values on open.
   const [draft, setDraft] = useState<PromptVariableValues>({})
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)
-
+  const [conflictRecoveryState, setConflictRecoveryState] = useState<ConflictRecoveryState>('idle')
   useEffect(() => {
     if (!isOpen) return
-    const seeded: PromptVariableValues = {}
-    for (const { block, variables } of eligible) {
-      const bucket: Record<string, PromptVariableValue> = {}
-      const stored = values[block.id] ?? {}
-      for (const def of variables) {
-        bucket[def.name] = resolveInitialValue(def, stored[def.name])
-      }
-      seeded[block.id] = bucket
-    }
-    setDraft(seeded)
+    setDraft(seedDraft(eligible, values))
     setCollapsed(Object.fromEntries(eligible.map(({ block }) => [block.id, true])))
   }, [isOpen, eligible, values])
+
+  useEffect(() => {
+    if (isOpen) setConflictRecoveryState('idle')
+  }, [isOpen])
 
   const setVar = (blockId: string, varName: string, value: PromptVariableValue) => {
     setDraft((prev) => ({
@@ -168,15 +188,27 @@ export function PromptVariablesModal({
   }
 
   const handleSave = async () => {
-    if (saving) return
+    if (saving || conflictRecoveryState === 'conflict' || conflictRecoveryState === 'reloading' || conflictRecoveryState === 'reload-error') return
     setSaving(true)
     try {
       await onSave(buildSavePayload())
       onClose()
-    } catch {
-      // error surfaced via hook's console.warn + toast upstream
+    } catch (error) {
+      if (isPresetRevisionConflict(error)) setConflictRecoveryState('conflict')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const reloadLatestForReview = async () => {
+    if (saving || conflictRecoveryState === 'reloading') return
+    setConflictRecoveryState('reloading')
+    try {
+      const latest = await onReloadLatest()
+      setDraft(seedDraft(eligible, latest))
+      setConflictRecoveryState('latest')
+    } catch {
+      setConflictRecoveryState('reload-error')
     }
   }
 
@@ -240,6 +272,27 @@ export function PromptVariablesModal({
         )}
       </div>
 
+      {conflictRecoveryState !== 'idle' && (
+        <div className={css.conflictBanner} role="alert">
+          <AlertTriangle size={17} aria-hidden="true" />
+          <div className={css.conflictCopy}>
+            <strong>{conflictRecoveryState === 'latest' ? ts('latestReady') : ts('conflict')}</strong>
+            {conflictRecoveryState === 'conflict' && <span>{ts('conflictHint')}</span>}
+            {conflictRecoveryState === 'reload-error' && <span>{ts('reloadError')}</span>}
+          </div>
+          {conflictRecoveryState !== 'latest' && (
+            <button
+              type="button"
+              className={[css.btn, css.btnGhost].join(' ')}
+              onClick={() => { void reloadLatestForReview() }}
+              disabled={conflictRecoveryState === 'reloading'}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              {conflictRecoveryState === 'reloading' ? ts('reloadingLatest') : ts('reloadLatest')}
+            </button>
+          )}
+        </div>
+      )}
       <div className={css.footer}>
         {eligible.length > 0 && (
           <button
@@ -261,7 +314,7 @@ export function PromptVariablesModal({
           type="button"
           className={`${css.btn} ${css.btnSubmit}`}
           onClick={handleSave}
-          disabled={saving || eligible.length === 0}
+          disabled={saving || conflictRecoveryState === 'conflict' || conflictRecoveryState === 'reloading' || conflictRecoveryState === 'reload-error' || eligible.length === 0}
         >
           {saving ? t('saving') : tc('actions.save')}
         </button>

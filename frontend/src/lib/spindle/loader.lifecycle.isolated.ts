@@ -80,6 +80,14 @@ const originalUrlDescriptors = new Map<string, PropertyDescriptor | undefined>(
     .map((key) => [key, Object.getOwnPropertyDescriptor(URL, key)]),
 )
 const windowMock = dom.window
+Object.defineProperty(windowMock, 'matchMedia', {
+  configurable: true,
+  value: () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }),
+})
 const nativeWindowAddEventListener = windowMock.addEventListener.bind(windowMock)
 const nativeWindowRemoveEventListener = windowMock.removeEventListener.bind(windowMock)
 let trackWindowHandlers = false
@@ -218,14 +226,14 @@ const presetAccessMock = {
   },
 }
 
-mock.module('@/store', () => ({ useStore: useStoreMock }))
 mock.module('@/i18n', () => ({
+  default: { t: (key: string) => key, language: 'en' },
   UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
-  changeUiLanguage: async () => {},
-  default: { language: 'en', t: (key: string) => key },
   ensureLanguageLoaded: async () => {},
-  initI18n: async () => ({}),
+  initI18n: async () => ({ t: (key: string) => key, language: 'en' }),
+  changeUiLanguage: async () => {},
 }))
+mock.module('@/store', () => ({ useStore: useStoreMock }))
 mock.module('@/ws/client', () => ({
   WS_AUTH_ERROR: '__ws_auth_error',
   WS_CLOSE: '__ws_close',
@@ -296,13 +304,16 @@ mock.module('./frontend-domain-api', () => ({
 }))
 mock.module('@/api/spindle', () => ({ spindleApi: { getPermissions: () => permissionPromise } }))
 mock.module('@/api/characters', () => ({ charactersApi: { get: async () => null } }))
-mock.module('@/api/chats', () => ({ chatsApi: {}, messagesApi: { update: async () => ({ id: 'message' }) } }))
+mock.module('@/api/chats', () => ({
+  chatsApi: { listCharacterChats: async () => [] },
+  messagesApi: { update: async () => ({ id: 'message' }) },
+}))
 mock.module('./dom-helper', () => ({ createDOMHelper: () => ({ cleanup() {} }) }))
 mock.module('./message-interceptors', () => ({
   dispatchMessageTagIntercepts() {},
   getTagInterceptorRegistryVersion: () => 0,
   registerTagInterceptor: () => () => {},
-  stripMessageTags: (content: string) => ({ cleanedContent: content, intercepts: [] }),
+  stripMessageTags: (content: string) => ({ content, intercepts: [] }),
   subscribeTagInterceptorRegistry: () => () => {},
   unregisterTagInterceptorsByExtension() {},
 }))
@@ -317,6 +328,7 @@ mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},
   invalidateDisplayRegexCacheForMessage() {},
   invalidateDisplayRegexCacheForVars() {},
+  useDisplayPreprocessed: (content: string) => content,
   useDisplayRegex: (content: string) => content,
 }))
 mock.module('./message-widgets', () => ({
@@ -356,6 +368,12 @@ mock.module('./character-editor-helper', () => ({
   updateCharacterEditorExtensions() {},
   flushCharacterEditorExtensions: async () => {},
 }))
+mock.module('./connection-editor-helper', () => ({
+  getConnectionEditorState: () => ({}),
+  getEditedConnectionProfileId: () => null,
+  subscribeConnectionEditorState: () => () => {},
+  subscribeConnectionEditorSaved: () => () => {},
+}))
 mock.module('./preset-editor-helper', () => ({
   getPresetEditorState: () => ({}),
   subscribePresetEditorState: () => () => {},
@@ -383,15 +401,15 @@ mock.module('@/lib/uuid', () => ({
 mock.module('./navigation-guards', () => ({ installSpindleNavigationGuards() {} }))
 mock.module('@/lib/drawer-tab-registry', () => ({
   DRAWER_TABS: [],
-  adaptExtensionTabs: () => [],
-  applyDrawerTabOrder: (items: unknown[]) => items,
   ensureRegistryRoot: () => undefined,
-  extensionCommandsToCommands: () => [],
-  extensionTabsToCommands: () => [],
   isDrawerTabCore: () => false,
+  sanitizeHiddenDrawerTabIds: (ids: unknown) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [],
+  sanitizeDrawerTabOrder: (ids: unknown) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [],
+  applyDrawerTabOrder: <T>(items: T[]) => items,
+  adaptExtensionTabs: () => [],
   registryToCommands: () => [],
-  sanitizeDrawerTabOrder: (order?: string[]) => order ?? [],
-  sanitizeHiddenDrawerTabIds: (ids?: string[]) => ids ?? [],
+  extensionTabsToCommands: () => [],
+  extensionCommandsToCommands: () => [],
 }))
 mock.module('./ui-events-helper', () => ({
   createUIEventsHelper: () => ({}),

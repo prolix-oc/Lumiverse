@@ -1,0 +1,31 @@
+.status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-warning, #f5a623) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lumiverse-warning, #f5a623) 10%, transparent);
+  color: var(--lumiverse-text);
+}
+
+.copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.copy strong {
+  font-size: 13px;
+}
+
+.copy code {
+  overflow-wrap: anywhere;
+  color: var(--lumiverse-text-dim);
+  font-size: 11px;
+}

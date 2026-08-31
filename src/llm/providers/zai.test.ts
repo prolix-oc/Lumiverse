@@ -64,6 +64,7 @@ describe("ZAIProvider interleaved thinking", () => {
             properties: { city: { type: "string" } },
             required: ["city"],
           },
+          strict: false,
         },
       },
     ]);

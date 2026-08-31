@@ -131,7 +131,25 @@ beforeEach(() => {
 afterEach(() => closeDatabase());
 
 describe("world-book vector commit races", () => {
-  test("keeps the source when vector cleanup fails", async () => {
+  test("keeps source vectors when the fenced source delete fails", async () => {
+    let sourceDeleteCalled = false;
+    let vectorDeleteCalled = false;
+    await expect(__test__.coordinateWorldBookVectorAndSourceDelete(
+      "user",
+      ["entry-1"],
+      async () => { vectorDeleteCalled = true; },
+      () => {
+        sourceDeleteCalled = true;
+        throw new Error("source revision is stale");
+      },
+    )).rejects.toThrow("source revision is stale");
+
+    expect(sourceDeleteCalled).toBe(true);
+    expect(vectorDeleteCalled).toBe(false);
+    expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).not.toBeNull();
+  });
+
+  test("does not roll a committed source delete back when vector cleanup fails", async () => {
     let sourceDeleteCalled = false;
     await expect(__test__.coordinateWorldBookVectorAndSourceDelete(
       "user",
@@ -140,14 +158,15 @@ describe("world-book vector commit races", () => {
       () => {
         sourceDeleteCalled = true;
         getDb().query("DELETE FROM world_book_entries WHERE id = 'entry-1'").run();
+        return true;
       },
     )).rejects.toThrow("vector store unavailable");
 
-    expect(sourceDeleteCalled).toBe(false);
-    expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).not.toBeNull();
+    expect(sourceDeleteCalled).toBe(true);
+    expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).toBeNull();
   });
 
-  test("holds the entry gate through source deletion", async () => {
+  test("holds the entry gate through source deletion and vector cleanup", async () => {
     const events: string[] = [];
     let releaseVectorDelete!: () => void;
     let vectorDeleteStarted!: () => void;
@@ -165,6 +184,7 @@ describe("world-book vector commit races", () => {
       () => {
         events.push("source-delete");
         getDb().query("DELETE FROM world_book_entries WHERE id = 'entry-1'").run();
+        return true;
       },
     );
     await started;
@@ -174,12 +194,12 @@ describe("world-book vector commit races", () => {
       expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).toBeNull();
     });
     await Promise.resolve();
-    expect(events).toEqual(["vector-delete"]);
+    expect(events).toEqual(["source-delete", "vector-delete"]);
 
     releaseVectorDelete();
     await deletion;
     await competingCommit;
-    expect(events).toEqual(["vector-delete", "source-delete", "competing-commit"]);
+    expect(events).toEqual(["source-delete", "vector-delete", "competing-commit"]);
   });
 
   test("compare-and-set rejects an edit after final snapshot validation", async () => {

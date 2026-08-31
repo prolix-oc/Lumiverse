@@ -170,6 +170,10 @@ export const wsHandler = upgradeWebSocket((c) => {
             timestamp: Date.now(),
           })
         );
+        if (userId) {
+          const { drainPendingAgentRunEventsForUser } = await import("../services/agent-run-projection.service");
+          drainPendingAgentRunEventsForUser(userId);
+        }
       } catch (err) {
         console.error("[WS] onOpen error:", err);
       }

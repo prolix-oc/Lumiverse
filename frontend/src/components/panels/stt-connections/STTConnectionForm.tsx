@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import type { RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
@@ -9,6 +10,7 @@ import type {
   SttConnectionProfile,
   CreateSttConnectionInput,
 } from '@/types/api'
+import ConnectionReviewStatus from '@/components/shared/ConnectionReviewStatus'
 import styles from '../ConnectionManager.module.css'
 
 interface Props {
@@ -16,10 +18,12 @@ interface Props {
   profile?: SttConnectionProfile
   onSave: (input: CreateSttConnectionInput) => void
   onCancel: () => void
+  onReview?: () => Promise<void> | void
+  focusTargetRef?: RefObject<HTMLElement | null>
 }
-
-export default function STTConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+export default function STTConnectionForm({ providers, profile, onSave, onCancel, onReview, focusTargetRef }: Props) {
   const { t } = useTranslation('panels')
+  const reviewRequired = profile?.review_required === true
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'openai')
   const [apiKey, setApiKey] = useState('')
@@ -50,8 +54,8 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
         .map((option) => [option.id, option.label])
     )
   }, [modelOptions])
-
   const fetchModels = useCallback(async () => {
+    if (reviewRequired) return
     setModelsLoading(true)
     try {
       const result = await sttConnectionsApi.previewModels({
@@ -66,7 +70,7 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, profile?.id, provider])
+  }, [apiKey, apiUrl, profile?.id, provider, reviewRequired])
 
   useEffect(() => {
     if (profile?.id && capabilities?.modelListStyle !== 'static') {
@@ -85,9 +89,10 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
       is_default: isDefault,
     })
   }, [name, provider, apiKey, apiUrl, model, isDefault, onSave])
-
   return (
     <div className={styles.form}>
+      {profile && <ConnectionReviewStatus profile={profile} onReview={onReview ?? (() => undefined)} focusTargetRef={focusTargetRef} />}
+      <fieldset disabled={reviewRequired} style={{ border: 0, padding: 0, margin: 0 }}>
       <FormField label={t('sttConnectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('sttConnectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
@@ -135,6 +140,7 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('sttConnectionForm.setDefault')} />
       </FormField>
 
+      </fieldset>
       <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('sttConnectionForm.cancel')}</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>

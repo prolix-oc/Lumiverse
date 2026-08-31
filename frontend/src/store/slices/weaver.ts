@@ -82,9 +82,10 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
     const state = get()
     const profiles = state.profiles ?? []
     const resolvedId =
-      (state.activeProfileId && profiles.some((p) => p.id === state.activeProfileId)
+      (state.activeProfileId && profiles.some((p) => p.id === state.activeProfileId && p.review_required !== true)
         ? state.activeProfileId
-        : profiles.find((p) => p.is_default)?.id ?? profiles[0]?.id) ?? undefined
+        : profiles.find((p) => p.is_default && p.review_required !== true)?.id
+          ?? profiles.find((p) => p.review_required !== true)?.id) ?? undefined
     const session = await api.createSession({
       ...(resolvedId ? { connection_id: resolvedId } : {}),
       ...input,

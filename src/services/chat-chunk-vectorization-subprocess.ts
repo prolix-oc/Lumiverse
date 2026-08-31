@@ -9,20 +9,25 @@ import {
 } from "./chat-chunk-vectorization-runner";
 
 type HostToSubprocessMessage =
-  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
+  | { type: "process_batch"; requestId: string; generation: number; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
+  | { type: "cancel_generation"; generation: number }
   | { type: "shutdown" };
 
 type SubprocessToHostMessage =
   | { type: "ready" }
-  | { type: "result"; requestId: string; result: ChatChunkVectorizationBatchResult }
-  | { type: "error"; requestId?: string; error: string; name?: string; stack?: string };
+  | { type: "result"; requestId: string; generation: number; result: ChatChunkVectorizationBatchResult }
+  | { type: "error"; requestId?: string; generation?: number; error: string; name?: string; stack?: string };
 
 let initialized: Promise<void> | null = null;
+let activeGeneration: number | null = null;
+let activeController: AbortController | null = null;
 
 function send(message: SubprocessToHostMessage): void {
-  if (typeof process.send === "function") {
-    process.send(message);
-  }
+  if (typeof process.send === "function") process.send(message);
+}
+function describeError(err: unknown): { error: string; name?: string; stack?: string } {
+  if (err instanceof Error) return { error: err.message, name: err.name, stack: err.stack };
+  return { error: String(err) };
 }
 
 function ensureInitialized(): Promise<void> {
@@ -36,41 +41,44 @@ function ensureInitialized(): Promise<void> {
   return initialized;
 }
 
-function createBatchSignal(timeoutMs?: number): { signal: AbortSignal | undefined; cleanup: () => void } {
+function createBatchController(timeoutMs?: number): { controller: AbortController; cleanup: () => void } {
   const effectiveTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
     ? Math.max(0, Math.floor(timeoutMs))
     : 0;
-  if (effectiveTimeoutMs <= 0) {
-    return {
-      signal: undefined,
-      cleanup: () => {},
-    };
-  }
-
   const controller = new AbortController();
+  if (effectiveTimeoutMs <= 0) return { controller, cleanup: () => {} };
+
   const timer = setTimeout(() => {
     console.warn("[vectorization] Chat chunk subprocess batch deadline reached; aborting remaining work without restart");
     controller.abort(createChatChunkVectorizationBatchTimeoutError(effectiveTimeoutMs));
   }, effectiveTimeoutMs);
-
-  return {
-    signal: controller.signal,
-    cleanup: () => clearTimeout(timer),
-  };
+  return { controller, cleanup: () => clearTimeout(timer) };
 }
 
-async function handleProcessBatch(message: Extract<HostToSubprocessMessage, { type: "process_batch" }>): Promise<void> {
+async function handleProcessBatch(
+  message: Extract<HostToSubprocessMessage, { type: "process_batch" }>,
+): Promise<void> {
   await ensureInitialized();
-  const { signal, cleanup } = createBatchSignal(message.timeoutMs);
+  if (activeGeneration !== null && activeGeneration !== message.generation) {
+    throw new Error(`Vector worker generation ${activeGeneration} cannot process generation ${message.generation}`);
+  }
+  activeGeneration = message.generation;
+  const { controller, cleanup } = createBatchController(message.timeoutMs);
+  activeController = controller;
   try {
-    const result = await processChatChunkVectorizationBatch(message.tasks, { signal });
+    const result = await processChatChunkVectorizationBatch(message.tasks, {
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) throw controller.signal.reason;
     send({
       type: "result",
       requestId: message.requestId,
+      generation: message.generation,
       result,
     });
   } finally {
     cleanup();
+    if (activeController === controller) activeController = null;
   }
 }
 
@@ -80,14 +88,22 @@ function handleMessage(message: HostToSubprocessMessage): void {
     process.exit(0);
     return;
   }
+  if (message.type === "cancel_generation") {
+    if (activeGeneration === message.generation) {
+      activeController?.abort(new DOMException("Database generation cancelled", "AbortError"));
+    }
+    // A subprocess owns one host generation. Exit even when idle so a reopened
+    // host database can never reuse this process's SQLite/Lance handles.
+    process.exit(0);
+    return;
+  }
 
-  handleProcessBatch(message).catch((err: any) => {
+  handleProcessBatch(message).catch((err: unknown) => {
     send({
       type: "error",
       requestId: message.requestId,
-      error: err?.message || String(err),
-      name: err?.name,
-      stack: err?.stack,
+      generation: message.generation,
+      ...describeError(err),
     });
   });
 }
@@ -102,12 +118,10 @@ process.on("message", (message) => {
 
 void ensureInitialized().then(
   () => send({ type: "ready" }),
-  (err: any) => {
+  (err: unknown) => {
     send({
       type: "error",
-      error: err?.message || String(err),
-      name: err?.name,
-      stack: err?.stack,
+      ...describeError(err),
     });
     process.exit(1);
   },

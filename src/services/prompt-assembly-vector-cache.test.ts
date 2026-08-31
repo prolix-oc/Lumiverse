@@ -267,7 +267,7 @@ describe("vector world-info retrieval cache", () => {
 });
 
 describe("vector world-info search fan-out", () => {
-  test("searches only attached books containing search-ready entries", () => {
+  test("searches only attached authorized books and rejects a foreign indexed entry", () => {
     const searchable = __vectorWiRetrievalTest.getSearchableWorldBookIds(
       ["book-keyword-only", "book-ready", "book-pending"],
       [
@@ -287,6 +287,10 @@ describe("vector world-info search fan-out", () => {
           vectorized: false,
           vector_index_status: "not_enabled",
           vector_indexed_at: null,
+        }),
+        entry({
+          id: "entry-foreign-ready",
+          world_book_id: "book-foreign-user",
         }),
       ],
     );

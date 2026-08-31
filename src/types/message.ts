@@ -33,6 +33,8 @@ export interface Message {
   parent_message_id: string | null;
   branch_id: string | null;
   created_at: number;
+  /** Monotonic revision incremented by message/swipe mutations. */
+  generation_revision?: number;
 }
 
 /** A persisted, currently-visible message that matched a chat find query. */

@@ -268,3 +268,98 @@ describe("world-book P8 REST mutation contracts", () => {
     });
   });
 });
+
+describe("world-book entry parent containment", () => {
+  test("PUT ignores client world_book_id and wrong-parent routes stay 404", async () => {
+    const bookA = svc.createWorldBook(USER_ID, { name: "Parent A" });
+    const bookB = svc.createWorldBook(USER_ID, { name: "Parent B" });
+    const entry = svc.createEntry(USER_ID, bookA.id, { comment: "only-a", content: "original" })!;
+    const headers = { "content-type": "application/json", "x-test-user": USER_ID };
+
+    const moved = await app.request(`http://localhost/world-books/${bookA.id}/entries/${entry.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        content: "edited",
+        world_book_id: bookB.id,
+        id: "forged-id",
+        expected_revision: entry.revision,
+      }),
+    });
+    expect(moved.status).toBe(200);
+    const saved = await moved.json() as { world_book_id: string; content: string; id: string };
+    expect(saved.world_book_id).toBe(bookA.id);
+    expect(saved.id).toBe(entry.id);
+    expect(saved.content).toBe("edited");
+    expect(svc.getEntry(USER_ID, entry.id)?.world_book_id).toBe(bookA.id);
+
+    const listB = await app.request(`http://localhost/world-books/${bookB.id}/entries?limit=50`, {
+      headers: { "x-test-user": USER_ID },
+    });
+    expect(listB.status).toBe(200);
+    const pageB = await listB.json() as { data: Array<{ id: string }> };
+    expect(pageB.data.map((row) => row.id)).not.toContain(entry.id);
+
+    const wrongPut = await app.request(`http://localhost/world-books/${bookB.id}/entries/${entry.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ content: "from-b", expected_revision: entry.revision + 1 }),
+    });
+    expect(wrongPut.status).toBe(404);
+    expect(await wrongPut.json()).toEqual({ error: "Not found" });
+
+    const wrongDelete = await app.request(`http://localhost/world-books/${bookB.id}/entries/${entry.id}`, {
+      method: "DELETE",
+      headers: { "x-test-user": USER_ID },
+    });
+    expect(wrongDelete.status).toBe(404);
+    expect(await wrongDelete.json()).toEqual({ error: "Not found" });
+
+    const rightDelete = await app.request(`http://localhost/world-books/${bookA.id}/entries/${entry.id}`, {
+      method: "DELETE",
+      headers: { "x-test-user": USER_ID },
+    });
+    expect(rightDelete.status).toBe(200);
+    expect(svc.getEntry(USER_ID, entry.id)).toBeNull();
+  });
+
+  test("stale expected parent after bulk move stays 404 without mutating B", async () => {
+    const bookA = svc.createWorldBook(USER_ID, { name: "Parent A" });
+    const bookB = svc.createWorldBook(USER_ID, { name: "Parent B" });
+    const entry = svc.createEntry(USER_ID, bookA.id, { comment: "move-me", content: "original" })!;
+    const headers = { "content-type": "application/json", "x-test-user": USER_ID };
+
+    const moved = await app.request(`http://localhost/world-books/${bookA.id}/entries/bulk`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "move",
+        entry_ids: [entry.id],
+        target_book_id: bookB.id,
+      }),
+    });
+    expect(moved.status).toBe(200);
+    expect(svc.getEntry(USER_ID, entry.id)?.world_book_id).toBe(bookB.id);
+
+    const stalePut = await app.request(`http://localhost/world-books/${bookA.id}/entries/${entry.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ content: "from-stale-a", expected_revision: entry.revision + 1 }),
+    });
+    expect(stalePut.status).toBe(404);
+    expect(await stalePut.json()).toEqual({ error: "Not found" });
+
+    const staleDelete = await app.request(`http://localhost/world-books/${bookA.id}/entries/${entry.id}`, {
+      method: "DELETE",
+      headers: { "x-test-user": USER_ID },
+    });
+    expect(staleDelete.status).toBe(404);
+    expect(await staleDelete.json()).toEqual({ error: "Not found" });
+
+    const live = svc.getEntry(USER_ID, entry.id);
+    expect(live?.world_book_id).toBe(bookB.id);
+    expect(live?.content).toBe("original");
+  });
+
+});
+

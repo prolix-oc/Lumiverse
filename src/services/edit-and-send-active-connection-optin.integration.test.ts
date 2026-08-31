@@ -192,16 +192,19 @@ interface DispatchObservation {
 function observeRealDispatches(): DispatchObservation[] {
   const observed: DispatchObservation[] = [];
   track(spyOn(chatBackground, "abortChatBackground").mockResolvedValue(undefined));
-  track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation(() => {
+  const resolveProfile = councilProfilesSvc.resolveProfile;
+  track(spyOn(councilProfilesSvc, "resolveProfile").mockImplementation((...args) => {
+    if (pool.getActivePoolsForUser(USER).length === 0) return resolveProfile(...args);
     throw new Error("skip-assembly");
   }));
   dispatcher.setEditAndSendStartGeneration(async (input, options) => {
     await generateSvc.startGeneration(input as never, options)
       .catch(() => { /* the stubbed prompt assembly, not the resolution */ });
+    const entry = pool.getPoolEntry(input.generationId);
     observed.push({
       options,
-      connectionId: (input as { connection_id?: string }).connection_id,
-      model: pool.getPoolEntry(input.generationId)?.model,
+      connectionId: entry?.connectionId,
+      model: entry?.model,
     });
     // Between paths, clear the in-memory generation state so a later dispatch
     // of a different row is resolved afresh rather than short-circuiting on a

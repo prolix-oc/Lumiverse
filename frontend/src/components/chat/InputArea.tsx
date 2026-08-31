@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useSyncExternalStore, Fragment, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
@@ -11,6 +11,8 @@ import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profi
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { memoryCortexApi } from '@/api/memory-cortex'
+import { agentRunsApi } from '@/api/agent-runs'
+import { recoverAgentRuns } from '@/lib/agent-run-recovery'
 import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
@@ -34,9 +36,12 @@ import {
 } from '@/lib/chatPersonaSelection'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
-import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
+import type { Chat, MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
+import { isAgenticGenerationType } from '@/types/effective-runtime'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import AgentRuntimeModeControl from './AgentRuntimeModeControl'
+import AgentRunStopButton from './AgentRunStopButton'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import { databankApi } from '@/api/databank'
@@ -76,6 +81,14 @@ import {
   subscribePresetProfilePromptVariableChanges,
   updatePresetProfilePromptVariables,
 } from '@/hooks/preset-profile-prompt-variables'
+import { selectActiveAgentRunForChat, selectLatestAgentRunForChat } from '@/store/slices/agent-runs'
+import {
+  agentRuntimeErrorTranslationKey,
+  agentRuntimePreflightTranslationKey,
+  getRuntimeSelectionSnapshot,
+  resetActiveGenerationMode,
+  subscribeRuntimeSelection,
+} from '@/lib/agentRuntimeSelection'
 import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefaults'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
@@ -90,6 +103,14 @@ import InputAreaCustomizeModal, {
   type ComposerActionId,
 } from './InputAreaCustomizeModal'
 import { ComposerActionBarLive } from './InputAreaComposerBar'
+import {
+  beginGenerationRequest,
+  captureGenerationRequest,
+  consumeGenerationStopResult,
+  isGenerationRequestCurrentForChat,
+  startGenerationWithRecovery,
+  type GenerationStopWireResult,
+} from '@/lib/generation-recovery'
 import { isExtensionComposerActionId } from './composerActionOwnership'
 
 interface InputAreaProps {
@@ -105,6 +126,7 @@ const MOBILE_QUEUE_HOLD_PROMPT_MS = 180
 const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
 const ALT_FIELD_NAMES = ['description', 'personality', 'scenario'] as const
+type ComposerStopResult = 'accepted' | 'too_late' | 'terminal'
 
 function stackVisibleRegexSelections(base: string, selections: PendingRegexSelection[]): string {
   return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
@@ -128,6 +150,29 @@ function serializeHiddenRegexSelections(selections: PendingRegexSelection[]) {
     source_message_id: item.messageId,
   }))
 }
+
+function resolveGenerationErrorMessage(
+  error: unknown,
+  fallback: string,
+  translate: (key: string) => string,
+): string {
+  const runtimeKey = agentRuntimeErrorTranslationKey(error)
+    ?? agentRuntimePreflightTranslationKey(error)
+  if (runtimeKey) return translate(runtimeKey)
+  if (!error || typeof error !== 'object') return fallback
+
+  const source = error as { body?: unknown; message?: unknown }
+  const body = source.body && typeof source.body === 'object'
+    ? source.body as { error?: unknown }
+    : null
+  return typeof body?.error === 'string'
+    ? body.error
+    : typeof source.message === 'string'
+      ? source.message
+      : fallback
+}
+
+
 const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
   const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
   return 0.12 + centerBias * 0.22
@@ -281,8 +326,24 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
   const navigate = useNavigate()
   const [text, setText] = useState('')
+  const [composerStopping, setComposerStopping] = useState(false)
+  const [composerAbortInFlight, setComposerAbortInFlight] = useState(false)
+  const [composerStopResult, setComposerStopResult] = useState<ComposerStopResult | null>(null)
+  const composerStopResultRef = useRef<ComposerStopResult | null>(null)
   const [pendingRegexVisibleCount, setPendingRegexVisibleCount] = useState(0)
+  const [pendingRuntimeTarget, setPendingRuntimeTarget] = useState<{
+    generationType: string
+    messageId: string | null
+    swipeId: number | null
+    targetCharacterId: string | null
+  }>({
+    generationType: 'normal',
+    messageId: null,
+    swipeId: null,
+    targetCharacterId: null,
+  })
   const [lastImpersonateInput, setLastImpersonateInput] = useState<string>('')
+  const [retryingTurnId, setRetryingTurnId] = useState<string | null>(null)
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
@@ -294,6 +355,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const showComposerCustomizeGear = useStore((state) => readProductivityFeature(state, 'showComposerCustomizeGear'))
   const hasLumiverseSuite = useStore((state) => hasEnabledFrontendExtension(state.extensions, 'lumiverse_suite'))
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
+  const [promptVariablesAvailability, setPromptVariablesAvailability] = useState<PromptVariablesAvailability | null>(null)
+  const [memoryCortexInFlight, setMemoryCortexInFlight] = useState(false)
+
   const openPopoverRef = useRef(openPopover)
   useEffect(() => {
     openPopoverRef.current = openPopover
@@ -319,8 +383,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const promptVariablesBindingRef = useRef<PromptVariableProfileTarget | null>(null)
   promptVariablesBindingRef.current = promptVariablesBinding
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
-  const [promptVariablesAvailability, setPromptVariablesAvailability] = useState<PromptVariablesAvailability | null>(null)
-  const [memoryCortexInFlight, setMemoryCortexInFlight] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -343,6 +405,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const [atQuery, setAtQuery] = useState<string | null>(null)
   const [atStartIndex, setAtStartIndex] = useState(0)
   const [atResults, setAtResults] = useState<Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null; extensions?: Record<string, any> }>>([])
+  const generationAbortControllerRef = useRef<AbortController | null>(null)
   const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
@@ -350,6 +413,15 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const sendingRef = useRef(false)
   const regexActionHandlingRef = useRef(false)
   const generationNonceRef = useRef(0)
+  const pendingAgentStopRef = useRef<{
+    generationId: string | null
+    requestAuthorityId: string | null
+    stoppedTurnId: string | null
+  } | null>(null)
+  const composerStopAuthorityRef = useRef<{
+    generationId: string | null
+    requestAuthorityId: string | null
+  } | null>(null)
   const touchHoldPromptTimerRef = useRef<number>(0)
   const touchQueueArmTimerRef = useRef<number>(0)
   const touchHoldStartedAtRef = useRef(0)
@@ -378,7 +450,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
   const setActiveProfile = useStore((s) => s.setActiveProfile)
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null
+  const activeProfile = profiles.find((p) => p.id === activeProfileId && p.review_required !== true) || null
+  const selectableProfiles = profiles.filter((p) => p.review_required !== true)
   const voiceSettings = useStore((s) => s.voiceSettings)
   // Temporary chats are persona-less: messages send as plain "User" and no
   // persona_id is attached to message extras or generation requests.
@@ -424,9 +497,132 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const setImpersonateDraftContent = useStore((s) => s.setImpersonateDraftContent)
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
+  const streamingSwipeId = useStore((s) => s.streamingSwipeId)
   const localGenerationInChat = isStreaming && activeChatId === chatId
-  const isGeneratingInChat = !!liveChatGenerationId || localGenerationInChat
-  const generationIdForChat = liveChatGenerationId || (localGenerationInChat ? activeGenerationId : null)
+  const generationRequestAuthority = useStore((s) => s.generationRequests[chatId])
+  const requestPendingInChat = generationRequestAuthority?.status === 'pending'
+    || generationRequestAuthority?.status === 'queued'
+    || generationRequestAuthority?.status === 'working'
+  const generationRequestStatusLabel = generationRequestAuthority?.status === 'pending'
+    ? t('agentRun.status.pending')
+    : generationRequestAuthority?.status === 'queued'
+      ? t('agentRun.phase.queued')
+      : generationRequestAuthority?.status === 'working'
+        ? t('agentRun.phase.started')
+        : null
+  const isGeneratingInChat = !!liveChatGenerationId || localGenerationInChat || requestPendingInChat
+  const runtimeSelection = useSyncExternalStore(
+    useCallback((listener) => subscribeRuntimeSelection(chatId, listener), [chatId]),
+    useCallback(() => getRuntimeSelectionSnapshot(chatId), [chatId]),
+    useCallback(() => getRuntimeSelectionSnapshot(chatId), [chatId]),
+  )
+  const generationIdForChat = generationRequestAuthority?.generationId
+    || liveChatGenerationId
+    || (localGenerationInChat ? activeGenerationId : null)
+  const waitingForExactAgentRun = isGeneratingInChat
+    && !isGroupChat
+    && !mpRoomId
+    && isAgenticGenerationType(pendingRuntimeTarget.generationType)
+    && (
+      runtimeSelection.oneTurnMode === 'agentic'
+      || runtimeSelection.activeGenerationMode === 'agentic'
+    )
+  const latestAgentRun = useStore((s) => selectLatestAgentRunForChat(s, chatId))
+  const latestAssistantMessage = messages.at(-1)
+  const exactRetryRun = useMemo(() => {
+    if (isGeneratingInChat || !latestAgentRun || !latestAssistantMessage || latestAssistantMessage.is_user) return null
+    const target = latestAgentRun.target
+    if (!target || target.messageId !== latestAssistantMessage.id || target.swipeId !== latestAssistantMessage.swipe_id) return null
+    if (latestAgentRun.workStatus !== 'terminal') return null
+    if (!latestAgentRun.recoveryEligible || latestAgentRun.recoveryAction !== 'retry') return null
+    return latestAgentRun
+  }, [isGeneratingInChat, latestAgentRun, latestAssistantMessage])
+  const canReplayAssistant = !isGeneratingInChat && !!latestAssistantMessage && !latestAssistantMessage.is_user
+  const activeAgentRun = useStore((s) => selectActiveAgentRunForChat(s, chatId, generationIdForChat))
+  const composerAbortSettled = composerStopping && !composerAbortInFlight && composerStopResult !== null
+  const showStopControl = !isRoomPeer && (isGeneratingInChat || composerAbortInFlight) && !composerAbortSettled
+  useEffect(() => {
+    pendingAgentStopRef.current = null
+    composerStopAuthorityRef.current = null
+    setComposerStopping(false)
+    setComposerAbortInFlight(false)
+    composerStopResultRef.current = null
+    setComposerStopResult(null)
+  }, [chatId])
+  const recordComposerStopResult = useCallback((result: ComposerStopResult | null) => {
+    composerStopResultRef.current = result
+    setComposerStopResult(result)
+  }, [])
+  const applyComposerStopResult = useCallback((result: GenerationStopWireResult, knownGenerationId?: string) => {
+    const authority = composerStopAuthorityRef.current
+    composerStopAuthorityRef.current = null
+    recordComposerStopResult(consumeGenerationStopResult(
+      chatId,
+      result,
+      knownGenerationId ?? authority?.generationId ?? undefined,
+      t('generationStatus.error'),
+      authority ? authority.requestAuthorityId : undefined,
+    ))
+  }, [chatId, recordComposerStopResult, t])
+  const agentRunSyncStatus = useStore((s) => s.agentRunSyncByChat[chatId])
+  const canRetryExactAgentRunLookup = agentRunSyncStatus === 'error'
+    || agentRunSyncStatus === 'stale'
+  const cancelGenerationLocally = useCallback(() => {
+    generationNonceRef.current += 1
+    const authority = useStore.getState().generationRequests[chatId] ?? null
+    authority?.abortController?.abort(new DOMException('Generation cancelled', 'AbortError'))
+    generationAbortControllerRef.current?.abort(new DOMException('Generation cancelled', 'AbortError'))
+    generationAbortControllerRef.current = null
+    return authority
+  }, [chatId])
+  const beginComposerAbort = useCallback(() => {
+    recordComposerStopResult(null)
+    setComposerStopping(true)
+    setComposerAbortInFlight(true)
+    const authority = cancelGenerationLocally()
+    composerStopAuthorityRef.current = authority ? {
+      generationId: authority.generationId,
+      requestAuthorityId: authority.requestAuthorityId,
+    } : null
+    return authority
+  }, [cancelGenerationLocally, recordComposerStopResult])
+  const settleComposerAbort = useCallback(() => {
+    setComposerAbortInFlight(false)
+    if (composerStopResultRef.current === null) setComposerStopping(false)
+  }, [])
+
+  useEffect(() => {
+    const pending = pendingAgentStopRef.current
+    if (!pending || !activeAgentRun) return
+    if (pending.generationId && pending.generationId !== activeAgentRun.generationId) return
+    if (pending.stoppedTurnId === activeAgentRun.turnId) return
+    pending.stoppedTurnId = activeAgentRun.turnId
+    void agentRunsApi.stop(activeAgentRun.turnId, {
+      chatId,
+      generationId: activeAgentRun.generationId,
+      requestAuthorityId: pending.requestAuthorityId ?? undefined,
+    }).then((result) => {
+      if (pendingAgentStopRef.current === pending && pending.stoppedTurnId === activeAgentRun.turnId) {
+        pendingAgentStopRef.current = null
+      }
+      applyComposerStopResult(result, activeAgentRun.generationId)
+    }).catch(() => {
+      if (pendingAgentStopRef.current === pending && pending.stoppedTurnId === activeAgentRun.turnId) {
+        pending.stoppedTurnId = null
+      }
+      console.error('[InputArea] Failed to stop located Agentic run:')
+    })
+  }, [activeAgentRun, applyComposerStopResult, chatId])
+
+  useEffect(() => {
+    if (!waitingForExactAgentRun || activeAgentRun) return
+    void recoverAgentRuns(chatId, agentRunsApi, useStore)
+    const timer = window.setInterval(() => {
+      void recoverAgentRuns(chatId, agentRunsApi, useStore)
+    }, 750)
+    return () => window.clearInterval(timer)
+  }, [activeAgentRun, chatId, waitingForExactAgentRun])
   const groupResponseOrder = useMemo(
     () => readGroupResponseOrder(activeChatMetadata),
     [activeChatMetadata],
@@ -447,6 +643,44 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     isGroupChat,
     mutedCharacterIds,
   ])
+  useEffect(() => {
+    if (
+      !localGenerationInChat
+      || streamingGenerationType !== 'swipe'
+      || !regeneratingMessageId
+      || streamingSwipeId === null
+    ) return
+    setPendingRuntimeTarget({
+      generationType: 'swipe',
+      messageId: regeneratingMessageId,
+      swipeId: streamingSwipeId,
+      targetCharacterId: focusedPreviewCharacterId,
+    })
+  }, [
+    focusedPreviewCharacterId,
+    localGenerationInChat,
+    regeneratingMessageId,
+    streamingGenerationType,
+    streamingSwipeId,
+  ])
+
+  useEffect(() => {
+    if (isGeneratingInChat) return
+    resetActiveGenerationMode(chatId)
+    setPendingRuntimeTarget((current) => (
+      current.generationType === 'normal'
+      && current.messageId === null
+      && current.swipeId === null
+      && current.targetCharacterId === focusedPreviewCharacterId
+        ? current
+        : {
+            generationType: 'normal',
+            messageId: null,
+            swipeId: null,
+            targetCharacterId: focusedPreviewCharacterId,
+          }
+    ))
+  }, [chatId, focusedPreviewCharacterId, isGeneratingInChat])
 
   // Track whether the active character has expressions configured
   const [hasExpressions, setHasExpressions] = useState(false)
@@ -1111,6 +1345,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     && promptVariablesAvailability?.presetId === activeLoomPresetId
     && promptVariablesAvailability.registryUpdatedAt === activeLoomPresetRegistryUpdatedAt
     && promptVariablesAvailability.hasDefinitions
+  const activeLoomPresetName = activeLoomPresetId ? loomRegistry[activeLoomPresetId]?.name ?? null : null
 
   useEffect(() => {
     setPromptVariablesAvailability(null)
@@ -1242,6 +1477,16 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     }
   }, [promptVariablesPreset, promptVariablesBinding, chatId, t])
 
+  const reloadPromptVariableValues = useCallback(async (): Promise<PromptVariableValues> => {
+    const presetId = promptVariablesPreset?.id
+    if (!presetId || useStore.getState().activeLoomPresetId !== presetId) {
+      throw new Error('No active preset')
+    }
+    const latest = presetSaveCoordinator.acceptPersisted(unmarshalPreset(await presetsApi.get(presetId)))
+    if (useStore.getState().activeLoomPresetId !== presetId) throw new Error('No active preset')
+    setPromptVariablesPreset(latest)
+    return latest.promptVariables
+  }, [promptVariablesPreset?.id])
   useEffect(() => subscribePresetProfilePromptVariableChanges(({ target, binding }) => {
     const currentTarget = promptVariablesBindingRef.current
     if (
@@ -1492,16 +1737,41 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       if (e.key === 'Escape' && isGeneratingInChat && !isRoomPeer) {
         e.preventDefault()
         e.stopPropagation()
-        generateApi.stop(generationIdForChat || undefined, chatId).catch(console.error)
-        // If in optimistic phase, revert locally
-        if (localGenerationInChat && !activeGenerationId) {
-          stopStreaming()
+        const knownRun = activeAgentRun
+        const stoppedAuthority = beginComposerAbort()
+        if (knownRun) {
+          void agentRunsApi.stop(knownRun.turnId, {
+            chatId,
+            generationId: knownRun.generationId,
+            requestAuthorityId: stoppedAuthority?.requestAuthorityId ?? undefined,
+          }).then((result) => applyComposerStopResult(result, knownRun.generationId))
+            .catch(console.error)
+            .finally(settleComposerAbort)
+        } else {
+          if (waitingForExactAgentRun) {
+            pendingAgentStopRef.current = {
+              generationId: generationIdForChat,
+              requestAuthorityId: stoppedAuthority?.requestAuthorityId ?? null,
+              stoppedTurnId: null,
+            }
+            void recoverAgentRuns(chatId, agentRunsApi, useStore)
+          } else {
+            pendingAgentStopRef.current = null
+          }
+          void generateApi.stop(
+            stoppedAuthority?.generationId || generationIdForChat || undefined,
+            chatId,
+            stoppedAuthority?.requestAuthorityId ?? undefined,
+          )
+            .then((result) => applyComposerStopResult(result, stoppedAuthority?.generationId || generationIdForChat || undefined))
+            .catch(console.error)
+            .finally(settleComposerAbort)
         }
       }
     }
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
-  }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [activeAgentRun, waitingForExactAgentRun, isGeneratingInChat, generationIdForChat, chatId, beginComposerAbort, applyComposerStopResult, settleComposerAbort, isRoomPeer])
 
   useEffect(() => {
     if (openPopover !== 'persona') {
@@ -1881,15 +2151,30 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     contentOverride?: string,
     triggerAction?: RegexActionActivation,
   ) => {
-    if (sendingRef.current || isGeneratingInChat) return
+    if (sendingRef.current || (isGeneratingInChat && !composerAbortSettled)) return
     sendingRef.current = true
+    setComposerStopping(false)
+    setComposerAbortInFlight(false)
+    const nonce = ++generationNonceRef.current
+    generationAbortControllerRef.current?.abort()
+    const generationAbortController = new AbortController()
+    generationAbortControllerRef.current = generationAbortController
+    beginGenerationRequest(chatId, { generationType: 'normal' })
+    const generationRequest = captureGenerationRequest(chatId)
 
     // Multiplayer: route through the room (turn/window-gated) unless we're the
     // host in round-robin, who sends locally on their own chat.
     if (await attemptRoomSend(contentOverride, triggerAction) !== 'local') {
+      useStore.getState().stopGenerationRequest(chatId)
       sendingRef.current = false
       return
     }
+    setPendingRuntimeTarget({
+      generationType: 'normal',
+      messageId: null,
+      swipeId: null,
+      targetCharacterId: focusedPreviewCharacterId,
+    })
 
     const pendingSelections = getPendingRegexSelections(chatId)
     const sourceText = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
@@ -1900,11 +2185,17 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const willCreateMessage = !!content || !!attachments
     if (willCreateMessage && !await finalizeRegexSelections(pendingSelections, triggerAction)) {
+      useStore.getState().stopGenerationRequest(chatId)
       sendingRef.current = false
       return
     }
 
-    const nonce = ++generationNonceRef.current
+    // The request authority was published before any async routing, message
+    // persistence, runtime decision, or generation admission.
+    // Publish the cancellable local intent before message persistence and
+    // runtime preflight. The target message does not exist yet, so defer the
+    // normal stream placeholder until the authoritative START identifies it.
+    beginStreaming(undefined, 'normal', { createPlaceholder: false })
     if (contentOverride === undefined) {
       setText('')
       setPendingAttachments([])
@@ -1931,6 +2222,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       const effectivePersonaId = isTemporaryChat ? null : activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const presetId = getActivePresetForGeneration() || undefined
+      const forceResponse = isGroupChat || !!mpRoomId
       const genOpts: import('@/api/generate').GenerateRequest = {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
@@ -1939,7 +2231,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
+        mode: forceResponse ? 'response' : undefined,
+        target_character_id: !isGroupChat ? focusedPreviewCharacterId ?? undefined : undefined,
         user_input: sourceText || undefined,
+        request_authority_id: generationRequest.requestAuthorityId ?? undefined,
       }
 
       // Parse @mentions in the user's message (group chats only). Each mention
@@ -2016,27 +2311,36 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           extra: Object.keys(extra).length > 0 ? extra : undefined,
         })
         regexAppendsCommitted = true
+        if (
+          !isGenerationRequestCurrentForChat(generationRequest)
+        ) return
         // Optimistically add to store so it appears immediately
         addMessage(msg)
-        // Show streaming state immediately so stop button appears during assembly
-        beginStreaming()
-        const res = await generateApi.start(genOpts)
-        if (generationNonceRef.current !== nonce) return
+        const res = await startGenerationWithRecovery('start', genOpts, {
+          forceRuntimeRefresh: true,
+          forceResponse,
+          signal: generationAbortController.signal,
+        })
+        if (!isGenerationRequestCurrentForChat(generationRequest, res.generationId, true)) return
         startStreaming(res.generationId)
         consumeOneshotGuides()
       } else if (hasQueuedMessages) {
         // Queued user messages waiting — trigger normal generation
-        beginStreaming()
-        const res = await generateApi.start(genOpts)
-        if (generationNonceRef.current !== nonce) return
+        const res = await startGenerationWithRecovery('start', genOpts, {
+          forceResponse,
+          signal: generationAbortController.signal,
+        })
+        if (!isGenerationRequestCurrentForChat(generationRequest, res.generationId, true)) return
         startStreaming(res.generationId)
         consumeOneshotGuides()
       } else {
         // Empty send from the input bar is a nudge for a fresh reply, not the
         // explicit Continue action that appends onto the previous assistant message.
-        beginStreaming()
-        const res = await generateApi.start(genOpts)
-        if (generationNonceRef.current !== nonce) return
+        const res = await startGenerationWithRecovery('start', genOpts, {
+          forceResponse,
+          signal: generationAbortController.signal,
+        })
+        if (!isGenerationRequestCurrentForChat(generationRequest, res.generationId, true)) return
         startStreaming(res.generationId)
         consumeOneshotGuides()
       }
@@ -2052,13 +2356,13 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       }
       if (generationNonceRef.current !== nonce) return
       console.error('[InputArea] Failed to send:', err)
-      const msg = err?.body?.error || err?.message || te('failedToStartGeneration')
+      const msg = resolveGenerationErrorMessage(err, te('failedToStartGeneration'), t)
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.generationFailed') })
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, t, te])
+  }, [text, chatId, isGeneratingInChat, composerAbortSettled, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, focusedPreviewCharacterId, t, te])
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
@@ -2239,80 +2543,82 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
+    generationAbortControllerRef.current?.abort()
+    const generationAbortController = new AbortController()
+    generationAbortControllerRef.current = generationAbortController
 
-    // 1. Delete the last assistant message (if after the latest user turn)
     const lastMsg = messages[messages.length - 1]
-    let nextIndex = 0
-    if (lastMsg && !lastMsg.is_user) {
-      nextIndex = lastMsg.index_in_chat
-      try {
-        await messagesApi.delete(chatId, lastMsg.id)
-        useStore.getState().removeMessage(lastMsg.id)
-      } catch (err) {
-        console.error('[InputArea] Failed to delete before regenerate:', err)
-      }
-    } else {
-      nextIndex = (lastMsg?.index_in_chat ?? -1) + 1
-    }
+    const targetMessage = lastMsg && !lastMsg.is_user ? lastMsg : null
+    const targetCharacterId = isGroupChat && typeof targetMessage?.extra?.character_id === 'string'
+      ? targetMessage.extra.character_id
+      : focusedPreviewCharacterId
+    const targetSwipeId = targetMessage?.swipe_id ?? null
+    beginGenerationRequest(chatId, {
+      generationType: 'regenerate',
+      targetMessageId: targetMessage?.id ?? null,
+      targetSwipeId,
+    })
+    const generationRequest = captureGenerationRequest(chatId)
 
-    // 2. Insert a blank placeholder message immediately so there's a card to stream into
-    const placeholderId = `__regen_placeholder_${Date.now()}`
-    const placeholder: import('@/types/api').Message = {
-      id: placeholderId,
+    setPendingRuntimeTarget({
+      generationType: 'regenerate',
+      messageId: targetMessage?.id ?? null,
+      swipeId: targetSwipeId,
+      targetCharacterId,
+    })
+    beginStreaming(targetMessage?.id, 'regenerate')
+
+    const presetId = getActivePresetForGeneration() || undefined
+    const forceResponse = isGroupChat || !!mpRoomId
+    const genOpts: import('@/api/generate').GenerateRequest = {
       chat_id: chatId,
-      index_in_chat: nextIndex,
-      is_user: false,
-      name: '',
-      content: '',
-      send_date: Math.floor(Date.now() / 1000),
-      swipe_id: 0,
-      swipes: [''],
-      swipe_dates: [Math.floor(Date.now() / 1000)],
-      extra: {},
-      parent_message_id: null,
-      branch_id: null,
-      created_at: Math.floor(Date.now() / 1000),
+      connection_id: activeProfileId || undefined,
+      persona_id: isTemporaryChat ? undefined : activePersonaId || undefined,
+      persona_addon_states: isTemporaryChat ? undefined : activeGenerationAddonStates,
+      preset_id: presetId,
+      force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+      generation_type: 'regenerate',
+      mode: forceResponse ? 'response' : undefined,
+      message_id: targetMessage?.id,
+      swipe_id: targetSwipeId ?? undefined,
+      target_character_id: targetCharacterId ?? undefined,
+      retain_council: retainCouncilForRegens || undefined,
+      request_authority_id: generationRequest.requestAuthorityId ?? undefined,
     }
-    addMessage(placeholder)
+    if (feedback) {
+      genOpts.regen_feedback = feedback
+      genOpts.regen_feedback_position = regenFeedback.position
+      genOpts.regen_feedback_format = regenFeedback.format
+    }
 
-    // 3. Begin streaming, targeting the placeholder card
-    beginStreaming(placeholderId)
-
-    // 4. Fire generation
     try {
-      const presetId = getActivePresetForGeneration() || undefined
-      const genOpts: import('@/api/generate').GenerateRequest = {
-        chat_id: chatId,
-        connection_id: activeProfileId || undefined,
-        persona_id: activePersonaId || undefined,
-        persona_addon_states: activeGenerationAddonStates,
-        preset_id: presetId,
-        force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
-        generation_type: 'normal',
-        retain_council: retainCouncilForRegens || undefined,
-      }
-      if (isGroupChat && typeof lastMsg?.extra?.character_id === 'string') {
-        genOpts.target_character_id = lastMsg.extra.character_id
-      }
-      if (feedback) {
-        genOpts.regen_feedback = feedback
-        genOpts.regen_feedback_position = regenFeedback.position
-        genOpts.regen_feedback_format = regenFeedback.format
-      }
-      const res = await generateApi.start(genOpts)
-      if (generationNonceRef.current !== nonce) return
+      const res = await startGenerationWithRecovery('regenerate', genOpts, {
+        forceRuntimeRefresh: true,
+        forceResponse,
+        signal: generationAbortController.signal,
+      })
+      if (
+        generationNonceRef.current !== nonce
+        || !isGenerationRequestCurrentForChat(generationRequest, res.generationId, true)
+      ) return
       startStreaming(res.generationId)
       consumeOneshotGuides()
-    } catch (err: any) {
-      if (generationNonceRef.current !== nonce) return
-      // Remove the placeholder on failure
-      useStore.getState().removeMessage(placeholderId)
+    } catch (err: unknown) {
+      if (
+        generationNonceRef.current !== nonce
+        || useStore.getState().activeChatId !== chatId
+      ) return
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('[InputArea] Failed to regenerate:', err)
-      const msg = err?.body?.error || err?.message || te('failedToRegenerate')
+      const msg = resolveGenerationErrorMessage(err, te('failedToRegenerate'), t)
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
+    } finally {
+      if (generationAbortControllerRef.current === generationAbortController) {
+        generationAbortControllerRef.current = null
+      }
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, isTemporaryChat, focusedPreviewCharacterId, mpRoomId, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, regenFeedback.format, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
@@ -2330,42 +2636,111 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const handleContinue = useCallback(async () => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
-    beginStreaming(undefined, 'continue')
+    generationAbortControllerRef.current?.abort()
+    const generationAbortController = new AbortController()
+    generationAbortControllerRef.current = generationAbortController
+    const lastMessage = messages.at(-1)
+    const lastAssistant = lastMessage && !lastMessage.is_user ? lastMessage : undefined
+    const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
+      ? lastAssistant.extra.character_id
+      : focusedPreviewCharacterId
+    const forceResponse = isGroupChat || !!mpRoomId
+    setPendingRuntimeTarget({
+      generationType: 'continue',
+      messageId: lastAssistant?.id ?? null,
+      swipeId: lastAssistant?.swipe_id ?? null,
+      targetCharacterId,
+    })
+    beginStreaming(lastAssistant?.id, 'continue')
     try {
-      const lastMessage = messages.at(-1)
-      const lastAssistant = lastMessage && !lastMessage.is_user ? lastMessage : undefined
-      const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
-        ? lastAssistant.extra.character_id
-        : undefined
       const presetId = getActivePresetForGeneration() || undefined
-      const res = await generateApi.continueGeneration({
+      const res = await startGenerationWithRecovery('continue', {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
-        persona_id: activePersonaId || undefined,
-        persona_addon_states: activeGenerationAddonStates,
+        persona_id: isTemporaryChat ? undefined : activePersonaId || undefined,
+        persona_addon_states: isTemporaryChat ? undefined : activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        generation_type: 'continue',
+        mode: forceResponse ? 'response' : undefined,
         message_id: lastAssistant?.id,
-        target_character_id: targetCharacterId,
+        swipe_id: lastAssistant?.swipe_id,
+        target_character_id: targetCharacterId ?? undefined,
         retain_council: retainCouncilForRegens || undefined,
+      }, {
+        forceResponse,
+        signal: generationAbortController.signal,
       })
-      if (generationNonceRef.current !== nonce) return
+      if (
+        generationNonceRef.current !== nonce
+        || useStore.getState().activeChatId !== chatId
+      ) return
       startStreaming(res.generationId)
       consumeOneshotGuides()
-    } catch (err: any) {
-      if (generationNonceRef.current !== nonce) return
+    } catch (err: unknown) {
+      if (
+        generationNonceRef.current !== nonce
+        || useStore.getState().activeChatId !== chatId
+      ) return
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('[InputArea] Failed to continue:', err)
-      const msg = err?.body?.error || err?.message || te('failedToContinue')
+      const msg = resolveGenerationErrorMessage(err, te('failedToContinue'), t)
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.continueFailed') })
+    } finally {
+      if (generationAbortControllerRef.current === generationAbortController) {
+        generationAbortControllerRef.current = null
+      }
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, isTemporaryChat, focusedPreviewCharacterId, mpRoomId, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, startGenerationWithRecovery, setStreamingError, consumeOneshotGuides, t, te])
+  const handleRetry = useCallback(async () => {
+    const candidate = exactRetryRun
+    if (!candidate || isGeneratingInChat || retryingTurnId !== null) return
+    const current = selectLatestAgentRunForChat(useStore.getState(), chatId)
+    if (
+      !current
+      || current.turnId !== candidate.turnId
+      || current.recoveryAction !== 'retry'
+      || !current.recoveryEligible
+      || current.workStatus !== 'terminal'
+    ) return
+    setRetryingTurnId(candidate.turnId)
+    setPendingRuntimeTarget({
+      generationType: candidate.generationType,
+      messageId: candidate.target?.messageId ?? null,
+      swipeId: candidate.target?.swipeId ?? null,
+      targetCharacterId: null,
+    })
+    try {
+      const response = await agentRunsApi.retry(candidate.turnId)
+      if (!response.accepted) {
+        toast.error(t('agentRuntime.retry.rejected'))
+        return
+      }
+      await recoverAgentRuns(chatId, agentRunsApi, useStore)
+      toast.success(t('agentRuntime.retry.accepted'))
+    } catch {
+      toast.error(t('agentRuntime.retry.failed'))
+    } finally {
+      setRetryingTurnId((currentTurnId) => currentTurnId === candidate.turnId ? null : currentTurnId)
+    }
+  }, [chatId, exactRetryRun, isGeneratingInChat, retryingTurnId, t])
+
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
+    generationAbortControllerRef.current?.abort()
+    const generationAbortController = new AbortController()
+    generationAbortControllerRef.current = generationAbortController
     const inputDraft = text
     const impersonateInput = inputDraft.trim()
+    setPendingRuntimeTarget({
+      generationType: 'impersonate',
+      messageId: null,
+      swipeId: null,
+      targetCharacterId: null,
+    })
     beginStreaming(undefined, 'impersonate_draft')
     // Stash the input so the user can restore it after the run, and clear the box.
     if (impersonateInput) {
@@ -2377,48 +2752,133 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     try {
       const forcedPresetId = mode === 'oneliner' ? impersonationPresetId : null
       const presetId = forcedPresetId || getActivePresetForGeneration() || undefined
-      const res = await generateApi.start({
+      const res = await startGenerationWithRecovery('start', {
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
-        persona_id: activePersonaId || undefined,
-        persona_addon_states: activeGenerationAddonStates,
+        persona_id: isTemporaryChat ? undefined : activePersonaId || undefined,
+        persona_addon_states: isTemporaryChat ? undefined : activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'impersonate',
+        mode: 'response',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
         user_input: inputDraft || undefined,
         impersonate_draft: true,
+      }, {
+        forceResponse: true,
+        signal: generationAbortController.signal,
       })
-      if (generationNonceRef.current !== nonce) return
+      if (
+        generationNonceRef.current !== nonce
+        || useStore.getState().activeChatId !== chatId
+      ) return
       startStreaming(res.generationId)
       consumeOneshotGuides()
-    } catch (err: any) {
-      if (generationNonceRef.current !== nonce) return
+    } catch (err: unknown) {
+      if (
+        generationNonceRef.current !== nonce
+        || useStore.getState().activeChatId !== chatId
+      ) return
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('[InputArea] Failed to impersonate:', err)
-      const msg = err?.body?.error || err?.message || te('failedToImpersonate')
+      const msg = resolveGenerationErrorMessage(err, te('failedToImpersonate'), t)
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
+    } finally {
+      if (generationAbortControllerRef.current === generationAbortController) {
+        generationAbortControllerRef.current = null
+      }
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
+  }, [chatId, isGeneratingInChat, text, isTemporaryChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
 
   const handleStop = useCallback(async () => {
-    if (!isGeneratingInChat) return
-    // Peers don't own the host's generation — stopping is the host's to do.
-    if (isRoomPeer) return
+    if ((!isGeneratingInChat && !composerAbortInFlight) || isRoomPeer) return
+    const knownRun = activeAgentRun
+    const stoppedAuthority = beginComposerAbort()
     try {
-      // Stop the specific generation when we know its ID; the chat id lets the
-      // backend fall back to the chat's active generation if the ID is stale
-      // (or, in the optimistic phase, not yet known).
-      await generateApi.stop(generationIdForChat || undefined, chatId)
-    } catch (err) {
-      console.error('[InputArea] Failed to stop:', err)
+      if (knownRun) {
+        pendingAgentStopRef.current = null
+        try {
+          const result = await agentRunsApi.stop(knownRun.turnId, {
+            chatId,
+            generationId: knownRun.generationId,
+            requestAuthorityId: stoppedAuthority?.requestAuthorityId ?? undefined,
+          })
+          applyComposerStopResult(result, knownRun.generationId)
+        } catch (err: unknown) {
+          console.error('[InputArea] Failed to stop Agentic run:', err)
+          setComposerStopping(false)
+        }
+      } else {
+        if (waitingForExactAgentRun) {
+          pendingAgentStopRef.current = {
+            generationId: generationIdForChat,
+            requestAuthorityId: stoppedAuthority?.requestAuthorityId ?? null,
+            stoppedTurnId: null,
+          }
+          void recoverAgentRuns(chatId, agentRunsApi, useStore)
+        } else {
+          pendingAgentStopRef.current = null
+        }
+        try {
+          // The chat id remains the backend fallback while an optimistic
+          // generation has not handed its durable id to the client.
+          const result = await generateApi.stop(
+            stoppedAuthority?.generationId || generationIdForChat || undefined,
+            chatId,
+            stoppedAuthority?.requestAuthorityId ?? undefined,
+          )
+          applyComposerStopResult(result, stoppedAuthority?.generationId || generationIdForChat || undefined)
+        } catch (err: unknown) {
+          console.error('[InputArea] Failed to stop:', err)
+          setComposerStopping(false)
+        }
+      }
+    } finally {
+      settleComposerAbort()
     }
-    // If we're in the optimistic phase (no WS events yet), revert locally
-    if (localGenerationInChat && !activeGenerationId) {
-      stopStreaming()
+  }, [isGeneratingInChat, composerAbortInFlight, isRoomPeer, activeAgentRun, beginComposerAbort, applyComposerStopResult, settleComposerAbort, waitingForExactAgentRun, generationIdForChat, chatId])
+
+  const handleRetryStopLookup = useCallback(async () => {
+    if (isRoomPeer) return
+    const stoppedAuthority = beginComposerAbort()
+    try {
+      await recoverAgentRuns(chatId, agentRunsApi, useStore)
+      const recovered = selectActiveAgentRunForChat(
+        useStore.getState(),
+        chatId,
+        generationIdForChat,
+      )
+      if (recovered) {
+        const result = await agentRunsApi.stop(recovered.turnId, {
+          chatId,
+          generationId: recovered.generationId,
+          requestAuthorityId: stoppedAuthority?.requestAuthorityId ?? undefined,
+        })
+        applyComposerStopResult(result, recovered.generationId)
+      } else {
+        const result = await generateApi.stop(
+          stoppedAuthority?.generationId || generationIdForChat || undefined,
+          chatId,
+          stoppedAuthority?.requestAuthorityId ?? undefined,
+        )
+        applyComposerStopResult(result, stoppedAuthority?.generationId || generationIdForChat || undefined)
+      }
+    } catch (error) {
+      console.error('[InputArea] Failed to recover exact stop target:', error)
+      setComposerStopping(false)
+    } finally {
+      settleComposerAbort()
     }
-  }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
+  }, [
+    beginComposerAbort,
+    chatId,
+    generationIdForChat,
+    isRoomPeer,
+    applyComposerStopResult,
+    settleComposerAbort,
+  ])
 
   const queueCurrentChatDeletion = useCallback(() => {
     void chatsApi.delete(chatId).catch((err) => {
@@ -2524,7 +2984,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       })
     }
   }, [chatId, activeCharacterId, isGroupChat, navigate, openModal, t])
-
   const openChatSettings = useCallback(() => {
     void (async () => {
       try {
@@ -2533,7 +2992,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           chatId,
           chatName: chat.name || '',
           metadata: chat.metadata || {},
-          onSaved: (updatedChat: import('@/types/api').Chat) => {
+          onSaved: (updatedChat: Chat) => {
             const value = updatedChat.metadata?.impersonation_preset_id
             setImpersonationPresetId(typeof value === 'string' && value ? value : null)
             const mode = updatedChat.metadata?.group_scenario_override?.mode
@@ -2564,8 +3023,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       } else {
         toast.info(t('toast.noMemoryRebuildNeeded'))
       }
-    } catch (err: any) {
-      toast.error(err?.message || t('toast.failedRecompileMemories'))
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : t('toast.failedRecompileMemories'))
     } finally {
       setMemoryCortexInFlight(false)
     }
@@ -2597,6 +3056,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     memoryCortexInFlight,
   ])
 
+
   const handleDryRun = useCallback(async () => {
     if (dryRunning || isGeneratingInChat) return
     const presetId = getActivePresetForGeneration()
@@ -2609,8 +3069,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       const result = await generateApi.dryRun({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
-        persona_id: activePersonaId || undefined,
-        persona_addon_states: activeGenerationAddonStates,
+        persona_id: isTemporaryChat ? undefined : activePersonaId || undefined,
+        persona_addon_states: isTemporaryChat ? undefined : activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         user_input: text || undefined,
@@ -2624,7 +3084,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       setDryRunning(false)
     }
-  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
+  }, [text, chatId, dryRunning, isGeneratingInChat, isTemporaryChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -2639,7 +3099,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         template: text,
         chat_id: chatId,
         character_id: focusedPreviewCharacterId || undefined,
-        persona_id: activePersonaId || undefined,
+        persona_id: isTemporaryChat ? undefined : activePersonaId || undefined,
         connection_id: activeProfileId || undefined,
         user_input: text,
       })
@@ -2662,7 +3122,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       setResolvingMacros(false)
     }
-  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te])
+  }, [text, chatId, resolvingMacros, isTemporaryChat, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te])
 
   const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, hashStartIndex)
@@ -3182,13 +3642,35 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           blocks={promptVariablesPreset.blocks}
           values={promptVariablesPreset.promptVariables ?? {}}
           onSave={savePromptVariableValues}
+          onReloadLatest={reloadPromptVariableValues}
           onClose={() => setPromptVariablesModalOpen(false)}
         />
       )}
 
       <span data-spindle-mount="chat_composer_above" data-spindle-scope={`chat:${chatId}:composer-above`} style={{ display: 'contents' }} />
+      <AgentRuntimeModeControl
+        chatId={chatId}
+        generationType={pendingRuntimeTarget.generationType}
+        messageId={pendingRuntimeTarget.messageId}
+        swipeId={pendingRuntimeTarget.swipeId}
+        logicalConnectionId={activeProfileId}
+        presetId={getActivePresetForGeneration()}
+        forcePresetId={shouldForceLoomRuntimePreset(
+          getActivePresetForGeneration(),
+          chatId,
+          activeCharacterId,
+          activeProfileId,
+        )}
+        personaId={isTemporaryChat ? null : activePersonaId}
+        targetCharacterId={pendingRuntimeTarget.targetCharacterId}
+        supported={
+          isAgenticGenerationType(pendingRuntimeTarget.generationType)
+          && !isGroupChat
+          && !mpRoomId
+        }
+      />
 
-      {/* Native action bar, then chat_toolbar (follows spindle contract). */}
+      {/* Native customizable action bar, then extension toolbar (follows spindle contract). */}
       {(() => {
         const altFieldsButton = (() => {
           if (!hasAltFields) return null
@@ -3223,29 +3705,57 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               onClick={() => setOpenPopover((p) => (p === 'altFields' ? null : 'altFields'))}
               title={title}
               aria-label={title}
+              aria-pressed={openPopover === 'altFields'}
             >
               <Layers size={14} />
               {hasSelection && <span className={styles.badge}>{selectionCount}</span>}
             </button>
           )
         })()
+
         const composerActions: Record<ComposerActionId, ReactNode> = {
           home: (
             <>
-              <button type="button" className={styles.actionBtn} onClick={onNavigateHome ?? (() => navigate('/'))} title={t('input.backHome')}>
+              <button type="button" className={styles.actionBtn} onClick={onNavigateHome ?? (() => navigate('/'))} title={t('input.backHome')} aria-label={t('input.backHome')}>
                 <Home size={14} />
               </button>
               <span className={styles.actionDivider} />
             </>
           ),
           regen: !isGeneratingInChat ? (
-            <button type="button" className={styles.actionBtn} onClick={handleRegenerate} title={t('input.regenerate')}>
+            <button
+              type="button"
+              className={styles.actionBtn}
+              onClick={handleRegenerate}
+              title={canReplayAssistant ? t('input.regenerate') : t('agentRuntime.actionUnavailable')}
+              aria-label={t('input.regenerate')}
+              disabled={!canReplayAssistant}
+            >
               <RotateCw size={14} />
             </button>
           ) : null,
           continue: !isGeneratingInChat ? (
-            <button type="button" className={styles.actionBtn} onClick={handleContinue} title={t('input.continue')}>
+            <button
+              type="button"
+              className={styles.actionBtn}
+              onClick={handleContinue}
+              title={canReplayAssistant ? t('input.continue') : t('agentRuntime.actionUnavailable')}
+              aria-label={t('input.continue')}
+              disabled={!canReplayAssistant}
+            >
               <CornerDownLeft size={14} />
+            </button>
+          ) : null,
+          agentRetry: exactRetryRun ? (
+            <button
+              type="button"
+              className={clsx(styles.actionBtn, styles.actionBtnRetry)}
+              onClick={() => void handleRetry()}
+              title={t('agentRuntime.retry.retry')}
+              aria-label={t('agentRuntime.retry.retry')}
+              disabled={retryingTurnId === exactRetryRun.turnId}
+            >
+              <RotateCw size={14} />
             </button>
           ) : null,
           oneliner: (
@@ -3271,6 +3781,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               )}
               onClick={() => setOpenPopover((p) => (p === 'persona' ? null : 'persona'))}
               title={t('input.sendAsPersona')}
+              aria-label={t('input.sendAsPersona')}
+              aria-pressed={openPopover === 'persona'}
             >
               <UserCircle size={14} />
               {persistedChatPersonaId && <span className={styles.badge}>1</span>}
@@ -3282,25 +3794,30 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               className={clsx(styles.actionBtn, openPopover === 'connections' && styles.actionBtnActive)}
               onClick={() => setOpenPopover((p) => (p === 'connections' ? null : 'connections'))}
               title={activeProfile ? t('input.switchConnectionActive', { name: activeProfile.name }) : t('input.switchConnection')}
+              aria-label={activeProfile ? t('input.switchConnectionActive', { name: activeProfile.name }) : t('input.switchConnection')}
+              aria-pressed={openPopover === 'connections'}
             >
               <Link2 size={14} />
             </button>
           ),
           connectionsPicker: hasLumiverseSuite ? (() => {
             const picker = qtActionById.get('lumiverse_suite.connections_picker.open')
+            if (!picker || picker.hidden) return null
+            const Icon = picker.icon
             return (
               <button
                 type="button"
-                className={clsx(styles.actionBtn, picker?.active && styles.actionBtnActive)}
+                className={clsx(styles.actionBtn, picker.active && styles.actionBtnActive)}
                 data-lumiverse-connections-launcher="true"
                 onClick={() => {
-                  if (picker && !picker.disabled) picker.run()
+                  if (!picker.disabled) picker.run()
                 }}
-                title="Connections Picker"
-                aria-label="Connections Picker"
-                disabled={picker?.disabled}
+                title={picker.label}
+                aria-label={picker.label}
+                aria-pressed={typeof picker.active === 'boolean' ? picker.active : undefined}
+                disabled={picker.disabled}
               >
-                <Waypoints size={14} />
+                <Icon size={14} />
               </button>
             )
           })() : null,
@@ -3315,6 +3832,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               )}
               onClick={() => setOpenPopover((p) => (p === 'addons' ? null : 'addons'))}
               title={chatAddonOverrideCount > 0 ? t('input.personaAddonsCustomized') : t('input.personaAddons')}
+              aria-label={chatAddonOverrideCount > 0 ? t('input.personaAddonsCustomized') : t('input.personaAddons')}
+              aria-pressed={openPopover === 'addons'}
             >
               <IconPlaylistAdd size={14} />
               {chatAddonOverrideCount > 0 && <span className={styles.badge}>{chatAddonOverrideCount}</span>}
@@ -3342,6 +3861,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               )}
               onClick={() => setOpenPopover((p) => (p === 'guides' ? null : 'guides'))}
               title={t('input.guidedGenerations')}
+              aria-label={t('input.guidedGenerations')}
+              aria-pressed={openPopover === 'guides'}
             >
               <Compass size={14} />
               {activeGuideCount > 0 && <span className={styles.badge}>{activeGuideCount}</span>}
@@ -3353,6 +3874,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               className={clsx(styles.actionBtn, openPopover === 'quick' && styles.actionBtnActive)}
               onClick={() => setOpenPopover((p) => (p === 'quick' ? null : 'quick'))}
               title={t('input.quickReplies')}
+              aria-label={t('input.quickReplies')}
+              aria-pressed={openPopover === 'quick'}
             >
               <MessageSquareQuote size={14} />
             </button>
@@ -3363,6 +3886,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               className={clsx(styles.actionBtn, openPopover === 'tools' && styles.actionBtnActive)}
               onClick={() => setOpenPopover((p) => (p === 'tools' ? null : 'tools'))}
               title={t('input.tools')}
+              aria-label={t('input.tools')}
+              aria-pressed={openPopover === 'tools'}
             >
               <Wrench size={14} />
             </button>
@@ -3373,6 +3898,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               className={clsx(styles.actionBtn, openPopover === 'extras' && styles.actionBtnActive)}
               onClick={() => setOpenPopover((p) => (p === 'extras' ? null : 'extras'))}
               title={t('input.extras')}
+              aria-label={t('input.extras')}
+              aria-pressed={openPopover === 'extras'}
             >
               <MoreHorizontal size={14} />
             </button>
@@ -3390,8 +3917,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             </button>
           ),
         }
+
         return (
-          <>
+          <Fragment>
             <ComposerActionBarLive
               order={composerActionBar.order}
               isVisible={composerActionBar.isVisible}
@@ -3429,9 +3957,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                   type="button"
                   className={clsx(styles.actionBtn, styles.composerCustomizeGear, customizeOpen && styles.actionBtnActive)}
                   onClick={() => setCustomizeOpen(true)}
-                  title="Customize composer"
-                  aria-label="Customize composer"
+                  title={t('composerCustomize.gearTitle')}
+                  aria-label={t('composerCustomize.gearTitle')}
                   aria-expanded={customizeOpen}
+                  aria-controls="input-area-customize-dialog"
+                  data-composer-customize="true"
                   data-composer-pinned="customize"
                 >
                   <SlidersHorizontal size={14} />
@@ -3443,7 +3973,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               data-spindle-scope={`chat:${chatId}:toolbar`}
               className={styles.extensionToolbar}
             />
-          </>
+          </Fragment>
         )
       })()}
 
@@ -3620,8 +4150,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
           {renderPopover === 'connections' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
-              {profiles.map((p) => (
+              {selectableProfiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
+              {selectableProfiles.map((p) => (
                 <button
                   key={p.id}
                   type="button"
@@ -4387,20 +4917,72 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             />
           </div>
 
-          {isGeneratingInChat && !isRoomPeer ? (
+          {showStopControl ? (
             <div className={styles.sendBtnShell}>
-              <button
-                type="button"
-                className={clsx(styles.sendBtn, styles.sendBtnStop)}
-                onClick={handleStop}
-                title={t('input.stopGeneration')}
-                aria-label={t('input.stopGeneration')}
-              >
-                <Square size={16} />
-              </button>
+              {generationRequestStatusLabel ? (
+                <span className={styles.requestStatusBadge} role="status">
+                  {generationRequestStatusLabel}
+                </span>
+              ) : null}
+              {activeAgentRun ? (
+                <AgentRunStopButton
+                  turnId={activeAgentRun.turnId}
+                  chatId={chatId}
+                  generationId={activeAgentRun.generationId}
+                  requestAuthorityId={generationRequestAuthority?.requestAuthorityId ?? undefined}
+                  onBeforeStop={beginComposerAbort}
+                  onSettled={settleComposerAbort}
+                  onResult={(result) => applyComposerStopResult(result, activeAgentRun.generationId)}
+                />
+              ) : waitingForExactAgentRun ? (
+                <button
+                  type="button"
+                  className={clsx(styles.sendBtn, styles.sendBtnStop)}
+                  title={composerStopping
+                    ? t('agentRuntime.stop.stopping')
+                    : t(canRetryExactAgentRunLookup ? 'agentRuntime.stop.retry' : 'agentRuntime.stop.locating')}
+                  aria-label={composerStopping
+                    ? t('agentRuntime.stop.stopping')
+                    : t(canRetryExactAgentRunLookup ? 'agentRuntime.stop.retry' : 'agentRuntime.stop.locating')}
+                  onClick={() => void (canRetryExactAgentRunLookup ? handleRetryStopLookup() : handleStop())}
+                  data-stop-state={composerStopping ? 'stopping' : canRetryExactAgentRunLookup ? 'error' : 'locating'}
+                >
+                  {canRetryExactAgentRunLookup && !composerStopping ? <RotateCw size={16} /> : <Square size={16} />}
+                  <span>{composerStopping
+                    ? t('agentRuntime.stop.stopping')
+                    : t(canRetryExactAgentRunLookup ? 'agentRuntime.stop.retry' : 'agentRuntime.stop.locating')}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={clsx(styles.sendBtn, styles.sendBtnStop)}
+                  onClick={handleStop}
+                  title={composerStopping ? t('agentRuntime.stop.stopping') : t('input.stopGeneration')}
+                  aria-label={composerStopping ? t('agentRuntime.stop.stopping') : t('input.stopGeneration')}
+                  data-stop-state={composerStopping ? 'stopping' : undefined}
+                >
+                  <Square size={16} />
+                  <span>{composerStopping
+                    ? t('agentRuntime.stop.stopping')
+                    : t('agentRuntime.stop.stop')}</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className={styles.sendBtnShell}>
+              {composerAbortSettled ? (
+                <span
+                  className={styles.abortBadge}
+                  data-stop-state={composerStopResult}
+                  role="status"
+                >
+                  {t(composerStopResult === 'accepted'
+                    ? 'agentRuntime.stop.accepted'
+                    : composerStopResult === 'too_late'
+                      ? 'agentRuntime.stop.tooLate'
+                      : 'agentRuntime.stop.terminal')}
+                </span>
+              ) : null}
               {mobileQueueHint ? (
                 <span
                   className={clsx(
@@ -4450,7 +5032,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     </div>
   )
 }
-
 export default function InputArea(props: InputAreaProps) {
   return useSpindleComponentOverride('InputArea', InputAreaNative, props)
 }

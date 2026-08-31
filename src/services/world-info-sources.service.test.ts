@@ -67,6 +67,7 @@ describe("group chat world-info source selection", () => {
     expect(sources.worldBookIds).toEqual([loreMember.book.id]);
     expect(sources.entries.map((entry) => entry.content)).toEqual(["Inactive member lore"]);
     expect(sources.bookNameMap.get(loreMember.book.id)).toBe("Lorekeeper Book");
+    expect(sources.bookMap.get(loreMember.book.id)?.description).toBe("");
   });
 
   test("active-character lorebook mode overrides merged cards", () => {
@@ -125,6 +126,9 @@ describe("group chat world-info source selection", () => {
 
     const prefetched = await prefetchAssemblyData({
       userId: USER_ID,
+      generationId: crypto.randomUUID(),
+      dryRun: false,
+      assemblySurface: "RESPONSE",
       chatId: updated.id,
       generationType: "normal",
     });

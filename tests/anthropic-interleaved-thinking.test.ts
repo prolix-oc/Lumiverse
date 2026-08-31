@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { AnthropicProvider } from "../src/llm/providers/anthropic";
+import { INVALID_TOOL_ARGUMENTS } from "../src/llm/tool-arguments";
 import { buildInlineToolContinuation } from "../src/services/inline-tool-continuation";
 import type {
   GenerationRequest,
   LlmMessage,
   LlmThinkingBlock,
+  StreamChunk,
 } from "../src/llm/types";
 
 // Expose the protected seams used by the interleaved-thinking implementation.
@@ -233,6 +235,111 @@ describe("Anthropic streaming captures thinking blocks + signature", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("malformed arguments fail closed without logging raw model text", async () => {
+    const events = [
+      { type: "message_start", message: { usage: { input_tokens: 1 } } },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "anthropic_bad", name: "agent_delegate" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"task":"private' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "anthropic_good", name: "lore_list_books" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: "{}" },
+      },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const warnings: unknown[][] = [];
+    globalThis.fetch = (async () =>
+      new Response(sseBody(events), { status: 200 })) as typeof fetch;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+
+    try {
+      await expect((async () => {
+        for await (const _chunk of provider.generateStream("k", "https://api.anthropic.com", {
+          messages: [{ role: "user", content: "delegate" }],
+          model: "claude-opus-4-8",
+          parameters: { thinking: { type: "adaptive" } },
+          tools: [
+            { name: "agent_delegate", description: "", parameters: {} },
+            { name: "lore_list_books", description: "", parameters: {} },
+          ],
+        })) {
+          // Consume the bounded stream through its terminal validation.
+        }
+      })()).rejects.toMatchObject({ code: "provider_protocol_error" });
+      expect(warnings).toHaveLength(0);
+      expect(JSON.stringify(warnings)).not.toContain("private");
+    } finally {
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("drops partial tool calls when the stream stops at max_tokens", async () => {
+    const events = [
+      { type: "message_start", message: { usage: { input_tokens: 1 } } },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "partial", name: "agent_delegate" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"task":"' },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "max_tokens" },
+        usage: { output_tokens: 4 },
+      },
+      { type: "message_stop" },
+    ];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(sseBody(events), { status: 200 })) as typeof fetch;
+
+    try {
+      const chunks: StreamChunk[] = [];
+      for await (const chunk of provider.generateStream(
+        "k",
+        "https://api.anthropic.com",
+        {
+          messages: [{ role: "user", content: "delegate" }],
+          model: "claude-opus-4-8",
+          parameters: {},
+          tools: [{ name: "agent_delegate", description: "", parameters: {} }],
+        },
+      )) {
+        chunks.push(chunk);
+      }
+      const terminal = chunks.find((chunk) => chunk.finish_reason);
+      expect(terminal?.finish_reason).toBe("max_tokens");
+      expect(terminal?.tool_calls).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("end-to-end: builder output replays correctly through Anthropic", () => {
@@ -282,6 +389,39 @@ describe("end-to-end: builder output replays correctly through Anthropic", () =>
       type: "tool_result",
       tool_use_id: "call_1",
       content: "the answer",
+    });
+  });
+
+  test("normalizes malformed replay arguments to an object", () => {
+    const [assistantMsg] = buildInlineToolContinuation({
+      structured: true,
+      legacyAssistantOutput: "",
+      roundContent: "",
+      roundReasoning: "",
+      toolCalls: [
+        {
+          name: "agent_delegate",
+          args: INVALID_TOOL_ARGUMENTS,
+          call_id: "bad-call",
+        },
+      ],
+      results: [
+        {
+          callId: "bad-call",
+          qualifiedName: "agent_delegate",
+          toolName: "agent_delegate",
+          toolDisplayName: "Delegate",
+          result: '{"status":"error","errorCode":"invalid_arguments"}',
+        },
+      ],
+    });
+
+    const formatted = provider.format(assistantMsg) as Array<
+      Record<string, unknown>
+    >;
+    expect(formatted.find((part) => part.type === "tool_use")).toMatchObject({
+      id: "bad-call",
+      input: {},
     });
   });
 });

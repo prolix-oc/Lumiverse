@@ -5,6 +5,7 @@ import {
   useMemo,
   useCallback,
   useLayoutEffect,
+  useId,
   forwardRef,
   type ChangeEvent,
   type CompositionEvent,
@@ -287,6 +288,7 @@ export default function ExpandedTextEditor({
   sourceRef,
 }: ExpandedTextEditorProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
+  const macroListId = useId()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
@@ -888,6 +890,7 @@ export default function ExpandedTextEditor({
                 <input
                   className={s.macroSearchInput}
                   placeholder={t('searchMacros')}
+                  aria-label={t('searchMacros')}
                   value={macroSearch}
                   onChange={e => setMacroSearch(e.target.value)}
                   autoFocus
@@ -905,14 +908,14 @@ export default function ExpandedTextEditor({
               </div>
             </div>
             <div className={s.macroList}>
-              {filteredMacros.map(group => (
-                <div key={group.category} className={s.macroGroup}>
-                  <div className={s.macroGroupTitle}>{group.category}</div>
+              {filteredMacros.map((group, groupIndex) => (
+                <div key={group.category} className={s.macroGroup} aria-labelledby={`${macroListId}-${groupIndex}`}>
+                  <div id={`${macroListId}-${groupIndex}`} className={s.macroGroupTitle}>{group.category}</div>
                   {group.macros.map(macro => (
-                    <div key={macro.syntax} className={s.macroItem} onClick={() => insertMacro(macro.syntax)}>
+                    <button type="button" key={macro.syntax} className={s.macroItem} onClick={() => insertMacro(macro.syntax)}>
                       <span className={s.macroSyntax}>{macro.syntax}</span>
                       <span className={s.macroDesc}>{macro.description}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               ))}

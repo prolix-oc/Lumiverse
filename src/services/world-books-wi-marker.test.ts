@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { closeDatabaseAsync, getDb, initDatabase } from "../db/connection";
 import {
   createEntry,
   createWorldBook,
@@ -71,12 +71,12 @@ describe("WI marker fields — import normalization (pure)", () => {
 
 describe("WI marker fields — persistence round trip", () => {
   beforeEach(async () => {
-    closeDatabase();
+    await closeDatabaseAsync();
     initDatabase(":memory:");
     await applyBaseline();
   });
 
-  afterEach(() => closeDatabase());
+  afterEach(async () => closeDatabaseAsync());
 
   test("create + read preserves wi_marker and wi_marker_side", () => {
     const book = createWorldBook(USER_ID, { name: "Markers" });
@@ -192,7 +192,7 @@ describe("WI marker fields — persistence round trip", () => {
       wi_marker_side: "before",
     });
 
-    const updated = updateEntry(USER_ID, created!.id, { wi_marker: null, wi_marker_side: null });
+    const updated = updateEntry(USER_ID, book.id, created!.id, { wi_marker: null, wi_marker_side: null });
     expect(updated!.wi_marker).toBeNull();
     expect(updated!.wi_marker_side).toBeNull();
 
@@ -209,7 +209,7 @@ describe("WI marker fields — persistence round trip", () => {
       wi_marker_side: "before",
     });
 
-    const updated = updateEntry(USER_ID, created!.id, {
+    const updated = updateEntry(USER_ID, book.id, created!.id, {
       wi_marker: "scenario",
       wi_marker_side: "after",
     });
@@ -225,7 +225,7 @@ describe("WI marker fields — persistence round trip", () => {
       wi_marker_side: "before",
     });
 
-    const updated = updateEntry(USER_ID, created!.id, { wi_marker_side: "after" });
+    const updated = updateEntry(USER_ID, book.id, created!.id, { wi_marker_side: "after" });
     expect(updated!.wi_marker).toBe("char_description");
     expect(updated!.wi_marker_side).toBe("after");
   });

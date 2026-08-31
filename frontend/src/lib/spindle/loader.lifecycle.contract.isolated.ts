@@ -52,6 +52,14 @@ Object.assign(globalThis, {
   requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
   cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
 })
+Object.defineProperty(dom.window, 'matchMedia', {
+  configurable: true,
+  value: () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }),
+})
 const confirmWindowListeners = new Set<EventListenerOrEventListenerObject>()
 const nativeWindowAddEventListener = dom.window.addEventListener.bind(dom.window)
 const nativeWindowRemoveEventListener = dom.window.removeEventListener.bind(dom.window)
@@ -99,26 +107,26 @@ const useStoreMock = Object.assign(
   },
 )
 
+mock.module('@/i18n', () => ({
+  default: { t: (key: string) => key, language: 'en' },
+  UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
+  ensureLanguageLoaded: async () => {},
+  initI18n: async () => ({ t: (key: string) => key, language: 'en' }),
+  changeUiLanguage: async () => {},
+}))
 const NullComponent = () => null
 mock.module('@/store', () => ({ useStore: useStoreMock }))
-mock.module('@/i18n', () => ({
-  UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
-  changeUiLanguage: async () => {},
-  default: { language: 'en', t: (key: string) => key },
-  ensureLanguageLoaded: async () => {},
-  initI18n: async () => ({}),
-}))
 mock.module('@/components/shared/FormComponents', () => ({
-  Button: NullComponent,
+  EditorLayout: NullComponent,
   EditorContent: NullComponent,
   EditorFooter: NullComponent,
-  EditorLayout: NullComponent,
-  EditorSection: NullComponent,
   FormField: NullComponent,
-  ImageInput: NullComponent,
-  Select: NullComponent,
-  TextArea: NullComponent,
+  EditorSection: NullComponent,
   TextInput: NullComponent,
+  TextArea: NullComponent,
+  Select: NullComponent,
+  Button: NullComponent,
+  ImageInput: NullComponent,
 }))
 mock.module('@/components/shared/FormComponents.module.css', () => ({ default: {} }))
 mock.module('@/components/shared/NumericInput', () => ({ default: NullComponent }))
@@ -250,7 +258,7 @@ mock.module('@/api/characters', () => ({
   },
 }))
 mock.module('@/api/chats', () => ({
-  chatsApi: {},
+  chatsApi: { listCharacterChats: async () => [] },
   messagesApi: {
     update: async () => {
       chatApiCalls += 1
@@ -265,7 +273,7 @@ mock.module('./message-interceptors', () => ({
     tagRegistrations += 1
     return () => {}
   },
-  stripMessageTags: (content: string) => ({ cleanedContent: content, intercepts: [] }),
+  stripMessageTags: (content: string) => ({ content, intercepts: [] }),
   subscribeTagInterceptorRegistry: () => () => {},
   unregisterTagInterceptorsByExtension() {},
 }))
@@ -280,10 +288,11 @@ mock.module('./display-resolver-registry', () => ({
   unregisterDisplayResolver() {},
 }))
 mock.module('@/hooks/useDisplayRegex', () => ({
+  useDisplayPreprocessed: (content: string) => content,
+  useDisplayRegex: (content: string) => content,
   invalidateDisplayRegexCache() {},
   invalidateDisplayRegexCacheForMessage() {},
   invalidateDisplayRegexCacheForVars() {},
-  useDisplayRegex: (content: string) => content,
 }))
 mock.module('./message-widgets', () => ({
   SpindleMessageWidgets: () => null,
@@ -316,15 +325,15 @@ mock.module('./character-editor-helper', () => ({
 mock.module('./navigation-guards', () => ({ installSpindleNavigationGuards() {} }))
 mock.module('@/lib/drawer-tab-registry', () => ({
   DRAWER_TABS: [],
-  adaptExtensionTabs: () => [],
-  applyDrawerTabOrder: (items: unknown[]) => items,
   ensureRegistryRoot: () => undefined,
-  extensionCommandsToCommands: () => [],
-  extensionTabsToCommands: () => [],
   isDrawerTabCore: () => false,
+  sanitizeHiddenDrawerTabIds: (ids: unknown) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [],
+  sanitizeDrawerTabOrder: (ids: unknown) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [],
+  applyDrawerTabOrder: <T>(items: T[]) => items,
+  adaptExtensionTabs: () => [],
   registryToCommands: () => [],
-  sanitizeDrawerTabOrder: (order?: string[]) => order ?? [],
-  sanitizeHiddenDrawerTabIds: (ids?: string[]) => ids ?? [],
+  extensionTabsToCommands: () => [],
+  extensionCommandsToCommands: () => [],
 }))
 mock.module('./browser-scheduler', () => ({ yieldToBrowser: async () => {}, scheduleSpindleDomTask: () => () => {} }))
 // The native adapter intentionally imports the production Vite registry. This
@@ -515,7 +524,7 @@ describe('loader-owned roots', () => {
     const loaderMountDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderMount')
     const loaderModalDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderModal')
     const loaderInjectionDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderInjection')
-    const extensionId = 'loader-root-contract'
+    const extensionId = 'loader_root_contract'
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Loader root contract',
@@ -649,7 +658,7 @@ function restoreGlobalProperty(key: string, descriptor: PropertyDescriptor | und
 
 describe('startup queue and force-load lifecycle', () => {
   test('replays backend and process events queued during one active bootstrap exactly once', async () => {
-    const queueId = 'startup-queue-generation-contract'
+    const queueId = 'startup_queue_generation_contract'
     const manifest = placementManifest(queueId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const source = `
@@ -732,7 +741,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('does not deliver late backend or process events queued after unload to a reload', async () => {
-    const lateId = 'startup-queue-late-event-contract'
+    const lateId = 'startup_queue_late_event_contract'
     const manifest = placementManifest(lateId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const lateEventsDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__lateQueueEvents')
@@ -771,7 +780,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('reloads a same-signature force load after unload inside the dedupe window', async () => {
-    const forceId = 'force-reload-dedupe-contract'
+    const forceId = 'force_reload_dedupe_contract'
     const manifest = placementManifest(forceId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const forceSetupDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__forceSetupCount')
@@ -808,7 +817,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('retries a failed force load when no frontend was loaded', async () => {
-    const retryId = 'force-failed-retry-contract'
+    const retryId = 'force_failed_retry_contract'
     const manifest = placementManifest(retryId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const forceRetryDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__forceRetrySetupCount')
@@ -847,7 +856,7 @@ describe('startup queue and force-load lifecycle', () => {
 describe('permission-free drawer and input placements', () => {
   test('registers drawer tabs and input actions when ui_panels is not granted', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'free-placement-registration'
+    const extensionId = 'free_placement_registration'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const freePlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__freePlacementHandles')
@@ -878,7 +887,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('keeps drawer tabs and input actions after unrelated privileged permission revoke cleanup passes', async () => {
     mockedGrantedPermissions = ['ui_panels', 'app_manipulation']
-    const extensionId = 'free-placement-revoke'
+    const extensionId = 'free_placement_revoke'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const revokePlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__revokePlacementHandles')
@@ -922,7 +931,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('removes free placements on unload and starts a clean set on reload', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'free-placement-reload'
+    const extensionId = 'free_placement_reload'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const reloadPlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__reloadPlacementHandles')
@@ -965,7 +974,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('keeps every privileged placement and mobility gate closed without permissions', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'privileged-placement-gate'
+    const extensionId = 'privileged_placement_gate'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const privilegedDeniedDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__privilegedPlacementDenied')
@@ -1009,7 +1018,7 @@ describe('permission-free drawer and input placements', () => {
 describe('tab mobility permission gate', () => {
   test('allows tab movement with app_manipulation only', async () => {
     mockedGrantedPermissions = ['app_manipulation']
-    const extensionId = 'mobility-app-manipulation'
+    const extensionId = 'mobility_app_manipulation'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const mobilityDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__appMobilityTab')
@@ -1036,7 +1045,7 @@ describe('tab mobility permission gate', () => {
 
   test('allows tab movement with ui_panels only', async () => {
     mockedGrantedPermissions = ['ui_panels']
-    const extensionId = 'mobility-ui-panels'
+    const extensionId = 'mobility_ui_panels'
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const mobilityDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__uiPanelsMobilityTab')
@@ -1236,7 +1245,7 @@ describe('generation rollover', () => {
 })
 describe('retained non-UI context lifecycle', () => {
   test('rejects every retained generation-A capability after unload/reload without host side effects', async () => {
-    const retainedId = 'retained-context-contract'
+    const retainedId = 'retained_context_contract'
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Retained context contract',
@@ -1355,7 +1364,7 @@ describe('retained non-UI context lifecycle', () => {
   })
 
   test('settles overlapping showConfirm requests independently and releases modal capacity', async () => {
-    const confirmId = 'overlapping-confirm-contract'
+    const confirmId = 'overlapping_confirm_contract'
     const manifest = placementManifest(confirmId)
     const source = `
       export function setup(context) {
@@ -1435,7 +1444,7 @@ describe('retained non-UI context lifecycle', () => {
   })
 
   test('drains character onChange subscriptions on revoke/unload and regrants a fresh listener', async () => {
-    const characterId = 'character-subscription-contract'
+    const characterId = 'character_subscription_contract'
     mockedGrantedPermissions = ['characters']
     const manifest: SpindleManifest = { ...placementManifest(characterId), permissions: ['characters'] }
     const source = `

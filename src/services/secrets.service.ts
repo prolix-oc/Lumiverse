@@ -9,6 +9,41 @@ interface SecretRow {
   updated_at: number;
 }
 
+function canonicalSecretJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value) ?? "null";
+  if (typeof value === "number") return Number.isFinite(value) ? (JSON.stringify(value) ?? "null") : "null";
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalSecretJson(entry)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalSecretJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(String(value)) ?? "null";
+}
+
+function secretRevision(key: string, row: SecretRow | null): string {
+  const encryptedIdentity = row
+    ? (() => {
+      const hasher = new Bun.CryptoHasher("sha256");
+      hasher.update(canonicalSecretJson({
+        encrypted_value: row.encrypted_value,
+        iv: row.iv,
+        tag: row.tag,
+      }));
+      return hasher.digest("hex");
+    })()
+    : null;
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(canonicalSecretJson({
+    secret_ref: key,
+    present: !!row,
+    updated_at: row?.updated_at ?? null,
+    encrypted_identity: encryptedIdentity,
+  }));
+  return hasher.digest("hex");
+}
+
 /**
  * Reserved principal for system-scope Spindle extension brokers. Real user
  * ids are UUIDs, so this principal is unreachable through normal login.
@@ -145,21 +180,58 @@ function ensureSystemPrincipalRow(): void {
   ).run(now, now, SYSTEM_SECRET_PRINCIPAL);
 }
 
-export async function putSecret(userId: string, key: string, value: string): Promise<void> {
-  if (userId === SYSTEM_SECRET_PRINCIPAL) ensureSystemPrincipalRow();
-  const { encrypted, iv, tag } = await encrypt(value);
-  const now = Math.floor(Date.now() / 1000);
+export interface PreparedSecretWrite {
+  encrypted: string;
+  iv: string;
+  tag: string;
+  updatedAt: number;
+}
 
+/** Encrypt a secret before entering a synchronous SQLite transaction. */
+export async function prepareSecretWrite(value: string): Promise<PreparedSecretWrite> {
+  const { encrypted, iv, tag } = await encrypt(value);
+  return { encrypted, iv, tag, updatedAt: Math.floor(Date.now() / 1000) };
+}
+
+/** Persist a prepared secret on the caller's current SQLite transaction. */
+export function putPreparedSecret(userId: string, key: string, prepared: PreparedSecretWrite): void {
+  if (userId === SYSTEM_SECRET_PRINCIPAL) ensureSystemPrincipalRow();
   getDb()
     .query(
       `INSERT INTO secrets (key, encrypted_value, iv, tag, user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(key, user_id) DO UPDATE SET encrypted_value = excluded.encrypted_value, iv = excluded.iv, tag = excluded.tag, updated_at = excluded.updated_at`
+       ON CONFLICT(key, user_id) DO UPDATE SET encrypted_value = excluded.encrypted_value, iv = excluded.iv, tag = excluded.tag, updated_at = excluded.updated_at`,
     )
-    .run(key, encrypted, iv, tag, userId, now);
+    .run(key, prepared.encrypted, prepared.iv, prepared.tag, userId, prepared.updatedAt);
+}
+
+export async function putSecret(userId: string, key: string, value: string): Promise<void> {
+  putPreparedSecret(userId, key, await prepareSecretWrite(value));
 }
 
 export async function getSecret(userId: string, key: string): Promise<string | null> {
   const row = getDb().query("SELECT * FROM secrets WHERE key = ? AND user_id = ?").get(key, userId) as SecretRow | null;
+  if (!row) return null;
+  try {
+    return await decrypt(row.encrypted_value, row.iv, row.tag);
+  } catch (err) {
+    throw normalizeSecretReadError(err, key);
+  }
+}
+/**
+ * Load one encrypted credential at the revision frozen during runtime
+ * admission. The row and revision are read together; callers never fall back
+ * to a fresh read after this fence.
+ */
+export async function getSecretAtRevision(
+  userId: string,
+  key: string,
+  expectedRevision: string,
+): Promise<string | null> {
+  const row = getDb().query("SELECT * FROM secrets WHERE key = ? AND user_id = ?").get(key, userId) as SecretRow | null;
+  const actualRevision = secretRevision(key, row);
+  if (actualRevision !== expectedRevision) {
+    throw new Error("credential_revision_mismatch");
+  }
   if (!row) return null;
   try {
     return await decrypt(row.encrypted_value, row.iv, row.tag);

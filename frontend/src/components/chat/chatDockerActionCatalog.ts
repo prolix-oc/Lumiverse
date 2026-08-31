@@ -63,6 +63,7 @@ export interface ChatDockerActionOwners {
   openModal?: (id: string, payload?: unknown) => void
   warmMemories?: (chatId: string) => void | Promise<void>
   navigateToOldestMessage?: () => void | Promise<void>
+  navigateToOldestMessageLoading?: boolean
   openMessageNavigator?: () => void
   openComposerCustomize?: () => void
   runCommand?: (id: string) => void | Promise<void>
@@ -86,22 +87,56 @@ export interface ChatDockerAction {
   run: () => void
 }
 
+export type ChatDockerActionTranslate = (key: string, options?: Record<string, unknown>) => string
+
 export interface BuildChatDockerActionCatalogOptions {
   owners?: ChatDockerActionOwners
   scope?: ChatDockerActionScope
+  translate?: ChatDockerActionTranslate
 }
 
 let registeredOwners: ChatDockerActionOwners = {}
 const ownerListeners = new Set<() => void>()
+const ownerRegistrationByKey = new Map<keyof ChatDockerActionOwners, symbol>()
 
 export function registerChatDockerActionOwners(next: ChatDockerActionOwners | null): () => void {
-  registeredOwners = next ? { ...registeredOwners, ...next } : {}
+  if (!next) {
+    registeredOwners = {}
+    ownerRegistrationByKey.clear()
+    ownerListeners.forEach((listener) => listener())
+    return () => undefined
+  }
+
+  const registration = Symbol('chat-docker-owner-registration')
+  const registrationOwners = { ...next }
+  const registrationKeys = Object.keys(registrationOwners) as Array<keyof ChatDockerActionOwners>
+  registeredOwners = { ...registeredOwners, ...registrationOwners }
+  registrationKeys.forEach((key) => ownerRegistrationByKey.set(key, registration))
   ownerListeners.forEach((listener) => listener())
+
+  let cleanedUp = false
   return () => {
-    if (!next) return
-    registeredOwners = Object.fromEntries(
-      Object.entries(registeredOwners).filter(([, value]) => !Object.values(next).includes(value)),
-    ) as ChatDockerActionOwners
+    if (cleanedUp) return
+    cleanedUp = true
+
+    let cleanedAny = false
+    let ownersAfterCleanup = registeredOwners
+    for (const key of registrationKeys) {
+      if (ownerRegistrationByKey.get(key) !== registration) continue
+      ownerRegistrationByKey.delete(key)
+      if (
+        !Object.prototype.hasOwnProperty.call(registeredOwners, key)
+        || !Object.is(registeredOwners[key], registrationOwners[key])
+      ) {
+        continue
+      }
+      if (!cleanedAny) ownersAfterCleanup = { ...registeredOwners }
+      delete ownersAfterCleanup[key]
+      cleanedAny = true
+    }
+
+    if (!cleanedAny) return
+    registeredOwners = ownersAfterCleanup
     ownerListeners.forEach((listener) => listener())
   }
 }
@@ -134,6 +169,7 @@ export function buildChatDockerActionCatalog(
   options: BuildChatDockerActionCatalogOptions = {},
 ): ChatDockerAction[] {
   const owners = { ...registeredOwners, ...options.owners }
+  const text: ChatDockerActionTranslate = options.translate ?? ((key) => key)
   const scope: ChatDockerActionScope = {
     promptVariablesLoading: owners.promptVariablesLoading,
     memoryCortexAvailable: owners.memoryCortexAvailable,
@@ -145,19 +181,22 @@ export function buildChatDockerActionCatalog(
   const hasChat = Boolean(scope.activeChatId)
   const hasCharacter = Boolean(scope.activeCharacterId)
   const presetAvailable = Boolean(scope.activeLoomPresetId)
-  const promptDisabled = !presetAvailable || Boolean(scope.promptVariablesLoading)
+  const promptDisabled = !presetAvailable || Boolean(scope.promptVariablesLoading) || !owners.openPromptVariablesModal
   const convertHidden = Boolean(scope.isGroupChat)
-  const convertDisabled = !hasChat || !hasCharacter || convertHidden
+  const convertDisabled = !hasChat || !hasCharacter || convertHidden || !owners.handleConvertToGroup
   const groupCreatorDisabled = scope.groupChatCreatorRegistered === false
+    || (!owners.openGroupChatCreator && !owners.openModal)
+  const authorsNoteDisabled = !hasChat || !owners.setAuthorsNoteOpen
   const memoriesDisabled = !hasChat
     || scope.memoryCortexAvailable === false
     || Boolean(scope.memoryCortexInFlight)
-
+  const scrollToTopDisabled = !hasChat || !owners.navigateToOldestMessage || Boolean(owners.navigateToOldestMessageLoading)
+  const browseMessagesDisabled = !hasChat || !owners.openMessageNavigator
   const catalog: ChatDockerAction[] = [
     {
       id: 'chat.new',
-      label: 'New Chat',
-      description: 'Start a new chat with the current character.',
+      label: text('chatDocker.new.label'),
+      description: text('chatDocker.new.description'),
       keywords: ['new', 'chat', 'plus'],
       icon: Plus,
       disabled: false,
@@ -172,8 +211,8 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.manage',
-      label: 'Manage Chats',
-      description: 'Open the chat manager for the current character.',
+      label: text('chatDocker.manage.label'),
+      description: text('chatDocker.manage.description'),
       keywords: ['manage', 'chats', 'history'],
       icon: FolderOpen,
       disabled: !hasCharacter,
@@ -185,8 +224,8 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.prompt-variables',
-      label: 'Prompt Variables',
-      description: 'Edit prompt variables for the active preset.',
+      label: text('chatDocker.promptVariables.label'),
+      description: text('chatDocker.promptVariables.description'),
       keywords: ['prompt', 'variables', 'preset'],
       icon: Sliders,
       disabled: promptDisabled,
@@ -199,14 +238,14 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.settings',
-      label: 'Chat Settings',
-      description: 'Open settings for the current chat.',
+      label: text('chatDocker.settings.label'),
+      description: text('chatDocker.settings.description'),
       keywords: ['chat', 'settings'],
       icon: Settings2,
-      disabled: !hasChat,
+      disabled: !hasChat || (!owners.openChatSettings && !owners.openModal),
       hidden: false,
       run: () => {
-        if (!hasChat) return
+        if (!hasChat || (!owners.openChatSettings && !owners.openModal)) return
         if (owners.openChatSettings) {
           owners.openChatSettings()
           return
@@ -216,8 +255,8 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.convert-to-group',
-      label: 'Convert to Group',
-      description: 'Convert the current chat into a group chat.',
+      label: text('chatDocker.convertToGroup.label'),
+      description: text('chatDocker.convertToGroup.description'),
       keywords: ['convert', 'group'],
       icon: UserPlus,
       disabled: convertDisabled,
@@ -229,8 +268,8 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.new-group',
-      label: 'New Group',
-      description: 'Open the group chat creator.',
+      label: text('chatDocker.newGroup.label'),
+      description: text('chatDocker.newGroup.description'),
       keywords: ['new', 'group'],
       icon: UsersRound,
       disabled: groupCreatorDisabled,
@@ -246,21 +285,21 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.authors-note',
-      label: "Author's Note",
-      description: 'Open the author note for the current chat.',
+      label: text('chatDocker.authorsNote.label'),
+      description: text('chatDocker.authorsNote.description'),
       keywords: ['authors', 'note'],
       icon: StickyNote,
-      disabled: !hasChat,
+      disabled: authorsNoteDisabled,
       hidden: false,
       run: () => {
-        if (!hasChat) return
+        if (authorsNoteDisabled) return
         owners.setAuthorsNoteOpen?.(true)
       },
     },
     {
       id: 'chat.recompile-memories',
-      label: 'Recompile Memories',
-      description: 'Force a Memory Cortex warm for the current chat.',
+      label: text('chatDocker.recompileMemories.label'),
+      description: text('chatDocker.recompileMemories.description'),
       keywords: ['memory', 'cortex', 'recompile', 'warm'],
       icon: BrainCircuit,
       disabled: memoriesDisabled,
@@ -273,8 +312,8 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.select-messages',
-      label: 'Select messages',
-      description: 'Toggle message selection mode in the current chat.',
+      label: text('chatDocker.selectMessages.label'),
+      description: text('chatDocker.selectMessages.description'),
       keywords: ['select', 'messages', 'bulk', 'list-checks'],
       icon: ListChecks,
       disabled: !hasChat,
@@ -287,34 +326,34 @@ export function buildChatDockerActionCatalog(
     },
     {
       id: 'chat.scroll-to-top',
-      label: 'Go to oldest message',
-      description: 'Navigate to the oldest message in this chat.',
+      label: text('chatDocker.scrollToTop.label'),
+      description: text('chatDocker.scrollToTop.description'),
       keywords: ['scroll', 'top', 'oldest', 'first', 'message', 'arrow-up'],
       icon: ArrowUp,
-      disabled: !hasChat,
+      disabled: scrollToTopDisabled,
       hidden: false,
       run: () => {
-        if (!hasChat) return
+        if (scrollToTopDisabled) return
         void owners.navigateToOldestMessage?.()
       },
     },
     {
       id: 'chat.browse-messages',
-      label: 'Browse messages',
-      description: 'Open the message navigator to browse and search messages.',
+      label: text('chatDocker.browseMessages.label'),
+      description: text('chatDocker.browseMessages.description'),
       keywords: ['browse', 'messages', 'navigator', 'list', 'jump'],
       icon: List,
-      disabled: !hasChat,
+      disabled: browseMessagesDisabled,
       hidden: false,
       run: () => {
-        if (!hasChat) return
+        if (browseMessagesDisabled) return
         owners.openMessageNavigator?.()
       },
     },
     {
       id: 'chat.customize-composer',
-      label: 'Customize composer',
-      description: 'Open the composer action bar customizer.',
+      label: text('chatDocker.customizeComposer.label'),
+      description: text('chatDocker.customizeComposer.description'),
       keywords: ['customize', 'composer', 'action-bar', 'gear', 'sliders'],
       icon: SlidersHorizontal,
       disabled: !owners.openComposerCustomize,
@@ -325,7 +364,9 @@ export function buildChatDockerActionCatalog(
     },
   ]
 
-  return [...new Map(catalog.map((action) => [action.id, action])).values()]
+  return [...new Map<string, ChatDockerAction>(
+    catalog.map((action): [string, ChatDockerAction] => [action.id, action]),
+  ).values()]
 }
 
 export function collectChatDockerActionIds(actions: ReadonlyArray<{ id: string }>): string[] {

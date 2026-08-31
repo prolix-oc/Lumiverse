@@ -11,6 +11,7 @@ export interface NumberStepperProps {
   step?: number
   allowEmpty?: boolean
   placeholder?: string
+  inputId?: string
   className?: string
 }
 
@@ -22,6 +23,7 @@ export default function NumberStepper({
   step = 1,
   allowEmpty,
   placeholder,
+  inputId,
   className,
 }: NumberStepperProps) {
   const increment = useCallback(() => {
@@ -41,6 +43,7 @@ export default function NumberStepper({
   return (
     <div className={`${styles.stepper} ${className || ''}`}>
       <NumericInput
+        id={inputId}
         className={styles.input}
         value={value}
         min={min}

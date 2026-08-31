@@ -6,17 +6,28 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
-import { generateApi, type DryRunMessage, type DryRunResponse } from '@/api/generate'
+import { selectAgentRunForTarget } from '@/store/slices/agent-runs'
+import { generateApi, type DryRunMessage } from '@/api/generate'
+import { agentRunsApi } from '@/api/agent-runs'
 import type { BreakdownCacheEntry } from '@/types/store'
 import { findExpandedTextMatches } from '@/lib/expandedTextSearch'
-import { groupBreakdownEntries, getBlockDisplayColor } from '@/lib/prompt-breakdown'
-import type { BreakdownGroup } from '@/lib/prompt-breakdown'
+import {
+  GROUP_COLORS,
+  groupBreakdownEntries,
+  getBlockDisplayColor,
+  inspectionAttemptTargetMessageId,
+  inspectionDetailToBreakdown,
+  workInspectionCheckpointLabel,
+  type BreakdownEntry,
+  type BreakdownGroup,
+} from '@/lib/prompt-breakdown'
 import { translateBreakdownGroupLabel } from '@/lib/i18n/breakdownGroupLabel'
+import { formatPromptItemizerOutcomeReason } from '@/lib/i18n/promptItemizerOutcome'
 import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
 import { getNanoGptCacheUsageSummary } from '@/lib/nanogpt-breakdown-cache'
 import { getOpenAiCompatibleCacheUsageSummary } from '@/lib/openai-compatible-breakdown-cache'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
+import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptInput, type RawPromptView } from '@/lib/formatRawPrompt'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import styles from './PromptItemizerModal.module.css'
 import clsx from 'clsx'
@@ -31,6 +42,8 @@ const ROLE_CLASS: Record<string, string> = {
   assistant: styles.roleAssistant,
 }
 
+const INSPECTION_PAGE_SIZE = 12
+
 function summarizeMessage(content: string): string {
   const normalized = content.replace(/\s+/g, ' ').trim()
   if (!normalized) return i18n.t('shared.emptyMessage', { ns: 'modals' })
@@ -42,9 +55,11 @@ function countLines(content: string): number {
   return content.split(/\r\n|\r|\n/).length
 }
 
+
 export default function PromptItemizerModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'promptItemizer' })
   const { t: ts } = useTranslation('modals', { keyPrefix: 'shared' })
+  const { t: tChat } = useTranslation('chat')
 
   const modalProps = useStore((s) => s.modalProps)
   const closeModal = useStore((s) => s.closeModal)
@@ -58,33 +73,60 @@ export default function PromptItemizerModal() {
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
 
-  const messageId = modalProps?.messageId as string | undefined
+  const messageId = typeof modalProps?.messageId === 'string' && modalProps.messageId
+    ? modalProps.messageId
+    : undefined
+  const modalChatId = typeof modalProps?.chatId === 'string' && modalProps.chatId
+    ? modalProps.chatId
+    : undefined
+  const modalAttemptId = typeof modalProps?.inspectionAttemptId === 'string' && modalProps.inspectionAttemptId
+    ? modalProps.inspectionAttemptId
+    : undefined
   const chatId = useMemo(() => {
+    if (modalChatId) return modalChatId
     if (!messageId) return activeChatId
     const m = messages.find((x) => x.id === messageId) as { chat_id?: string } | undefined
     return m?.chat_id ?? activeChatId
-  }, [messageId, messages, activeChatId])
+  }, [modalChatId, messageId, messages, activeChatId])
+  const sourceMessage = useMemo(
+    () => messageId ? messages.find((message) => message.id === messageId) ?? null : null,
+    [messageId, messages],
+  )
+  const sourceAgentRun = useStore((state) => (
+    chatId && messageId && typeof sourceMessage?.swipe_id === 'number'
+      ? selectAgentRunForTarget(state, chatId, messageId, sourceMessage.swipe_id)
+      : undefined
+  ))
+  const inspectionAttemptId = modalAttemptId ?? sourceAgentRun?.inspectionAttemptId
   const rawTargetCharacterId = useMemo(() => {
-    const sourceMessage = messageId
-      ? messages.find((x) => x.id === messageId)
-      : null
     if (typeof sourceMessage?.extra?.character_id === 'string') {
       return sourceMessage.extra.character_id
     }
     return activeGroupCharacterId ?? activeCharacterId ?? null
-  }, [messageId, messages, activeGroupCharacterId, activeCharacterId])
+  }, [sourceMessage, activeGroupCharacterId, activeCharacterId])
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BreakdownCacheEntry | null>(null)
   const [openGroups, setOpenGroups] = useState<Set<string>>(
-    new Set(['lumiverse', 'chatHistory', 'longTermMemory']),
+    () => new Set(['lumiverse', 'chatHistory', 'longTermMemory', 'nativeDatabank']),
   )
+  const [visiblePromptEntryCount, setVisiblePromptEntryCount] = useState(INSPECTION_PAGE_SIZE)
+  const [visibleLoomEntryCount, setVisibleLoomEntryCount] = useState(INSPECTION_PAGE_SIZE)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null)
   const [rawView, setRawView] = useState<'off' | RawPromptView>('off')
   const [copied, setCopied] = useState(false)
   const [rawLoading, setRawLoading] = useState(false)
   const [rawError, setRawError] = useState<string | null>(null)
-  const [rawData, setRawData] = useState<DryRunResponse | null>(null)
+  const [rawInput, setRawInput] = useState<RawPromptInput | null>(null)
+  useEffect(() => {
+    setRawInput(null)
+    setRawError(null)
+    setLoadError(null)
+    setRawView('off')
+    setVisiblePromptEntryCount(INSPECTION_PAGE_SIZE)
+    setVisibleLoomEntryCount(INSPECTION_PAGE_SIZE)
+  }, [messageId, inspectionAttemptId])
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [matchIndex, setMatchIndex] = useState(0)
@@ -93,36 +135,79 @@ export default function PromptItemizerModal() {
   const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!messageId) return
+    if (messageId) {
+      const cached = breakdownCache[messageId]
+      if (cached) {
+        setLoadError(null)
+        setLoading(false)
+        setData(cached)
+        return
+      }
 
-    const cached = breakdownCache[messageId]
-    if (cached) {
-      setData(cached)
+      setLoading(true)
+      setLoadError(null)
+      generateApi.getBreakdown(messageId)
+        .then((res) => {
+          setLoadError(null)
+          const entry: BreakdownCacheEntry = {
+            entries: res.entries,
+            messages: res.messages,
+            totalTokens: res.totalTokens,
+            chatHistoryTokens: res.chatHistoryTokens,
+            maxContext: res.maxContext,
+            model: res.model,
+            provider: res.provider,
+            parameters: res.parameters,
+            usage: res.usage,
+            presetName: res.presetName,
+            tokenizer_name: res.tokenizer_name,
+            assemblySurface: res.assemblySurface,
+            loomPromptInspection: res.loomPromptInspection,
+          }
+          cacheBreakdown(messageId, entry)
+          setData(entry)
+        })
+        .catch(() => {
+          if (!inspectionAttemptId) {
+            setData(null)
+            setLoadError(t('ar007.loadError'))
+            return
+          }
+          return agentRunsApi.inspection(inspectionAttemptId, chatId ?? undefined)
+            .then((detail) => {
+              const entry = inspectionDetailToBreakdown(detail)
+              const attemptMessageId = inspectionAttemptTargetMessageId(detail)
+              if (messageId && attemptMessageId === messageId) {
+                cacheBreakdown(messageId, entry)
+              }
+              setLoadError(null)
+              setData(entry)
+            })
+            .catch(() => {
+              setData(null)
+              setLoadError(t('ar007.loadError'))
+            })
+        })
+        .finally(() => setLoading(false))
       return
     }
 
+    if (!inspectionAttemptId) return
+
     setLoading(true)
-    generateApi.getBreakdown(messageId)
-      .then((res) => {
-        const entry: BreakdownCacheEntry = {
-          entries: res.entries,
-          messages: res.messages,
-          totalTokens: res.totalTokens,
-          chatHistoryTokens: res.chatHistoryTokens,
-          maxContext: res.maxContext,
-          model: res.model,
-          provider: res.provider,
-          parameters: res.parameters,
-          usage: res.usage,
-          presetName: res.presetName,
-          tokenizer_name: res.tokenizer_name,
-        }
-        cacheBreakdown(messageId, entry)
+    setLoadError(null)
+    agentRunsApi.inspection(inspectionAttemptId, chatId ?? undefined)
+      .then((detail) => {
+        const entry = inspectionDetailToBreakdown(detail)
+        setLoadError(null)
         setData(entry)
       })
-      .catch(() => setData(null))
+      .catch(() => {
+        setData(null)
+        setLoadError(t('ar007.loadError'))
+      })
       .finally(() => setLoading(false))
-  }, [messageId, breakdownCache, cacheBreakdown])
+  }, [messageId, inspectionAttemptId, chatId, breakdownCache, cacheBreakdown, t])
 
   const toggleGroup = (label: string) => {
     setOpenGroups((prev) => {
@@ -132,8 +217,31 @@ export default function PromptItemizerModal() {
     })
   }
 
-  const ensureRawData = useCallback(async (): Promise<DryRunResponse | null> => {
-    if (rawData) return rawData
+  const ensureRawInput = useCallback(async (): Promise<RawPromptInput | null> => {
+    if (rawInput) return rawInput
+    if (data?.messages) {
+      const generationType = typeof sourceMessage?.extra?.generation_type === 'string'
+        ? sourceMessage.extra.generation_type
+        : data.assemblySurface === 'WORK'
+          ? 'stored_work_target'
+          : 'normal'
+      const stored: RawPromptInput = {
+        messages: data.messages,
+        parameters: data.parameters,
+        model: data.model,
+        provider: data.provider,
+        assemblySurface: data.assemblySurface,
+        source: 'stored_breakdown',
+        target: {
+          generationType,
+          messageId: messageId ?? null,
+          swipeId: sourceMessage?.swipe_id ?? null,
+        },
+        loomPromptInspection: data.loomPromptInspection,
+      }
+      setRawInput(stored)
+      return stored
+    }
     if (!chatId || !messageId) {
       setRawError(t('missingChat'))
       return null
@@ -142,7 +250,7 @@ export default function PromptItemizerModal() {
     setRawError(null)
     try {
       const presetId = getActivePresetForGeneration() || undefined
-      const res = await generateApi.dryRun({
+      const response = await generateApi.dryRun({
         chat_id: chatId,
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
@@ -151,39 +259,47 @@ export default function PromptItemizerModal() {
         exclude_message_id: messageId,
         target_character_id: rawTargetCharacterId || undefined,
       })
-      setRawData(res)
-      return res
-    } catch (err: any) {
-      setRawError(err?.message || t('rawFailed'))
+      const fallback = {
+        ...dryRunToRawPromptInput(response),
+        target: {
+          generationType: 'normal',
+          messageId,
+          swipeId: sourceMessage?.swipe_id ?? null,
+        },
+      } satisfies RawPromptInput
+      setRawInput(fallback)
+      return fallback
+    } catch (err: unknown) {
+      setRawError(err instanceof Error && err.message ? err.message : t('rawFailed'))
       return null
     } finally {
       setRawLoading(false)
     }
-  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId, t])
+  }, [rawInput, chatId, messageId, data, sourceMessage, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId, t])
 
   const handleToggleRaw = useCallback(async () => {
     if (rawView !== 'off') {
       setRawView((v) => (v === 'text' ? 'json' : 'off'))
       return
     }
-    const res = await ensureRawData()
-    if (res) setRawView('text')
-  }, [rawView, ensureRawData])
+    const input = await ensureRawInput()
+    if (input) setRawView('text')
+  }, [rawView, ensureRawInput])
 
   const handleCopy = useCallback(async () => {
-    const res = await ensureRawData()
-    if (!res) return
+    const input = await ensureRawInput()
+    if (!input) return
     const view: RawPromptView = rawView === 'json' ? 'json' : 'text'
-    const text = formatRawPrompt(dryRunToRawPromptInput(res), view)
+    const text = formatRawPrompt(input, view)
     copyTextToClipboard(text).catch(console.error)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
-  }, [ensureRawData, rawView])
+  }, [ensureRawInput, rawView])
 
   const rawText = useMemo(() => {
-    if (rawView === 'off' || !rawData) return ''
-    return formatRawPrompt(dryRunToRawPromptInput(rawData), rawView)
-  }, [rawView, rawData])
+    if (rawView === 'off' || !rawInput) return ''
+    return formatRawPrompt(rawInput, rawView)
+  }, [rawView, rawInput])
 
   const rawButtonLabel = rawView === 'off' ? ts('raw') : rawView === 'text' ? ts('json') : ts('visual')
 
@@ -191,14 +307,77 @@ export default function PromptItemizerModal() {
     setMatchIndex(0)
   }, [rawView])
 
-  const groups = useMemo(() => (data ? groupBreakdownEntries(data.entries) : []), [data])
-  const groupLabel = useCallback((id: string, fallback: string) => translateBreakdownGroupLabel(id, t), [t])
+  const groups = useMemo(() => {
+    if (!data) return []
+    const ordinaryEntries: BreakdownEntry[] = []
+    const databankEntries: BreakdownEntry[] = []
+    for (const entry of data.entries) {
+      if (entry.type === 'databank' || entry.type === 'databank_mention') {
+        databankEntries.push(entry)
+      } else {
+        ordinaryEntries.push(entry)
+      }
+    }
+    const grouped = groupBreakdownEntries(ordinaryEntries)
+    if (databankEntries.length === 0) return grouped
+
+    const databankGroup: BreakdownGroup = {
+      id: 'nativeDatabank',
+      label: 'Databank',
+      color: GROUP_COLORS.worldInfo,
+      tokens: databankEntries.reduce((total, entry) => total + entry.tokens, 0),
+      entries: databankEntries,
+    }
+    const worldInfoIndex = grouped.findIndex((group) => group.id === 'worldInfo')
+    const firstTrailingIndex = grouped.findIndex((group) => (
+      group.id === 'sidecar' || group.id === 'extensions' || group.id === 'system'
+    ))
+    const insertionIndex = worldInfoIndex >= 0
+      ? worldInfoIndex + 1
+      : firstTrailingIndex >= 0
+        ? firstTrailingIndex
+        : grouped.length
+    return [
+      ...grouped.slice(0, insertionIndex),
+      databankGroup,
+      ...grouped.slice(insertionIndex),
+    ]
+  }, [data])
+  const loomInspection = data?.loomPromptInspection
+  const responseOmission = loomInspection?.responseOmission
+  const assemblySurface = sourceAgentRun || data?.assemblySurface === 'WORK' || loomInspection?.surface === 'WORK'
+    ? 'WORK'
+    : 'RESPONSE'
+  const groupLabel = useCallback((id: string, fallback: string) => {
+    if (id === 'nativeDatabank') return fallback
+    return translateBreakdownGroupLabel(id, t)
+  }, [t])
+  const roleByBlockId = useMemo(() => {
+    const roles = new Map<string, string>()
+    for (const entry of data?.entries ?? []) {
+      if (entry.blockId && entry.role && !roles.has(entry.blockId)) roles.set(entry.blockId, entry.role)
+    }
+    return roles
+  }, [data])
+  const visiblePromptEntries = data?.entries.slice(0, visiblePromptEntryCount) ?? []
+  const visibleLoomItems = loomInspection?.items.slice(0, visibleLoomEntryCount) ?? []
+  const visibleEffectiveEntryIds = loomInspection?.effectiveEntryIds.slice(0, visibleLoomEntryCount) ?? []
+  const visibleResponseSources = responseOmission?.source.slice(0, visibleLoomEntryCount) ?? []
+  const visibleOmittedEntryIds = responseOmission?.omittedEntryIds.slice(0, visibleLoomEntryCount) ?? []
+  const visibleOmittedPhases = responseOmission?.omittedPhaseInstructions.slice(0, visibleLoomEntryCount) ?? []
+  const retainedLoomEvidenceCount = Math.max(
+    loomInspection?.items.length ?? 0,
+    loomInspection?.effectiveEntryIds.length ?? 0,
+    responseOmission?.source.length ?? 0,
+    responseOmission?.omittedEntryIds.length ?? 0,
+    responseOmission?.omittedPhaseInstructions.length ?? 0,
+  )
   const sidecarGroup = groups.find((g) => g.id === 'sidecar')
   const chatHistoryGroup = data?.chatHistoryTokens != null && data.chatHistoryTokens > 0
     ? {
         id: 'chatHistory',
         label: 'Chat History',
-        color: '#d4a842',
+        color: GROUP_COLORS.chatHistory,
         tokens: data.chatHistoryTokens,
         entries: [],
       }
@@ -255,6 +434,7 @@ export default function PromptItemizerModal() {
     | { kind: 'raw'; start: number; end: number }
 
   const breakdownFindMatches = useMemo<FindMatch[]>(() => {
+    if (assemblySurface === 'WORK') return []
     const query = findQuery.trim()
     if (!query) return []
     const matches: FindMatch[] = []
@@ -279,17 +459,17 @@ export default function PromptItemizerModal() {
       }
     }
     return matches
-  }, [findQuery, flatEntries, entryContentSearchText])
+  }, [assemblySurface, findQuery, flatEntries, entryContentSearchText])
 
   const rawFindMatches = useMemo<FindMatch[]>(() => {
     const query = findQuery.trim()
-    if (!query || rawView === 'off' || !rawText) return []
+    if (assemblySurface === 'WORK' || !query || rawView === 'off' || !rawText) return []
     return findExpandedTextMatches(rawText, query).map((range) => ({
       kind: 'raw' as const,
       start: range.start,
       end: range.end,
     }))
-  }, [findQuery, rawText, rawView])
+  }, [assemblySurface, findQuery, rawText, rawView])
 
   const findMatches = rawView === 'off' ? breakdownFindMatches : rawFindMatches
   const currentMatchIndex = findMatches.length === 0
@@ -311,6 +491,7 @@ export default function PromptItemizerModal() {
 
   // Ctrl/Cmd+F opens find, mirroring the expanded editor.
   useEffect(() => {
+    if (assemblySurface === 'WORK') return
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && (event.key === 'f' || event.key === 'F')) {
         event.preventDefault()
@@ -320,7 +501,7 @@ export default function PromptItemizerModal() {
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [])
+  }, [assemblySurface])
 
   // Scroll only on explicit find navigation. Scope the lookup to this modal
   // and move its own scroll container directly; document-level scrollIntoView
@@ -420,15 +601,19 @@ export default function PromptItemizerModal() {
     [data],
   )
   const cacheHintsByKey = useMemo(() => {
-    const map = new Map<string, { kind: 'cached' | 'miss'; label: string }>()
-    flatEntries.forEach((item, index) => {
+    const hintByEntry = new Map<BreakdownEntry, (typeof cacheHints)[number]>()
+    data?.entries.forEach((entry, index) => {
       const hint = cacheHints[index]
-      if (hint) map.set(item.key, hint)
+      if (hint) hintByEntry.set(entry, hint)
     })
-    return map
-  }, [flatEntries, cacheHints])
-  const selectedEntryIndex = selectedEntry ? flatEntries.findIndex((item) => item.key === selectedEntry.key) : -1
-  const selectedCacheHint = selectedEntryIndex >= 0 ? cacheHints[selectedEntryIndex] : undefined
+    const hintByKey = new Map<string, { kind: 'cached' | 'miss'; label: string }>()
+    for (const item of flatEntries) {
+      const hint = hintByEntry.get(item.entry)
+      if (hint) hintByKey.set(item.key, hint)
+    }
+    return hintByKey
+  }, [data, flatEntries, cacheHints])
+  const selectedCacheHint = selectedEntry ? cacheHintsByKey.get(selectedEntry.key) : undefined
   const selectedChatHistoryMessages = useMemo(() => {
     if (!selectedEntry || selectedEntry.entry.type !== 'chat_history') return null
 
@@ -436,11 +621,11 @@ export default function PromptItemizerModal() {
     const messageCount = selectedEntry.entry.messageCount
     if (firstMessageIndex == null || messageCount == null || messageCount <= 0) return null
 
-    const sourceMessages = data?.messages ?? rawData?.messages
+    const sourceMessages = data?.messages ?? rawInput?.messages
     if (!sourceMessages) return null
 
     return sourceMessages.slice(firstMessageIndex, firstMessageIndex + messageCount)
-  }, [selectedEntry, data?.messages, rawData?.messages])
+  }, [selectedEntry, data?.messages, rawInput?.messages])
 
   const selectedChatHistoryUsesReassembledMessages = Boolean(
     selectedEntry?.entry.type === 'chat_history' && !data?.messages && selectedChatHistoryMessages,
@@ -448,6 +633,7 @@ export default function PromptItemizerModal() {
 
   useEffect(() => {
     if (
+      assemblySurface === 'WORK' ||
       rawView !== 'off' ||
       !selectedEntry ||
       selectedEntry.entry.type !== 'chat_history' ||
@@ -458,8 +644,8 @@ export default function PromptItemizerModal() {
     ) {
       return
     }
-    void ensureRawData()
-  }, [data?.messages, ensureRawData, rawError, rawLoading, rawView, selectedChatHistoryMessages, selectedEntry])
+    void ensureRawInput()
+  }, [assemblySurface, data?.messages, ensureRawInput, rawError, rawLoading, rawView, selectedChatHistoryMessages, selectedEntry])
 
   return (
     <ModalShell
@@ -484,9 +670,14 @@ export default function PromptItemizerModal() {
           </div>
 
           <div ref={bodyRef} className={styles.body}>
-            {loading && <div className={styles.loading}>{t('loading')}</div>}
-            {!loading && !data && <div className={styles.empty}>{t('empty')}</div>}
-            {!loading && data && findOpen && (
+            {!loading && !data && loadError && (
+              <div className={styles.loadError} role="alert">
+                <strong>{t('ar007.unavailableTitle')}</strong>
+                <span>{loadError}</span>
+              </div>
+            )}
+            {!loading && !data && !loadError && <div className={styles.empty}>{t('empty')}</div>}
+            {!loading && data && assemblySurface !== 'WORK' && findOpen && (
               <div className={styles.findBar}>
                 <Search size={12} className={styles.findBarIcon} />
                 <input
@@ -541,8 +732,335 @@ export default function PromptItemizerModal() {
               </div>
             )}
 
-            {!loading && data && rawView === 'off' && (
+            {!loading && data && (rawView === 'off' || assemblySurface === 'WORK') && (
               <>
+                <section className={styles.effectivePromptInspection} aria-labelledby="effective-prompt-inspection-title">
+                  <header className={styles.effectivePromptHeader}>
+                    <div>
+                      <p className={styles.effectivePromptEyebrow}>
+                        <code>{assemblySurface}</code>
+                        <span aria-hidden="true">·</span>
+                        <code>{workInspectionCheckpointLabel(assemblySurface, loomInspection?.checkpoint)}</code>
+                      </p>
+                      <h3 id="effective-prompt-inspection-title">{t('inspectionTitle')}</h3>
+                      <p>
+                        {t('ar007.sourceSummary', { entries: data.entries.length.toLocaleString(), tokens: data.totalTokens.toLocaleString() })}
+                      </p>
+                    </div>
+                    <span className={styles.readOnlyBadge}>{t('ar007.readOnly')}</span>
+                  </header>
+
+                  <div className={styles.effectivePromptBoundary}>
+                    <p>
+                      <strong>{t('ar007.nativeContextTitle')}</strong> {t('ar007.nativeContext')}
+                    </p>
+                    {assemblySurface === 'WORK' ? (
+                      <p className={styles.privacyBoundary}>
+                        <strong>{t('ar007.workBoundaryTitle')}</strong> {t('ar007.workBoundary')}
+                      </p>
+                    ) : (
+                      <p>
+                        <strong>{t('ar007.ordinaryResponseTitle')}</strong> {t('ar007.ordinaryResponse')}
+                      </p>
+                    )}
+                  </div>
+
+                  <section className={styles.effectivePromptSection} aria-labelledby="effective-prompt-source-order">
+                    <div className={styles.effectivePromptSectionHeader}>
+                      <div>
+                        <h4 id="effective-prompt-source-order">{t('ar007.orderedSourcesTitle')}</h4>
+                        <p>{t('ar007.orderedSourcesSummary')}</p>
+                      </div>
+                      <span>{visiblePromptEntries.length}/{data.entries.length}</span>
+                    </div>
+                    {visiblePromptEntries.length > 0 ? (
+                      <ol className={styles.effectivePromptOrder}>
+                        {visiblePromptEntries.map((entry, index) => {
+                          const nativeWorldInfo = entry.type === 'world_info'
+                          const nativeDatabank = entry.type === 'databank' || entry.type === 'databank_mention'
+                          const nativeSource = nativeWorldInfo || nativeDatabank
+                          const sourceLabel = nativeWorldInfo
+                            ? t('ar007.nativeWorldInfo')
+                            : nativeDatabank
+                              ? t('ar007.nativeDatabank')
+                              : t('ar007.ordinaryPrompt')
+                          return (
+                            <li className={styles.effectivePromptItem} key={`${entry.type}:${entry.blockId ?? entry.name}:${index}`}>
+                              <header className={styles.promptItemHeader}>
+                                <span className={styles.promptOrderBadge}>{index + 1}</span>
+                                <div>
+                                  <strong>{entry.name}</strong>
+                                  <span>{entry.type}</span>
+                                </div>
+                                <span className={nativeSource ? styles.nativeSourceBadge : styles.promptSourceBadge}>
+                                  {sourceLabel}
+                                </span>
+                              </header>
+                              <dl className={styles.promptItemFields}>
+                                <div>
+                                  <dt>{t('ar007.role')}</dt>
+                                  <dd><code>{entry.role ?? t('ar007.notRecorded')}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.tokens')}</dt>
+                                  <dd>{entry.tokens.toLocaleString()}</dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.sourceIdentity')}</dt>
+                                  <dd><code>{entry.blockId ?? t('ar007.notRecorded')}</code></dd>
+                                </div>
+                                {nativeSource ? (
+                                  <div>
+                                    <dt>{t('ar007.contentHash')}</dt>
+                                    <dd><code>{t('ar007.ownerInspection')}</code></dd>
+                                  </div>
+                                ) : null}
+                              </dl>
+                              {nativeSource ? (
+                                <p className={styles.nativeEvidenceGap}>
+                                  {t('ar007.nativeEvidenceGap')}
+                                </p>
+                              ) : null}
+                              {entry.content != null && assemblySurface !== 'WORK' ? (
+                                <details className={styles.promptContent}>
+                                  <summary>{t('ar007.inspectContent')}</summary>
+                                  <pre>{entry.content}</pre>
+                                </details>
+                              ) : entry.content != null ? (
+                                <p className={styles.loomPrivacyGap}>{t('ar007.contentHidden')}</p>
+                              ) : null}
+                            </li>
+                          )
+                        })}
+                      </ol>
+                    ) : (
+                      <p className={styles.loomEvidenceGap}>{t('ar007.noOrderedSources')}</p>
+                    )}
+                    {data.entries.length > visiblePromptEntryCount ? (
+                      <div className={styles.inspectionReveal}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setVisiblePromptEntryCount((count) => Math.min(count + INSPECTION_PAGE_SIZE, data.entries.length))}
+                        >
+                          {t('ar007.showNext', { count: Math.min(INSPECTION_PAGE_SIZE, data.entries.length - visiblePromptEntryCount) })}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  {loomInspection ? (
+                    <section className={styles.loomInspection} aria-labelledby="loom-prompt-inspection-title">
+                      <header className={styles.loomInspectionHeader}>
+                        <div>
+                          <p className={styles.loomInspectionEyebrow}>
+                            <code>{loomInspection.surface}</code>
+                            <span aria-hidden="true">·</span>
+                            <code>{loomInspection.checkpoint}</code>
+                          </p>
+                          <h4 id="loom-prompt-inspection-title">{t('inspectionTitle')}</h4>
+                          <p>{t('inspectionSummary', {
+                            count: loomInspection.items.length,
+                            effectiveCount: loomInspection.effectiveEntryIds.length,
+                          })}</p>
+                        </div>
+                        <details className={styles.loomEffectiveOrder}>
+                          <summary>{t('inspectionEffectiveOrder')}</summary>
+                          <code>{visibleEffectiveEntryIds.join(' → ') || '—'}</code>
+                        </details>
+                      </header>
+                      <p className={styles.loomRouteNotice}>
+                        {t('ar007.fixedRoutes')}
+                      </p>
+                      <ol className={styles.loomInspectionList}>
+                        {visibleLoomItems.map((item, index) => {
+                          const outcomeReason = 'reason' in item.outcome ? item.outcome.reason : null
+                          const outcomeStatus = t(`ar007.outcomeStatus.${item.outcome.status}`, { defaultValue: item.outcome.status })
+                          const outcomeDetail = item.outcome.status === 'included'
+                            ? t('ar007.outcomeIncluded', { status: outcomeStatus, index: item.outcome.effectiveIndex + 1 })
+                            : item.outcome.status === 'deduplicated'
+                              ? t('ar007.outcomeDeduplicated', { status: outcomeStatus, entry: item.outcome.keptEntryId, destination: item.outcome.destination })
+                              : formatPromptItemizerOutcomeReason(outcomeStatus, item.outcome.reason, tChat)
+
+                          const repairRequired = outcomeReason === 'stale_source'
+                            || outcomeReason === 'invalid_source'
+                            || outcomeReason === 'required_source_unavailable'
+                            || item.conditionResult === 'invalid'
+                          return (
+                            <li className={styles.loomInspectionItem} key={`${item.entryId}-${index}`}>
+                              <div className={styles.loomInspectionItemHeader}>
+                                <span>{t('inspectionItemOrder', { order: index + 1 })}</span>
+                                <code>{item.entryId}</code>
+                                <span className={styles.loomOutcome} data-outcome={item.outcome.status}>{outcomeDetail}</span>
+                              </div>
+                              <dl className={styles.loomInspectionFields}>
+                                <div>
+                                  <dt>{t('ar007.exactBlock')}</dt>
+                                  <dd><code>{item.source.blockId}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.presetRevision')}</dt>
+                                  <dd><code>{item.source.presetRevision}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.blockRevision')}</dt>
+                                  <dd><code>{item.source.blockRevision}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.sourcePromptOrder')}</dt>
+                                  <dd><code>{item.source.promptOrder}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.fixedRole')}</dt>
+                                  <dd><code>{item.bucket}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('inspectionRoute')}</dt>
+                                  <dd><code>{`${item.bucket} → ${item.destination} @ ${item.checkpoint}`}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('inspectionRequired')}</dt>
+                                  <dd><code>{String(item.required)}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('inspectionCondition')}</dt>
+                                  <dd><code>{item.condition ? JSON.stringify(item.condition) : t('ar007.notApplicable')}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('inspectionConditionResult')}</dt>
+                                  <dd><code>{item.conditionResult ?? 'not_applicable'}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.ordinaryPromptSuppressed')}</dt>
+                                  <dd><code>{item.ordinaryPromptSuppressed ? t('ar007.booleanTrue') : t('ar007.booleanFalse')}</code></dd>
+                                </div>
+                                <div>
+                                  <dt>{t('ar007.outcomeReasonLabel')}</dt>
+                                  <dd><code>{outcomeReason ? tChat(`ownerInspection.values.${outcomeReason}`, { defaultValue: outcomeReason }) : t('ar007.notApplicable')}</code></dd>
+                                </div>
+                                {item.outcome.status === 'deduplicated' ? (
+                                  <>
+                                    <div>
+                                      <dt>{t('ar007.dedupeRetainedEntry')}</dt>
+                                      <dd><code>{item.outcome.keptEntryId}</code></dd>
+                                    </div>
+                                    <div>
+                                      <dt>{t('ar007.dedupeRetainedDestination')}</dt>
+                                      <dd><code>{item.outcome.destination}</code></dd>
+                                    </div>
+                                  </>
+                                ) : null}
+                              </dl>
+                              {repairRequired ? (
+                                <p className={styles.loomRepair}>
+                                  <strong>{t('ar007.repairRequired')}</strong> {t('ar007.repairDetail')}
+                                </p>
+                              ) : null}
+                              {item.effectiveText === null ? (
+                                <p className={styles.loomInspectionEmpty}>{t('inspectionNoEffectiveText')}</p>
+                              ) : item.destination === 'render' ? (
+                                <details className={styles.loomInspectionContent}>
+                                  <summary>{t('inspectionEffectiveText')}</summary>
+                                  <pre>{item.effectiveText}</pre>
+                                </details>
+                              ) : (
+                                <p className={styles.loomPrivacyGap}>
+                                  {t('ar007.workTextHidden')}
+                                </p>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ol>
+                      {assemblySurface === 'WORK' ? (
+                        <p className={styles.loomEvidenceGap}>
+                          {t('ar007.structuredCustomPhase')}
+                        </p>
+                      ) : null}
+                    </section>
+                  ) : (
+                    <p className={styles.loomEvidenceGap}>
+                      {t('ar007.noStructuredInspection')}
+                    </p>
+                  )}
+
+                  {responseOmission ? (
+                    <section
+                      className={styles.responseOmission}
+                      role="note"
+                      aria-label={t('responseOmissionTitle')}
+                    >
+                      <strong>{t('responseOmissionTitle')}</strong>
+                      <span className={styles.responseOmissionSummary}>
+                        {t('responseOmissionSummary', {
+                          entryCount: responseOmission.omittedEntryIds.length,
+                          phaseCount: responseOmission.omittedPhaseInstructions.length,
+                        })}
+                      </span>
+                      <p className={styles.responseOmissionExplanation}>
+                        {t('ar007.responseOmissionText', { reason: responseOmission.reason })}
+                      </p>
+                      <details className={styles.responseOmissionDetails}>
+                        <summary>{t('responseOmissionDetails')}</summary>
+                        <dl>
+                          <div>
+                            <dt>{t('responseOmissionCheckpoint')}</dt>
+                            <dd>{loomInspection?.checkpoint}</dd>
+                          </div>
+                          <div>
+                            <dt>{t('responseOmissionEntries')}</dt>
+                            <dd>{visibleOmittedEntryIds.join(', ') || '—'}</dd>
+                          </div>
+                          <div>
+                            <dt>{t('responseOmissionSources')}</dt>
+                            <dd>
+                              <ul className={styles.loomExactList}>
+                                {visibleResponseSources.map((source) => (
+                                  <li key={`${source.blockId}-${source.blockRevision}-${source.promptOrder}`}>
+                                    <code>{`${source.blockId}@${source.blockRevision} · preset:${source.presetRevision} · order:${source.promptOrder}`}</code>
+                                  </li>
+                                ))}
+                              </ul>
+                            </dd>
+                          </div>
+                          {responseOmission.omittedPhaseInstructions.length > 0 ? (
+                            <div>
+                              <dt>{t('responseOmissionPhases')}</dt>
+                              <dd>
+                                <ul className={styles.loomExactList}>
+                                  {visibleOmittedPhases.map(({ phaseId, source }) => (
+                                    <li key={`${phaseId}-${source.blockId}-${source.blockRevision}-${source.promptOrder}`}>
+                                      <code>{`${phaseId}: ${source.blockId}@${source.blockRevision} · preset:${source.presetRevision} · order:${source.promptOrder}`}</code>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                      </details>
+                    </section>
+                  ) : null}
+
+                  {retainedLoomEvidenceCount > visibleLoomEntryCount ? (
+                    <div className={styles.inspectionReveal}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setVisibleLoomEntryCount((count) => Math.min(
+                          count + INSPECTION_PAGE_SIZE,
+                          retainedLoomEvidenceCount,
+                        ))}
+                      >
+                        {t('ar007.showNextLoom', { count: Math.min(INSPECTION_PAGE_SIZE, retainedLoomEvidenceCount - visibleLoomEntryCount) })}
+                      </Button>
+                    </div>
+                  ) : null}
+                </section>
+                <div className={styles.tokenExplorerHeading}>
+                  <h3>{t('ar007.tokenDistribution')}</h3>
+                  <p>{t('ar007.tokenDistributionSummary')}</p>
+                </div>
                 <StackedBar groups={summaryGroups} total={data.totalTokens} groupLabel={groupLabel} />
                 {data.chatHistoryTokens != null && data.chatHistoryTokens > 0 && (
                   <div className={styles.cacheSummary}>
@@ -651,7 +1169,11 @@ export default function PromptItemizerModal() {
                         </div>
                       </div>
                     </div>
-                    {selectedChatHistoryMessages && selectedChatHistoryMessages.length > 0 ? (
+                    {assemblySurface === 'WORK' ? (
+                      <div className={styles.entryInspectorEmpty}>
+                        {t('ar007.workContentHidden')}
+                      </div>
+                    ) : selectedChatHistoryMessages && selectedChatHistoryMessages.length > 0 ? (
                       <div className={styles.messageInspectorList}>
                         {selectedChatHistoryUsesReassembledMessages && (
                           <div className={styles.messageInspectorNotice}>
@@ -681,14 +1203,14 @@ export default function PromptItemizerModal() {
                 )}
               </>
             )}
-            {!loading && data && rawView !== 'off' && (
+            {!loading && data && assemblySurface !== 'WORK' && rawView !== 'off' && (
               <>
                 <div className={styles.rawCaveat}>
                   {t('rawCaveat')}
                 </div>
                 {rawLoading && <div className={styles.loading}>{t('reassembling')}</div>}
                 {!rawLoading && rawError && <div className={styles.empty}>{rawError}</div>}
-                {!rawLoading && !rawError && rawData && (
+                {!rawLoading && !rawError && rawInput && (
                   <pre className={styles.rawView}>
                     {findOpen ? highlightRawFindMatches(rawText) : rawText}
                   </pre>
@@ -706,45 +1228,51 @@ export default function PromptItemizerModal() {
                 </span>
               )}
               {sidecarGroup && sidecarGroup.tokens > 0 && (
-                <span className={styles.footerMax} style={{ marginLeft: 6, color: '#e05daa' }}>
+                <span className={clsx(styles.footerMax, styles.footerMetric)} style={{ color: sidecarGroup.color }}>
                   {t('footerSidecar', { count: sidecarGroup.tokens })}
                 </span>
               )}
               {data.chatHistoryTokens != null && data.chatHistoryTokens > 0 && (
-                <span className={styles.footerMax} style={{ marginLeft: 6 }}>
+                <span className={clsx(styles.footerMax, styles.footerMetric)}>
                   {t('footerChatHistory', { count: data.chatHistoryTokens })}
                 </span>
               )}
               <div className={styles.footerSpacer} />
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<Search size={12} />}
-                onClick={() => {
-                  setFindOpen((open) => !open)
-                  requestAnimationFrame(() => findInputRef.current?.focus())
-                }}
-              >
-                {t('find')}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={<Code size={12} />}
-                onClick={handleToggleRaw}
-                loading={rawLoading && rawView === 'off'}
-              >
-                {rawButtonLabel}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={copied ? <Check size={12} /> : <Copy size={12} />}
-                onClick={handleCopy}
-                loading={rawLoading && !copied}
-              >
-                {copied ? ts('copied') : ts('copy')}
-              </Button>
+              {assemblySurface !== 'WORK' ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Search size={12} />}
+                    onClick={() => {
+                      setFindOpen((open) => !open)
+                      requestAnimationFrame(() => findInputRef.current?.focus())
+                    }}
+                  >
+                    {t('find')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Code size={12} />}
+                    onClick={handleToggleRaw}
+                    loading={rawLoading && rawView === 'off'}
+                  >
+                    {rawButtonLabel}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={copied ? <Check size={12} /> : <Copy size={12} />}
+                    onClick={handleCopy}
+                    loading={rawLoading && !copied}
+                  >
+                    {copied ? ts('copied') : ts('copy')}
+                  </Button>
+                </>
+              ) : (
+                <span className={styles.workPrivacyFooter}>{t('ar007.workContentsOwnerOnly')}</span>
+              )}
             </div>
           )}
     </ModalShell>

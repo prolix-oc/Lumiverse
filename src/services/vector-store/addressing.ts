@@ -42,6 +42,14 @@ export function rowId(userId: string, sourceType: string, sourceId: string, chun
   return `${userId}:${sourceType}:${sourceId}:${chunkIndex}`;
 }
 
+/** Return false instead of silently dropping NaN/Infinity during restore. */
+export function isFiniteVector(values: ArrayLike<number>): boolean {
+  for (let index = 0; index < values.length; index++) {
+    if (!Number.isFinite(values[index])) return false;
+  }
+  return values.length > 0;
+}
+
 /** World-book entries live in their own collection; everything else shares `embeddings`. */
 export function collectionForSourceType(sourceType: string): CollectionName {
   return sourceType === "world_book_entry" ? WORLD_BOOK_COLLECTION : EMBEDDINGS_COLLECTION;

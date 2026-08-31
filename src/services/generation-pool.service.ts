@@ -23,6 +23,7 @@ export interface PooledTokensEntry {
   chatId: string;
   content: string;
   reasoning: string;
+  requestAuthorityId?: string;
   tokenSeq: number;
   generationType: GenerationType;
   targetMessageId?: string;
@@ -32,6 +33,8 @@ export interface PooledTokensEntry {
   characterName: string;
   characterId?: string;
   model: string;
+  provider?: string;
+  connectionId?: string;
   startedAt: number;
   reasoningStartedAt?: number;
   reasoningDurationMs?: number;
@@ -72,11 +75,34 @@ export interface PooledTokensEntry {
 
 // ── State ────────────────────────────────────────────────────────────────────
 
+/** Terminal reasons understood by the shared generation owner. */
+export type PoolTerminalReason = "completed" | "stopped" | "failed" | "timeout";
+
+export interface PoolTerminalProjection {
+  readonly status: Extract<PoolStatus, "completed" | "stopped" | "error">;
+  readonly messageId?: string;
+  readonly error?: string;
+}
+
+/**
+ * A generation owns terminal compare-and-set through its AgentTurnLedger.
+ * The pool is only a projection: it asks the owner to claim, then records the
+ * winning terminal snapshot. Feature-inactive generations use the same
+ * interface with a small compatible CAS coordinator.
+ */
+export interface PoolTerminalOwner {
+  tryTerminate(reason: PoolTerminalReason): boolean;
+  projectTerminal: (projection: PoolTerminalProjection) => boolean;
+}
+
 /** Primary index: generationId → pool entry */
 const pool = new Map<string, PooledTokensEntry>();
 
 /** Secondary index: "userId:chatId" → generationId (most recent) */
 const chatIndex = new Map<string, string>();
+
+/** Terminal owner per generation. The owner, not this service, owns CAS. */
+const terminalOwners = new Map<string, PoolTerminalOwner>();
 
 /** Terminal statuses that indicate a generation is no longer active */
 const TERMINAL_STATUSES: Set<PoolStatus> = new Set(["completed", "stopped", "error"]);
@@ -105,10 +131,13 @@ export function createPoolEntry(opts: {
   generationId: string;
   userId: string;
   chatId: string;
+  requestAuthorityId?: string;
   generationType: GenerationType;
   characterName: string;
   characterId?: string;
   model: string;
+  provider?: string;
+  connectionId?: string;
   targetMessageId?: string;
   targetSwipeId?: number;
 }): void {
@@ -116,6 +145,7 @@ export function createPoolEntry(opts: {
     generationId: opts.generationId,
     userId: opts.userId,
     chatId: opts.chatId,
+    requestAuthorityId: opts.requestAuthorityId,
     content: "",
     reasoning: "",
     tokenSeq: 0,
@@ -125,6 +155,8 @@ export function createPoolEntry(opts: {
     characterName: opts.characterName,
     characterId: opts.characterId,
     model: opts.model,
+    provider: opts.provider,
+    connectionId: opts.connectionId,
     startedAt: Date.now(),
     status: "assembling",
     lastActivityAt: Date.now(),
@@ -132,17 +164,29 @@ export function createPoolEntry(opts: {
   pool.set(opts.generationId, entry);
   chatIndex.set(`${opts.userId}:${opts.chatId}`, opts.generationId);
 }
+/** Register the ledger-backed terminal owner after the pool entry exists. */
+export function registerPoolTerminalOwner(
+  generationId: string,
+  owner: PoolTerminalOwner,
+): void {
+  terminalOwners.set(generationId, owner);
+}
+
+/** Detach terminal callbacks after the generation has fully torn down. */
+export function unregisterPoolTerminalOwner(generationId: string): void {
+  terminalOwners.delete(generationId);
+}
 
 export function setPoolStatus(generationId: string, status: PoolStatus): void {
   const entry = pool.get(generationId);
-  if (!entry) return;
+  if (!entry || TERMINAL_STATUSES.has(entry.status)) return;
   entry.status = status;
   entry.lastActivityAt = Date.now();
 }
 
 export function markStreamingStarted(generationId: string): void {
   const entry = pool.get(generationId);
-  if (entry && !entry.streamingStartedAt) {
+  if (entry && !TERMINAL_STATUSES.has(entry.status) && !entry.streamingStartedAt) {
     entry.streamingStartedAt = Date.now();
   }
 }
@@ -163,6 +207,9 @@ export interface PoolAppendResult {
 export function appendPoolContent(generationId: string, text: string): PoolAppendResult {
   const entry = pool.get(generationId);
   if (!entry) return { seq: 0, offset: 0 };
+  if (TERMINAL_STATUSES.has(entry.status)) {
+    return { seq: entry.tokenSeq, offset: entry.content.length };
+  }
   const now = Date.now();
   // Finalize reasoning duration on the first content token
   if (entry.reasoningStartedAt && !entry.reasoningDurationMs) {
@@ -188,8 +235,10 @@ export function appendPoolContent(generationId: string, text: string): PoolAppen
 export function appendPoolReasoning(generationId: string, text: string): PoolAppendResult {
   const entry = pool.get(generationId);
   if (!entry) return { seq: 0, offset: 0 };
+  if (TERMINAL_STATUSES.has(entry.status)) {
+    return { seq: entry.tokenSeq, offset: entry.reasoning.length };
+  }
   const now = Date.now();
-  if (!entry.reasoningStartedAt) entry.reasoningStartedAt = now;
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
   if (entry.status === "assembling" || entry.status === "council" || entry.status === "waiting") {
     setPoolStatus(generationId, "reasoning");
@@ -200,31 +249,66 @@ export function appendPoolReasoning(generationId: string, text: string): PoolApp
   entry.lastActivityAt = now;
   return { seq: ++entry.tokenSeq, offset };
 }
+function terminalReasonForStatus(
+  status: PoolTerminalProjection["status"],
+): PoolTerminalReason {
+  return status === "completed"
+    ? "completed"
+    : status === "stopped"
+      ? "stopped"
+      : "failed";
+}
 
-export function completePool(generationId: string, messageId: string | undefined): void {
+/**
+ * Record the terminal projection after the shared owner wins CAS.
+ * This function intentionally never calls the owner and therefore cannot
+ * recurse when the owner is notified by requestPoolTerminal.
+ */
+export function projectPoolTerminal(
+  generationId: string,
+  projection: PoolTerminalProjection,
+): boolean {
   const entry = pool.get(generationId);
-  if (!entry) return;
-  entry.status = "completed";
-  entry.completedMessageId = messageId;
+  if (!entry || TERMINAL_STATUSES.has(entry.status)) return false;
+  entry.status = projection.status;
+  if (projection.messageId !== undefined) {
+    entry.completedMessageId = projection.messageId;
+  }
+  if (projection.error !== undefined) entry.error = projection.error;
   entry.completedAt = Date.now();
+  entry.lastActivityAt = entry.completedAt;
   trimTerminalEntries();
+  return true;
+}
+
+function requestPoolTerminal(
+  generationId: string,
+  projection: PoolTerminalProjection,
+  reason = terminalReasonForStatus(projection.status),
+): boolean {
+  const owner = terminalOwners.get(generationId);
+  if (owner && !owner.tryTerminate(reason)) return false;
+  if (owner) return owner.projectTerminal(projection);
+  const projected = projectPoolTerminal(generationId, projection);
+  return projected;
+}
+
+export function completePool(
+  generationId: string,
+  messageId: string | undefined,
+): void {
+  requestPoolTerminal(generationId, {
+    status: "completed",
+    ...(messageId !== undefined ? { messageId } : {}),
+  });
 }
 
 export function stopPool(generationId: string): void {
-  const entry = pool.get(generationId);
-  if (!entry) return;
-  entry.status = "stopped";
-  entry.completedAt = Date.now();
-  trimTerminalEntries();
+  requestPoolTerminal(generationId, { status: "stopped" });
 }
 
 export function errorPool(generationId: string, message: string): void {
-  const entry = pool.get(generationId);
-  if (!entry) return;
-  entry.status = "error";
-  entry.error = message;
-  entry.completedAt = Date.now();
-  trimTerminalEntries();
+  requestPoolTerminal(generationId, { status: "error", error: message });
 }
 
 // ── Lookups ──────────────────────────────────────────────────────────────────
@@ -303,6 +387,7 @@ export function acknowledgeChat(userId: string, chatId: string): string[] {
 export function clearAllPoolEntries(): void {
   pool.clear();
   chatIndex.clear();
+  terminalOwners.clear();
 }
 
 export function removePoolEntry(generationId: string): void {
@@ -314,6 +399,7 @@ export function removePoolEntry(generationId: string): void {
       chatIndex.delete(chatKey);
     }
   }
+  terminalOwners.delete(generationId);
   pool.delete(generationId);
 }
 
@@ -325,6 +411,7 @@ export function removePoolEntriesForChat(userId: string, chatId: string): void {
   const chatKey = `${userId}:${chatId}`;
   for (const [id, entry] of pool) {
     if (entry.userId === userId && entry.chatId === chatId) {
+      terminalOwners.delete(id);
       pool.delete(id);
     }
   }
@@ -337,22 +424,27 @@ function sweep(): void {
   const now = Date.now();
 
   // Failsafe: force-error non-terminal entries with no activity for far longer
-  // than any legitimate generation gap. The entry transitions to a terminal
-  // state (reclaimed by the TTL pass below) and connected clients receive the
-  // error so their streaming UI unsticks. If the underlying generation task is
-  // somehow still alive and later completes, completePool() simply overwrites
-  // this status — the failsafe is self-healing.
+  // than any legitimate generation gap. The terminal owner is asked first, so
+  // a late provider completion cannot overwrite a watchdog winner.
   for (const entry of pool.values()) {
     if (TERMINAL_STATUSES.has(entry.status)) continue;
     if (now - entry.lastActivityAt <= STALE_ACTIVE_TIMEOUT_MS) continue;
     const message = "Generation timed out: no activity for 60 minutes";
     const priorStatus = entry.status;
-    errorPool(entry.generationId, message);
-    eventBus.emit(
-      EventType.GENERATION_ENDED,
-      { generationId: entry.generationId, chatId: entry.chatId, error: message },
-      entry.userId,
+    const owner = terminalOwners.get(entry.generationId);
+    const projected = requestPoolTerminal(
+      entry.generationId,
+      { status: "error", error: message },
+      "timeout",
     );
+    if (projected && !owner) {
+      eventBus.emit(
+        EventType.GENERATION_ENDED,
+        { generationId: entry.generationId, chatId: entry.chatId, error: message },
+        entry.userId,
+      );
+    }
+    if (!projected) continue;
     console.warn(
       `[GenerationPool] Force-errored stale generation ${entry.generationId} (chat ${entry.chatId}, status was ${priorStatus})`,
     );

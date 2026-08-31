@@ -191,4 +191,45 @@ describe("worker entity-extension RPC permissions", () => {
     expect(responses).toHaveLength(3);
     expect(responses.every((response) => response.error === undefined)).toBe(true);
   });
+
+  test("rejects preset authority namespaces and redacts authority markers from extension results", () => {
+    const calls: Array<[string, string, string, string, unknown]> = [];
+    const responses: Array<{ type: "response"; requestId: string; result?: unknown; error?: string }> = [];
+    const api = new WorkerHostContentApi({
+      manifest: { identifier: "preset-boundary" },
+      hasPermission: () => true,
+      resolveEffectiveUserId: () => "owner-1",
+      enforceScopedUser: () => {},
+      setEntityExtensionNamespace: (userId, entity, entityId, namespace, value) => {
+        calls.push([userId, entity, entityId, namespace, value]);
+        return {
+          entity,
+          id: entityId,
+          namespace,
+          value,
+          extensions: {
+            [namespace]: value,
+            agentConfig: { enabled: true },
+            agentConfigReviewRequired: true,
+            agentConfigReview: { state: "review_required" },
+          },
+        };
+      },
+      postResponse: (message) => responses.push(message),
+    });
+
+    api.handleEntityExtensionSet("reserved", "preset", "preset-1", "agentConfig", { enabled: true });
+    expect(calls).toEqual([]);
+    expect(responses[0]?.error).toContain("metadata.agentConfig");
+
+    api.handleEntityExtensionSet("ordinary", "preset", "preset-1", "extension_ns", { value: 1 });
+    expect(calls).toHaveLength(1);
+    expect(responses[1]?.result).toEqual({
+      entity: "preset",
+      id: "preset-1",
+      namespace: "extension_ns",
+      value: { value: 1 },
+      extensions: { extension_ns: { value: 1 } },
+    });
+  });
 });

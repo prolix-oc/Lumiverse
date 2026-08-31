@@ -8,6 +8,9 @@ import {
   syncPresetEditorState,
   updatePresetEditorDraft,
 } from './preset-editor-helper'
+import { createNewLoomPreset } from '@/lib/loom/service'
+import { toPresetEditorDraft } from './preset-editor-adapter'
+
 import { createPresetEditorAccess } from './preset-editor-access'
 import type { PromptBlockDTO } from 'lumiverse-spindle-types'
 import type { PromptVariableValuesDTO } from 'lumiverse-spindle-types'
@@ -105,9 +108,33 @@ afterEach(() => {
   for (const unsubscribe of [...activeSubscriptions]) unsubscribe()
   expect(activeSubscriptions.size).toBe(0)
   setPresetEditorController(null)
+
 })
 
 describe('scoped preset editor helper', () => {
+  test('keeps the editor bridge closed when a local preset has an invalid sealed descriptor', () => {
+    const current = createNewLoomPreset('Invalid local preset')
+    Object.assign(current.blocks[0], { sealed: true, sealedSource: 'lumihub', sealedKey: 'foreign-key' })
+
+    expect(() => toPresetEditorDraft(current)).toThrow('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+    expect(() => setPresetEditorController({
+      getState: () => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: toPresetEditorDraft(current),
+      }),
+      setActiveTab() {},
+      updatePreset() {},
+      async flush() {},
+    })).not.toThrow()
+    expect(getPresetEditorState()).toEqual({
+      open: false,
+      presetId: null,
+      activeTabId: null,
+      preset: null,
+    })
+  })
   test('clones Main fields and mutates only its identifier namespace', () => {
     let current = publishedDraft()
     let activeTab = 'preset'

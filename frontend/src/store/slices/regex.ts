@@ -3,12 +3,14 @@ import type { RegexSlice } from '@/types/store'
 import { regexApi } from '@/api/regex'
 import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from '@/types/regex'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
+import { applyPresetAuthorityResult, presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
 
 // The server caps list responses at 1000 rows, so the slice pages to
 // exhaustion. This list drives both the regex panel and the client-side
 // display pipeline — a truncated page would silently hide scripts (module
 // regexes imported from cards stop applying once a user crosses 1000 total).
 const REGEX_LIST_PAGE_SIZE = 1000
+
 
 export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   regexScripts: [],
@@ -31,40 +33,56 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
 
   addRegexScript: async (input: CreateRegexScriptInput) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
-    const script = await regexApi.create({
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const response = await regexApi.create({
       ...input,
       active_preset_id: activePresetId,
     })
-    set((s) => ({ regexScripts: [...s.regexScripts, script] }))
+    applyPresetAuthorityResult(response, scopeEpoch)
+    const script = response.script
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: [...requestScripts, script] })
+    }
     return script
   },
 
   updateRegexScript: async (id: string, updates: UpdateRegexScriptInput) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
-    const updated = await regexApi.update(id, {
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const response = await regexApi.update(id, {
       ...updates,
       active_preset_id: activePresetId,
     })
-    set((s) => ({
-      regexScripts: s.regexScripts.map((r) => (r.id === id ? updated : r)),
-    }))
+    applyPresetAuthorityResult(response, scopeEpoch)
+    const updated = response.script
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.map((script) => (script.id === id ? updated : script)) })
+    }
   },
 
   removeRegexScript: async (id: string) => {
-    await regexApi.remove(id)
-    set((s) => ({
-      regexScripts: s.regexScripts.filter((r) => r.id !== id),
-    }))
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const response = await regexApi.remove(id)
+    applyPresetAuthorityResult(response, scopeEpoch)
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.filter((script) => script.id !== id) })
+    }
   },
 
   bulkRemoveRegexScripts: async (ids: string[]) => {
     if (ids.length === 0) return 0
-    const { deleted } = await regexApi.bulkRemove(ids)
-    const removed = new Set(deleted)
-    set((s) => ({
-      regexScripts: s.regexScripts.filter((r) => !removed.has(r.id)),
-    }))
-    return deleted.length
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const response = await regexApi.bulkRemove(ids)
+    applyPresetAuthorityResult(response, scopeEpoch)
+    const removed = new Set(response.deleted)
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.filter((script) => !removed.has(script.id)) })
+    }
+    return response.deleted.length
   },
 
   // Drag-to-reorder. `orderedIds` is the full list of script ids in their new
@@ -79,62 +97,76 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   // the new order with the stale one.
   reorderRegexScripts: async (orderedIds: string[], folderChange?: { id: string; folder: string }) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
     const previous = get().regexScripts
-    // Optimistic local update: apply the new order + any folder reassignment.
-    const byId = new Map(previous.map((r) => [r.id, r]))
+    const byId = new Map(previous.map((script) => [script.id, script]))
     const reordered: RegexScript[] = []
     for (const id of orderedIds) {
-      const r = byId.get(id)
-      if (!r) continue
+      const script = byId.get(id)
+      if (!script) continue
       byId.delete(id)
-      reordered.push(folderChange && r.id === folderChange.id ? { ...r, folder: folderChange.folder } : r)
+      reordered.push(folderChange && script.id === folderChange.id ? { ...script, folder: folderChange.folder } : script)
     }
-    // Defensive: keep any scripts not referenced in orderedIds (shouldn't happen).
-    for (const r of byId.values()) reordered.push(r)
+    for (const script of byId.values()) reordered.push(script)
     set({ regexScripts: reordered })
+    const optimisticScripts = get().regexScripts
 
     try {
-      await regexApi.reorder(orderedIds)
+      const reorderResult = await regexApi.reorder(orderedIds)
+      applyPresetAuthorityResult(reorderResult, scopeEpoch)
       if (folderChange) {
-        const updated = await regexApi.update(folderChange.id, {
+        const response = await regexApi.update(folderChange.id, {
           folder: folderChange.folder,
           active_preset_id: activePresetId,
         })
-        set((s) => ({ regexScripts: s.regexScripts.map((r) => (r.id === updated.id ? updated : r)) }))
+        applyPresetAuthorityResult(response, scopeEpoch)
+        const updated = response.script
+        if (get().regexScripts === optimisticScripts) {
+          set({ regexScripts: optimisticScripts.map((script) => (script.id === updated.id ? updated : script)) })
+        }
       }
     } catch (err) {
-      // Roll back to the pre-drag order on failure.
-      set({ regexScripts: previous })
+      if (get().regexScripts === optimisticScripts) set({ regexScripts: previous })
       throw err
     }
   },
 
   toggleRegexScript: async (id: string, disabled: boolean) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
-    const updated = await enqueuePresetRegexOperation(() => regexApi.toggle(id, disabled, activePresetId))
-    set((s) => ({
-      regexScripts: s.regexScripts.map((r) => (r.id === id ? updated : r)),
-    }))
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const response = await enqueuePresetRegexOperation(() => regexApi.toggle(id, disabled, activePresetId))
+    applyPresetAuthorityResult(response, scopeEpoch)
+    const updated = response.script
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.map((script) => (script.id === id ? updated : script)) })
+    }
   },
 
   toggleSelectedRegexScripts: async (ids: string[], disabled: boolean) => {
     if (ids.length === 0) return { changedIds: [], skippedIds: [] }
     const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
     const result = await enqueuePresetRegexOperation(() => regexApi.toggleSelected(ids, disabled, activePresetId))
+    applyPresetAuthorityResult(result, scopeEpoch)
     const changed = new Set(result.changedIds)
-    set((s) => ({
-      regexScripts: s.regexScripts.map((r) => (changed.has(r.id) ? { ...r, disabled } : r)),
-    }))
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.map((script) => (changed.has(script.id) ? { ...script, disabled } : script)) })
+    }
     return result
   },
 
   toggleRegexFolder: async (folder: string, disabled: boolean) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const requestScripts = get().regexScripts
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
     const result = await enqueuePresetRegexOperation(() => regexApi.toggleFolder(folder, disabled, activePresetId))
+    applyPresetAuthorityResult(result, scopeEpoch)
     const changed = new Set(result.changedIds)
-    set((s) => ({
-      regexScripts: s.regexScripts.map((r) => (changed.has(r.id) ? { ...r, disabled } : r)),
-    }))
+    if (get().regexScripts === requestScripts) {
+      set({ regexScripts: requestScripts.map((script) => (changed.has(script.id) ? { ...script, disabled } : script)) })
+    }
     return result
   },
 

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import * as svc from "../services/chats.service";
+import * as agentActivityRunsSvc from "../services/agent-activity-runs.service";
 import * as personasSvc from "../services/personas.service";
 import * as charactersSvc from "../services/characters.service";
 import * as regexScriptsSvc from "../services/regex-scripts.service";
@@ -25,6 +26,10 @@ import {
   withChatPersonaAddonState,
 } from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
+import {
+  RuntimeDecisionError,
+  AGENT_RUNTIME_DECISION_SERVICE,
+} from "../services/agent-runtime-decision.service";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
 
 async function runMessageContentProcessors(
@@ -87,6 +92,99 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 }
 
 const app = new Hono();
+app.put("/:id/agent-mode", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("id");
+  try {
+    const body = await c.req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json({ error: "Request body must be an object", code: "INVALID_REQUEST" }, 400);
+    }
+    const keys = Object.keys(body);
+    if (keys.some((key) => key !== "mode" && key !== "expectedRevision")) {
+      return c.json({ error: "Only mode and expectedRevision are allowed", code: "INVALID_REQUEST" }, 400);
+    }
+    if (!Object.hasOwn(body, "mode")) {
+      return c.json({ error: "mode is required", code: "INVALID_REQUEST" }, 400);
+    }
+    if (body.mode !== "response" && body.mode !== "agentic") {
+      return c.json({ error: "mode must be 'response' or 'agentic'", code: "INVALID_REQUEST" }, 400);
+    }
+    if (!Object.hasOwn(body, "expectedRevision")) {
+      return c.json({ error: "expectedRevision is required (use 0 for the first write)", code: "AGENT_CHAT_MODE_REVISION_REQUIRED" }, 428);
+    }
+    const expectedRevision = body.expectedRevision;
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      return c.json({ error: "expectedRevision must be a non-negative integer", code: "INVALID_REQUEST" }, 400);
+    }
+    const updated = AGENT_RUNTIME_DECISION_SERVICE.setChatAgentModeOverride(
+      userId,
+      chatId,
+      body.mode,
+      expectedRevision,
+    );
+    if (updated === null) return c.json({ error: "Not found", code: "NOT_FOUND" }, 404);
+    return c.json(updated);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return c.json({ error: "Invalid JSON body", code: "INVALID_REQUEST" }, 400);
+    }
+    if (error instanceof RuntimeDecisionError) {
+      if (error.code === "not_found") return c.json({ error: "Not found", code: "NOT_FOUND" }, 404);
+      const code = error.code === "chat_mode_revision_conflict"
+        ? "AGENT_CHAT_MODE_REVISION_CONFLICT"
+        : error.code.toUpperCase();
+      return c.json({
+        error: error.message,
+        code,
+        ...(error.details ?? {}),
+      }, error.status as 400 | 404 | 409 | 503);
+    }
+    return c.json({ error: "Chat agent mode unavailable", code: "AGENT_MODE_UNAVAILABLE" }, 503);
+  }
+});
+
+app.delete("/:id/agent-mode", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("id");
+  try {
+    const body = await c.req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json({ error: "Request body must be an object", code: "INVALID_REQUEST" }, 400);
+    }
+    const keys = Object.keys(body);
+    if (keys.some((key) => key !== "expectedRevision")) {
+      return c.json({ error: "Only expectedRevision is allowed", code: "INVALID_REQUEST" }, 400);
+    }
+    if (!Object.hasOwn(body, "expectedRevision")) {
+      return c.json({ error: "expectedRevision is required", code: "AGENT_CHAT_MODE_REVISION_REQUIRED" }, 428);
+    }
+    const expectedRevision = body.expectedRevision;
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      return c.json({ error: "expectedRevision must be a non-negative integer", code: "INVALID_REQUEST" }, 400);
+    }
+    const updated = AGENT_RUNTIME_DECISION_SERVICE.resetChatAgentModeOverride(userId, chatId, expectedRevision);
+    if (updated === null) return c.json({ error: "Not found", code: "NOT_FOUND" }, 404);
+    return c.json(updated);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return c.json({ error: "Invalid JSON body", code: "INVALID_REQUEST" }, 400);
+    }
+    if (error instanceof RuntimeDecisionError) {
+      if (error.code === "not_found") return c.json({ error: "Not found", code: "NOT_FOUND" }, 404);
+      const code = error.code === "chat_mode_revision_conflict"
+        ? "AGENT_CHAT_MODE_REVISION_CONFLICT"
+        : error.code.toUpperCase();
+      return c.json({
+        error: error.message,
+        code,
+        ...(error.details ?? {}),
+      }, error.status as 400 | 404 | 409 | 503);
+    }
+    return c.json({ error: "Chat agent mode unavailable", code: "AGENT_MODE_UNAVAILABLE" }, 503);
+  }
+});
+
 
 /** Matches an outlet macro so display resolution can populate Lorebook
  * outlets when a directly or indirectly referenced persona outlet needs one. */
@@ -175,6 +273,15 @@ app.get("/", (c) => {
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const characterId = c.req.query("characterId");
   return c.json(svc.listChats(userId, pagination, characterId));
+});
+
+app.get("/:chatId/agent-activity-runs", (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  if (!agentActivityRunsSvc.ownsChatForActivity(userId, chatId)) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  return c.json({ runs: agentActivityRunsSvc.listAgentActivityRuns(userId, chatId) });
 });
 
 app.get("/recent", (c) => {

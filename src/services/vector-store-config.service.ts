@@ -272,14 +272,20 @@ export interface UpdateVectorStoreConfigInput {
   milvus_password?: string | null;
 }
 
-function validateVectorStoreRuntimeTuningInput(input: UpdateVectorStoreConfigInput): void {
-  if (input.tuningProfile !== undefined && !normalizeTuningProfile(input.tuningProfile)) {
-    throw new Error("Invalid vector store tuning profile.");
-  }
-  if (input.milvusHybridSearch !== undefined && !normalizeMilvusHybridSearchConfig(input.milvusHybridSearch)) {
-    throw new Error("Invalid Milvus hybrid candidate tuning.");
-  }
+let vectorStoreConfigTransitionTail: Promise<void> = Promise.resolve();
+
+function serializeVectorStoreConfigTransition<T>(operation: () => Promise<T>): Promise<T> {
+  const result = vectorStoreConfigTransitionTail.then(operation, operation);
+  vectorStoreConfigTransitionTail = result.then(() => undefined, () => undefined);
+  return result;
 }
+
+function validateVectorStoreRuntimeTuningInput(input: UpdateVectorStoreConfigInput): void { if (input.tuningProfile !== undefined && !normalizeTuningProfile(input.tuningProfile)) {
+  throw new Error("Invalid vector store tuning profile.");
+}
+if (input.milvusHybridSearch !== undefined && !normalizeMilvusHybridSearchConfig(input.milvusHybridSearch)) {
+  throw new Error("Invalid Milvus hybrid candidate tuning.");
+} }
 
 function mergeStoredVectorStoreRuntimeTuning(
   stored: VectorStoreConfig,
@@ -299,76 +305,61 @@ function mergeStoredVectorStoreRuntimeTuning(
  * re-embed — call {@link markVectorStoreStaleForReindex} (or the /switch route)
  * for that.
  */
-export async function updateVectorStoreConfig(
+export function updateVectorStoreConfig(
   userId: string,
   input: UpdateVectorStoreConfigInput,
 ): Promise<VectorStoreConfigWithStatus> {
-  assertVectorStoreOwner(userId);
-  const ownerId = getFirstUserId() ?? userId;
-  if (isVectorStoreEnvManaged()) {
-    if (hasVectorStoreProviderOrConnectionFields(input)) {
-      throw new Error("Vector store provider and connection are managed by environment variables and cannot be changed at runtime.");
+  return serializeVectorStoreConfigTransition(async () => {
+    assertVectorStoreOwner(userId);
+    const ownerId = getFirstUserId() ?? userId;
+    if (isVectorStoreEnvManaged()) {
+      if (hasVectorStoreProviderOrConnectionFields(input)) {
+        throw new Error("Vector store provider and connection are managed by environment variables and cannot be changed at runtime.");
+      }
+      validateVectorStoreRuntimeTuningInput(input);
+      const next = mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input);
+      const { resetActiveVectorStore } = await import("./vector-store");
+      await resetActiveVectorStore();
+      settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, next);
+      return getVectorStoreConfigForApi();
     }
-    validateVectorStoreRuntimeTuningInput(input);
-    settingsSvc.putSetting(
-      ownerId,
-      VECTOR_STORE_CONFIG_KEY,
-      mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
-    );
 
-    // Break the static import cycle (index.ts imports this service).
+    if (!hasVectorStoreProviderOrConnectionFields(input)) {
+      validateVectorStoreRuntimeTuningInput(input);
+      const next = mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input);
+      const { resetActiveVectorStore } = await import("./vector-store");
+      await resetActiveVectorStore();
+      settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, next);
+      return getVectorStoreConfigForApi();
+    }
+
+    const previous = getResolvedVectorStoreConfig();
+    const normalized = normalizeVectorStoreConfig(input);
     const { resetActiveVectorStore } = await import("./vector-store");
-    resetActiveVectorStore();
+    await resetActiveVectorStore();
+
+    if (input.qdrant_api_key !== undefined) {
+      if (!input.qdrant_api_key) secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
+      else await secretsSvc.putSecret(ownerId, QDRANT_API_KEY_SECRET, input.qdrant_api_key);
+    } else if (
+      normalized.provider === "qdrant"
+      && !hasSameVectorStoreCredentialTarget(normalized, previous, "qdrant")
+    ) {
+      secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
+    }
+    if (input.milvus_password !== undefined) {
+      if (!input.milvus_password) secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
+      else await secretsSvc.putSecret(ownerId, MILVUS_PASSWORD_SECRET, input.milvus_password);
+    } else if (
+      normalized.provider === "milvus"
+      && !hasSameVectorStoreCredentialTarget(normalized, previous, "milvus")
+    ) {
+      secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
+    }
+
+    settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, normalized);
     return getVectorStoreConfigForApi();
-  }
-
-  if (!hasVectorStoreProviderOrConnectionFields(input)) {
-    validateVectorStoreRuntimeTuningInput(input);
-    settingsSvc.putSetting(
-      ownerId,
-      VECTOR_STORE_CONFIG_KEY,
-      mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
-    );
-
-    // Break the static import cycle (index.ts imports this service).
-    const { resetActiveVectorStore } = await import("./vector-store");
-    resetActiveVectorStore();
-    return getVectorStoreConfigForApi();
-  }
-
-  const previous = getResolvedVectorStoreConfig();
-  const normalized = normalizeVectorStoreConfig(input);
-
-  if (input.qdrant_api_key !== undefined) {
-    if (!input.qdrant_api_key) secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
-    else await secretsSvc.putSecret(ownerId, QDRANT_API_KEY_SECRET, input.qdrant_api_key);
-  } else if (
-    normalized.provider === "qdrant"
-    && !hasSameVectorStoreCredentialTarget(normalized, previous, "qdrant")
-  ) {
-    // Never carry a key across endpoints. The replacement target must either
-    // be reachable without a key or receive a new key explicitly.
-    secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
-  }
-  if (input.milvus_password !== undefined) {
-    if (!input.milvus_password) secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
-    else await secretsSvc.putSecret(ownerId, MILVUS_PASSWORD_SECRET, input.milvus_password);
-  } else if (
-    normalized.provider === "milvus"
-    && !hasSameVectorStoreCredentialTarget(normalized, previous, "milvus")
-  ) {
-    // A Milvus password is scoped to its transport, server, database, and
-    // username. Do not silently attach it to a different authentication scope.
-    secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
-  }
-
-  settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, normalized);
-
-  // Break the static import cycle (index.ts imports this service).
-  const { resetActiveVectorStore } = await import("./vector-store");
-  resetActiveVectorStore();
-
-  return getVectorStoreConfigForApi();
+  });
 }
 
 /** True when a candidate uses the exact authentication target of the active config. */

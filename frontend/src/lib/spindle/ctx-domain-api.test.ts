@@ -31,6 +31,8 @@ const profile = (): ConnectionProfile & { api_key: string } => ({
   metadata: { label: 'safe' },
   created_at: 1,
   updated_at: 1,
+  review_required: false,
+  review_code: null,
   api_key: 'secret-must-not-escape',
 })
 
@@ -53,7 +55,10 @@ const message = (id: string, content: string): Message => ({
 
 function createHarness() {
   let state = {
-    profiles: [profile()],
+    profiles: [
+      profile(),
+      { ...profile(), id: 'profile-2', name: 'Secondary', model: 'gpt-test-2' },
+    ],
     activeProfileId: 'profile-1',
     messages: [message('message-1', 'hello')],
     setActiveProfile(id: string | null) {

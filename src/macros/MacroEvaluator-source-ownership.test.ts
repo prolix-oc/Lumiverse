@@ -84,6 +84,7 @@ function makeRegexScript(presetId: string | null): RegexScript {
     preset_id: presetId,
     character_id: null,
     owner_extension_identifier: null,
+    validation_error_code: null,
     metadata: {},
     created_at: 0,
     updated_at: 0,

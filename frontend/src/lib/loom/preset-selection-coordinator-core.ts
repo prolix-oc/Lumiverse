@@ -4,12 +4,13 @@ export interface PresetSelectionAdapter {
   flushPreset(presetId: string): Promise<void>
 }
 
-
 export interface PresetSelectionTransitionOptions {
   signal?: AbortSignal
 }
 
 export interface PresetSelectionRequest {
+  /** True while this request still owns the coordinator's latest intent. */
+  isCurrent(): boolean
   transition(presetId: string | null): Promise<boolean>
   cancel(): void
 }
@@ -23,6 +24,8 @@ export interface PresetSelectionCoordinator {
  * Serializes active-preset changes. The departing preset is durably rebased and
  * flushed before the store exposes the next id. A later request or lifecycle
  * cancellation wins before an obsolete intermediate target becomes visible.
+ * Calling begin reserves that chronological position even when transition is
+ * deferred by a caller-owned blocker.
  */
 export function createPresetSelectionCoordinator(adapter: PresetSelectionAdapter): PresetSelectionCoordinator {
   let chain: Promise<void> = Promise.resolve()
@@ -31,6 +34,7 @@ export function createPresetSelectionCoordinator(adapter: PresetSelectionAdapter
   const begin = (options: PresetSelectionTransitionOptions = {}): PresetSelectionRequest => {
     if (options.signal?.aborted) {
       return {
+        isCurrent: () => false,
         transition: async () => false,
         cancel() {},
       }
@@ -42,7 +46,7 @@ export function createPresetSelectionCoordinator(adapter: PresetSelectionAdapter
       if (latestRequest === request) latestRequest += 1
     }
     const cleanup = () => {
-      options.signal?.removeEventListener('abort', invalidate)
+      options.signal?.removeEventListener('abort', cancel)
     }
     const cancel = () => {
       if (closed) return
@@ -54,6 +58,7 @@ export function createPresetSelectionCoordinator(adapter: PresetSelectionAdapter
     const isStale = () => closed || options.signal?.aborted === true || request !== latestRequest
 
     return {
+      isCurrent: () => !isStale(),
       transition(presetId) {
         if (isStale()) {
           cleanup()

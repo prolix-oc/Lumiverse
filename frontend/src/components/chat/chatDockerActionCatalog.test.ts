@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 mock.module('@/lib/commands', () => ({
   COMMANDS: [
@@ -31,7 +31,14 @@ const {
   buildChatDockerActionCatalog,
   CHAT_DOCKER_ACTION_IDS,
   countActionId,
+  getChatDockerActionOwners,
+  registerChatDockerActionOwners,
+  subscribeChatDockerActionOwners,
 } = await import('./chatDockerActionCatalog')
+
+beforeEach(() => {
+  registerChatDockerActionOwners(null)
+})
 
 describe('chatDockerActionCatalog', () => {
   test('catalog exposes chat.new once and invokes the existing new-chat owner', () => {
@@ -47,6 +54,17 @@ describe('chatDockerActionCatalog', () => {
     expect(matches).toHaveLength(1)
     matches[0].run()
     expect(runs).toEqual(['action-new-chat'])
+  })
+
+  test('owner-backed actions stay disabled before their surface registers', () => {
+    const catalog = buildChatDockerActionCatalog({
+      scope: { activeChatId: 'chat-1', activeCharacterId: 'char-1', activeLoomPresetId: 'preset-1' },
+    })
+    expect(catalog.find((action) => action.id === 'chat.prompt-variables')?.disabled).toBe(true)
+    expect(catalog.find((action) => action.id === 'chat.settings')?.disabled).toBe(true)
+    expect(catalog.find((action) => action.id === 'chat.convert-to-group')?.disabled).toBe(true)
+    expect(catalog.find((action) => action.id === 'chat.new-group')?.disabled).toBe(true)
+    expect(catalog.find((action) => action.id === 'chat.authors-note')?.disabled).toBe(true)
   })
 
   test('catalog invokes existing manage-chats command only when its scope is available', () => {
@@ -159,6 +177,27 @@ describe('chatDockerActionCatalog', () => {
     expect(notes).toEqual([true])
   })
 
+  test('catalog binds chat navigation actions to registered ChatView owners', () => {
+    let oldestRuns = 0
+    let navigatorRuns = 0
+    const catalog = buildChatDockerActionCatalog({
+      owners: {
+        navigateToOldestMessage: () => { oldestRuns += 1 },
+        openMessageNavigator: () => { navigatorRuns += 1 },
+      },
+      scope: { activeChatId: 'chat-1' },
+    })
+
+    const scrollToTop = catalog.find((action) => action.id === 'chat.scroll-to-top')
+    const browseMessages = catalog.find((action) => action.id === 'chat.browse-messages')
+    expect(scrollToTop?.disabled).toBe(false)
+    expect(browseMessages?.disabled).toBe(false)
+    scrollToTop?.run()
+    browseMessages?.run()
+    expect(oldestRuns).toBe(1)
+    expect(navigatorRuns).toBe(1)
+  })
+
   test('catalog invokes existing forced Memory Cortex warm path', () => {
     const warmed: Array<{ chatId: string; force?: boolean }> = []
 
@@ -224,5 +263,78 @@ describe('chatDockerActionCatalog', () => {
         expect(countActionId(surface, id)).toBe(1)
       }
     }
+  })
+  test('interleaved ChatView and InputArea cleanup keeps shared true and callback owners', () => {
+    const sharedCallback = () => undefined
+    const chatViewCleanup = registerChatDockerActionOwners({
+      navigateToOldestMessageLoading: true,
+      openMessageNavigator: sharedCallback,
+    })
+    const inputAreaCleanup = registerChatDockerActionOwners({
+      memoryCortexAvailable: true,
+      openComposerCustomize: sharedCallback,
+    })
+
+    chatViewCleanup()
+    expect(getChatDockerActionOwners()).toEqual({
+      memoryCortexAvailable: true,
+      openComposerCustomize: sharedCallback,
+    })
+
+    inputAreaCleanup()
+    expect(getChatDockerActionOwners()).toEqual({})
+  })
+
+  test('interleaved cleanup preserves shared false values and newer callback replacements', () => {
+    const sharedCallback = () => undefined
+    const replacementCallback = () => undefined
+    const chatViewCleanup = registerChatDockerActionOwners({
+      navigateToOldestMessageLoading: false,
+      openMessageNavigator: sharedCallback,
+    })
+    const inputAreaCleanup = registerChatDockerActionOwners({
+      promptVariablesLoading: false,
+      openComposerCustomize: sharedCallback,
+    })
+    const inputAreaReplacementCleanup = registerChatDockerActionOwners({
+      openComposerCustomize: replacementCallback,
+    })
+
+    chatViewCleanup()
+    expect(getChatDockerActionOwners()).toEqual({
+      promptVariablesLoading: false,
+      openComposerCustomize: replacementCallback,
+    })
+
+    inputAreaCleanup()
+    expect(getChatDockerActionOwners()).toEqual({
+      openComposerCustomize: replacementCallback,
+    })
+
+    inputAreaReplacementCleanup()
+    expect(getChatDockerActionOwners()).toEqual({})
+  })
+
+  test('stale cleanup keeps the current owner snapshot and does not notify subscribers', () => {
+    const snapshots: unknown[] = []
+    const unsubscribe = subscribeChatDockerActionOwners(() => {
+      snapshots.push(getChatDockerActionOwners())
+    })
+    const previousCleanup = registerChatDockerActionOwners({
+      openMessageNavigator: () => undefined,
+    })
+    const currentCleanup = registerChatDockerActionOwners({
+      openMessageNavigator: () => undefined,
+    })
+    const currentSnapshot = getChatDockerActionOwners()
+    const notificationsBeforeStaleCleanup = snapshots.length
+
+    previousCleanup()
+
+    expect(getChatDockerActionOwners()).toBe(currentSnapshot)
+    expect(snapshots).toHaveLength(notificationsBeforeStaleCleanup)
+
+    currentCleanup()
+    unsubscribe()
   })
 })

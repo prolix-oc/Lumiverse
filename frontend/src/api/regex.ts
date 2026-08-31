@@ -1,5 +1,5 @@
 import { get, post, put, del } from './client'
-import type { PaginatedResult } from '@/types/api'
+import type { PaginatedResult, Preset } from '@/types/api'
 import type {
   RegexScript,
   RegexPerformanceMetadata,
@@ -9,6 +9,12 @@ import type {
   RegexTarget,
 } from '@/types/regex'
 
+export interface RegexPresetAuthorityResult {
+  presetAuthorityChanged: boolean
+  presetAuthorities: Preset[]
+}
+
+export type RegexScriptMutationResult = RegexPresetAuthorityResult & { script: RegexScript }
 export const regexApi = {
   list(params?: { limit?: number; offset?: number; scope?: string; target?: string; character_id?: string; chat_id?: string }) {
     return get<PaginatedResult<RegexScript>>('/regex-scripts', params)
@@ -19,7 +25,7 @@ export const regexApi = {
   },
 
   create(input: CreateRegexScriptInput & { active_preset_id?: string | null }) {
-    return post<RegexScript>('/regex-scripts', input)
+    return post<RegexScriptMutationResult>('/regex-scripts', input)
   },
 
   activatePresetBound(presetId: string | null) {
@@ -34,19 +40,19 @@ export const regexApi = {
   },
 
   update(id: string, input: UpdateRegexScriptInput & { active_preset_id?: string | null }) {
-    return put<RegexScript>(`/regex-scripts/${id}`, input)
+    return put<RegexScriptMutationResult>(`/regex-scripts/${id}`, input)
   },
 
   remove(id: string) {
-    return del<void>(`/regex-scripts/${id}`)
+    return del<RegexPresetAuthorityResult & { success: true }>(`/regex-scripts/${id}`)
   },
 
   bulkRemove(ids: string[]) {
-    return post<{ deleted: string[]; count: number }>('/regex-scripts/bulk-delete', { ids })
+    return post<RegexPresetAuthorityResult & { deleted: string[]; count: number }>('/regex-scripts/bulk-delete', { ids })
   },
 
   toggleSelected(ids: string[], disabled: boolean, activePresetId?: string | null) {
-    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/bulk-toggle', {
+    return post<RegexPresetAuthorityResult & { changedIds: string[]; skippedIds: string[] }>('/regex-scripts/bulk-toggle', {
       ids,
       disabled,
       active_preset_id: activePresetId ?? null,
@@ -58,11 +64,11 @@ export const regexApi = {
   },
 
   toggle(id: string, disabled: boolean, activePresetId?: string | null) {
-    return put<RegexScript>(`/regex-scripts/${id}/toggle`, { disabled, active_preset_id: activePresetId ?? null })
+    return put<RegexScriptMutationResult>(`/regex-scripts/${id}/toggle`, { disabled, active_preset_id: activePresetId ?? null })
   },
 
   toggleFolder(folder: string, disabled: boolean, activePresetId?: string | null) {
-    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/folders/toggle', {
+    return post<RegexPresetAuthorityResult & { changedIds: string[]; skippedIds: string[] }>('/regex-scripts/folders/toggle', {
       folder,
       disabled,
       active_preset_id: activePresetId ?? null,
@@ -70,7 +76,7 @@ export const regexApi = {
   },
 
   reorder(ids: string[]) {
-    return put<{ success: boolean }>('/regex-scripts/reorder', { ids })
+    return put<RegexPresetAuthorityResult & { success: boolean }>('/regex-scripts/reorder', { ids })
   },
 
   getActive(params: { target: RegexTarget; character_id?: string; chat_id?: string }) {
@@ -87,7 +93,7 @@ export const regexApi = {
       : Array.isArray(payload)
         ? { scripts: payload, active_preset_id: activePresetId }
         : { ...payload, active_preset_id: activePresetId }
-    return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', body)
+    return post<RegexPresetAuthorityResult & { imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', body)
   },
 
   testRegex(params: {

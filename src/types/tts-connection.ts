@@ -7,6 +7,9 @@ export interface TtsConnectionProfile {
   voice: string;
   is_default: boolean;
   has_api_key: boolean;
+  /** Imported profiles remain visible but inert until explicitly reviewed. */
+  review_required: boolean;
+  review_code: string | null;
   default_parameters: Record<string, any>;
   metadata: Record<string, any>;
   created_at: number;
@@ -26,4 +29,7 @@ export interface CreateTtsConnectionInput {
   api_key?: string;
 }
 
-export type UpdateTtsConnectionInput = Partial<CreateTtsConnectionInput>;
+export interface UpdateTtsConnectionInput extends Partial<CreateTtsConnectionInput> {
+  /** Explicitly acknowledge an imported profile before enabling it. */
+  reviewed?: boolean;
+}

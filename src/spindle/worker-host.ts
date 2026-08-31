@@ -22,13 +22,14 @@ import type {
   BoundAssembleRequestDTO,
   QuietTrackedRequestDTO,
   ConnectionDispatchDescriptorDTO,
+  StreamChunkDTO,
+  LlmThinkingBlockDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
-import * as spindleUploads from "./uploads";
+import { CLIENT_ONLY_EVENTS, EventType } from "../ws/events";
 import { eventBus } from "../ws/bus";
-import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
 import { contextHandlerChain } from "./context-handler";
@@ -54,10 +55,10 @@ import {
   clearPromptRegexOwner,
 } from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
+import * as spindleUploads from "./uploads";
 import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as chatsSvc from "../services/chats.service";
-import type * as presetsSvc from "../services/presets.service";
 import { resolveInterceptorTimeout } from "../services/spindle-settings.service";
 import { getSidecarSettings } from "../services/sidecar-settings.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
@@ -91,7 +92,13 @@ import {
   unregisterSharedRpcEndpointsByOwner,
   type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
-import { getTextContent, type LlmMessage } from "../llm/types";
+import {
+  getTextContent,
+  type GenerationResponse,
+  type LlmMessage,
+  type StreamChunk,
+  type ToolCallResult,
+} from "../llm/types";
 import {
   clearFrontendRuntimeCapabilities,
   isFrontendRuntimeCapability,
@@ -119,7 +126,9 @@ import { join, resolve, sep } from "path";
 
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
 
-type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
+type ManagedSpindlePermission =
+  | Parameters<typeof managerSvc.hasPermission>[1]
+  | "regex_scripts_unrestricted";
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
 type ChatAppendGenerationOptions = {
@@ -331,10 +340,6 @@ type RuntimeWorkerToHost =
   | { type: "presets_update"; requestId: string; presetId: string; input: UpdatePresetInput; userId?: string }
   | { type: "presets_delete"; requestId: string; presetId: string; userId?: string }
   | { type: "preset_blocks_list"; requestId: string; presetId: string; userId?: string }
-  | { type: "preset_blocks_get"; requestId: string; presetId: string; blockId: string; userId?: string }
-  | { type: "preset_blocks_create"; requestId: string; presetId: string; input: presetsSvc.CreatePromptBlockInput; index?: number; userId?: string }
-  | { type: "preset_blocks_update"; requestId: string; presetId: string; blockId: string; input: presetsSvc.UpdatePromptBlockInput; userId?: string }
-  | { type: "preset_blocks_delete"; requestId: string; presetId: string; blockId: string; userId?: string }
   | { type: "preset_categories_list"; requestId: string; presetId: string; userId?: string }
   | {
       type: "tokens_count_text";
@@ -577,8 +582,25 @@ type RuntimeWorkerToHost =
   | { type: "image_gen_cancel_stream"; requestId: string }
   | ProviderWorkerToHost;
 
+type RuntimeStreamChunkDTO =
+  | Exclude<StreamChunkDTO, { type: "done" }>
+  | (Extract<StreamChunkDTO, { type: "done" }> & {
+      thinking_blocks?: LlmThinkingBlockDTO[];
+      reasoning_details?: Record<string, unknown>[];
+    });
+
 type RuntimeHostToWorker =
-  | HostToWorker
+  | Exclude<HostToWorker, { type: "generation_stream_chunk" }>
+  | {
+      type: "generation_stream_chunk";
+      requestId: string;
+      chunk: RuntimeStreamChunkDTO;
+    }
+  | {
+      type: "tool_invocation_abort";
+      requestId: string;
+      reason?: string;
+    }
   | {
       type: "rpc_pool_request";
       requestId: string;
@@ -859,6 +881,60 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   return out;
 }
 
+export async function relayGenerationStreamToSpindle(
+  stream: AsyncIterable<StreamChunk>,
+  signal: AbortSignal,
+  postChunk: (chunk: RuntimeStreamChunkDTO) => void,
+): Promise<"completed" | "aborted"> {
+  let content = "";
+  let reasoning = "";
+  let finishReason = "stop";
+  let toolCalls: ToolCallResult[] | undefined;
+  let usage: GenerationResponse["usage"];
+  const thinkingBlocks: LlmThinkingBlockDTO[] = [];
+  const reasoningDetails: Record<string, unknown>[] = [];
+
+  for await (const chunk of stream) {
+    if (signal.aborted) return "aborted";
+    if (chunk.token) {
+      content += chunk.token;
+      postChunk({ type: "token", token: chunk.token });
+    }
+    if (chunk.reasoning) {
+      reasoning += chunk.reasoning;
+      postChunk({ type: "reasoning", token: chunk.reasoning });
+    }
+    if (chunk.finish_reason) finishReason = chunk.finish_reason;
+    if (chunk.tool_calls) toolCalls = chunk.tool_calls;
+    if (chunk.usage) usage = chunk.usage;
+    if (chunk.thinking_blocks) {
+      for (const block of chunk.thinking_blocks) {
+        thinkingBlocks.push({
+          type: block.type,
+          thinking: block.thinking,
+          signature: block.signature,
+          data: block.data,
+        });
+      }
+    }
+    if (chunk.reasoning_details) reasoningDetails.push(...chunk.reasoning_details);
+  }
+
+  if (signal.aborted) return "aborted";
+  postChunk({
+    type: "done",
+    content,
+    reasoning: reasoning || undefined,
+    finish_reason: finishReason,
+    tool_calls: toolCalls,
+    usage,
+    thinking_blocks: thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
+    reasoning_details: reasoningDetails.length > 0 ? reasoningDetails : undefined,
+  });
+  return "completed";
+}
+
+
 export class WorkerHost {
   private runtime: RuntimeTransport | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
@@ -883,6 +959,7 @@ export class WorkerHost {
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
   private static readonly MAX_BACKEND_PROCESSES = 16;
+  private static readonly TOOL_INVOCATION_CANCEL_JOIN_TIMEOUT_MS = 2_000;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
   private onWorkerReady: (() => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
@@ -1009,11 +1086,7 @@ export class WorkerHost {
   }
 
   private hasPermission(permission: ManagedSpindlePermission): boolean {
-    const scopeId = sharedRpcPermissionScope.getStore();
-    if (!scopeId) return managerSvc.hasPermission(this.manifest.identifier, permission);
-
-    const scoped = this.sharedRpcPermissionScopes.get(scopeId);
-    return Boolean(scoped?.has(permission)) && managerSvc.hasPermission(this.manifest.identifier, permission);
+    return this.getGrantedPermissions().includes(permission);
   }
 
   private getStorageRootPath(identifier: string = this.manifest.identifier): string {
@@ -1435,25 +1508,19 @@ export class WorkerHost {
    * Invoke an extension-registered tool and wait for the result.
    * Used by council execution to route tool calls to the owning extension.
    *
-   * `councilMember` — when provided by the council execution path — is a
-   * trusted, host-built snapshot of the assigned member's identity and
-   * personality fields. It is delivered alongside the invocation args so the
-   * extension handler can personalise its tool output. The context is sourced
-   * entirely server-side and kept on a separate top-level field so user-space
-   * `args` cannot collide with or spoof it.
-   *
-   * `contextMessages` — when provided — are the structured chat messages that
-   * were also flattened into `args.context` for backwards compatibility.
-   * Forwarded on its own top-level field (same rationale as `councilMember`:
-   * host-provided truth that must not collide with user-space `args`).
-   * Multipart content is flattened to its text portion via `getTextContent`.
+   * `councilMember` is a trusted host-built snapshot delivered separately
+   * from user arguments. `contextMessages` is the structured chat context
+   * forwarded separately for the same reason. Cancellation is sent to the
+   * worker by request ID and this promise settles only after the worker has
+   * acknowledged completion or the bounded cancellation join expires.
    */
   invokeExtensionTool(
     toolName: string,
     args: Record<string, unknown>,
     timeoutMs = 30_000,
     councilMember?: CouncilMemberContext,
-    contextMessages?: LlmMessage[]
+    contextMessages?: LlmMessage[],
+    signal?: AbortSignal,
   ): Promise<string> {
     const requestId = crypto.randomUUID();
 
@@ -1472,8 +1539,75 @@ export class WorkerHost {
         role: m.role,
         content: getTextContent(m),
         ...(m.name ? { name: m.name } : {}),
-      })
+      }),
     );
+
+    let settled = false;
+    let cancellationRequested = false;
+    let cancellationError: unknown;
+    let resolvePromise!: (value: string) => void;
+    let rejectPromise!: (reason: unknown) => void;
+    let joinTimer = setTimeout(() => {}, 0);
+    let timeoutTimer = setTimeout(() => {}, 0);
+    const cleanup = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(joinTimer);
+      signal?.removeEventListener("abort", onAbort);
+      this.pendingRequests.delete(requestId);
+    };
+    const requestCancellation = (reason: unknown): void => {
+      if (settled || cancellationRequested) return;
+      cancellationRequested = true;
+      cancellationError = reason;
+      this.postToWorker({
+        type: "tool_invocation_abort",
+        requestId,
+        reason: reason instanceof Error ? reason.message : String(reason),
+      });
+      clearTimeout(joinTimer);
+      joinTimer = setTimeout(() => {
+        cleanup();
+        rejectPromise(cancellationError);
+      }, WorkerHost.TOOL_INVOCATION_CANCEL_JOIN_TIMEOUT_MS);
+    };
+    const onAbort = (): void => {
+      requestCancellation(
+        signal?.reason ?? new DOMException("Aborted", "AbortError"),
+      );
+    };
+
+    clearTimeout(timeoutTimer);
+    timeoutTimer = setTimeout(() => {
+      requestCancellation(new Error(`Tool invocation '${toolName}' timed out`));
+    }, timeoutMs);
+
+    const invocation = new Promise<string>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+      this.pendingRequests.set(requestId, {
+        resolve: (value) => {
+          const result = cancellationRequested
+            ? cancellationError
+            : String(value ?? "");
+          cleanup();
+          if (cancellationRequested) rejectPromise(result);
+          else resolvePromise(String(value ?? ""));
+        },
+        reject: (reason) => {
+          cleanup();
+          rejectPromise(reason);
+        },
+      });
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      cleanup();
+      rejectPromise(cancellationError);
+      return invocation;
+    }
 
     this.postToWorker({
       type: "tool_invocation",
@@ -1484,25 +1618,8 @@ export class WorkerHost {
       ...(contextMessagesDTO ? { contextMessages: contextMessagesDTO } : {}),
     });
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new Error(`Tool invocation '${toolName}' timed out`));
-      }, timeoutMs);
-
-      this.pendingRequests.set(requestId, {
-        resolve: (value) => {
-          clearTimeout(timeout);
-          resolve(String(value ?? ""));
-        },
-        reject: (reason) => {
-          clearTimeout(timeout);
-          reject(reason);
-        },
-      });
-    });
+    return invocation;
   }
-
   sendOAuthCallback(
     params: Record<string, string>
   ): Promise<{ html?: string; message?: string }> {
@@ -2515,6 +2632,7 @@ export class WorkerHost {
   private static readonly GENERATION_EVENTS = new Set([
     EventType.GENERATION_STARTED,
     EventType.GENERATION_IN_PROGRESS,
+    EventType.GENERATION_AGENT_ACTIVITY,
     EventType.GENERATION_ENDED,
     EventType.GENERATION_STOPPED,
     EventType.STREAM_TOKEN_RECEIVED,
@@ -2526,6 +2644,25 @@ export class WorkerHost {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Unknown event: ${event}`
       );
+      return;
+    }
+    // Agentic run/workspace projections are browser-only. Do this check before
+    // the generation grant so granting generation can never widen this
+    // extension boundary.
+    if (CLIENT_ONLY_EVENTS[eventType as EventType] === true) {
+      const existing = this.eventUnsubscribers.get(event);
+      if (existing) {
+        existing();
+        this.eventUnsubscribers.delete(event);
+      }
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Browser-only event cannot be subscribed from Spindle: ${event}`,
+      );
+      this.postToWorker({
+        type: "permission_denied",
+        permission: "client_only",
+        operation: `subscribe_event:${event}`,
+      });
       return;
     }
 
@@ -3138,56 +3275,25 @@ export class WorkerHost {
           throw new Error(`Streaming is not supported for generation type: ${input.type}`);
       }
 
-      let content = "";
-      let reasoning = "";
-      let finishReason = "stop";
-      let toolCalls: import("../llm/types").ToolCallResult[] | undefined;
-      let usage: import("../llm/types").GenerationResponse["usage"];
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        if (chunk.token) {
-          content += chunk.token;
+      const outcome = await relayGenerationStreamToSpindle(
+        stream,
+        abortController.signal,
+        (chunk) => {
           this.postToWorker({
             type: "generation_stream_chunk",
             requestId,
-            chunk: { type: "token", token: chunk.token },
+            chunk,
           });
-        }
-        if (chunk.reasoning) {
-          reasoning += chunk.reasoning;
-          this.postToWorker({
-            type: "generation_stream_chunk",
-            requestId,
-            chunk: { type: "reasoning", token: chunk.reasoning },
-          });
-        }
-        if (chunk.finish_reason) finishReason = chunk.finish_reason;
-        if (chunk.tool_calls) toolCalls = chunk.tool_calls;
-        if (chunk.usage) usage = chunk.usage;
-      }
+        },
+      );
 
-      if (abortController.signal.aborted) {
+      if (outcome === "aborted") {
         this.postToWorker({
           type: "generation_stream_error",
           requestId,
           error: "AbortError: Generation aborted",
         });
-        return;
       }
-
-      this.postToWorker({
-        type: "generation_stream_chunk",
-        requestId,
-        chunk: {
-          type: "done",
-          content,
-          reasoning: reasoning || undefined,
-          finish_reason: finishReason,
-          tool_calls: toolCalls,
-          usage,
-        },
-      });
     } catch (err: any) {
       const aborted = abortController.signal.aborted || err?.name === "AbortError";
       this.postToWorker({
@@ -3291,19 +3397,20 @@ export class WorkerHost {
         this.postToWorker({ type: "response", requestId, result: null });
         return;
       }
+      const publicConnection = connectionsSvc.toPublicConnection(c);
       const profile: ConnectionProfileDTO = {
-        id: c.id,
-        name: c.name,
-        provider: c.provider,
-        api_url: c.api_url,
-        model: c.model,
-        preset_id: c.preset_id,
-        is_default: c.is_default,
-        has_api_key: c.has_api_key,
-        metadata: c.metadata,
-        reasoning_bindings: extractReasoningBindingsDTO(c.metadata),
-        created_at: c.created_at,
-        updated_at: c.updated_at,
+        id: publicConnection.id,
+        name: publicConnection.name,
+        provider: publicConnection.provider,
+        api_url: publicConnection.api_url,
+        model: publicConnection.model,
+        preset_id: publicConnection.preset_id,
+        is_default: publicConnection.is_default,
+        has_api_key: publicConnection.has_api_key,
+        metadata: publicConnection.metadata,
+        reasoning_bindings: extractReasoningBindingsDTO(publicConnection.metadata),
+        created_at: publicConnection.created_at,
+        updated_at: publicConnection.updated_at,
       };
       this.postToWorker({ type: "response", requestId, result: profile });
     } catch (err: any) {
@@ -3315,7 +3422,7 @@ export class WorkerHost {
     userId: string,
     connectionId: string,
   ): ConnectionDispatchDescriptorDTO | null {
-    const connection = connectionsSvc.getConnection(userId, connectionId);
+    const connection = connectionsSvc.getUsableConnection(userId, connectionId);
     if (!connection) return null;
     let endpointOrigin = connection.api_url;
     try {

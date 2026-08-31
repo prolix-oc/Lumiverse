@@ -2,11 +2,10 @@ import { presetsApi } from '@/api/presets'
 import type { Preset, UpdatePresetInput } from '@/types/api'
 import { looksLikeLoomPresetData, marshalUpdate, unmarshalPreset } from './service'
 import type { LoomPreset } from './types'
+import { commitRuntimeAuthorityMutation } from '@/lib/agentRuntimeSelection'
 
 const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
 const PENDING_LOOM_PRESET_ENVELOPE_KEY = '__lumiverse_pending_loom_preset_v2'
-const MAX_REVISION_CONFLICT_RETRIES = 3
-
 const DRAFT_FIELDS = [
   'name',
   'description',
@@ -56,8 +55,6 @@ interface PresetSaveEntry {
 
 export interface PresetSaveAdapter {
   update(presetId: string, input: UpdatePresetInput): Promise<Preset>
-  /** Read the latest persisted row when a conditional update detects a conflict. */
-  get?: (presetId: string) => Promise<Preset>
 }
 
 export interface PresetMutationOptions {
@@ -111,7 +108,8 @@ export interface PresetSaveCoordinator {
    * paths are rebased over that row; untouched paths always come from the row.
    */
   hydrate(preset: LoomPreset, token?: PresetHydrationToken): LoomPreset
-  /** Return the current per-preset draft, if this coordinator owns one. */
+  /** Observe a server-authoritative mutation once, rebasing any unrelated local draft paths. */
+  observeAuthority(preset: LoomPreset, transformDraft?: (draft: LoomPreset) => LoomPreset): boolean
   getDraft(presetId: string): LoomPreset | null
   /** True when the preset has unsaved local changes. */
   hasPendingChanges(presetId: string): boolean
@@ -134,6 +132,8 @@ export interface PresetSaveCoordinator {
   flushBestEffort(presetId: string): void
   /** Subscribe to draft, rebase, and persistence transitions for one preset. */
   subscribe(presetId: string, listener: (preset: LoomPreset) => void): () => void
+  /** Accept an explicitly reviewed persisted row and discard the previous local draft. */
+  acceptPersisted(preset: LoomPreset): LoomPreset
   /** Forget all in-memory and durable state after a confirmed deletion. */
   remove(presetId: string): void
 }
@@ -148,10 +148,6 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-function isRevisionConflict(error: unknown): boolean {
-  if (!isRecord(error) || error.status !== 409 || !isRecord(error.body)) return false
-  return error.body.code === 'PRESET_REVISION_CONFLICT'
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -173,110 +169,6 @@ function sameJson(left: unknown, right: unknown): boolean {
   return leftKeys.every((key) => Object.hasOwn(right, key) && sameJson(left[key], right[key]))
 }
 
-const JSON_MERGE_CONFLICT = Symbol('json-merge-conflict')
-const JSON_MERGE_MISSING = Symbol('json-merge-missing')
-type JsonMergeSentinel = typeof JSON_MERGE_CONFLICT | typeof JSON_MERGE_MISSING
-
-function cloneMergedValue(value: unknown | typeof JSON_MERGE_MISSING): unknown | typeof JSON_MERGE_MISSING {
-  return value === JSON_MERGE_MISSING ? value : clone(value)
-}
-
-/** Conservatively merge JSON-shaped values, rejecting overlapping edits. */
-function mergeJsonValue(
-  base: unknown | typeof JSON_MERGE_MISSING,
-  local: unknown | typeof JSON_MERGE_MISSING,
-  remote: unknown | typeof JSON_MERGE_MISSING,
-): unknown | JsonMergeSentinel {
-  if (local === JSON_MERGE_MISSING || remote === JSON_MERGE_MISSING || base === JSON_MERGE_MISSING) {
-    if (local === remote) return cloneMergedValue(local)
-    if (local === base) return cloneMergedValue(remote)
-    if (remote === base) return cloneMergedValue(local)
-    return JSON_MERGE_CONFLICT
-  }
-  if (sameJson(local, remote)) return clone(local)
-  if (sameJson(local, base)) return clone(remote)
-  if (sameJson(remote, base)) return clone(local)
-  if (!isRecord(base) || !isRecord(local) || !isRecord(remote)) return JSON_MERGE_CONFLICT
-
-  const merged: Record<string, unknown> = {}
-  const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)])
-  for (const key of keys) {
-    const value = mergeJsonValue(
-      Object.hasOwn(base, key) ? base[key] : JSON_MERGE_MISSING,
-      Object.hasOwn(local, key) ? local[key] : JSON_MERGE_MISSING,
-      Object.hasOwn(remote, key) ? remote[key] : JSON_MERGE_MISSING,
-    )
-    if (value === JSON_MERGE_CONFLICT) return value
-    if (value !== JSON_MERGE_MISSING) merged[key] = value
-  }
-  return merged
-}
-
-function keyedBlocks(blocks: LoomPreset['blocks']): {
-  keys: string[]
-  values: Map<string, LoomPreset['blocks'][number]>
-} {
-  const occurrences = new Map<string, number>()
-  const keys: string[] = []
-  const values = new Map<string, LoomPreset['blocks'][number]>()
-  for (const block of blocks) {
-    const occurrence = occurrences.get(block.id) ?? 0
-    occurrences.set(block.id, occurrence + 1)
-    const key = JSON.stringify([block.id, occurrence])
-    keys.push(key)
-    values.set(key, block)
-  }
-  return { keys, values }
-}
-
-function sameSequence(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index])
-}
-
-/**
- * Merge block-property edits when at most one side changed block ordering or
- * membership. Duplicate legacy block ids are matched by occurrence.
- */
-function mergePromptBlocks(
-  baseBlocks: LoomPreset['blocks'],
-  localBlocks: LoomPreset['blocks'],
-  remoteBlocks: LoomPreset['blocks'],
-): LoomPreset['blocks'] | null {
-  const base = keyedBlocks(baseBlocks)
-  const local = keyedBlocks(localBlocks)
-  const remote = keyedBlocks(remoteBlocks)
-  const targetKeys = sameSequence(local.keys, remote.keys)
-    ? local.keys
-    : sameSequence(local.keys, base.keys)
-      ? remote.keys
-      : sameSequence(remote.keys, base.keys)
-        ? local.keys
-        : null
-  if (!targetKeys) return null
-
-  const allKeys = new Set([...base.keys, ...local.keys, ...remote.keys])
-  const mergedByKey = new Map<string, LoomPreset['blocks'][number]>()
-  for (const key of allKeys) {
-    const merged = mergeJsonValue(
-      base.values.get(key) ?? JSON_MERGE_MISSING,
-      local.values.get(key) ?? JSON_MERGE_MISSING,
-      remote.values.get(key) ?? JSON_MERGE_MISSING,
-    )
-    if (merged === JSON_MERGE_CONFLICT) return null
-    if (merged !== JSON_MERGE_MISSING) {
-      mergedByKey.set(key, merged as LoomPreset['blocks'][number])
-    }
-  }
-
-  const result: LoomPreset['blocks'] = []
-  for (const key of targetKeys) {
-    const block = mergedByKey.get(key)
-    if (!block) return null
-    result.push(block)
-  }
-  if (result.length !== mergedByKey.size) return null
-  return result
-}
 
 function canonicalPersistedPayload(preset: LoomPreset): unknown {
   const { expected_cache_revision: _expectedCacheRevision, ...payload } = marshalUpdate(preset)
@@ -619,12 +511,16 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   const latestHydrationReadEpochs = new Map<string, number>()
   const confirmedEpochs = new Map<string, number>()
   const confirmedCacheRevisions = new Map<string, number>()
+  const confirmedConfigRevisions = new Map<string, number>()
   const confirmedSnapshots = new Map<string, LoomPreset>()
   const rememberConfirmedCacheRevision = (presetId: string, preset: LoomPreset): void => {
-    if (typeof preset.cacheRevision !== 'number') return
-    const previous = confirmedCacheRevisions.get(presetId)
-    if (previous === undefined || preset.cacheRevision > previous) {
-      confirmedCacheRevisions.set(presetId, preset.cacheRevision)
+    const cacheRevision = typeof preset.cacheRevision === 'number' ? preset.cacheRevision : 0
+    const configRevision = preset.agentConfigRevision
+    const previousCache = confirmedCacheRevisions.get(presetId)
+    const previousConfig = confirmedConfigRevisions.get(presetId)
+    if (previousCache === undefined || cacheRevision > previousCache) confirmedCacheRevisions.set(presetId, cacheRevision)
+    if (previousConfig === undefined || configRevision > previousConfig) confirmedConfigRevisions.set(presetId, configRevision)
+    if (previousCache === undefined || cacheRevision > previousCache || previousConfig === undefined || configRevision > previousConfig) {
       confirmedSnapshots.set(presetId, clone(preset))
     }
   }
@@ -642,6 +538,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     latestHydrationReadEpochs.clear()
     confirmedEpochs.clear()
     confirmedCacheRevisions.clear()
+    confirmedConfigRevisions.clear()
     confirmedSnapshots.clear()
     pendingHydrations.clear()
   }
@@ -732,105 +629,61 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     const enqueueEpoch = scopeEpoch
     const previous = entry.chain.catch(() => entry.confirmed)
     const link = previous.then(async () => {
-      let pendingSnapshot = snapshot
-      let conflictRetries = 0
-      let conflictBase: LoomPreset | null = null
+      if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+        return clone(entry.confirmed)
+      }
 
-      while (true) {
+      const pendingSnapshot = rebaseDirtyPaths(entry.confirmed, snapshot, entry.dirty)
+      if (!entry.queuedSnapshots.some((queued) => (
+        sameJson(canonicalPersistedPayload(queued), canonicalPersistedPayload(pendingSnapshot))
+      ))) {
+        entry.queuedSnapshots.push(clone(pendingSnapshot))
+      }
+      let savedRow: Preset
+      try {
+        savedRow = await adapter.update(presetId, marshalUpdate(pendingSnapshot))
+      } catch (error) {
         if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
           return clone(entry.confirmed)
         }
-
-        try {
-          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
-            return clone(entry.confirmed)
-          }
-          pendingSnapshot = rebaseDirtyPaths(entry.confirmed, pendingSnapshot, entry.dirty)
-          if (!entry.queuedSnapshots.some((queued) => (
-            sameJson(canonicalPersistedPayload(queued), canonicalPersistedPayload(pendingSnapshot))
-          ))) {
-            entry.queuedSnapshots.push(clone(pendingSnapshot))
-          }
-          conflictBase = clone(entry.confirmed)
-          const savedRow = await adapter.update(presetId, marshalUpdate(pendingSnapshot))
-          const current = entries.get(presetId)
-          if (scopeEpoch !== enqueueEpoch || current !== entry) {
-            return clone(entry.confirmed)
-          }
-          const responseSource = current.queuedSnapshot ?? pendingSnapshot
-          const saved = preserveResponseState(
-            unmarshalPreset(savedRow),
-            responseSource,
-            savedRow,
-          )
-
-          current.confirmed = clone(saved)
-          rememberConfirmedCacheRevision(presetId, saved)
-          if (current.revision === revision) {
-            current.draft = clone(saved)
-            current.dirty = emptyDirtyPaths()
-          } else {
-            const rebased = confirmPersistedDirtyPaths(saved, current.draft, current.dirty)
-            current.draft = rebased.draft
-            current.dirty = rebased.dirty
-          }
-          advanceConfirmedEpoch(presetId)
-          writePendingEnvelope(presetId, current, pendingStorageScope)
-          publish(current)
-          return saved
-        } catch (error) {
-          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
-            return clone(entry.confirmed)
-          }
-          if (!isRevisionConflict(error) || !adapter.get || conflictRetries >= MAX_REVISION_CONFLICT_RETRIES) {
-            throw error
-          }
-
-          conflictRetries += 1
-          let latestRow: Preset
-          try {
-            latestRow = await adapter.get(presetId)
-          } catch (readError) {
-            if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
-              return clone(entry.confirmed)
-            }
-            throw readError
-          }
-          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
-            return clone(entry.confirmed)
-          }
-          const latest = unmarshalPreset(latestRow)
-          const current = entries.get(presetId)
-          if (entry.dirty.fields.includes('blocks')) {
-            // Merge independent per-block/property edits before retrying. If
-            // an equivalent queued write already reached persistence, use it
-            // as the base so a newer local edit remains independent too.
-            const blockMergeBase = sameJson(latest.blocks, pendingSnapshot.blocks)
-              ? pendingSnapshot.blocks
-              : conflictBase!.blocks
-            const mergedBlocks = mergePromptBlocks(
-              blockMergeBase,
-              current.draft.blocks,
-              latest.blocks,
-            )
-            if (!mergedBlocks) throw error
-            current.draft = { ...current.draft, blocks: mergedBlocks }
-          }
-          if (scopeEpoch !== enqueueEpoch || current !== entry) {
-            return clone(entry.confirmed)
-          }
-
-          current.confirmed = clone(latest)
-          rememberConfirmedCacheRevision(presetId, latest)
-          const rebased = rebaseDirtyPaths(latest, current.draft, current.dirty)
-          current.draft = rebased
-          advanceConfirmedEpoch(presetId)
-          writePendingEnvelope(presetId, current, pendingStorageScope)
-          publish(current)
-          pendingSnapshot = clone(current.draft)
-          current.queuedSnapshot = clone(pendingSnapshot)
-        }
+        // A 409 is authoritative concurrency control, not a transient error.
+        // Preserve the draft for explicit review; fetching a newer revision
+        // and retrying here would defeat the server's compare-and-swap guard.
+        throw error
       }
+      const persisted = unmarshalPreset(savedRow)
+      // A successful response is globally authoritative even if this editor
+      // scope became stale while the request was in flight. Commit before the
+      // local-scope guard so a stale A response invalidates runtime admission
+      // without ever being published into scope B.
+      if (persisted.cacheRevision !== pendingSnapshot.cacheRevision) {
+        commitRuntimeAuthorityMutation()
+      }
+      const current = entries.get(presetId)
+      if (scopeEpoch !== enqueueEpoch || current !== entry) {
+        return clone(entry.confirmed)
+      }
+      const responseSource = current.queuedSnapshot ?? pendingSnapshot
+      const saved = preserveResponseState(
+        persisted,
+        responseSource,
+        savedRow,
+      )
+
+      current.confirmed = clone(saved)
+      rememberConfirmedCacheRevision(presetId, saved)
+      if (current.revision === revision) {
+        current.draft = clone(saved)
+        current.dirty = emptyDirtyPaths()
+      } else {
+        const rebased = confirmPersistedDirtyPaths(saved, current.draft, current.dirty)
+        current.draft = rebased.draft
+        current.dirty = rebased.dirty
+      }
+      advanceConfirmedEpoch(presetId)
+      writePendingEnvelope(presetId, current, pendingStorageScope)
+      publish(current)
+      return saved
     })
     entry.chain = link
     link.then(
@@ -1021,6 +874,38 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       }
     },
 
+    observeAuthority(preset, transformDraft): boolean {
+      const entry = entries.get(preset.id)
+      const incomingCache = typeof preset.cacheRevision === 'number' ? preset.cacheRevision : 0
+      const incomingConfig = preset.agentConfigRevision
+      const knownCache = Math.max(
+        confirmedCacheRevisions.get(preset.id) ?? -1,
+        entry?.confirmed.cacheRevision ?? -1,
+      )
+      const knownConfig = Math.max(
+        confirmedConfigRevisions.get(preset.id) ?? -1,
+        entry?.confirmed.agentConfigRevision ?? -1,
+      )
+      if (incomingCache <= knownCache && incomingConfig <= knownConfig) return false
+      if (!entry) {
+        const created = ensure(preset.id, preset)
+        advanceConfirmedEpoch(preset.id)
+        publish(created)
+        evictCleanEntry(preset.id)
+        return true
+      }
+      const localDraft = transformDraft ? transformDraft(clone(entry.draft)) : entry.draft
+      entry.confirmed = clone(preset)
+      entry.draft = isDirty(entry.dirty)
+        ? rebaseDirtyPaths(preset, localDraft, entry.dirty)
+        : clone(preset)
+      rememberConfirmedCacheRevision(preset.id, preset)
+      advanceConfirmedEpoch(preset.id)
+      writePendingEnvelope(preset.id, entry, pendingStorageScope)
+      publish(entry)
+      evictCleanEntry(preset.id)
+      return true
+    },
     getDraft(presetId: string): LoomPreset | null {
       const entry = entries.get(presetId)
       return entry ? clone(entry.draft) : null
@@ -1104,10 +989,28 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       }
     },
 
+    acceptPersisted(preset): LoomPreset {
+      const previous = entries.get(preset.id)
+      if (previous?.timer) clearTimeout(previous.timer)
+      const accepted = createEntry(preset)
+      accepted.listeners = previous?.listeners ?? listenersByPreset.get(preset.id) ?? new Set()
+      entries.set(preset.id, accepted)
+      listenersByPreset.set(preset.id, accepted.listeners)
+      confirmedCacheRevisions.delete(preset.id)
+      confirmedConfigRevisions.delete(preset.id)
+      confirmedSnapshots.delete(preset.id)
+      rememberConfirmedCacheRevision(preset.id, preset)
+      advanceConfirmedEpoch(preset.id)
+      removePendingEnvelope(preset.id, pendingStorageScope)
+      publish(accepted)
+      return clone(accepted.draft)
+    },
+
     remove(presetId: string): void {
       const entry = entries.get(presetId)
       clearTimeout(entry?.timer)
       confirmedCacheRevisions.delete(presetId)
+      confirmedConfigRevisions.delete(presetId)
       confirmedSnapshots.delete(presetId)
       entries.delete(presetId)
       advanceConfirmedEpoch(presetId)
@@ -1119,15 +1022,64 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 
 export const presetSaveCoordinator = createPresetSaveCoordinator({
   update: (presetId, input) => presetsApi.update(presetId, input),
-  get: (presetId) => presetsApi.get(presetId),
 })
+const committedAuthorityRevisions = new Map<string, { cache: number; config: number }>()
 
+function authorityRevision(row: Preset): { cache: number; config: number } {
+  return { cache: Number(row.cache_revision ?? 0), config: Number(row.agent_config_revision ?? 0) }
+}
+
+function advancesAuthorityRevision(
+  previous: { cache: number; config: number } | undefined,
+  next: { cache: number; config: number },
+): boolean {
+  return previous === undefined || next.cache > previous.cache || next.config > previous.config
+}
+
+export interface PresetAuthorityResult {
+  presetAuthorityChanged: boolean
+  presetAuthorities: Preset[]
+}
+
+/** Commits persisted authority globally, while publishing only into the originating scope. */
+export function applyPresetAuthorityResult(
+  result: PresetAuthorityResult,
+  expectedScopeEpoch = presetSaveCoordinator.getScopeEpoch(),
+  transformDraft?: (draft: LoomPreset) => LoomPreset,
+): boolean {
+  const scopeIsCurrent = presetSaveCoordinator.getScopeEpoch() === expectedScopeEpoch
+  if (!scopeIsCurrent) {
+    if (result.presetAuthorityChanged && result.presetAuthorities.length > 0) {
+      commitRuntimeAuthorityMutation()
+    }
+    return false
+  }
+
+  let observed = false
+  let shouldCommit = false
+  for (const row of result.presetAuthorities) {
+    const nextRevision = authorityRevision(row)
+    const committedRevision = committedAuthorityRevisions.get(row.id)
+    const advancesCommittedAuthority = advancesAuthorityRevision(committedRevision, nextRevision)
+    if (result.presetAuthorityChanged && advancesCommittedAuthority) shouldCommit = true
+    if (advancesCommittedAuthority) {
+      committedAuthorityRevisions.set(row.id, {
+        cache: Math.max(committedRevision?.cache ?? 0, nextRevision.cache),
+        config: Math.max(committedRevision?.config ?? 0, nextRevision.config),
+      })
+    }
+    observed = presetSaveCoordinator.observeAuthority(unmarshalPreset(row), transformDraft) || observed
+  }
+  if (shouldCommit) commitRuntimeAuthorityMutation()
+  return observed
+}
 const durableRecoveryFlushes = new Map<string, Promise<void>>()
 export function setPresetSaveCoordinatorScope(scope: string | null): void {
   const previousScopeEpoch = presetSaveCoordinator.getScopeEpoch()
   presetSaveCoordinator.setScope(scope)
   if (presetSaveCoordinator.getScopeEpoch() !== previousScopeEpoch) {
     durableRecoveryFlushes.clear()
+    committedAuthorityRevisions.clear()
   }
 }
 export async function flushPresetForGeneration(presetId: string | undefined): Promise<void> {

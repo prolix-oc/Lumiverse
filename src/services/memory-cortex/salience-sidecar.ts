@@ -413,34 +413,6 @@ const TOOL_ANALYZE_PASSAGE_BATCH: ToolDefinition = {
   },
 };
 
-/**
- * Build the tool-forcing parameters for each provider.
- * Anthropic: tool_choice { type: "any" } — must use at least one tool
- * OpenAI/compat: tool_choice "required" — must use tools
- * Google: toolConfig { functionCallingConfig: { mode: "ANY" } }
- * Nano-GPT: tool_choice "auto" — some routed models reject "required"
- */
-const GOOGLE_PROVIDERS = new Set(["google", "google_vertex"]);
-
-export function getToolChoiceParams(provider: string): Record<string, any> {
-  const normalizedProvider = provider.trim().toLowerCase();
-  if (GOOGLE_PROVIDERS.has(normalizedProvider)) {
-    return { toolConfig: { functionCallingConfig: { mode: "ANY" } } };
-  }
-  // Anthropic accepts tool_choice at body level; OpenAI/compat also accept it
-  // Both use different formats but the passthrough sends it as-is
-  if (normalizedProvider === "anthropic") {
-    return { tool_choice: { type: "any" } };
-  }
-  // Nano-GPT routes requests to many upstream models. Some reject the OpenAI
-  // compatible `required` value, while still honoring the extraction prompt
-  // and tool definitions when `auto` is used.
-  if (normalizedProvider === "nanogpt") {
-    return { tool_choice: "auto" };
-  }
-  // OpenAI and compatibles
-  return { tool_choice: "required" };
-}
 
 /**
  * Parse tool call results from a generation response into our extraction format.
@@ -547,10 +519,6 @@ function validateGradedHeuristics(args: any): SidecarGradedHeuristics {
   };
 }
 
-// Legacy export kept for compatibility — now returns empty (tools handle everything)
-export function getExtractionStructuredParams(_provider: string, _batch: boolean): Record<string, any> {
-  return {};
-}
 
 // ─── Adapter Type ──────────────────────────────────────────────
 

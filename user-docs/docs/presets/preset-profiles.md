@@ -69,3 +69,15 @@ The snapshot records the current preset, the enabled/disabled state of every blo
 - **Character-specific prompts** — A fantasy character uses narrative blocks; a modern character uses casual blocks
 - **Per-chat tuning** — One chat emphasizes action scenes (action blocks on); another emphasizes dialogue (dialogue blocks on)
 - **Quick switching** — Swap between "detailed" and "concise" block configurations without manual toggling
+
+
+---
+
+## Preset profiles versus agent profiles
+
+These are separate concepts:
+
+- A **preset profile** selects a preset and restores its prompt-block and prompt-variable state for a chat, persona, character, or default context.
+- An **agent profile** is a reusable child-agent definition inside that selected preset's **Agents & Tools** configuration. It stores grants and limits, references an existing connection profile, and does not contain credentials.
+
+Changing a preset profile can therefore change which Agents & Tools configuration is active, but it does not grant a child new tools or lore scope. Review the active preset's grants and imported-config warning before enabling agent work.

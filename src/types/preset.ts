@@ -1,3 +1,7 @@
+import type { AgentConfigReviewV1, AgentConfigV2 } from "./agents";
+
+export type PresetMetadata = Record<string, any>;
+
 export interface Preset {
   id: string;
   name: string;
@@ -6,7 +10,11 @@ export interface Preset {
   parameters: Record<string, any>;
   prompt_order: any[];
   prompts: Record<string, any>;
-  metadata: Record<string, any>;
+  metadata: PresetMetadata;
+  /** Normalized V2 projection; Agentic runtime metadata aliases are always stripped. */
+  agent_config?: AgentConfigV2;
+  agent_config_revision?: number;
+  agent_config_review?: AgentConfigReviewV1;
   cache_revision?: number;
   created_at: number;
   updated_at: number;
@@ -19,12 +27,18 @@ export interface CreatePresetInput {
   parameters?: Record<string, any>;
   prompt_order?: any[];
   prompts?: Record<string, any>;
-  metadata?: Record<string, any>;
+  metadata?: PresetMetadata;
+  /** Import-only preset-bound regex companions; never persisted in the preset row. */
+  regex_scripts?: readonly Record<string, unknown>[];
+  /** Normalized V2 config is written through the authenticated config authority. */
+  agent_config?: AgentConfigV2;
 }
 
 export type UpdatePresetInput = Partial<CreatePresetInput> & {
   /** Transport-only optimistic concurrency precondition; never persisted. */
   expected_cache_revision?: number;
+  /** Required when an ordinary update submits agent_config. */
+  expected_config_revision?: number;
 };
 
 export class PresetRevisionConflictError extends Error {
@@ -45,6 +59,17 @@ export class PresetRevisionConflictError extends Error {
 }
 
 // --- Loom Preset Assembly Types ---
+/** Prompt markers whose content and admission are resolved by native assembly. */
+export const STRUCTURAL_PROMPT_MARKERS = new Set([
+  "chat_history",
+  "world_info_before",
+  "world_info_after",
+  "char_description",
+  "char_personality",
+  "persona_description",
+  "scenario",
+  "dialogue_examples",
+]);
 
 export interface PromptVariableOption {
   id: string;

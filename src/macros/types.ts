@@ -1,5 +1,5 @@
-// ============================================================================
-// TOKEN TYPES
+import type { ExpansionBudgetV1, PreparationFailureCode } from "../types/agent-preprocessing";
+
 // ============================================================================
 
 export enum TokenType {
@@ -82,6 +82,8 @@ export interface MacroDefinition {
   strictArgs?: boolean;
   delayArgResolution?: boolean;
   aliases?: string[];
+  /** True when this macro supplies native Databank retrieval context. */
+  handlesDatabankRetrieval?: boolean;
   /** When true, extension macros cannot overwrite this definition */
   builtIn?: boolean;
   /** When true, the handler's return value is guaranteed to never contain
@@ -114,9 +116,18 @@ export interface MacroExecContext {
   isScoped: boolean;
   body: string;
   bodyRaw: AstNode[];
+  /** Source offset of this macro within the current template. */
   offset: number;
+  /** Absolute source offset propagated through nested macro expansion. */
   globalOffset: number;
   env: MacroEnv;
+  /** One exact UTF-8 budget shared by this invocation and all recursive work. */
+  budget: ExpansionBudgetV1;
+  /** Preflight expansion/output before constructing a generated fragment. */
+  reserveExpansion: (value: string | number, operationBytes?: number) => number;
+  reserveOutput: (value: string | number) => number;
+  /** Concatenate already bounded fragments without a post-hoc truncation check. */
+  append: (parts: readonly string[]) => string;
   resolve: (text: string) => string | Promise<string>;
   resolveNodes: (nodes: AstNode[]) => string | Promise<string>;
   resolvePromptSource?: (
@@ -214,6 +225,8 @@ export interface MacroEnv {
   };
   /** Set to true when any chat variable macro mutates state. Used to trigger persistence. */
   _chatVarsDirty?: boolean;
+  /** Internal per-assembly budget shared by every evaluation using this environment. */
+  _expansionBudget?: ExpansionBudgetV1;
   /**
    * The preset prompt block currently being rendered. This is set only for
    * that block's existing macro evaluation and restored immediately after, so
@@ -253,6 +266,7 @@ export interface MacroDiagnostic {
   message: string;
   macroName?: string;
   offset?: number;
+  code?: PreparationFailureCode;
 }
 
 // ============================================================================

@@ -1,4 +1,9 @@
 import { expect, test } from 'bun:test'
+import { readFile } from 'node:fs/promises'
+
+const isolatedSource = await readFile(new URL('./placement-helper.isolated.ts', import.meta.url), 'utf8')
+const expectedIsolatedTestCount = (isolatedSource.match(/\btest\s*\(/g) ?? []).length
+const expectedSummaryLines = [`${expectedIsolatedTestCount} pass`, '0 fail']
 
 // The isolated companion uses Bun's process-global mock registry. Keep those
 // mocks from poisoning the real preset-editor-helper suite in combined runs.
@@ -35,14 +40,14 @@ test('placement helper cases pass in an isolated module graph', async () => {
     if (exitCode !== 0) {
       throw new Error(`Isolated placement-helper tests failed with exit code ${exitCode}:\n${summary}`)
     }
-    if (!summaryLines.every((line, index) => line === ['22 pass', '0 fail'][index]) || summaryLines.length !== 2) {
+    if (!summaryLines.every((line, index) => line === expectedSummaryLines[index]) || summaryLines.length !== expectedSummaryLines.length) {
       throw new Error(`Isolated placement-helper tests reported unexpected counts: ${summaryLines.join(', ')}\n${summary}`)
     }
     expect(timedOut).toBe(false)
     expect(exitCode).toBe(0)
-    expect(summaryLines).toEqual(['22 pass', '0 fail'])
+    expect(summaryLines).toEqual(expectedSummaryLines)
     expect(summary).toMatch(/\b[1-9]\d* expect\(\) calls\b/)
-    expect(summary).toMatch(/Ran 22 tests across 1 file/)
+    expect(summary).toMatch(new RegExp(`Ran ${expectedIsolatedTestCount} tests across 1 file`))
   } finally {
     clearTimeout(watchdog)
   }

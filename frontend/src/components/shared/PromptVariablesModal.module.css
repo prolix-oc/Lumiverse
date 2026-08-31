@@ -250,6 +250,37 @@
   font-style: italic;
 }
 
+.conflictBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-danger-040, rgba(248, 113, 113, 0.4));
+  border-radius: var(--lcs-radius-sm, 8px);
+  background: var(--lumiverse-danger-010, rgba(248, 113, 113, 0.08));
+  color: var(--lumiverse-text);
+}
+
+.conflictBanner > svg {
+  flex: 0 0 auto;
+  color: var(--lumiverse-danger, #f87171);
+}
+
+.conflictCopy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+}
+
+.conflictCopy span {
+  color: var(--lumiverse-text-dim);
+}
+
 .footer {
   display: flex;
   align-items: center;

@@ -191,6 +191,10 @@ When a user selects a preset that contains Prompt Variables, they will see a **S
 
 Clicking this opens the **Prompt Variables Modal**.
 
+Values saved here are scoped by the active preset profile when one is bound. Without a profile binding, the save updates the selected preset itself; it is not a chat-local override. A real preset-level value change advances the preset revision; saving the same values again does not. Lumiverse then marks every exact Agentic reference to the prior revision for review, including the four policy groups, phase instructions, and per-child instruction subsets. Bound profile saves do not change the shared preset revision, but they still invalidate and refresh Agentic readiness before another turn can start.
+
+If repair is required, **Portability & Repair** lists the affected references. Agentic preflight remains closed until the references are reviewed against the current revision. A blocked Send creates no outbox item, runtime attempt, or provider request.
+
 ### Intelligent Filtering
 
 The modal aggregates all variables from the preset, but **it only shows variables for blocks that are currently enabled**.

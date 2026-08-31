@@ -9,6 +9,7 @@ import {
 import { readStoredTokenCount } from '@/lib/storedTokenCount'
 import { estimateTokens } from '@/lib/tokenEstimate'
 import type { WorldBookEntry } from '@/types/api'
+import { useStore } from '@/store'
 
 export interface LorebookResolvedTokenCount {
   value: number
@@ -16,8 +17,8 @@ export interface LorebookResolvedTokenCount {
 }
 
 export function useLorebookTokenCounts(entries: readonly WorldBookEntry[], enabled: boolean) {
-  const model = useActiveTokenizerModel()
-  useTokenCountSweep(entries, enabled)
+  const model = useActiveTokenizerModel(useStore)
+  useTokenCountSweep(entries, enabled, useStore)
   useSyncExternalStore(subscribeTokenCountCache, getTokenCountCacheVersion, getTokenCountCacheVersion)
 
   const resolveTokenCount = useCallback((entry: WorldBookEntry): LorebookResolvedTokenCount => {

@@ -83,7 +83,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   if (!chat) throw new Error("Chat not found");
 
   const allMessages = profiler.measureSync("messages", () =>
-    chatsSvc.getMessages(ctx.userId, ctx.chatId)
+    chatsSvc.getMessagesForProviderHistory(ctx.userId, ctx.chatId)
   );
   const messages = ctx.excludeMessageId
     ? allMessages.filter(m => m.id !== ctx.excludeMessageId)
@@ -128,13 +128,23 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId)
   );
 
-  // No-preset temp chats skip preset loading entirely (assembly re-checks the
-  // same flag and falls back to the raw legacy message mapping).
-  const resolvedPresetId = isNoPresetChatMetadata(chat.metadata) && !ctx.presetOverride
-    ? null
-    : ctx.presetId || connection?.preset_id;
+  // An admitted effective preset snapshot is authoritative for the whole
+  // generation; do not re-read the preset or profile source after sidecar work.
+  const effectivePresetSnapshot = ctx.effectivePresetSnapshot;
+  const hasEffectivePresetSnapshot = effectivePresetSnapshot !== undefined;
+  const resolvedPresetId =
+    !hasEffectivePresetSnapshot &&
+    isNoPresetChatMetadata(chat.metadata) &&
+    !ctx.presetOverride
+      ? null
+      : !hasEffectivePresetSnapshot
+        ? ctx.presetId || connection?.preset_id
+        : null;
   const preset = profiler.measureSync("preset", () =>
-    ctx.presetOverride ?? (resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null)
+    hasEffectivePresetSnapshot
+      ? effectivePresetSnapshot!.preset
+      : ctx.presetOverride ??
+        (resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null),
   );
 
   // ── 3. Embedding config (1 setting + 1 secret decrypt — only async op) ─

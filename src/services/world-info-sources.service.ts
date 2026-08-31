@@ -1,7 +1,7 @@
 import type { Chat } from "../types/chat";
 import type { Character } from "../types/character";
 import type { Persona } from "../types/persona";
-import type { WorldBookEntry } from "../types/world-book";
+import type { WorldBook, WorldBookEntry } from "../types/world-book";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import * as charactersSvc from "./characters.service";
 import * as chatsSvc from "./chats.service";
@@ -21,6 +21,7 @@ export interface WorldInfoSources {
   worldBookIds: string[];
   bookSourceMap: Map<string, BookSource>;
   bookNameMap: Map<string, string>;
+  bookMap: Map<string, WorldBook>;
 }
 
 export function getGroupCardMode(chat: Chat): GroupCardMode {
@@ -100,6 +101,7 @@ export function collectWorldInfoSources(
   const worldBookIds: string[] = [];
   const bookSourceMap = new Map<string, BookSource>();
   const bookNameMap = new Map<string, string>();
+  const bookMap = new Map<string, WorldBook>();
   const seen = new Set<string>();
 
   const pushBook = (id: string | null | undefined, source: BookSource) => {
@@ -130,7 +132,12 @@ export function collectWorldInfoSources(
 
   const entries: WorldBookEntry[] = [];
   if (worldBookIds.length > 0) {
-    const entryMap = worldBooksSvc.listEntriesForBooks(userId, worldBookIds, bookNameMap);
+    const entryMap = worldBooksSvc.listEntriesForBooks(
+      userId,
+      worldBookIds,
+      bookNameMap,
+      bookMap,
+    );
     for (const id of worldBookIds) {
       const bookEntries = entryMap.get(id);
       if (bookEntries && bookEntries.length > 0) {
@@ -138,7 +145,7 @@ export function collectWorldInfoSources(
         continue;
       }
 
-      const book = worldBooksSvc.getWorldBook(userId, id);
+      const book = bookMap.get(id);
       const sourceCharacterId = typeof book?.metadata?.source_character_id === "string"
         ? book.metadata.source_character_id
         : "";
@@ -160,5 +167,6 @@ export function collectWorldInfoSources(
     worldBookIds,
     bookSourceMap,
     bookNameMap,
+    bookMap,
   };
 }

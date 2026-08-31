@@ -4,9 +4,12 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { useStore } from '@/store'
-import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
-import { importRegexFiles, type RegexImportResult } from './regexImportBatch'
+import {
+  importRegexFiles,
+  importRegexPayloadWithAuthority,
+  type RegexImportResult,
+} from './regexImportBatch'
 import styles from './RegexImportModal.module.css'
 import clsx from 'clsx'
 
@@ -25,11 +28,10 @@ export default function RegexImportModal() {
   const [importing, setImporting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const importPayload = useCallback((data: unknown) => {
-    // Pass the active preset so overwriting a bound regex can update its
-    // enabled state without losing or invalidating that binding.
-    return regexApi.importScripts(data, activeLoomPresetId)
-  }, [activeLoomPresetId])
+  const importPayload = useCallback(
+    (data: unknown) => importRegexPayloadWithAuthority(data, activeLoomPresetId),
+    [activeLoomPresetId],
+  )
 
   const presentResult = useCallback(async (nextResult: RegexImportResult) => {
     setResult(nextResult)

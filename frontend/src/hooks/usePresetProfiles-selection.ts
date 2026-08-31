@@ -26,8 +26,9 @@ export function createPresetProfileSelectionController(
   } | null = null
 
   const cancel = () => {
-    selection?.request.cancel()
+    const ownedSelection = selection
     selection = null
+    ownedSelection?.request.cancel()
   }
 
   const select = (resolvedPresetId: string | null, currentPresetId: string | null) => {

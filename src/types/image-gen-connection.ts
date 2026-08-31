@@ -6,6 +6,9 @@ export interface ImageGenConnectionProfile {
   model: string;
   is_default: boolean;
   has_api_key: boolean;
+  /** Imported profiles remain visible but inert until explicitly reviewed. */
+  review_required: boolean;
+  review_code: string | null;
   default_parameters: Record<string, any>;
   metadata: Record<string, any>;
   created_at: number;
@@ -24,4 +27,7 @@ export interface CreateImageGenConnectionInput {
   api_key?: string;
 }
 
-export type UpdateImageGenConnectionInput = Partial<CreateImageGenConnectionInput>;
+export interface UpdateImageGenConnectionInput extends Partial<CreateImageGenConnectionInput> {
+  /** Explicitly acknowledge an imported profile before enabling it. */
+  reviewed?: boolean;
+}

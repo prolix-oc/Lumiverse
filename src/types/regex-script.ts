@@ -70,6 +70,8 @@ export interface RegexScript {
   character_id: string | null;
   /** Trusted host attribution. Null denotes a user/import/system-created script. */
   owner_extension_identifier: string | null;
+  /** Stable repair code for a quarantined imported or legacy row. */
+  validation_error_code: string | null;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;

@@ -84,6 +84,8 @@ async function applyBaseline(): Promise<void> {
   const db = getDb();
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
+  // Baseline ships characters.library_scope (099) and
+  // world_book_entries.revision (098) squashed; no extra migration loads.
 }
 
 function createFixtureEntries(): FixtureEntries {
@@ -227,9 +229,9 @@ describe.serial("world-book concurrency contract matrix", () => {
 
   describe.serial("world-book H11 optimistic concurrency", () => {
   test("single update without expected_revision remains backward-compatible and increments once", () => {
-    const { first } = createFixtureEntries();
+    const { book, first } = createFixtureEntries();
 
-    const updated = updateEntry(OWNER_ID, first.id, { comment: "unconditional" });
+    const updated = updateEntry(OWNER_ID, book.id, first.id, { comment: "unconditional" });
 
     expect(updated).toMatchObject({
       id: first.id,
@@ -239,11 +241,11 @@ describe.serial("world-book concurrency contract matrix", () => {
   });
 
   test("duplicate validates the source revision before creating a new entry", () => {
-    const { first } = createFixtureEntries();
+    const { book, first } = createFixtureEntries();
     const copied = duplicateEntry(OWNER_ID, first.id, { expected_revision: first.revision });
     expect(copied?.id).toBeDefined();
 
-    const winner = updateEntry(OWNER_ID, first.id, {
+    const winner = updateEntry(OWNER_ID, book.id, first.id, {
       comment: "source changed",
       expected_revision: first.revision,
     });
@@ -291,15 +293,15 @@ describe.serial("world-book concurrency contract matrix", () => {
   });
 
   test("matching expected_revision succeeds once and stale single writes expose the canonical conflict", () => {
-    const { first } = createFixtureEntries();
+    const { book, first } = createFixtureEntries();
 
-    const winner = updateEntry(OWNER_ID, first.id, {
+    const winner = updateEntry(OWNER_ID, book.id, first.id, {
       comment: "winner",
       expected_revision: first.revision,
     });
     expect(winner?.revision).toBe(first.revision + 1);
 
-    const staleError = captureSyncError(() => updateEntry(OWNER_ID, first.id, {
+    const staleError = captureSyncError(() => updateEntry(OWNER_ID, book.id, first.id, {
       comment: "stale loser",
       expected_revision: first.revision,
     }));
@@ -314,9 +316,9 @@ describe.serial("world-book concurrency contract matrix", () => {
     const malformed: unknown[] = [undefined, null, "1", 1.5, -1, {}, []];
 
     for (const expected_revision of malformed) {
-      const { first } = createFixtureEntries();
+      const { book, first } = createFixtureEntries();
       const before = getEntry(OWNER_ID, first.id)!;
-      const error = captureSyncError(() => updateEntry(OWNER_ID, first.id, {
+      const error = captureSyncError(() => updateEntry(OWNER_ID, book.id, first.id, {
         comment: "must not land",
         expected_revision,
       } as unknown as UpdateWorldBookEntryInput));
@@ -396,7 +398,7 @@ describe.serial("world-book concurrency contract matrix", () => {
     const { book, first, second } = createFixtureEntries();
     const beforeFirst = getEntry(OWNER_ID, first.id)!;
 
-    const winner = updateEntry(OWNER_ID, second.id, {
+    const winner = updateEntry(OWNER_ID, book.id, second.id, {
       comment: "winner",
       expected_revision: second.revision,
     })!;
@@ -426,7 +428,7 @@ describe.serial("world-book concurrency contract matrix", () => {
 
   test("stale reorder changes no entry order values or revisions", () => {
     const { book, first, second } = createFixtureEntries();
-    updateEntry(OWNER_ID, first.id, {
+    updateEntry(OWNER_ID, book.id, first.id, {
       comment: "changed first",
       expected_revision: first.revision,
     });
@@ -458,7 +460,7 @@ describe.serial("world-book concurrency contract matrix", () => {
 
   test("stale async bulk delete removes no entries", async () => {
     const { book, first, second } = createFixtureEntries();
-    const winner = updateEntry(OWNER_ID, second.id, {
+    const winner = updateEntry(OWNER_ID, book.id, second.id, {
       comment: "winner",
       expected_revision: second.revision,
     })!;

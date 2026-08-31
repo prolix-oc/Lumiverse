@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Download, Upload, X, KeyRound, ShieldAlert } from 'lucide-react'
+import { Download, Upload, X, KeyRound, ShieldAlert, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/shared/FormComponents'
+import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
+import { userDataApi } from '@/api/user-data'
 import {
-  userDataApi,
-  type DecryptionTicket,
-  type ImportJobStatus,
-  type TicketSubmissionResponse,
-} from '@/api/user-data'
+  isUserDataJobActive,
+  isUserDataJobCancellable,
+  normalizeUserDataApiFailure,
+  normalizeUserDataProgress,
+  ARCHIVE_SCHEMA_VERSION,
+  USER_DATA_LIMITS,
+  type UserDataJob,
+  type UserDataJobStatus,
+  type UserDataProgress,
+} from '@/types/user-data'
 import styles from './DataPortability.module.css'
 
 interface ExportProgress {
@@ -18,507 +26,376 @@ interface ExportProgress {
   processed?: number
   total?: number
 }
-
-interface ImportProgress {
-  jobId: string
-  phase: string
-  table?: string
-  processed?: number
-  total?: number
+function parseWsProgress(value: unknown): UserDataProgress | null {
+  try {
+    return normalizeUserDataProgress(value)
+  } catch {
+    return null
+  }
 }
 
-type ImportSummary = ImportJobStatus['summary']
-type FileSummary = ImportJobStatus['fileSummary']
+function statusForProgress(phase: string, current: UserDataJobStatus): UserDataJobStatus {
+  if (current === 'cancelling' || current === 'cleanup_pending' || current === 'complete' || current === 'failed' || current === 'cancelled') return current
+  if (phase === 'cancelling') return 'cancelling'
+  if (phase === 'cleanup_pending') return 'cleanup_pending'
+  if (phase === 'awaiting_ticket') return 'awaiting_ticket'
+  if (phase === 'committing') return 'committing'
+  if (current === 'queued' || current === 'validating') return current
+  return 'running'
+}
+
+function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  window.setTimeout(resolve, ms)
+  return promise
+}
 
 export default function DataPortability() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
-  // ── Export state ──────────────────────────────────────────────────────
+  const userId = useStore((state) => state.user?.id ?? null)
+  const downloadAnchorRef = useRef<HTMLAnchorElement | null>(null)
+
+  const job = useStore((state) => state.userDataJob)
+  const jobLoading = useStore((state) => state.userDataJobLoading)
+  const jobAction = useStore((state) => state.userDataJobAction)
+  const jobFailure = useStore((state) => state.userDataJobError)
+  const setUserDataJob = useStore((state) => state.setUserDataJob)
+  const clearUserDataJob = useStore((state) => state.clearUserDataJob)
+  const startUserDataImport = useStore((state) => state.startUserDataImport)
+  const refreshUserDataJob = useStore((state) => state.refreshUserDataJob)
+  const reconnectUserDataJob = useStore((state) => state.reconnectUserDataJob)
+  const submitUserDataTicket = useStore((state) => state.submitUserDataTicket)
+  const skipUserDataTicket = useStore((state) => state.skipUserDataTicket)
+  const cancelUserDataImport = useStore((state) => state.cancelUserDataImport)
   const [includeVectors, setIncludeVectors] = useState(true)
   const [includeSecrets, setIncludeSecrets] = useState(false)
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportWarnings, setExportWarnings] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
-  const downloadAnchorRef = useRef<HTMLAnchorElement | null>(null)
-
-  // ── Import state ──────────────────────────────────────────────────────
   const [file, setFile] = useState<File | null>(null)
-  const [importing, setImporting] = useState(false)
-  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [importUploadPct, setImportUploadPct] = useState<number | null>(null)
-  const [importJobId, setImportJobId] = useState<string | null>(null)
-  const [importSummary, setImportSummary] = useState<ImportSummary | null>(null)
-  const [importFileSummary, setImportFileSummary] = useState<FileSummary | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [importSuccess, setImportSuccess] = useState<string | null>(null)
-  // Secret-ticket UX state
-  const [awaitingTicket, setAwaitingTicket] = useState<{
-    jobId: string
-    secretsCount: number
-  } | null>(null)
-  const [ticketSubmitting, setTicketSubmitting] = useState(false)
-  const [ticketReuseWarning, setTicketReuseWarning] = useState<TicketSubmissionResponse | null>(null)
 
-  // ── WebSocket wiring ──────────────────────────────────────────────────
+  // Status is durable in SQLite. Polling is deliberately bounded and is the
+  // reconnect path after a tab/browser/server restart; WebSocket progress is
+  // only an acceleration and never the source of truth.
+  useEffect(() => {
+    void reconnectUserDataJob()
+    const timer = window.setInterval(() => {
+      const current = useStore.getState().userDataJob
+      if (current && isUserDataJobActive(current.status)) void refreshUserDataJob(current.jobId)
+    }, 2_000)
+    return () => window.clearInterval(timer)
+  }, [reconnectUserDataJob, refreshUserDataJob, userId])
+
   useEffect(() => {
     const unsubs: Array<() => void> = []
-    unsubs.push(
-      wsClient.on(EventType.USER_EXPORT_PROGRESS, (payload: ExportProgress) => {
-        setExportProgress(payload)
-        if (payload.phase === 'complete') {
-          // Clear shortly after — the browser is finishing the download stream.
-          setTimeout(() => {
-            setExportProgress(null)
-            setExporting(false)
-          }, 1200)
-        }
-      }),
-    )
-    unsubs.push(
-      wsClient.on(EventType.USER_IMPORT_PROGRESS, (payload: ImportProgress & { secretsCount?: number }) => {
-        setImportProgress(payload)
-        if (payload.phase === 'awaiting_ticket') {
-          setAwaitingTicket({
-            jobId: payload.jobId || '',
-            secretsCount: payload.secretsCount ?? 0,
-          })
-        }
-        if (payload.phase === 'ticket_accepted' || payload.phase === 'ticket_skipped') {
-          setAwaitingTicket(null)
-        }
-      }),
-    )
-    unsubs.push(
-      wsClient.on(
-        EventType.USER_IMPORT_COMPLETE,
-        (payload: { jobId: string; summary: ImportSummary; fileSummary: FileSummary }) => {
-          setImportSummary(payload.summary)
-          setImportFileSummary(payload.fileSummary)
-          setImporting(false)
-          setImportProgress(null)
-          setImportSuccess(t('dataPortability.importComplete'))
-        },
-      ),
-    )
-    unsubs.push(
-      wsClient.on(
-        EventType.USER_IMPORT_FAILED,
-        (payload: { error?: string; cancelled?: boolean }) => {
-          setImporting(false)
-          setImportProgress(null)
-          if (payload.cancelled) {
-            setImportError(t('dataPortability.importCancelled'))
-          } else {
-            setImportError(payload.error || t('dataPortability.importFailed'))
-          }
-        },
-      ),
-    )
-    return () => {
-      for (const u of unsubs) u()
-    }
-  }, [t])
+    unsubs.push(wsClient.on(EventType.USER_EXPORT_PROGRESS, (payload: ExportProgress) => {
+      const progress = parseWsProgress(payload)
+      if (!progress) return
+      setExportProgress({
+        phase: progress.phase,
+        table: progress.table ?? undefined,
+        processed: progress.processed ?? undefined,
+        total: progress.total ?? undefined,
+      })
+      if (progress.phase === 'complete') {
+        window.setTimeout(() => setExportProgress(null), 1_200)
+        setExporting(false)
+      }
+    }))
+    unsubs.push(wsClient.on(EventType.USER_IMPORT_PROGRESS, (payload: { jobId?: unknown; phase?: unknown; table?: unknown; processed?: unknown; total?: unknown }) => {
+      const current = useStore.getState().userDataJob
+      if (!current || typeof payload.jobId !== 'string' || payload.jobId !== current.jobId) return
+      const progress = parseWsProgress(payload)
+      if (!progress) return
+      setUserDataJob({ ...current, status: statusForProgress(progress.phase, current.status), progress, failure: null })
+      void refreshUserDataJob(current.jobId)
+    }))
+    unsubs.push(wsClient.on(EventType.USER_IMPORT_COMPLETE, (payload: { jobId?: unknown }) => {
+      if (typeof payload.jobId === 'string') void reconnectUserDataJob(payload.jobId)
+    }))
+    unsubs.push(wsClient.on(EventType.USER_IMPORT_FAILED, (payload: { jobId?: unknown }) => {
+      const current = useStore.getState().userDataJob
+      const jobId = typeof payload.jobId === 'string' ? payload.jobId : current?.jobId
+      if (jobId) void reconnectUserDataJob(jobId)
+    }))
+    return () => { for (const unsubscribe of unsubs) unsubscribe() }
+  }, [reconnectUserDataJob, refreshUserDataJob, setUserDataJob])
+  useEffect(() => {
+    if (job?.status === 'complete') setFile(null)
+  }, [job?.status])
 
-  // ── Export action ─────────────────────────────────────────────────────
+
   const handleExport = async () => {
     setExportError(null)
-    setExportWarnings([])
     setExporting(true)
     setExportProgress({ phase: 'start' })
-    const a = downloadAnchorRef.current
-    if (!a) {
+    const anchor = downloadAnchorRef.current
+    if (!anchor) {
       setExportError(t('dataPortability.exportAnchorMissing'))
       setExporting(false)
+      setExportProgress(null)
       return
     }
-
     if (!includeSecrets) {
-      // Single-step path: browser handles a streaming GET as a native download.
-      a.href = userDataApi.exportUrl(includeVectors)
-      a.click()
+      anchor.removeAttribute('download')
+      anchor.href = userDataApi.exportUrl(includeVectors)
+      anchor.click()
+      // A native download is detached from the page; do not leave a stale
+      // busy state waiting for a websocket event that may be missed.
+      setExporting(false)
+      setExportProgress(null)
       return
     }
-
-    // Two-step path: prepare → fetch ticket + URL → trigger ticket save → kick the archive download.
     try {
-      const resp = await userDataApi.prepareSecretsExport(includeVectors)
-      if (resp.unreachableSecrets?.length) {
-        setExportWarnings(resp.unreachableSecrets)
-      }
-      // Save the ticket as a downloadable file via a Blob URL.
-      if (resp.ticket && resp.ticketFilename) {
-        const ticketBlob = new Blob([JSON.stringify(resp.ticket, null, 2)], {
-          type: 'application/json',
-        })
+      const response = await userDataApi.prepareSecretsExport(includeVectors)
+      if (response.ticket && response.ticketFilename) {
+        const ticketBlob = new Blob([JSON.stringify(response.ticket, null, 2)], { type: 'application/json' })
         const ticketUrl = URL.createObjectURL(ticketBlob)
-        a.href = ticketUrl
-        a.download = resp.ticketFilename
-        a.click()
-        // Revoke after the browser has had a chance to start the download.
-        setTimeout(() => URL.revokeObjectURL(ticketUrl), 5000)
+        anchor.href = ticketUrl
+        anchor.download = response.ticketFilename
+        anchor.click()
+        window.setTimeout(() => URL.revokeObjectURL(ticketUrl), 5_000)
       }
-      // Brief delay before kicking the archive download so the ticket save
-      // dialog (on browsers that show one) doesn't get swallowed.
-      await new Promise((r) => setTimeout(r, 600))
-      a.removeAttribute('download')
-      a.href = resp.archiveUrl
-      a.click()
-    } catch (err: any) {
-      setExportError(err?.body?.error || err?.message || t('dataPortability.exportPrepareFailed'))
+      await delay(600)
+      anchor.removeAttribute('download')
+      anchor.href = response.archiveUrl
+      anchor.click()
       setExporting(false)
+      setExportProgress(null)
+    } catch {
+      setExportError(t('dataPortability.exportPrepareFailed'))
+      setExporting(false)
+      setExportProgress(null)
     }
   }
 
-  // ── Import action ─────────────────────────────────────────────────────
   const handleImport = async () => {
     if (!file) return
     setImportError(null)
     setImportSuccess(null)
-    setImportSummary(null)
-    setImportFileSummary(null)
-    setImportProgress(null)
+    if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > USER_DATA_LIMITS.maxArchiveUploadBytes) {
+      setImportError(t('dataPortability.failureReasons.size'))
+      return
+    }
+    // A new upload supersedes the old tab attachment. Clear it before the
+    // request so a failed/restarted upload cannot leave Cancel targeting the
+    // previous receipt while the new archive is being staged.
+    clearUserDataJob()
+    setUploading(true)
     setImportUploadPct(0)
-    setImporting(true)
     try {
-      const { jobId } = await userDataApi.startImport(file, (pct) => {
-        setImportUploadPct(pct)
-        // Once bytes are on the wire, the server is verifying the archive
-        // (central-directory parse + manifest decode). Surface a status
-        // immediately so the UI doesn't look frozen during the gap between
-        // upload-complete and the first job-side WS event.
-        if (pct >= 100) {
-          setImportProgress({ jobId: '', phase: 'verifying' })
-        }
-      })
-      setImportJobId(jobId)
+      await startUserDataImport(file, (percent) => setImportUploadPct(percent))
+      // Keep the selected file while the job runs. If validation or import
+      // fails, the user can retry the same archive without selecting it again.
       setImportUploadPct(null)
-      // From here, progress is delivered over the WebSocket. As a fallback,
-      // poll once after a short delay in case the WS subscription is slow.
-      setTimeout(() => {
-        userDataApi
-          .getImportStatus(jobId)
-          .then((status) => {
-            if (status.status === 'complete' && !importSummary) {
-              setImportSummary(status.summary)
-              setImportFileSummary(status.fileSummary)
-              setImporting(false)
-              setImportSuccess(t('dataPortability.importComplete'))
-            }
-          })
-          .catch(() => {/* ignore */})
-      }, 1500)
-    } catch (err: any) {
-      setImporting(false)
+    } catch (error) {
       setImportUploadPct(null)
-      setImportError(err?.message || t('dataPortability.uploadFailed'))
+      const failure = normalizeUserDataApiFailure(error, 'upload_failed')
+      setImportError(t(`dataPortability.failureReasons.${failure.code}`, {
+        defaultValue: t('dataPortability.failureReasons.upload_failed'),
+      }))
+    } finally {
+      setUploading(false)
     }
   }
 
-  // ── Ticket handlers ───────────────────────────────────────────────────
   const handleTicketUpload = async (ticketFile: File) => {
-    if (!awaitingTicket) return
-    setTicketSubmitting(true)
-    setTicketReuseWarning(null)
+    if (!job || job.status !== 'awaiting_ticket' || jobAction !== null) return
+    setImportError(null)
+    setImportSuccess(null)
+    if (!Number.isSafeInteger(ticketFile.size) || ticketFile.size < 0 || ticketFile.size > USER_DATA_LIMITS.maxTicketBytes) {
+      setImportError(t('dataPortability.failureReasons.ticket_invalid'))
+      return
+    }
     try {
-      const text = await ticketFile.text()
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(text)
-      } catch {
-        throw new Error(t('dataPortability.ticketInvalidJson'))
-      }
-      const result = await userDataApi.submitTicket(
-        awaitingTicket.jobId,
-        parsed as DecryptionTicket,
-      )
-      if (result.wasReused) {
-        setTicketReuseWarning(result)
-      }
-      // Server resolves the gate and emits ticket_accepted via WS, which
-      // clears `awaitingTicket` from our progress handler above.
-    } catch (err: any) {
-      setImportError(err?.body?.error || err?.message || t('dataPortability.ticketSubmitFailed'))
-    } finally {
-      setTicketSubmitting(false)
+      const accepted = await submitUserDataTicket(job.jobId, await ticketFile.text())
+      if (accepted) setImportSuccess(t('dataPortability.ticketAccepted'))
+    } catch (error) {
+      const failure = normalizeUserDataApiFailure(error, 'ticket_submission_failed')
+      setImportError(t(`dataPortability.failureReasons.${failure.code}`, {
+        defaultValue: t('dataPortability.failureReasons.ticket_submission_failed'),
+      }))
     }
   }
 
   const handleSkipTicket = async () => {
-    if (!awaitingTicket) return
-    setTicketSubmitting(true)
-    try {
-      await userDataApi.skipTicket(awaitingTicket.jobId)
-    } catch (err: any) {
-      setImportError(err?.body?.error || err?.message || t('dataPortability.skipFailed'))
-    } finally {
-      setTicketSubmitting(false)
-    }
+    if (!job || job.status !== 'awaiting_ticket' || jobAction !== null) return
+    setImportError(null)
+    setImportSuccess(null)
+    const skipped = await skipUserDataTicket(job.jobId)
+    if (skipped) setImportSuccess(t('dataPortability.ticketSkipped'))
   }
 
   const handleCancelImport = async () => {
-    if (!importJobId) return
-    try {
-      await userDataApi.cancelImport(importJobId)
-    } catch (err: any) {
-      setImportError(err?.message || t('dataPortability.cancelFailed'))
-    }
+    if (!job || !isUserDataJobCancellable(job.status)) return
+    const status = await cancelUserDataImport(job.jobId)
+    if (status === 'too_late') setImportError(t('dataPortability.cancelTooLate'))
+    if (status === 'cancelling') setImportSuccess(t('dataPortability.cancelling'))
+    if (status === 'cleanup_pending') setImportSuccess(t('dataPortability.cleanupPending'))
+    if (status === 'cancelled') setImportSuccess(t('dataPortability.importCancelled'))
   }
-
-  const exportLabel = useMemo(() => {
-    if (!exporting || !exportProgress) return ''
-    const phase = exportProgress.phase
-    if ((phase === 'table' || phase === 'table_start' || phase === 'table_done') && exportProgress.table) {
-      const suffix = typeof exportProgress.processed === 'number'
-        ? t('dataPortability.exportTableSuffix', { processed: exportProgress.processed })
-        : ''
-      return t('dataPortability.exportTable', { table: exportProgress.table, suffix })
-    }
-    if (phase === 'files' || phase === 'files_done') {
-      return exportProgress.total
-        ? t('dataPortability.exportFilesCount', { done: exportProgress.processed ?? 0, total: exportProgress.total })
-        : t('dataPortability.exportFiles')
-    }
-    if (phase === 'lancedb_start' || phase === 'lancedb' || phase === 'lancedb_done') {
-      return exportProgress.table
-        ? t('dataPortability.exportVectors', { table: exportProgress.table })
-        : t('dataPortability.exportVectorsGeneric')
-    }
-    if (phase === 'complete') return t('dataPortability.exportDone')
-    return t('dataPortability.exportPreparing')
-  }, [exporting, exportProgress, t])
 
   const importLabel = useMemo(() => {
     if (importUploadPct !== null && importUploadPct < 100) return t('dataPortability.uploading', { pct: importUploadPct })
-    if (!importing || !importProgress) {
-      return importUploadPct === 100 ? t('dataPortability.verifying') : ''
-    }
-    const phase = importProgress.phase
-    if (phase === 'verifying') return t('dataPortability.verifying')
-    if (phase === 'start') return t('dataPortability.importQueued')
-    if (phase === 'awaiting_ticket') return t('dataPortability.awaitingTicket')
-    if (phase === 'ticket_accepted') return t('dataPortability.ticketAccepted')
-    if (phase === 'ticket_skipped') return t('dataPortability.ticketSkipped')
+    if (!job) return importUploadPct === 100 ? t('dataPortability.verifying') : ''
+    const phase = job.progress?.phase
+    if (job.status === 'awaiting_ticket' || phase === 'awaiting_ticket') return t('dataPortability.awaitingTicket')
+    if (phase === 'verifying' || job.status === 'validating') return t('dataPortability.verifying')
     if (phase === 'secrets_apply_start') return t('dataPortability.secretsStart')
     if (phase === 'secrets_apply_done') return t('dataPortability.secretsDone')
     if (phase === 'extracted') return t('dataPortability.extracted')
-    if (phase === 'table' && importProgress.table) {
-      return t('dataPortability.applyingTable', { table: importProgress.table })
-    }
-    if (phase === 'table_done' && importProgress.table) {
-      return t('dataPortability.appliedTable', { table: importProgress.table })
-    }
-    if (phase === 'files') {
-      return importProgress.total
-        ? t('dataPortability.restoringFilesCount', { done: importProgress.processed ?? 0, total: importProgress.total })
-        : t('dataPortability.restoringFiles')
-    }
-    if (phase === 'files_done') return t('dataPortability.filesRestored')
-    if (phase === 'lancedb_table_done' && importProgress.table) {
-      return t('dataPortability.vectorsRestored', { table: importProgress.table })
-    }
+    if (phase === 'table' && job.progress?.table) return t('dataPortability.applyingTable', { table: job.progress.table })
+    if (phase === 'table_done' && job.progress?.table) return t('dataPortability.appliedTable', { table: job.progress.table })
+    if (phase === 'files') return job.progress?.total !== null && job.progress?.total !== undefined ? t('dataPortability.restoringFilesCount', { done: job.progress.processed ?? 0, total: job.progress.total }) : t('dataPortability.restoringFiles')
     if (phase === 'lancedb_skipped') return t('dataPortability.vectorsSkipped')
+    if (phase === 'cancelling' || job.status === 'cancelling') return t('dataPortability.cancelling')
+    if (phase === 'cleanup_pending' || job.status === 'cleanup_pending') return t('dataPortability.cleanupPending')
+    if (job.status === 'complete') return t('dataPortability.importComplete')
+    if (job.status === 'cancelled') return t('dataPortability.importCancelled')
+    if (job.status === 'failed') return t('dataPortability.importFailed')
     return t('dataPortability.importGeneric')
-  }, [importing, importProgress, importUploadPct, t])
+  }, [importUploadPct, job, t])
 
-  // ── Render ────────────────────────────────────────────────────────────
+  const failureLabel = jobFailure?.code ?? job?.failure?.code
+  const failureText = failureLabel
+    ? t(`dataPortability.failureReasons.${failureLabel}`, { defaultValue: t('dataPortability.failureReasons.unknown') })
+    : null
+  const isBusy = uploading || (job !== null && isUserDataJobActive(job.status))
+
   return (
     <div className={styles.container}>
-      <a ref={downloadAnchorRef} style={{ display: 'none' }} aria-hidden />
+      <a ref={downloadAnchorRef} style={{ display: 'none' }} aria-hidden="true" />
 
-      {/* ── Export ──────────────────────────────────────────────────── */}
       <section className={styles.section}>
         <h3 className={styles.title}>{t('dataPortability.exportTitle')}</h3>
-        <p className={styles.description}>
-          {t('dataPortability.exportDesc')}
-        </p>
+        <p className={styles.description}>{t('dataPortability.exportDesc')}</p>
+        <p className={styles.schemaVersion}>{t('dataPortability.exportSchemaVersion', { version: ARCHIVE_SCHEMA_VERSION })}</p>
         <label className={styles.checkboxRow}>
-          <input
-            type="checkbox"
-            checked={includeVectors}
-            onChange={(e) => setIncludeVectors(e.target.checked)}
-            disabled={exporting}
-          />
+          <input type="checkbox" checked={includeVectors} onChange={(event) => setIncludeVectors(event.target.checked)} disabled={exporting} />
           <span>{t('dataPortability.includeVectors')}</span>
         </label>
         <label className={styles.checkboxRow}>
-          <input
-            type="checkbox"
-            checked={includeSecrets}
-            onChange={(e) => setIncludeSecrets(e.target.checked)}
-            disabled={exporting}
-          />
-          <span>
-            <KeyRound size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-            {t('dataPortability.includeSecrets')}
-          </span>
+          <input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} disabled={exporting} />
+          <span><KeyRound size={12} style={{ verticalAlign: 'middle', marginRight: 4 }} />{t('dataPortability.includeSecrets')}</span>
         </label>
-        {includeSecrets && (
-          <div className={styles.warning}>
-            {t('dataPortability.secretsWarning')}
-          </div>
-        )}
+        {includeSecrets && <div className={styles.warning}>{t('dataPortability.secretsWarning')}</div>}
         <div className={styles.actions}>
-          <Button
-            variant="primary"
-            icon={<Download size={14} />}
-            onClick={handleExport}
-            disabled={exporting}
-          >
+          <Button variant="primary" icon={<Download size={14} />} onClick={handleExport} disabled={exporting}>
             {exporting ? t('dataPortability.preparing') : t('dataPortability.downloadArchive')}
           </Button>
         </div>
-        {exporting && (
+        {(exporting || exportProgress) && (
           <div className={styles.progress}>
-            <div className={styles.progressLabel}>
-              <span>{exportLabel}</span>
-            </div>
-            <div className={styles.progressBar}>
-              <div className={styles.progressFillIndeterminate} />
-            </div>
+            <div className={styles.progressLabel}><span>{exportProgress?.phase === 'complete' ? t('dataPortability.exportDone') : t('dataPortability.exportPreparing')}</span></div>
+            <div className={styles.progressBar}><div className={styles.progressFillIndeterminate} /></div>
           </div>
         )}
         {exportError && <div className={styles.error}>{exportError}</div>}
-        {exportWarnings.length > 0 && (
-          <div className={styles.warning}>
-            {t('dataPortability.exportSecretsWarn', { count: exportWarnings.length, keys: exportWarnings.join(', ') })}
-          </div>
-        )}
       </section>
 
-      {/* ── Import ──────────────────────────────────────────────────── */}
       <section className={styles.section}>
         <h3 className={styles.title}>{t('dataPortability.importTitle')}</h3>
-        <p className={styles.description}>
-          {t('dataPortability.importDesc')}
-        </p>
-        <div className={styles.warning}>
-          {t('dataPortability.importWarn')}
-        </div>
+        <p className={styles.description}>{t('dataPortability.importDesc')}</p>
+        <div className={styles.warning}>{t('dataPortability.importWarn')}</div>
         <div className={styles.actions}>
           <input
             className={styles.fileInput}
             type="file"
             accept=".lvbak,.zip,application/zip,application/octet-stream"
-            disabled={importing}
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null
-              setFile(f)
-              setImportSuccess(null)
+            disabled={isBusy}
+            onChange={(event) => {
+              const selected = event.target.files?.[0] ?? null
+              setFile(selected)
               setImportError(null)
-              setImportSummary(null)
-              setImportFileSummary(null)
+              setImportSuccess(null)
             }}
           />
-          <Button
-            variant="primary"
-            icon={<Upload size={14} />}
-            onClick={handleImport}
-            disabled={!file || importing}
-          >
-            {importing ? t('dataPortability.importing') : t('dataPortability.uploadImport')}
+          <Button variant="primary" icon={<Upload size={14} />} onClick={handleImport} disabled={!file || isBusy}>
+            {uploading ? t('dataPortability.importing') : job?.status === 'failed' || job?.status === 'cancelled' ? t('dataPortability.reuploadImport') : t('dataPortability.uploadImport')}
           </Button>
-          {importing && importJobId && (
-            <Button
-              variant="ghost"
-              icon={<X size={14} />}
-              onClick={handleCancelImport}
-            >
-              {tc('actions.cancel')}
+          {job && isUserDataJobCancellable(job.status) && (
+            <Button variant="ghost" icon={<X size={14} />} onClick={handleCancelImport} disabled={jobAction === 'cancel'}>
+              {jobAction === 'cancel' ? t('dataPortability.cancelling') : tc('actions.cancel')}
+            </Button>
+          )}
+          {job && (
+            <Button variant="ghost" icon={<RefreshCw size={14} />} onClick={() => void reconnectUserDataJob(job.jobId)} disabled={jobLoading || jobAction !== null}>
+              {t('dataPortability.reconnect')}
             </Button>
           )}
         </div>
-        {awaitingTicket && (
-          <div className={styles.progress}>
-            <div className={styles.progressLabel}>
-              <span>
-                <ShieldAlert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                {t('dataPortability.ticketPrompt', { count: awaitingTicket.secretsCount })}
-              </span>
+
+        {job && (
+          <div className={styles.jobCard}>
+            <div className={styles.jobHeader}>
+              <span>{t('dataPortability.jobStatus', { status: t(`dataPortability.statuses.${job.status}`) })}</span>
+              <span className={styles.jobId}>{job.jobId}</span>
             </div>
-            <div className={styles.actions} style={{ marginTop: 8 }}>
-              <input
-                className={styles.fileInput}
-                type="file"
-                accept=".json,application/json"
-                disabled={ticketSubmitting}
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) void handleTicketUpload(f)
-                }}
-              />
-              <Button
-                variant="ghost"
-                onClick={handleSkipTicket}
-                disabled={ticketSubmitting}
-              >
-                {t('dataPortability.skipApiKeys')}
-              </Button>
-            </div>
-            {ticketReuseWarning?.wasReused && (
-              <div className={styles.warning} style={{ marginTop: 8 }}>
-                {t('dataPortability.ticketReuse', {
-                  count: ticketReuseWarning.uses,
-                  lastUsed: ticketReuseWarning.previouslyConsumedAt
-                    ? t('dataPortability.ticketLastUsed', {
-                        date: new Date(ticketReuseWarning.previouslyConsumedAt * 1000).toLocaleString(),
-                      })
-                    : '',
-                })}
+            {job.archiveId && <div className={styles.jobMeta}>{t('dataPortability.archiveId', { id: job.archiveId })}</div>}
+            {(isBusy || job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') && (
+              <div className={styles.progress}>
+                <div className={styles.progressLabel}><span>{importLabel}</span>{job.progress?.total !== null && job.progress?.total !== undefined ? <span>{job.progress.processed ?? 0}/{job.progress.total}</span> : null}</div>
+                <div className={styles.progressBar}>
+                  {importUploadPct !== null ? <div className={styles.progressFill} style={{ width: `${importUploadPct}%` }} /> : <div className={styles.progressFillIndeterminate} />}
+                </div>
               </div>
             )}
-          </div>
-        )}
-        {importing && (
-          <div className={styles.progress}>
-            <div className={styles.progressLabel}>
-              <span>{importLabel}</span>
-              {importProgress?.total ? (
-                <span>{importProgress.processed ?? 0}/{importProgress.total}</span>
-              ) : null}
-            </div>
-            <div className={styles.progressBar}>
-              {importUploadPct !== null ? (
-                <div className={styles.progressFill} style={{ width: `${importUploadPct}%` }} />
-              ) : (
-                <div className={styles.progressFillIndeterminate} />
-              )}
-            </div>
-          </div>
-        )}
-        {importError && <div className={styles.error}>{importError}</div>}
-        {importSuccess && <div className={styles.success}>{importSuccess}</div>}
-        {importSummary && (
-          <div className={styles.summaryTable}>
-            <div className={styles.summaryHead}>{t('dataPortability.summaryTable')}</div>
-            <div className={styles.summaryHead}>{t('dataPortability.summaryImported')}</div>
-            <div className={styles.summaryHead}>{t('dataPortability.summarySkipped')}</div>
-            {Object.entries(importSummary)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([table, counts]) => (
-                <FragmentRow key={table} table={table} imported={counts.imported} skipped={counts.skipped} />
-              ))}
-            {importFileSummary && Object.keys(importFileSummary).length > 0 && (
-              <>
-                <div className={styles.summaryHead} style={{ gridColumn: 'span 3', marginTop: 6 }}>{t('dataPortability.summaryFiles')}</div>
-                {Object.entries(importFileSummary).map(([bucket, count]) => (
-                  <FragmentRow key={`file-${bucket}`} table={bucket} imported={count} skipped={0} />
-                ))}
-              </>
+            {failureText && <div className={styles.error}>{failureText}</div>}
+            {job.status === 'awaiting_ticket' && (
+              <div className={styles.progress}>
+                <div className={styles.progressLabel}><span><ShieldAlert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{t('dataPortability.ticketPrompt', { count: job.ticket.secretsCount })}</span></div>
+                <div className={styles.actions} style={{ marginTop: 8 }}>
+                  <input className={styles.fileInput} type="file" accept=".json,application/json" disabled={jobAction === 'ticket'} onChange={(event) => { const ticket = event.target.files?.[0]; if (ticket) void handleTicketUpload(ticket) }} />
+                  <Button variant="ghost" onClick={handleSkipTicket} disabled={jobAction === 'skip-ticket'}>{jobAction === 'skip-ticket' ? t('dataPortability.skippingTicket') : t('dataPortability.skipApiKeys')}</Button>
+                </div>
+              </div>
             )}
+            {importSuccess && <div className={styles.success}>{importSuccess}</div>}
+            {job.status === 'complete' && <ReceiptSummary job={job} t={t} />}
           </div>
         )}
+        {!job && !uploading && <div className={styles.description}>{t('dataPortability.noActiveJob')}</div>}
+        {importError && <div className={styles.error}>{importError}</div>}
+        {jobFailure && !failureText && <div className={styles.error}>{t('dataPortability.failureReasons.unknown')}</div>}
       </section>
     </div>
   )
 }
 
-function FragmentRow({ table, imported, skipped }: { table: string; imported: number; skipped: number }) {
+function ReceiptSummary({ job, t }: { job: UserDataJob; t: TFunction<'settings'> }) {
+  const tableRows = Object.entries(job.summary.tables).sort(([left], [right]) => left.localeCompare(right))
+  const fileRows = Object.entries(job.summary.files).sort(([left], [right]) => left.localeCompare(right))
+  const vector = job.summary.vectors
+  const vectorStatus = vector ? t(`dataPortability.vectorStatuses.${vector.status}`) : null
   return (
-    <>
-      <div className={styles.summaryTableName}>{table}</div>
-      <div className={styles.summaryCell}>{imported}</div>
-      <div className={styles.summaryCell}>{skipped}</div>
-    </>
+    <div className={styles.summaryTable}>
+      <div className={styles.summaryHead}>{t('dataPortability.summaryTable')}</div>
+      <div className={styles.summaryHead}>{t('dataPortability.summaryImported')}</div>
+      <div className={styles.summaryHead}>{t('dataPortability.summarySkipped')}</div>
+      {tableRows.map(([table, counts]) => <FragmentRow key={table} table={table} imported={counts.imported} skipped={counts.skipped} />)}
+      <div className={styles.summaryHead} style={{ gridColumn: 'span 3', marginTop: 6 }}>{t('dataPortability.summaryFiles')}</div>
+      {fileRows.length === 0 ? <div className={styles.summaryTableName} style={{ gridColumn: 'span 3' }}>{t('dataPortability.summaryFilesNone')}</div> : fileRows.map(([name, count]) => <FragmentRow key={`file-${name}`} table={name} imported={count} skipped={0} />)}
+      {vector && (
+        <>
+          <div className={styles.summaryHead} style={{ gridColumn: 'span 3', marginTop: 6 }}>{t('dataPortability.summaryVectors')}</div>
+          <FragmentRow
+            table={`${t('dataPortability.summaryVectors')} — ${vectorStatus}`}
+            imported={vector.imported}
+            skipped={vector.skipped}
+          />
+        </>
+      )}
+      <div className={styles.summaryHead} style={{ gridColumn: 'span 3', marginTop: 6 }}>{t('dataPortability.summarySecrets')}</div>
+      <FragmentRow table={t('dataPortability.summarySecrets')} imported={job.summary.secrets.imported} skipped={job.summary.secrets.skipped} />
+    </div>
   )
+}
+
+function FragmentRow({ table, imported, skipped }: { table: string; imported: number; skipped: number }) {
+  return <><div className={styles.summaryTableName}>{table}</div><div className={styles.summaryCell}>{imported}</div><div className={styles.summaryCell}>{skipped}</div></>
 }

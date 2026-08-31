@@ -1,13 +1,22 @@
 import type { DryRunResponse, DryRunMessage } from '@/api/generate'
+import type { LoomPromptInspectionV1 } from '@/types/agent-runtime'
 
 export type RawPromptView = 'text' | 'json'
 
 export interface RawPromptInput {
   messages: DryRunMessage[]
-  parameters?: Record<string, any>
+  parameters?: Record<string, unknown>
   assistantPrefill?: string
   model?: string
   provider?: string
+  assemblySurface?: 'RESPONSE' | 'WORK'
+  source?: 'stored_breakdown' | 'response_dry_run'
+  target?: {
+    generationType: string
+    messageId: string | null
+    swipeId: number | null
+  }
+  loomPromptInspection?: LoomPromptInspectionV1
 }
 
 function formatContentPartsSummary(message: DryRunMessage): string {
@@ -41,6 +50,26 @@ export function formatRawPromptText(input: RawPromptInput): string {
     const header = [input.provider, input.model].filter(Boolean).join(' / ')
     parts.push(`# ${header}`)
   }
+  if (input.assemblySurface || input.source) {
+    parts.push([
+      '### ASSEMBLY',
+      `Surface: ${input.assemblySurface ?? 'UNKNOWN'}`,
+      `Source: ${input.source ?? 'unknown'}`,
+    ].join('\n'))
+  }
+
+  if (input.target) {
+    parts.push([
+      '### TARGET',
+      `Generation type: ${input.target.generationType}`,
+      `Message ID: ${input.target.messageId ?? 'none'}`,
+      `Swipe ID: ${input.target.swipeId ?? 'none'}`,
+    ].join('\n'))
+  }
+
+  if (input.loomPromptInspection) {
+    parts.push(`### LOOM INCLUSION / OMISSION\n${JSON.stringify(input.loomPromptInspection, null, 2)}`)
+  }
 
   parts.push(formatMessagesText(input.messages))
 
@@ -56,13 +85,17 @@ export function formatRawPromptText(input: RawPromptInput): string {
 }
 
 export function formatRawPromptJson(input: RawPromptInput): string {
-  const payload: Record<string, any> = {
+  const payload: Record<string, unknown> = {
     messages: input.messages,
   }
   if (input.assistantPrefill) payload.assistantPrefill = input.assistantPrefill
   if (input.parameters) payload.parameters = input.parameters
   if (input.model) payload.model = input.model
   if (input.provider) payload.provider = input.provider
+  if (input.assemblySurface) payload.assemblySurface = input.assemblySurface
+  if (input.source) payload.source = input.source
+  if (input.target) payload.target = input.target
+  if (input.loomPromptInspection) payload.loomPromptInspection = input.loomPromptInspection
   return JSON.stringify(payload, null, 2)
 }
 
@@ -77,5 +110,8 @@ export function dryRunToRawPromptInput(res: DryRunResponse): RawPromptInput {
     assistantPrefill: res.assistantPrefill,
     model: res.model,
     provider: res.provider,
+    assemblySurface: res.assemblySurface,
+    source: 'response_dry_run',
+    loomPromptInspection: res.loomPromptInspection,
   }
 }

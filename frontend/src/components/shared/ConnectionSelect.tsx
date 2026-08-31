@@ -9,14 +9,23 @@ import styles from './ConnectionSelect.module.css'
 
 export type { ConnectionKind }
 
-/** The fields every connection-profile variant shares; enough to render a row. */
-interface ConnectionLike {
+/** The provider fields available to option filtering/annotation callbacks. */
+export interface ConnectionOptionProfile {
   id: string
   name: string
   provider: string
   model?: string
+  review_required?: boolean
 }
 
+export interface ConnectionOptionState {
+  /** Prevent selecting this option while keeping it visible for repair context. */
+  disabled?: boolean
+  /** Additional translated context rendered after the provider/model sublabel. */
+  annotation?: string
+}
+
+type ConnectionLike = ConnectionOptionProfile
 /** Store-slice selector per kind; exhaustive, so a new kind won't compile until added here. */
 const PROFILE_SELECTOR_MAP: Record<ConnectionKind, (s: AppStore) => ConnectionLike[]> = {
   llm: (s) => s.profiles,
@@ -32,6 +41,19 @@ interface ConnectionSelectProps {
   value: string
   onChange: (id: string) => void
 
+  /**
+   * Optional editor hook for capability-aware connection choices. Return false
+   * to hide an unselected option; the current value is retained in the list so
+   * a stale binding remains visible and can be repaired explicitly.
+   */
+  optionFilter?: (profile: ConnectionOptionProfile) => boolean
+  /**
+   * Decorate or disable an option without changing its persisted id. Disabled
+   * options stay visible, which lets repair UIs explain why a binding cannot
+   * be activated while preventing an incompatible selection.
+   */
+  optionState?: (profile: ConnectionOptionProfile) => ConnectionOptionState | undefined
+
   /** Render a paired model picker beneath the selector. */
   withModel?: boolean
   modelValue?: string
@@ -43,8 +65,8 @@ interface ConnectionSelectProps {
    */
   seedDefaultModel?: boolean
 
-  // Pass-throughs to SearchableSelect (it supplies translated defaults for the
-  // message props).
+  // Pass-throughs to SearchableSelect (it supplies translated defaults for
+  // the message props).
   placeholder?: string
   searchPlaceholder?: string
   emptyMessage?: string
@@ -71,6 +93,8 @@ export default function ConnectionSelect({
   kind,
   value,
   onChange,
+  optionFilter,
+  optionState,
   withModel = false,
   modelValue,
   onModelChange,
@@ -91,29 +115,44 @@ export default function ConnectionSelect({
   modelAppearance,
 }: ConnectionSelectProps) {
   const profiles = useStore(PROFILE_SELECTOR_MAP[kind])
+  const selectedProfile = profiles.find((profile) => profile.id === value) ?? null
+  const visibleProfiles = useMemo(() => {
+    const filtered = optionFilter ? profiles.filter(optionFilter) : profiles
+    if (!value || filtered.some((profile) => profile.id === value)) return filtered
+    const selected = profiles.find((profile) => profile.id === value)
+    return selected ? [selected, ...filtered] : filtered
+  }, [profiles, optionFilter, value])
 
   const options: SearchableSelectOption[] = useMemo(
     () =>
-      profiles.map((p) => ({
-        value: p.id,
-        label: p.name,
-        sublabel: p.model ? `${p.provider} / ${p.model}` : p.provider,
-        leading: <ProviderIcon kind={kind} provider={p.provider} fill />,
-      })),
-    [profiles, kind],
+      visibleProfiles.map((p) => {
+        const state = optionState?.(p)
+        const reviewRequired = p.review_required === true
+        const baseSublabel = p.model ? `${p.provider} / ${p.model}` : p.provider
+        return {
+          value: p.id,
+          label: p.name,
+          sublabel: [baseSublabel, state?.annotation].filter(Boolean).join(' · '),
+          leading: <ProviderIcon kind={kind} provider={p.provider} fill />,
+          disabled: reviewRequired || state?.disabled,
+        }
+      }),
+    [visibleProfiles, optionState, kind],
   )
 
   const [models, setModels] = useState<string[]>([])
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
 
-  // A slow response for the old connection must not overwrite the new one's.
   const loadSeqRef = useRef(0)
+  // A slow response for the old connection must not overwrite the new one's.
   const loadModels = useCallback(async () => {
     const seq = ++loadSeqRef.current
-    if (!withModel || !value) {
+    const profile = profiles.find((candidate) => candidate.id === value)
+    if (!withModel || !value || profile?.review_required === true) {
       setModels([])
       setModelLabels({})
+      setModelsLoading(false)
       return
     }
     setModelsLoading(true)
@@ -129,7 +168,7 @@ export default function ConnectionSelect({
     } finally {
       if (seq === loadSeqRef.current) setModelsLoading(false)
     }
-  }, [withModel, value, kind])
+  }, [withModel, value, kind, profiles])
 
   useEffect(() => {
     void loadModels()
@@ -148,13 +187,16 @@ export default function ConnectionSelect({
     if (prev === value) return
     prevConnRef.current = value
     const profile = profiles.find((p) => p.id === value) || null
+    if (profile?.review_required === true) {
+      onModelChange?.('')
+      return
+    }
     if (prev === null || prev === '') {
       if (seedDefaultModel && value && !modelValue && profile?.model) onModelChange?.(profile.model)
     } else {
       onModelChange?.(seedDefaultModel ? profile?.model || '' : '')
     }
   }, [withModel, seedDefaultModel, value, profiles, modelValue, onModelChange])
-
   const select = (
     <SearchableSelect
       value={value}
@@ -190,7 +232,7 @@ export default function ConnectionSelect({
         onRefresh={loadModels}
         autoRefreshOnFocus
         refreshKey={value}
-        disabled={!value}
+        disabled={!value || selectedProfile?.review_required === true}
         placeholder={modelPlaceholder}
         emptyMessage={value ? modelEmptyMessage : modelNoConnectionMessage}
         appearance={modelAppearance}

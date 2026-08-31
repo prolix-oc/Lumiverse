@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
+import { agentActivityGenerationKey, activityGenerationFromRun, agentSummaryFromRun } from '@/store/slices/chat'
 import { generateUUID } from '@/lib/uuid'
 import {
   getCharacterAvatarThumbUrlById,
@@ -17,13 +18,93 @@ import {
   type AvatarTierUrls,
 } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
-import type { Message } from '@/types/api'
+import type { AgentSummary, AgentUsage, Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
 import { resolveMultiplayerMessageAuthor } from '@/lib/multiplayerMessageAuthor'
 import {
   preloadChatNavigationSnapshot,
   preloadChatNavigationSnapshotById,
 } from '@/lib/chatNavigationSnapshot'
+
+const AGENT_SUMMARY_STATUSES: Record<AgentSummary['status'], true> = {
+  succeeded: true,
+  failed: true,
+  cancelled: true,
+  timed_out: true,
+}
+
+type AgentSummaryWire = { [Key in keyof AgentSummary]?: unknown }
+type AgentUsageWire = { [Key in keyof AgentUsage]?: unknown }
+
+function isAgentSummaryStatus(value: unknown): value is AgentSummary['status'] {
+  return typeof value === 'string' && Object.hasOwn(AGENT_SUMMARY_STATUSES, value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function readAgentSummary(value: unknown): AgentSummary | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as AgentSummaryWire
+  if (!isAgentSummaryStatus(candidate.status)) return undefined
+
+  const invocationCount = candidate.invocationCount
+  const succeededCount = candidate.succeededCount
+  const failedCount = candidate.failedCount
+  const cancelledCount = candidate.cancelledCount
+  const timedOutCount = candidate.timedOutCount
+  const toolCallCount = candidate.toolCallCount
+  if (
+    !isNonNegativeInteger(invocationCount)
+    || !isNonNegativeInteger(succeededCount)
+    || !isNonNegativeInteger(failedCount)
+    || !isNonNegativeInteger(cancelledCount)
+    || !isNonNegativeInteger(timedOutCount)
+    || !isNonNegativeInteger(toolCallCount)
+  ) {
+    return undefined
+  }
+
+  if (candidate.usage === null || typeof candidate.usage !== 'object' || Array.isArray(candidate.usage)) {
+    return undefined
+  }
+  const usage = candidate.usage as AgentUsageWire
+  if (
+    typeof usage.inputTokens !== 'number'
+    || !Number.isFinite(usage.inputTokens)
+    || usage.inputTokens < 0
+    || typeof usage.outputTokens !== 'number'
+    || !Number.isFinite(usage.outputTokens)
+    || usage.outputTokens < 0
+    || typeof usage.totalTokens !== 'number'
+    || !Number.isFinite(usage.totalTokens)
+    || usage.totalTokens < 0
+  ) {
+    return undefined
+  }
+
+  const errorCodes = Array.isArray(candidate.errorCodes)
+    && candidate.errorCodes.every((code) => typeof code === 'string')
+    ? candidate.errorCodes
+    : undefined
+
+  return {
+    status: candidate.status,
+    invocationCount,
+    succeededCount,
+    failedCount,
+    cancelledCount,
+    timedOutCount,
+    toolCallCount,
+    usage: {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+    },
+    ...(errorCodes ? { errorCodes } : {}),
+  }
+}
 
 const CONTEXT_HISTORY_ANCHOR_KEY = 'context_history_anchor_message_id'
 
@@ -140,6 +221,35 @@ export function useMessageCard(message: Message, chatId: string) {
       || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
     return isStreamingMessage ? s.streamingReasoningStartedAt : null
   })
+  const liveAgentActivity = useStore((s) => {
+    const generationId = s.activeGenerationId
+    if (!s.isStreaming || !generationId) return undefined
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return undefined
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    if (!isStreamingMessage) return undefined
+    return s.agentActivityByGeneration[
+      agentActivityGenerationKey(generationId, message.id, s.streamingSwipeId ?? message.swipe_id)
+    ] ?? s.agentActivityByGeneration[agentActivityGenerationKey(generationId)]
+  })
+  // Select the retained run itself, not a freshly converted generation. React's
+  // external-store snapshot must remain referentially stable between recovery
+  // writes; derive the render model only after the stable store selection.
+  const recoveredAgentActivityRun = useStore((s) => {
+    if (s.isStreaming && s.activeGenerationId) return undefined
+    return Object.values(s.agentActivityRunsByGeneration).find((run) => (
+      run.chatId === s.activeChatId
+      && run.targetMessageId === message.id
+      && run.targetSwipeId === message.swipe_id
+    ))
+  })
+  const recoveredAgentActivity = useMemo(
+    () => recoveredAgentActivityRun ? activityGenerationFromRun(recoveredAgentActivityRun) : undefined,
+    [recoveredAgentActivityRun],
+  )
+  const agentActivity = liveAgentActivity ?? recoveredAgentActivity
 
   const isUser = message.is_user
   const isLastMessage = messages.length > 0 && messages[messages.length - 1].id === message.id
@@ -191,7 +301,16 @@ export function useMessageCard(message: Message, chatId: string) {
     : undefined
   const tokenCount = message.extra?.tokenCount as number | undefined
   const generationMetrics = message.extra?.generationMetrics as GenerationMetrics | undefined
-
+  const agentSummarySource = Array.isArray(message.extra?.agentActivityBySwipe)
+    ? message.extra.agentActivityBySwipe[message.swipe_id]
+    : message.extra?.agentActivity
+  const retainedRun = useStore((s) => Object.values(s.agentActivityRunsByGeneration).find((run) => (
+    run.chatId === s.activeChatId
+    && run.targetMessageId === message.id
+    && run.targetSwipeId === message.swipe_id
+  )))
+  const agentSummary = readAgentSummary(agentSummarySource)
+    ?? (retainedRun ? agentSummaryFromRun(retainedRun) : undefined)
   const isGroupChat = useStore((s) => s.isGroupChat)
 
   // Temporary chats are persona-less: never attribute the user's messages to
@@ -614,6 +733,8 @@ export function useMessageCard(message: Message, chatId: string) {
     reasoning,
     reasoningDuration,
     reasoningStartedAt,
+    agentActivity,
+    agentSummary,
     tokenCount,
     generationMetrics,
     avatarUrl: mpAvatarUrl,

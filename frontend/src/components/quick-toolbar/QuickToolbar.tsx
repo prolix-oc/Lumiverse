@@ -24,8 +24,9 @@ import {
   SlidersHorizontal,
   User,
 } from 'lucide-react'
-import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import { useTranslation } from 'react-i18next'
 import { isMobileViewportOrDevice, shouldHideQuickToolbarWhenOverlaid } from '@/lib/uiProductivityDefaults'
+import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
 import { useLorebookWorkspaceOverlayOpen } from '@/lib/lorebookWorkspaceVisibility'
 import { usePersistentRect, type DragMode } from '@/hooks/usePersistentRect'
@@ -236,6 +237,7 @@ function readOptionalToolbarColor(settings: object): string | undefined {
 }
 
 function QuickToolbarNative() {
+  const { t } = useTranslation('chat')
   const {
     settings,
     updateSettings,
@@ -607,7 +609,16 @@ function QuickToolbarNative() {
     if (!anchored) return
     const toolbar = toolbarRef.current
     const root = rootRef.current
-    if (!toolbar || !root) return
+    if (!toolbar || !root) {
+      if (!isRetry) {
+        if (v2FitRetryRafRef.current) cancelToolbarFrame(v2FitRetryRafRef.current)
+        v2FitRetryRafRef.current = scheduleToolbarFrame(() => {
+          v2FitRetryRafRef.current = 0
+          measureV2FitRef.current(true)
+        })
+      }
+      return
+    }
     const uiScale = readUiScale()
     const toLayoutWidth = (node: HTMLElement | null, fallback: number) => {
       const renderedWidth = node?.getBoundingClientRect().width ?? 0
@@ -994,6 +1005,7 @@ function QuickToolbarNative() {
     const context = cardContext[action.id]
     const closable = action.surface.kind !== 'command'
     const active = isToolbarActionActive(action, uiState)
+    const disabled = Boolean(action.disabled)
     const hasProfilePortrait = action.id === 'profile' && showProfilePortrait
     return (
       <button
@@ -1007,13 +1019,13 @@ function QuickToolbarNative() {
         data-toolbar-item-drag-handle={measuring ? undefined : ''}
         data-dragging={!measuring && draggingActionId === action.id ? '' : undefined}
         style={{ flex: QUICK_TOOLBAR_CHILD_FLEX }}
-        onClick={measuring ? undefined : action.run}
-        disabled={measuring ? undefined : action.disabled}
+        onClick={measuring || disabled ? undefined : action.run}
+        disabled={measuring ? undefined : disabled}
         aria-hidden={measuring || undefined}
         aria-pressed={measuring ? undefined : (typeof action.active === 'boolean' || closable) ? active : undefined}
         tabIndex={measuring ? -1 : undefined}
         aria-label={action.label}
-        title={context ? `${action.label} — ${context}` : action.label}
+        title={context ? t('quickToolbar.actionWithContext', { label: action.label, context }) : action.label}
       >
         <span className={clsx(styles.cardIcon, hasProfilePortrait && styles.cardIconPortrait)}>
           {hasProfilePortrait ? (
@@ -1036,7 +1048,6 @@ function QuickToolbarNative() {
       </button>
     )
   }
-
   const customizeButton = (
     <button
       ref={customizeButtonRef}
@@ -1049,13 +1060,14 @@ function QuickToolbarNative() {
         (customizing || modalOpen) && styles.itemActive,
       )}
       onClick={openCustomizer}
-      title="Customize toolbar"
-      aria-label="Customize toolbar"
+      title={t('quickToolbar.customize')}
+      aria-label={t('quickToolbar.customize')}
       aria-expanded={customizing}
     >
       {anchored
         ? <SlidersHorizontal size={renderedIconSize} aria-hidden="true" />
         : <MoreHorizontal size={renderedIconSize} aria-hidden="true" />}
+      {labelVisible && !anchored && <span className={styles.itemLabel}>{t('quickToolbar.more')}</span>}
     </button>
   )
   const uiScale = readUiScale()
@@ -1178,8 +1190,8 @@ function QuickToolbarNative() {
           data-toolbar-drag-handle=""
           className={clsx(styles.dragHandle, vertical && styles.dragHandleVertical)}
           onPointerDown={(event) => beginExplicitDrag('move', event)}
-          title="Move quick toolbar"
-          aria-label="Move quick toolbar"
+          title={t('quickToolbar.move')}
+          aria-label={t('quickToolbar.move')}
         >
           {vertical ? <GripVertical size={gripGlyph} /> : <GripHorizontal size={gripGlyph} />}
         </button>
@@ -1194,7 +1206,7 @@ function QuickToolbarNative() {
           data-density={v2Density}
           data-fit={fitReady ? 'ready' : 'pending'}
           data-icon-only={v2IconOnly || undefined}
-          aria-label="Quick access toolbar"
+          aria-label={t('quickToolbar.quickAccess')}
           style={toolbarStyle}
         >
           <div ref={cardScrollerRef} className={styles.cardScroller}>
@@ -1217,8 +1229,8 @@ function QuickToolbarNative() {
               type="button"
               className={clsx(styles.item, styles.cardStripSettings, styles.overflowButton, overflowOpen && styles.itemActive)}
               onClick={() => setOverflowOpen((open) => !open)}
-              title={`Show ${overflowActionIds.length} more toolbar actions`}
-              aria-label={`Show ${overflowActionIds.length} more toolbar actions`}
+              title={t('quickToolbar.showMore', { count: overflowActionIds.length })}
+              aria-label={t('quickToolbar.showMore', { count: overflowActionIds.length })}
               aria-controls="quick-toolbar-overflow"
               aria-expanded={overflowOpen}
             >
@@ -1238,13 +1250,14 @@ function QuickToolbarNative() {
             // never left unstyled (A-M4).
             freePosition && styles.toolbarFree,
           )}
-          aria-label="Quick access toolbar"
+          aria-label={t('quickToolbar.quickAccess')}
           style={toolbarStyle}
         >
           {actions.map((action) => {
             const Icon = action.icon
             const closable = action.surface.kind !== 'command'
             const active = isToolbarActionActive(action, uiState)
+            const disabled = Boolean(action.disabled)
             return (
               <button
                 key={action.id}
@@ -1254,8 +1267,8 @@ function QuickToolbarNative() {
                 data-dragging={draggingActionId === action.id ? '' : undefined}
                 className={clsx(styles.item, active && styles.itemActive)}
                 style={{ flex: QUICK_TOOLBAR_CHILD_FLEX }}
-                onClick={action.run}
-                disabled={action.disabled}
+                onClick={disabled ? undefined : action.run}
+                disabled={disabled}
                 aria-pressed={(typeof action.active === 'boolean' || closable) ? active : undefined}
                 title={action.label}
                 aria-label={action.label}
@@ -1301,7 +1314,7 @@ function QuickToolbarNative() {
           }}
         >
           <div className={styles.overflowHeader}>
-            <strong id="quick-toolbar-overflow-title">Hidden actions</strong>
+            <strong id="quick-toolbar-overflow-title">{t('quickToolbar.hiddenActions')}</strong>
             <span>{overflowActionIds.length}</span>
           </div>
           <label className={styles.overflowSearch}>
@@ -1310,8 +1323,8 @@ function QuickToolbarNative() {
               ref={overflowSearchRef}
               value={overflowQuery}
               onChange={(event) => setOverflowQuery(event.target.value)}
-              placeholder="Search actions"
-              aria-label="Search hidden toolbar actions"
+              placeholder={t('quickToolbar.searchActions')}
+              aria-label={t('quickToolbar.searchHiddenActions')}
             />
           </label>
           <div className={styles.overflowList}>
@@ -1322,20 +1335,31 @@ function QuickToolbarNative() {
               const context = cardContext[action.id]
               return (
                 <div className={styles.overflowRow} key={id}>
-                  <button type="button" className={styles.overflowAction} onClick={() => { action.run(); setOverflowOpen(false) }} title={context ? `${action.label} — ${context}` : action.label}>
+                  <button
+                    type="button"
+                    className={styles.overflowAction}
+                    onClick={() => {
+                      if (action.disabled) return
+                      action.run()
+                      setOverflowOpen(false)
+                    }}
+                    disabled={action.disabled}
+                    title={context ? t('quickToolbar.actionWithContext', { label: action.label, context }) : action.label}
+                    aria-label={action.label}
+                  >
                     <Icon size={16} aria-hidden="true" />
                     <span>
                       <strong>{action.label}</strong>
                       {context && <small>{context}</small>}
                     </span>
                   </button>
-                  <button type="button" className={styles.overflowPin} onClick={() => pinOverflowAction(id)} title={`Pin ${action.label} to the toolbar`} aria-label={`Pin ${action.label} to the toolbar`}>
+                  <button type="button" className={styles.overflowPin} onClick={() => pinOverflowAction(id)} title={t('quickToolbar.pinAction', { label: action.label })} aria-label={t('quickToolbar.pinAction', { label: action.label })}>
                     <Pin size={14} aria-hidden="true" />
                   </button>
                 </div>
               )
             })}
-            {filteredOverflowIds.length === 0 && <p className={styles.overflowEmpty}>No actions match that search.</p>}
+            {filteredOverflowIds.length === 0 && <p className={styles.overflowEmpty}>{t('quickToolbar.noActionsMatch')}</p>}
           </div>
         </div>,
         document.body,
@@ -1354,26 +1378,26 @@ function QuickToolbarNative() {
             '--quick-toolbar-caret': `${placement.caret}px`,
           } as CSSProperties}
           role="dialog"
-          aria-label="Customize toolbar"
+          aria-label={t('quickToolbar.customize')}
         >
           <div className={styles.customizerBody}>
             <div className={styles.customizerHeader}>
-              <strong>Toolbar</strong>
+              <strong>{t('quickToolbar.toolbar')}</strong>
               <button
                 type="button"
                 onClick={() => {
                   setCustomizing(false)
                   setModalOpen(true)
                 }}
-                title="Open the full customizer"
-                aria-label="Open the full customizer"
+                title={t('quickToolbar.openFullCustomizer')}
+                aria-label={t('quickToolbar.openFullCustomizer')}
               >
                 <Maximize2 size={13} />
               </button>
             </div>
 
             <label>
-              <span>Icon size</span>
+              <span>{t('quickToolbar.iconSize')}</span>
               <output>{iconSize}px</output>
               <input
                 type="range"
@@ -1388,7 +1412,7 @@ function QuickToolbarNative() {
               />
             </label>
             <label>
-              <span>Label size</span>
+              <span>{t('quickToolbar.labelSize')}</span>
               <output>{labelTextSize}px</output>
               <input
                 type="range"
@@ -1403,7 +1427,7 @@ function QuickToolbarNative() {
               />
             </label>
             <label className={styles.toggleRow}>
-              <span>Show labels</span>
+              <span>{t('quickToolbar.showLabels')}</span>
               <input
                 type="checkbox"
                 checked={labelVisible}
@@ -1480,7 +1504,7 @@ function QuickToolbarNative() {
               </label>
             )}
             <label>
-              <span>Opacity</span>
+              <span>{t('quickToolbar.opacity')}</span>
               <output>{Math.round(settings.opacity * 100)}%</output>
               <input
                 type="range"
@@ -1493,7 +1517,7 @@ function QuickToolbarNative() {
             {freePosition && (
               <>
                 <label className={styles.toggleRow}>
-                  <span>Snap to edge</span>
+                  <span>{t('quickToolbar.snapToEdge')}</span>
                   <input
                     type="checkbox"
                     checked={settings.snapToEdge}
@@ -1501,7 +1525,7 @@ function QuickToolbarNative() {
                   />
                 </label>
                 <label className={styles.toggleRow}>
-                  <span>Resize handles</span>
+                  <span>{t('quickToolbar.resizeHandles')}</span>
                   <input
                     type="checkbox"
                     checked={settings.resizeHandlesEnabled !== false}
@@ -1509,7 +1533,7 @@ function QuickToolbarNative() {
                   />
                 </label>
                 <fieldset>
-                  <legend>Orientation</legend>
+                  <legend>{t('quickToolbar.orientation')}</legend>
                   <div className={styles.segmented}>
                     {(['horizontal', 'vertical'] as const).map((option) => (
                       <button
@@ -1518,13 +1542,13 @@ function QuickToolbarNative() {
                         className={settings.orientation === option ? styles.segmentActive : undefined}
                         onClick={() => updateSettings({ orientation: option })}
                       >
-                        {option === 'horizontal' ? 'Horizontal' : 'Vertical'}
+                        {option === 'horizontal' ? t('quickToolbar.horizontal') : t('quickToolbar.vertical')}
                       </button>
                     ))}
                   </div>
                 </fieldset>
                 <label>
-                  <span>Scale</span>
+                  <span>{t('quickToolbar.scale')}</span>
                   <output>{Math.round(settings.scale * 100)}%</output>
                   <input
                     type="range"
@@ -1535,7 +1559,7 @@ function QuickToolbarNative() {
                   />
                 </label>
                 <label>
-                  <span>Rotation</span>
+                  <span>{t('quickToolbar.rotation')}</span>
                   <output>{settings.rotationDeg}°</output>
                   <input
                     type="range"
@@ -1548,7 +1572,7 @@ function QuickToolbarNative() {
               </>
             )}
             <fieldset>
-              <legend>Enabled icons</legend>
+              <legend>{t('quickToolbar.enabledIcons')}</legend>
               {/* Chrome cloned from the app's other search fields; the input
                   carries no class and is styled as `.searchField input`. */}
               <label className={styles.searchField}>
@@ -1556,8 +1580,8 @@ function QuickToolbarNative() {
                 <input
                   value={iconQuery}
                   onChange={(event) => setIconQuery(event.target.value)}
-                  placeholder="Search icons..."
-                  aria-label="Search icons"
+                  placeholder={t('quickToolbar.searchIcons')}
+                  aria-label={t('quickToolbar.searchIconsAria')}
                 />
               </label>
               <div className={styles.actionList}>
@@ -1579,7 +1603,7 @@ function QuickToolbarNative() {
                         type="button"
                         disabled={!canMoveWithinFiltered(orderedIds, filteredEnabledIds, id, -1)}
                         onClick={() => moveActionWithin(id, -1, filteredEnabledIds)}
-                        aria-label={`Move ${action.label} up`}
+                        aria-label={t('quickToolbar.moveActionUp', { label: action.label })}
                       >
                         <ChevronUp size={14} />
                       </button>
@@ -1587,7 +1611,7 @@ function QuickToolbarNative() {
                         type="button"
                         disabled={!canMoveWithinFiltered(orderedIds, filteredEnabledIds, id, 1)}
                         onClick={() => moveActionWithin(id, 1, filteredEnabledIds)}
-                        aria-label={`Move ${action.label} down`}
+                        aria-label={t('quickToolbar.moveActionDown', { label: action.label })}
                       >
                         <ChevronDown size={14} />
                       </button>
@@ -1595,13 +1619,13 @@ function QuickToolbarNative() {
                   )
                 })}
                 {filteredCatalogIds.length === 0 && (
-                  <p className={styles.actionEmpty}>No icons match that search.</p>
+                  <p className={styles.actionEmpty}>{t('quickToolbar.noIconsMatch')}</p>
                 )}
               </div>
             </fieldset>
             <button type="button" className={styles.resetButton} onClick={resetCurrentVariant}>
               <RotateCcw size={14} />
-              Reset current variant
+              {t('quickToolbar.resetVariant')}
             </button>
           </div>
         </div>,
@@ -1619,7 +1643,7 @@ function QuickToolbarNative() {
           type="button"
           className={clsx(styles.resizeHandle, RESIZE_HANDLE_CLASS[handle])}
           data-toolbar-resize-handle={handle}
-          aria-label={`Resize toolbar ${handle}`}
+          aria-label={t('quickToolbar.resize', { handle })}
           onPointerDown={(event) => beginExplicitDrag(handle, event)}
         />
       ))}
@@ -1637,8 +1661,8 @@ function QuickToolbarNative() {
       data-component="QuickToolbar"
       className={styles.modalRestoreHandle}
       onClick={() => setRestoredOverModal(true)}
-      title="Show the quick toolbar"
-      aria-label="Show the quick toolbar"
+      title={t('quickToolbar.showToolbar')}
+      aria-label={t('quickToolbar.showToolbar')}
     >
       <SlidersHorizontal size={14} aria-hidden="true" />
     </button>

@@ -23,12 +23,13 @@ import MessageActions from './MessageActions'
 import SwipeControls from './SwipeControls'
 import GreetingNav from './GreetingNav'
 import ReasoningBlock from './ReasoningBlock'
+import { AgentRunActivityStrip } from './AgentRunActivity'
 import StreamingIndicator from './StreamingIndicator'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
-import type { Message } from '@/types/api'
-import type { GenerationMetrics } from '@/types/ws-events'
+import type { AgentSummary, Message } from '@/types/api'
+import type { AgentActivityGeneration, GenerationMetrics } from '@/types/ws-events'
 import styles from './MinimalMessage.module.css'
 import clsx from 'clsx'
 
@@ -53,6 +54,8 @@ export interface MinimalMessageDefaultProps {
   reasoning: string | undefined
   reasoningDuration: number | undefined
   reasoningStartedAt: number | undefined
+  agentActivity: AgentActivityGeneration | undefined
+  agentSummary: AgentSummary | undefined
   tokenCount: number | undefined
   generationMetrics: GenerationMetrics | undefined
   avatarUrl: string | null
@@ -180,7 +183,7 @@ export default function MinimalMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   findQuery,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
-  isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
+  isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt, agentActivity, agentSummary,
   tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
   handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
   handleFork, handlePromptBreakdown, editAndSendPending,
@@ -411,14 +414,20 @@ export default function MinimalMessageDefault({
         </div>
 
         {/* Reasoning block — hidden during editing since the edit area shows it inline */}
-        {reasoning && !isEditing && (
+        {(reasoning || agentActivity || agentSummary) && !isEditing && (
           <ReasoningBlock
-            reasoning={reasoning}
+            reasoning={reasoning ?? ''}
             reasoningDuration={reasoningDuration}
             reasoningStartedAt={reasoningStartedAt}
             isStreaming={isActivelyStreaming}
+            agentActivity={agentActivity}
+            agentSummary={agentSummary}
           />
         )}
+
+        {!isUser && !isEditing ? (
+          <AgentRunActivityStrip chatId={chatId} messageId={message.id} swipeId={message.swipe_id} />
+        ) : null}
 
         {/* Inline image attachments — before content for assistant. */}
         {!isUser && message.extra?.attachments && message.extra.attachments.length > 0 && !isEditing && (

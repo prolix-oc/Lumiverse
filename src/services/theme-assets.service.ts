@@ -4,6 +4,7 @@ import { env } from "../env";
 import { getDb } from "../db/connection";
 import type { ThemeAsset } from "../types/theme-asset";
 import * as imagesSvc from "./images.service";
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
 import { convertImageToWebp } from "../utils/image-pipeline";
 
 type StorageType = ThemeAsset["storage_type"];
@@ -263,8 +264,7 @@ export function getThemeAsset(userId: string, id: string): ThemeAsset | null {
   const row = getThemeAssetRow(userId, id);
   return row ? rowToThemeAsset(row) : null;
 }
-
-export async function createThemeAsset(userId: string, input: CreateThemeAssetInput): Promise<ThemeAsset> {
+async function createThemeAssetUnsafe(userId: string, input: CreateThemeAssetInput): Promise<ThemeAsset> {
   const bundleId = normalizeBundleId(input.bundleId);
   const mimeType = inferMimeType(input.file);
   const storageType = resolveStorageType(mimeType);
@@ -325,7 +325,11 @@ export async function createThemeAsset(userId: string, input: CreateThemeAssetIn
   return getThemeAsset(userId, id)!;
 }
 
-export function updateThemeAsset(userId: string, id: string, input: UpdateThemeAssetInput): ThemeAsset | null {
+export async function createThemeAsset(userId: string, input: CreateThemeAssetInput): Promise<ThemeAsset> {
+  return withUserDataMutation(userId, () => createThemeAssetUnsafe(userId, input));
+}
+
+function updateThemeAssetUnsafe(userId: string, id: string, input: UpdateThemeAssetInput): ThemeAsset | null {
   const existing = getThemeAssetRow(userId, id);
   if (!existing) return null;
 
@@ -352,7 +356,11 @@ export function updateThemeAsset(userId: string, id: string, input: UpdateThemeA
   return getThemeAsset(userId, id);
 }
 
-export function deleteThemeAsset(userId: string, id: string): boolean {
+export function updateThemeAsset(userId: string, id: string, input: UpdateThemeAssetInput): ThemeAsset | null {
+  return withUserDataMutationSync(userId, () => updateThemeAssetUnsafe(userId, id, input));
+}
+
+function deleteThemeAssetUnsafe(userId: string, id: string): boolean {
   const existing = getThemeAssetRow(userId, id);
   if (!existing) return false;
 
@@ -370,6 +378,10 @@ export function deleteThemeAsset(userId: string, id: string): boolean {
 
   const result = getDb().query("DELETE FROM theme_assets WHERE id = ? AND user_id = ?").run(id, userId);
   return result.changes > 0;
+}
+
+export function deleteThemeAsset(userId: string, id: string): boolean {
+  return withUserDataMutationSync(userId, () => deleteThemeAssetUnsafe(userId, id));
 }
 
 export async function optimizeThemeAssetToWebp(userId: string, id: string): Promise<ThemeAsset | null> {

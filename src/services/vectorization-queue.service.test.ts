@@ -3,6 +3,8 @@ import { __test__ } from "./vectorization-queue.service";
 
 function job(overrides: Record<string, unknown> = {}) {
   return {
+    generation: 1,
+    signal: new AbortController().signal,
     type: "world_book_entry" as const,
     priority: 2,
     userId: "user",

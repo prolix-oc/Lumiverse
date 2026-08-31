@@ -47,6 +47,11 @@ interface TokenizerInstance {
   count: (text: string) => number;
 }
 
+export interface ResolvedTokenCounter {
+  readonly count: (text: string) => number;
+  readonly name: string;
+}
+
 // ---- Caches ----
 const MAX_CACHED_TOKENIZER_INSTANCES = 5;
 const MAX_PREWARM_TOKENIZERS = MAX_CACHED_TOKENIZER_INSTANCES;
@@ -348,7 +353,7 @@ async function loadTiktoken(config: TokenizerConfig): Promise<TokenizerInstance>
   if (cfg.configUrl) {
     try {
       await validateTokenizerUrl(cfg.configUrl, "tiktoken config url");
-      const configResp = await fetch(cfg.configUrl, { headers: await hfAuthHeaders(cfg.configUrl) });
+      const configResp = await fetch(cfg.configUrl, { signal: AbortSignal.timeout(TOKENIZER_FETCH_TIMEOUT_MS), headers: await hfAuthHeaders(cfg.configUrl) });
       if (configResp.ok) {
         const configData = await configResp.json();
         if (configData.added_tokens_decoder) {
@@ -530,6 +535,25 @@ export async function countBreakdown(
 }
 
 /**
+ * Resolve only a concrete tokenizer. Approximate configs, unknown models, and
+ * missing configs return null; loader/count failures remain visible so a
+ * security-sensitive caller can choose its own conservative fallback.
+ */
+export async function resolveStrictCounter(
+  modelId: string,
+): Promise<ResolvedTokenCounter | null> {
+  const tokenizerId = modelId ? getTokenizerIdForModel(modelId) : null;
+  if (!tokenizerId) return null;
+  const config = getConfig(tokenizerId);
+  if (!config || config.type === "approximate") return null;
+  const instance = await getInstance(tokenizerId);
+  return {
+    count: (text: string) => text ? countCached(tokenizerId, instance, text) : 0,
+    name: config.name || tokenizerId,
+  };
+}
+
+/**
  * Resolve a synchronous token counter for a model. Loads the tokenizer
  * instance (cached after first use), returns a `count(text)` that runs
  * in-process with zero per-call await overhead, and a display `name`.
@@ -540,7 +564,7 @@ export async function countBreakdown(
  * Intended for hot loops (e.g. context-budget clipping) that tokenize every
  * message in the assembled prompt and need to avoid async overhead per call.
  */
-export async function resolveCounter(modelId: string): Promise<{ count: (text: string) => number; name: string }> {
+export async function resolveCounter(modelId: string): Promise<ResolvedTokenCounter> {
   const tokenizerId = modelId ? getTokenizerIdForModel(modelId) : null;
   if (tokenizerId) {
     const config = getConfig(tokenizerId);

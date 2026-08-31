@@ -1,5 +1,47 @@
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
+import type { AgentActivityGeneration, AgenticProviderLifecycle, AgenticProviderOperation } from '@/types/ws-events'
+import type { AgentActivityRunV1, AgentPublicErrorV1, LoomPromptInspectionV1 } from '@/types/agent-runtime'
+import type {
+  AgentPersistentWorkspaceArtifactV1,
+  AgentPersistentWorkspaceRecordV1,
+  AgentPersistentWorkspacePublicationV1,
+  AgentPersistentWorkspaceSubmissionV1,
+  AgentPersistentWorkspaceTaskV1,
+  AgentPersistentWorkspaceTurnSessionV1,
+  AgentPersistentWorkspaceStateV1,
+  AgentPersistentWorkspaceV1,
+  AgentRunInspectionListV1,
+  AgentRunInspectionRetryResponseV1,
+  AgentRunInspectionStateV1,
+  AgentRunPublicErrorV2,
+  AgentRunPublicV2,
+  AgentRunSyncStatus,
+  AgentRuntimeSettingsProjectionV1,
+  AgentWorkspaceSectionV2,
+  AgentWorkspaceViewStateV2,
+} from './agent-runs'
+import type {
+  UserDataFailure,
+  UserDataJob,
+} from './user-data'
+export type GenerationRequestStatus = 'pending' | 'queued' | 'working' | 'completed' | 'stopped' | 'error'
+
+export interface GenerationRequestAuthority {
+  chatId: string
+  epoch: number
+  requestAuthorityId: string | null
+  generationId: string | null
+  abortController: AbortController | null
+  status: GenerationRequestStatus
+  /** Stop was issued after an ambiguous dispatch ACK, but no canonical terminal is observable yet. */
+  stopPending?: boolean
+  generationType: string
+  targetMessageId: string | null
+  targetSwipeId: number | null
+  retiredGenerationIds: string[]
+  terminalGenerationIds: string[]
+}
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -19,6 +61,8 @@ export interface ChatSlice {
   /** The chat row's `name` for the currently-open chat (group chats display it as the group name) */
   activeChatName: string | null
   messages: Message[]
+  /** Per-chat authority for the complete pending → terminal request lifecycle. */
+  generationRequests: Record<string, GenerationRequestAuthority>
   isStreaming: boolean
   /** True while the chat is fading out to another route. The last rendered
    * stream frame stays visible, but live/recovery writes are paused. */
@@ -28,7 +72,21 @@ export interface ChatSlice {
   streamingReasoningDuration: number | null
   streamingReasoningStartedAt: number | null
   streamingError: string | null
+  lastGenerationTerminalStatus: 'completed' | 'stopped' | 'error' | null
+  lastGenerationProvider: string | null
+  lastGenerationConnectionLabel: string | null
+  lastGenerationModel: string | null
+  setGenerationProviderMetadata: (metadata: {
+    provider?: string | null
+    connectionLabel?: string | null
+    model?: string | null
+  }) => void
   activeGenerationId: string | null
+  /** Live activity is keyed by generation + target message + swipe. */
+  agentActivityByGeneration: Record<string, AgentActivityGeneration>
+  /** Terminal fallback runs retained when no assistant target/pool exists. */
+  agentActivityRunsByGeneration: Record<string, AgentActivityRunV1>
+  agentTerminalErrorsByGeneration: Record<string, AgentPublicErrorV1>
   regeneratingMessageId: string | null
   /** Index of the swipe the active generation streams into. Lets the UI gate the
    *  streaming buffer to that swipe so the user can navigate to other swipes
@@ -74,7 +132,33 @@ export interface ChatSlice {
   addMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
   removeMessage: (id: string) => void
-  beginStreaming: (regeneratingMessageId?: string, generationType?: string) => void
+  beginGenerationRequest: (
+    chatId: string,
+    intent: {
+      generationType: string
+      targetMessageId?: string | null
+      targetSwipeId?: number | null
+      requestAuthorityId?: string | null
+    },
+  ) => GenerationRequestAuthority
+  acceptGenerationRequest: (
+    chatId: string,
+    generationId: string,
+    requestAuthorityId?: string,
+    status?: 'queued' | 'working',
+  ) => boolean
+  settleGenerationRequest: (
+    chatId: string,
+    status: 'completed' | 'stopped' | 'error',
+    generationId?: string | null,
+    requestAuthorityId?: string,
+  ) => boolean
+  stopGenerationRequest: (chatId: string) => GenerationRequestAuthority | null
+  beginStreaming: (
+    regeneratingMessageId?: string,
+    generationType?: string,
+    options?: { createPlaceholder?: boolean },
+  ) => void
   startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string) => void
   pauseStreamingForNavigation: () => void
   /** Append a live stream segment. When `offset` (char position of the segment
@@ -104,6 +188,13 @@ export interface ChatSlice {
   setRegeneratingMessageId: (messageId: string | null) => void
   /** Mark a generation ID as ended (prevents zombie resurrection from late HTTP responses) */
   markGenerationEnded: (generationId: string) => void
+  /** Validate and reconcile one compact child/tool activity event. */
+  reconcileAgentActivity: (payload: unknown) => void
+  /** Merge sanitized terminal fallback runs idempotently. */
+  mergeAgentActivityRuns: (runs: unknown[]) => void
+  setAgentTerminalError: (generationId: string, error: unknown) => void
+  /** Clear one terminal generation, or every activity tree when omitted. */
+  clearAgentActivity: (generationId?: string) => void
   /** Set impersonate draft content (from completed impersonate-draft generation) */
   setImpersonateDraftContent: (content: string | null) => void
 
@@ -111,10 +202,138 @@ export interface ChatSlice {
   messageSelectMode: boolean
   selectedMessageIds: string[]
   setMessageSelectMode: (enabled: boolean) => void
+
   toggleMessageSelect: (id: string) => void
   selectAllMessages: () => void
   clearMessageSelection: () => void
   selectMessageRange: (fromId: string, toId: string) => void
+}
+export interface AgentRunInspectionListStateV1 {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  list: AgentRunInspectionListV1 | null
+  error: AgentRunPublicErrorV2 | null
+}
+export type AgentPersistentWorkspaceCollectionV1 = 'sessions' | 'tasks' | 'records' | 'artifacts' | 'submissions' | 'publications'
+
+export interface AgentPersistentWorkspaceCollectionStateV1<T> {
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  items: T[]
+  error: string | null
+}
+export interface AgentPersistentWorkspaceSessionPageStateV1 {
+  total: number
+  limit: number
+  offset: number
+  nextOffset: number
+}
+
+
+export interface AgentPersistentWorkspaceCollectionsStateV1 {
+  sessions: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspaceTurnSessionV1>
+  sessionsPage: AgentPersistentWorkspaceSessionPageStateV1
+  tasks: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspaceTaskV1>
+  records: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspaceRecordV1>
+  artifacts: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspaceArtifactV1>
+  submissions: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspaceSubmissionV1>
+  publications: AgentPersistentWorkspaceCollectionStateV1<AgentPersistentWorkspacePublicationV1>
+}
+
+export interface AgentRunRetryStateV1 {
+  status: 'idle' | 'submitting' | 'accepted' | 'refused' | 'error'
+  response: AgentRunInspectionRetryResponseV1 | null
+  error: AgentRunPublicErrorV2 | null
+}
+
+// ---- Agent Run Projection Slice ----
+export interface AgentRunResyncDescriptorV1 {
+  snapshotSequence: number
+  totalRuns: number
+  omittedOlderRuns: number
+  nextOffset: number
+  identities: Record<string, true>
+}
+
+export interface AgentRunsSlice {
+  agentRunProvisionalByKey: Record<string, AgentRunPublicV2>
+  agentRunTerminalByTarget: Record<string, AgentRunPublicV2>
+  agentRunCursorByChat: Record<string, string>
+  agentRunLastSequenceByChat: Record<string, number>
+  agentRunCursorSequenceByChat: Record<string, number>
+  agentRunResyncOffsetByChat: Record<string, number>
+  agentRunResyncDescriptorByChat: Record<string, AgentRunResyncDescriptorV1>
+  agentRunSyncByChat: Record<string, AgentRunSyncStatus>
+  agentRunOmittedEventsByChat: Record<string, number>
+  agentRunRequestEpochByChat: Record<string, number>
+  agentRunInspectionByAttemptId: Record<string, AgentRunInspectionStateV1>
+  agentRunInspectionListByChat: Record<string, AgentRunInspectionListStateV1>
+  agentRunInspectionRequestEpochByKey: Record<string, number>
+  agentRunRetryByAttemptId: Record<string, AgentRunRetryStateV1>
+  agentWorkspaceByTurn: Record<string, AgentWorkspaceViewStateV2>
+  agentWorkspaceRequestEpochByKey: Record<string, number>
+  agentPersistentWorkspaceByChat: Record<string, AgentPersistentWorkspaceStateV1>
+  agentPersistentWorkspaceById: Record<string, AgentPersistentWorkspaceStateV1>
+  agentPersistentWorkspaceRequestEpochByKey: Record<string, number>
+  agentPersistentWorkspaceCollectionsById: Record<string, AgentPersistentWorkspaceCollectionsStateV1>
+  agentRuntimeSettingsByChat: Record<string, AgentRuntimeSettingsProjectionV1>
+  beginAgentRunRestore: (chatId: string) => number
+  applyAgentRunChanges: (chatId: string, requestEpoch: number, payload: unknown) => boolean
+  failAgentRunRestore: (chatId: string, requestEpoch: number) => void
+  reconcileAgentRunEvent: (payload: unknown) => 'applied' | 'stale' | 'gap' | 'rejected'
+  reconcileExactAgentRun: (chatId: string, payload: unknown) => boolean
+  markAgentRunsStale: (chatId?: string) => void
+  clearAgentRunsForChat: (chatId: string) => void
+  beginAgentRunInspection: (chatId: string, attemptId: string) => number
+  applyAgentRunInspection: (chatId: string, attemptId: string, requestEpoch: number, payload: unknown) => boolean
+  failAgentRunInspection: (
+    chatId: string,
+    attemptId: string,
+    requestEpoch: number,
+    availability: 'missing' | 'deleted' | 'unavailable' | 'stale',
+    error: AgentRunPublicErrorV2 | null,
+  ) => void
+  clearAgentRunInspection: (attemptId: string) => void
+  beginAgentRunInspectionList: (chatId: string) => number
+  applyAgentRunInspectionList: (chatId: string, requestEpoch: number, payload: unknown) => boolean
+  failAgentRunInspectionList: (chatId: string, requestEpoch: number, error: AgentRunPublicErrorV2 | null) => void
+  beginAgentRunRetry: (attemptId: string) => void
+  applyAgentRunRetry: (attemptId: string, payload: unknown) => boolean
+  failAgentRunRetry: (attemptId: string, error: AgentRunPublicErrorV2 | null) => void
+  beginAgentWorkspaceRequest: (chatId: string, turnId: string, section?: AgentWorkspaceSectionV2) => number
+  applyAgentWorkspaceIndex: (chatId: string, turnId: string, requestEpoch: number, payload: unknown) => boolean
+  applyAgentWorkspaceSection: (
+    chatId: string,
+    turnId: string,
+    section: AgentWorkspaceSectionV2,
+    requestEpoch: number,
+    payload: unknown,
+    append: boolean,
+  ) => boolean
+  failAgentWorkspaceRequest: (chatId: string, turnId: string, requestEpoch: number, section?: AgentWorkspaceSectionV2) => void
+  beginPersistentWorkspaceRequest: (scope: string) => number
+  applyPersistentWorkspace: (scope: string, requestEpoch: number, payload: unknown) => boolean
+  failPersistentWorkspaceRequest: (
+    scope: string,
+    requestEpoch: number,
+    availability: 'missing' | 'deleted' | 'unavailable' | 'detached',
+    error: string | null,
+  ) => void
+  beginPersistentWorkspaceCollection: (workspaceId: string, collection: AgentPersistentWorkspaceCollectionV1) => number
+  applyPersistentWorkspaceCollection: (
+    workspaceId: string,
+    collection: AgentPersistentWorkspaceCollectionV1,
+    requestEpoch: number,
+    payload: unknown,
+    append?: boolean,
+    expectedOffset?: number,
+  ) => boolean
+  failPersistentWorkspaceCollection: (
+    workspaceId: string,
+    collection: AgentPersistentWorkspaceCollectionV1,
+    requestEpoch: number,
+    error: string | null,
+  ) => void
+  setAgentRuntimeSettings: (chatId: string, projection: AgentRuntimeSettingsProjectionV1) => void
+  clearAgentRuntimeSettings: (chatId: string) => void
 }
 
 // ---- Characters Slice ----
@@ -342,7 +561,6 @@ export interface UISlice {
   // Transient highlight target for navigation feedback (e.g. greeting switch)
   highlightedMessageId: string | null
   setHighlightedMessageId: (id: string | null) => void
-
   // Session-only expansion state for height-collapsed assistant messages.
   expandedLongMessageKeys: string[]
   setLongMessageExpanded: (chatId: string, messageId: string, expanded: boolean) => void
@@ -1594,6 +1812,7 @@ export interface BreakdownCacheEntry {
     role?: string
     content?: string
     blockId?: string
+    promptOrder?: number
     extensionId?: string
     extensionName?: string
     messageCount?: number
@@ -1605,6 +1824,8 @@ export interface BreakdownCacheEntry {
   maxContext: number
   model: string
   provider: string
+  assemblySurface?: 'RESPONSE' | 'WORK'
+  loomPromptInspection?: LoomPromptInspectionV1
   parameters?: Record<string, unknown>
   usage?: {
     prompt_tokens: number
@@ -1847,6 +2068,10 @@ export interface ChatHeadEntry {
   avatarUrl: string | null
   status: ChatHeadStatus
   model: string
+  provider?: string
+  connectionLabel?: string
+  agentOperation?: AgenticProviderOperation
+  agentLifecycle?: AgenticProviderLifecycle
   startedAt: number
   attentionCleared?: boolean
   subtitle?: string
@@ -1901,6 +2126,7 @@ export interface DatabankSlice {
   selectedDatabankId: string | null
   databankScopeFilter: 'global' | 'character' | 'chat'
   databankScopeCharacterId: string | null
+  databankRevision: number
   setDatabanks: (banks: import('@/api/databank').Databank[]) => void
   addDatabank: (bank: import('@/api/databank').Databank) => void
   updateDatabank: (id: string, updates: Partial<import('@/api/databank').Databank>) => void
@@ -1908,6 +2134,7 @@ export interface DatabankSlice {
   setSelectedDatabankId: (id: string | null) => void
   setDatabankScopeFilter: (scope: 'global' | 'character' | 'chat') => void
   setDatabankScopeCharacterId: (id: string | null) => void
+  markDatabanksStale: () => void
   setDatabankDocuments: (docs: import('@/api/databank').DatabankDocument[]) => void
   addDatabankDocument: (doc: import('@/api/databank').DatabankDocument) => void
   updateDatabankDocument: (id: string, updates: Partial<import('@/api/databank').DatabankDocument>) => void
@@ -2011,6 +2238,26 @@ export interface WeaverSlice {
   startWeaverChat: (sessionId: string) => Promise<WeaverStartChatResult>
 }
 
+
+// ---- User-data portability slice ----
+export type UserDataJobAction = 'upload' | 'ticket' | 'skip-ticket' | 'cancel'
+
+export interface UserDataSlice {
+  userDataJob: UserDataJob | null
+  userDataJobLoading: boolean
+  userDataJobAction: UserDataJobAction | null
+  userDataJobError: UserDataFailure | null
+  userDataRequestEpoch: number
+  setUserDataJob: (job: UserDataJob) => void
+  clearUserDataJob: () => void
+  refreshUserDataJob: (jobId?: string | null) => Promise<UserDataJob | null>
+  startUserDataImport: (file: File, onProgress?: (percent: number) => void) => Promise<string>
+  submitUserDataTicket: (jobId: string, ticket: unknown) => Promise<boolean>
+  skipUserDataTicket: (jobId: string) => Promise<boolean>
+  cancelUserDataImport: (jobId: string) => Promise<'cancelled' | 'cancelling' | 'cleanup_pending' | 'too_late' | 'not_found' | null>
+  reconnectUserDataJob: (jobId?: string | null) => Promise<UserDataJob | null>
+}
+
 export type AppStore = ChatSlice &
   CharactersSlice &
   PersonasSlice &
@@ -2044,4 +2291,6 @@ export type AppStore = ChatSlice &
   ChatHeadsSlice &
   DatabankSlice &
   ConnectionSlice &
-  ContainersSlice
+  ContainersSlice &
+  AgentRunsSlice &
+  UserDataSlice

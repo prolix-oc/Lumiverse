@@ -27,6 +27,10 @@ import type { WorldBook, WorldBookVectorSummary, WorldInfoSettings } from '@/typ
 
 import styles from './WorldBookPanel.module.css'
 import clsx from 'clsx'
+function getChatWorldBookIds(metadata: Record<string, any> | null | undefined): string[] {
+  const ids = metadata?.chat_world_book_ids
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+}
 
 interface MobileAttachmentAccordionProps {
   icon: ReactNode
@@ -84,6 +88,9 @@ export default function WorldBookPanel() {
   const openModal = useStore((s) => s.openModal)
   const isMobile = useIsMobile()
   const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
+
   const drawerOpen = useStore((s) => s.drawerOpen)
   const drawerTab = useStore((s) => s.drawerTab)
   const activeModal = useStore((s) => s.activeModal)
@@ -472,46 +479,75 @@ export default function WorldBookPanel() {
     return null
   }, [selectedBook, t])
 
-  // Chat-scoped world books
-  const [chatWorldBookIds, setChatWorldBookIds] = useState<string[]>([])
-  const [chatMetadata, setChatMetadata] = useState<Record<string, any>>({})
+  // Chat-scoped world books live in the active chat store. CHAT_CHANGED updates
+  // that store, so an open panel reflects changes made by another tab/device.
+  const chatBookUpdateRef = useRef(0)
+  const chatWorldBookIds = useMemo(
+    () => activeChatId ? getChatWorldBookIds(activeChatMetadata) : [],
+    [activeChatId, activeChatMetadata],
+  )
 
   useEffect(() => {
-    if (!activeChatId) {
-      setChatWorldBookIds([])
-      setChatMetadata({})
-      return
-    }
-    chatsApi.get(activeChatId).then((chat) => {
-      const meta = (chat as any).metadata || {}
-      setChatMetadata(meta)
-      setChatWorldBookIds((meta.chat_world_book_ids as string[]) ?? [])
-    }).catch(() => {})
+    chatBookUpdateRef.current += 1
   }, [activeChatId])
 
   // Atomic partial merge so concurrent server-side writers (post-generation
   // expression detection, council caching, etc.) can't clobber this change.
+  // Keep the store optimistic, then only apply the response or rollback if no
+  // newer local or websocket update has replaced that optimistic snapshot.
   const setChatBooks = useCallback(
     (next: string[]) => {
-      setChatWorldBookIds(next)
-      setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
-      if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
+      const chatId = activeChatId
+      if (!chatId) return
+
+      const previousMetadata = useStore.getState().activeChatMetadata
+      const optimisticMetadata = {
+        ...(previousMetadata ?? {}),
+        chat_world_book_ids: next,
+      }
+      const updateId = ++chatBookUpdateRef.current
+
+      setActiveChatMetadata(optimisticMetadata)
+      void chatsApi.patchMetadata(chatId, { chat_world_book_ids: next })
+        .then((updated) => {
+          if (chatBookUpdateRef.current !== updateId) return
+          const state = useStore.getState()
+          if (state.activeChatId !== chatId || state.activeChatMetadata !== optimisticMetadata) return
+          const currentIds = getChatWorldBookIds(state.activeChatMetadata)
+          if (currentIds.length !== next.length || currentIds.some((id, index) => id !== next[index])) return
+          state.setActiveChatMetadata(updated.metadata ?? null)
+        })
+        .catch(() => {
+          if (chatBookUpdateRef.current !== updateId) return
+          const state = useStore.getState()
+          if (state.activeChatId !== chatId || state.activeChatMetadata !== optimisticMetadata) return
+          state.setActiveChatMetadata(previousMetadata)
+          toast.error(t('worldBookPanel.chatAttachmentSaveFailed'))
+        })
     },
-    [activeChatId],
+    [activeChatId, setActiveChatMetadata, t],
   )
 
   const handleChatBooksChange = useCallback(
     async (next: string[]) => {
+      const chatId = activeChatId
+      if (!chatId) return
+
+      const currentIds = getChatWorldBookIds(useStore.getState().activeChatMetadata)
       const allowedAddedIds = await filterWorldBooksForChatContextAttachment(
-        books.filter((book) => next.includes(book.id) && !chatWorldBookIds.includes(book.id)),
+        books.filter((book) => next.includes(book.id) && !currentIds.includes(book.id)),
       )
-      setChatBooks(next.filter((id) => chatWorldBookIds.includes(id) || allowedAddedIds.includes(id)))
+      const state = useStore.getState()
+      if (state.activeChatId !== chatId) return
+      const latestIds = getChatWorldBookIds(state.activeChatMetadata)
+      setChatBooks(next.filter((id) => latestIds.includes(id) || allowedAddedIds.includes(id)))
     },
-    [books, chatWorldBookIds, setChatBooks],
+    [activeChatId, books, setChatBooks],
   )
 
   const removeChatBook = (id: string) => {
-    setChatBooks(chatWorldBookIds.filter((x) => x !== id))
+    const currentIds = getChatWorldBookIds(useStore.getState().activeChatMetadata)
+    setChatBooks(currentIds.filter((x) => x !== id))
   }
 
   const activeChatBooks = books.filter((b) => chatWorldBookIds.includes(b.id))

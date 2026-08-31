@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import { env } from "../env";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
+import { withUserDataMutation } from "../services/user-data/snapshot";
 
 const app = new Hono();
 
@@ -151,17 +152,14 @@ app.post("/:id/documents", async (c) => {
   if (file.size > 10 * 1024 * 1024) {
     return c.json({ error: "File too large. Maximum 10MB." }, 400);
   }
-
-  // Save file to disk
-  const filename = await filesSvc.saveUpload(file, userId, "databank");
-
-  // Compute content hash
-  const buffer = await file.arrayBuffer();
-  const hash = createHash("sha256").update(new Uint8Array(buffer)).digest("hex");
-
-  // Create document record — strip extension from display name
-  const displayName = file.name.replace(/\.[^.]+$/, "");
-  const doc = databank.createDocument(userId, databankId, displayName, filename, file.type || "", file.size, hash);
+  const doc = await withUserDataMutation(userId, async () => {
+    // Save file and publish its relational reference under one user barrier.
+    const filename = await filesSvc.saveUpload(file, userId, "databank");
+    const buffer = await file.arrayBuffer();
+    const hash = createHash("sha256").update(new Uint8Array(buffer)).digest("hex");
+    const displayName = file.name.replace(/\.[^.]+$/, "");
+    return databank.createDocument(userId, databankId, displayName, filename, file.type || "", file.size, hash);
+  });
 
   // Kick off async processing (parse → chunk → vectorize)
   databank.processDocument(userId, doc.id).catch((err) => {
@@ -190,39 +188,41 @@ app.post("/:id/documents/scrape", async (c) => {
     // Scrape the URL
     const scraped = await databank.scrapeUrl(url);
 
-    // Write scraped content to a file
-    const dir = join(env.dataDir, "databank", userId);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-    const ext = scraped.sourceType === "wiki" ? ".md" : ".txt";
-    const filename = `${crypto.randomUUID()}${ext}`;
-    const filepath = join(dir, filename);
-
-    // Format with title header
-    const fileContent = `# ${scraped.title}\n\nSource: ${scraped.url}\n\n${scraped.content}`;
-    await Bun.write(filepath, fileContent);
-
-    // Compute content hash
-    const hash = createHash("sha256").update(fileContent).digest("hex");
-
-    // Create document record — no extension in display name
-    const docName = scraped.title || new URL(url).hostname;
-    const doc = databank.createDocument(
-      userId,
-      databankId,
-      docName,
-      filename,
-      `text/${ext === ".md" ? "markdown" : "plain"}`,
-      Buffer.byteLength(fileContent),
-      hash,
-    );
-
-    // Kick off async processing (chunk → vectorize)
-    databank.processDocument(userId, doc.id).catch((err) => {
-      console.error(`[databank] Processing scraped document failed for ${doc.id}:`, err);
+    // Write scraped content and publish its row under one user barrier.
+    const doc = await withUserDataMutation(userId, async () => {
+      const dir = join(env.dataDir, "databank", userId);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const ext = scraped.sourceType === "wiki" ? ".md" : ".txt";
+      const filename = `${crypto.randomUUID()}${ext}`;
+      const filepath = join(dir, filename);
+      const fileContent = `# ${scraped.title}\n\nSource: ${scraped.url}\n\n${scraped.content}`;
+      await Bun.write(filepath, fileContent);
+      const hash = createHash("sha256").update(fileContent).digest("hex");
+      const docName = scraped.title || new URL(url).hostname;
+      return databank.createDocument(
+        userId,
+        databankId,
+        docName,
+        filename,
+        `text/${ext === ".md" ? "markdown" : "plain"}`,
+        Buffer.byteLength(fileContent),
+        hash,
+      );
     });
 
-    return c.json({ ...doc, scraped: { title: scraped.title, sourceType: scraped.sourceType, contentLength: scraped.contentLength } }, 201);
+    // Match native uploads by starting ingestion only after the pending row is published.
+    databank.processDocument(userId, doc.id).catch((err) => {
+      console.error(`[databank] Background processing failed for scraped document ${doc.id}:`, err);
+    });
+
+    return c.json({
+      ...doc,
+      scraped: {
+        title: scraped.title,
+        sourceType: scraped.sourceType,
+        contentLength: scraped.contentLength,
+      },
+    }, 201);
   } catch (err: any) {
     if (err instanceof databank.ScrapeError) {
       const status = err.type === "not_found" ? 404
@@ -245,6 +245,8 @@ app.patch("/:id/documents/:docId", async (c) => {
   if (!name || typeof name !== "string") {
     return c.json({ error: "name is required" }, 400);
   }
+  const parentDoc = databank.getDocumentInDatabank(userId, c.req.param("id"), docId);
+  if (!parentDoc) return c.json({ error: "Not found" }, 404);
   const doc = databank.renameDocument(userId, docId, name.trim());
   if (!doc) return c.json({ error: "Not found" }, 404);
   return c.json(doc);
@@ -253,7 +255,7 @@ app.patch("/:id/documents/:docId", async (c) => {
 // GET /:id/documents/:docId — Get document details
 app.get("/:id/documents/:docId", (c) => {
   const userId = c.get("userId");
-  const doc = databank.getDocument(userId, c.req.param("docId"));
+  const doc = databank.getDocumentInDatabank(userId, c.req.param("id"), c.req.param("docId"));
   if (!doc) return c.json({ error: "Not found" }, 404);
   return c.json(doc);
 });
@@ -261,7 +263,9 @@ app.get("/:id/documents/:docId", (c) => {
 // GET /:id/documents/:docId/content — Get parsed document content
 app.get("/:id/documents/:docId/content", (c) => {
   const userId = c.get("userId");
-  const content = databank.getDocumentContent(userId, c.req.param("docId"));
+  const doc = databank.getDocumentInDatabank(userId, c.req.param("id"), c.req.param("docId"));
+  if (!doc) return c.json({ error: "Not found or not yet processed" }, 404);
+  const content = databank.getDocumentContent(userId, doc.id);
   if (content === null) return c.json({ error: "Not found or not yet processed" }, 404);
   return c.json({ content });
 });
@@ -270,6 +274,8 @@ app.get("/:id/documents/:docId/content", (c) => {
 app.delete("/:id/documents/:docId", async (c) => {
   const userId = c.get("userId");
   const docId = c.req.param("docId");
+  const doc = databank.getDocumentInDatabank(userId, c.req.param("id"), docId);
+  if (!doc) return c.json({ error: "Not found" }, 404);
 
   databank.abortDocumentProcessing(docId);
 
@@ -285,62 +291,47 @@ app.delete("/:id/documents/:docId", async (c) => {
 app.put("/:id/documents/:docId/content", async (c) => {
   const userId = c.get("userId");
   const docId = c.req.param("docId");
-
-  const doc = databank.getDocument(userId, docId);
+  const doc = databank.getDocumentInDatabank(userId, c.req.param("id"), docId);
   if (!doc) return c.json({ error: "Not found" }, 404);
 
   const body = await c.req.json().catch(() => ({}));
   const content = typeof body.content === "string" ? body.content : null;
   if (content === null) return c.json({ error: "content is required" }, 400);
 
-  // Size limit mirrors upload cap so a paste can't sneak around it.
   if (Buffer.byteLength(content) > 10 * 1024 * 1024) {
     return c.json({ error: "Content too large. Maximum 10MB." }, 400);
   }
 
-  // Abort any in-flight processing on this doc before touching its file.
-  databank.abortDocumentProcessing(docId);
-
-  // Drop old Lance vectors before SQLite chunk IDs are replaced.
-  await databank.deleteDocumentVectors(userId, docId);
-
-  // Write a new file. Use `.md` so the re-parser treats the edited text as raw
-  // text rather than running it back through e.g. HTML stripping (the GET
-  // content endpoint returns the parsed view, so edits are already plain text).
-  const dir = join(env.dataDir, "databank", userId);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const newFilename = `${crypto.randomUUID()}.md`;
-  const newFilepath = join(dir, newFilename);
-  await Bun.write(newFilepath, content);
-
-  const hash = createHash("sha256").update(content).digest("hex");
-  const size = Buffer.byteLength(content);
-
-  // Best-effort cleanup of the old file once the replacement is on disk.
-  try {
-    await filesSvc.deleteFile(userId, doc.filePath, "databank");
-  } catch {
-    // non-fatal — file may already be gone
-  }
-
-  databank.updateDocumentFile(userId, docId, newFilename, "text/markdown", size, hash);
-  databank.updateDocumentStatus(docId, "pending");
-
-  // Re-parse → re-chunk → re-embed in the background.
+  const updated = await withUserDataMutation(userId, async () => {
+    databank.abortDocumentProcessing(docId);
+    await databank.deleteDocumentVectors(userId, docId);
+    const dir = join(env.dataDir, "databank", userId);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const newFilename = `${crypto.randomUUID()}.md`;
+    const newFilepath = join(dir, newFilename);
+    await Bun.write(newFilepath, content);
+    const hash = createHash("sha256").update(content).digest("hex");
+    const size = Buffer.byteLength(content);
+    try {
+      await filesSvc.deleteFile(userId, doc.filePath, "databank");
+    } catch {
+      // The old file may already be absent.
+    }
+    databank.updateDocumentFile(userId, docId, newFilename, "text/markdown", size, hash);
+    databank.updateDocumentStatus(docId, "pending");
+    return databank.getDocument(userId, docId);
+  });
+  if (!updated) return c.json({ error: "Not found" }, 404);
   databank.processDocument(userId, docId).catch((err) => {
     console.error(`[databank] Reprocess after edit failed for ${docId}:`, err);
   });
-
-  const updated = databank.getDocument(userId, docId);
   return c.json(updated);
 });
-
-// POST /:id/documents/:docId/reprocess — Re-parse and re-vectorize
 app.post("/:id/documents/:docId/reprocess", async (c) => {
   const userId = c.get("userId");
   const docId = c.req.param("docId");
 
-  const doc = databank.getDocument(userId, docId);
+  const doc = databank.getDocumentInDatabank(userId, c.req.param("id"), docId);
   if (!doc) return c.json({ error: "Not found" }, 404);
 
   // Delete old vectors
@@ -424,8 +415,18 @@ app.get("/mentions/autocomplete", (c) => {
   const characterId = c.req.query("characterId") || "";
 
   const characterIds = characterId ? [characterId] : [];
-  const activeBankIds = databank.resolveActiveDatabankIds(userId, chatId, characterIds);
-  const results = databank.searchDocumentsBySlug(userId, q, activeBankIds, 10);
+  const activeBankIds = databank.resolvePersistedActiveDatabankIds(userId, chatId, characterIds);
+  if (activeBankIds.length === 0) return c.json({ data: [] });
+
+  const candidates = databank.searchDocumentsBySlug(userId, q, activeBankIds, 10);
+  const { docs } = databank.lookupSlugsInScope(
+    userId,
+    candidates.map((candidate) => candidate.slug),
+    activeBankIds,
+  );
+  const results = candidates.filter((candidate) =>
+    docs.get(candidate.slug)?.databankId === candidate.databankId
+  );
   return c.json({ data: results });
 });
 
@@ -435,9 +436,20 @@ app.post("/mentions/resolve", async (c) => {
   const body = await c.req.json();
   const { slug, chatId, characterId, maxTokens } = body;
 
-  if (!slug) return c.json({ error: "slug is required" }, 400);
+  const requestedSlug = typeof slug === "string" ? slug.toLowerCase() : "";
+  if (!requestedSlug) return c.json({ error: "slug is required" }, 400);
 
-  const doc = databank.getDocumentBySlug(userId, slug);
+  const activeChatId = typeof chatId === "string" ? chatId : "";
+  const characterIds = Array.isArray(characterId)
+    ? characterId.filter((id): id is string => typeof id === "string")
+    : typeof characterId === "string" && characterId ? [characterId] : [];
+  const activeBankIds = databank.resolvePersistedActiveDatabankIds(
+    userId,
+    activeChatId,
+    characterIds,
+  );
+  const { docs } = databank.lookupSlugsInScope(userId, [requestedSlug], activeBankIds);
+  const doc = docs.get(requestedSlug);
   if (!doc) return c.json({ error: "Document not found" }, 404);
 
   const content = databank.getFullDocumentText(userId, doc.id);

@@ -757,3 +757,10 @@
   opacity: 0.28 !important;
   transition: none !important;
 }
+
+.agentRunActivity {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

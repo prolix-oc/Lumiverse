@@ -543,7 +543,7 @@ export default function ImageGenPanel() {
 
   // Resolve active connection and its provider capabilities
   const activeConnection = useMemo(
-    () => imageGenProfiles.find((p) => p.id === activeImageGenConnectionId) || null,
+    () => imageGenProfiles.find((p) => p.id === activeImageGenConnectionId && p.review_required !== true) || null,
     [imageGenProfiles, activeImageGenConnectionId],
   )
 

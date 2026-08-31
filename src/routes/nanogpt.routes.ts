@@ -14,7 +14,7 @@ app.get("/auth", async (c) => {
   if (!callbackUrl) return c.json({ error: "callback_url is required" }, 400);
 
   if (connectionId) {
-    const conn = connSvc.getConnection(userId, connectionId);
+    const conn = connSvc.getUsableConnection(userId, connectionId);
     if (!conn) return c.json({ error: "Connection not found" }, 404);
     if (conn.provider !== "nanogpt") return c.json({ error: "Connection is not a NanoGPT profile" }, 400);
   }

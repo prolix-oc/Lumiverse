@@ -362,7 +362,7 @@ function writePersonEntry(
   flesh: { content: string; keys: string[] },
 ): string {
   if (person.npc_entry_id && getEntry(userId, person.npc_entry_id)) {
-    updateEntry(userId, person.npc_entry_id, {
+    updateEntry(userId, book.id, person.npc_entry_id, {
       key: flesh.keys,
       content: flesh.content,
       comment: person.name,

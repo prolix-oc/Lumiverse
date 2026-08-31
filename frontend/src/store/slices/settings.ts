@@ -1250,9 +1250,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         const savedConnectionId = patch.imageGeneration.activeImageGenConnectionId ?? null
         if (get().imageGenProfilesLoaded) {
           const profiles = get().imageGenProfiles
-          const activeImageGenConnectionId = savedConnectionId && profiles.some((profile) => profile.id === savedConnectionId)
+          const activeImageGenConnectionId = savedConnectionId && profiles.some((profile) => profile.id === savedConnectionId && profile.review_required !== true)
             ? savedConnectionId
-            : profiles.find((profile) => profile.is_default)?.id ?? null
+            : profiles.find((profile) => profile.is_default && profile.review_required !== true)?.id ?? null
           patch.activeImageGenConnectionId = activeImageGenConnectionId
           if (activeImageGenConnectionId !== savedConnectionId) {
             patch.imageGeneration = { ...patch.imageGeneration, activeImageGenConnectionId }

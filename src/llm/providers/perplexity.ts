@@ -20,6 +20,12 @@ export class PerplexityProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "none",
+    toolCalling: true,
+    requiredToolChoice: false,
+    nativeToolContinuation: false,
+    toolContinuationMode: "legacy",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
   };
 
   async listModels(_apiKey: string, _apiUrl: string): Promise<string[]> {

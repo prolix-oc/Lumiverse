@@ -93,11 +93,13 @@ export function shouldInjectEmptySendNudge(input: {
   generationType: string;
   targetCharacterId?: string;
   messages: Message[];
+  sourceUserMessageIds?: readonly string[];
 }): boolean {
   const lastVisible = getLastVisibleChatMessage(input.messages);
   return (
     input.generationType === "normal" &&
     !input.targetCharacterId &&
+    (input.sourceUserMessageIds?.length ?? 0) === 0 &&
     !!lastVisible &&
     !lastVisible.is_user
   );

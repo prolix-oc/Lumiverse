@@ -38,6 +38,56 @@ spindle.unregisterTool('search_knowledge_base')
 
 The `extension_id` field is set automatically by the host — you don't need to provide it.
 
+## Preset-owned Agents & Tools
+
+The preset **Agents & Tools** feature is separate from this extension registration API and from Council. It uses a host-owned, fixed catalog; extensions cannot register, replace, or execute a tool in that catalog, and `spindle.registerTool()` tools do not become child-profile tools.
+
+Core-tool authorization comes from the preset's `agentConfig` and the host's local user context; it is not an extension `tools` grant and does not require an extension registration.
+
+When an enabled preset grants tools, the main model may receive these six read-only core tools:
+
+| Tool | Arguments |
+|---|---|
+| `lore_list_books` | Optional `scope`, `folder`, `query`, `limit`, `offset`, `format` |
+| `lore_get_book` | Exactly one of `book_id` or `book_name`; optional `scope`, `limit`, `offset`, `format` |
+| `lore_list_entries` | Exactly one of `book_id` or `book_name`; optional `scope`, `limit`, `offset`, `format` |
+| `lore_get_entry` | Required `entry_id`; optional `scope`, `format` |
+| `lore_search_entries` | Required `query`; optional `book_id` or `book_name`, `scope`, `limit`, `offset`, `format` |
+| `chat_search_history` | Required `query`; optional `role`, `limit`, `offset`, `format` |
+
+`agent_delegate` is an additional main-model-only tool. Its arguments are `profile_id`, a `task` of at most 32 KiB UTF-8, and optional narrowing `tool_ids`; only profiles whose local author enabled `allowMainDelegation` are addressable, and the tool has no model-controlled stream argument. A child is depth-one: it may use its authorized lore/chat tools but never receives `agent_delegate`.
+
+All feature definitions use strict JSON Schema (`additionalProperties: false`) and matching runtime parsers. Selectors are at most 512 characters; `limit` is 1–50 and `offset` is a non-negative integer. `scope` defaults to `active` and cannot exceed the server-held grant. `format` is `json` or `text`. Results use a stable `{ data, total, limit, offset, truncated }` envelope (or text carrying the same IDs, provenance, and continuation values). `lore_get_book` is paged, so a whole book is read through bounded continuation rather than one unbounded response. An ambiguous book name returns candidate IDs and requires an ID retry.
+
+### Scope and snapshot boundaries
+
+Each child profile and the main model has an independent tool allowlist and lore-scope ceiling. A call may narrow that grant but never widen it. `active` is the immutable full enabled lore corpus considered by the current generation after World Info interception, with finalized overlays and book/source provenance; an entry can remain in this corpus with `activated: false`, because `activated` independently reports whether that entry was selected for prompt injection. `all_owned` is an explicit local grant for bounded live FTS/LIKE lookups under the root user's ownership. Disabled entries are excluded in both scopes.
+`lore_search_entries` ranks exact, then prefix, then substring matches in comment/title and primary keys before secondary keys and content-only matches. Active results preserve snapshot order for equal relevance; owned results use stable book/order/id ties. Ranking is applied before `offset` and `limit`, while `total` and `truncated` describe the full matching set.
+
+`chat_search_history` reads one immutable projection of the exact message snapshot already selected for the generation: active-swipe role/name/index/content in chat order. It excludes hidden and `_loom_inject` rows, the regenerate/swipe exclusion target, staged or pending targets, inactive swipes, attachments, extras, unrelated internal IDs, and every other chat. The model cannot supply a user ID, chat ID, ownership, or broader scope.
+
+Tool results are host-framed lower-authority derived data. They do not expose credentials, exception stacks, arbitrary metadata bags, hidden messages, disabled lore, or raw user IDs beyond documented IDs. In `text` format, rendering uses only a fresh minimal context and the no-argument display-name/group macros `user`, `char`, `group`, `groupNotMuted`, `notChar`, `isGroupChat`, `groupOthers`, and `groupMemberCount` (and their built-in aliases); disallowed macro syntax remains literal and does not receive the full macro environment.
+
+This catalog is not Council. Council still uses registered tools and its configured sidecar/inline behavior described below. The Agents & Tools feature does not discover extension tools or invoke extension workers. Live activity stays status-only. Authenticated owner inspection preserves its existing bounded provider exchanges, tool calls/results, accounting, accepted workspace evidence, receipts, IDs, and handoff guidance under retention/omission limits. Prior-segment prose/messages and tool calls/results are retired only from the next segment's provider context and are never replayed as continuity; raw hidden reasoning and opaque continuation carriers are prohibited. A real staged/target assistant message may retain a compact swipe-scoped summary.
+
+### Runtime activity and privacy
+
+The host-owned catalog runs inside the same root ledger as the provider loop. A call batch is validated before any side effect, executed serially in provider order, and returned with one bounded correlated result per call before continuation. When the authored aggregate-call or host request budget is exhausted, the host performs one tools-disabled finalization request; it does not silently persist pending calls.
+
+`GENERATION_AGENT_ACTIVITY` and terminal activity snapshots are status-only. They contain server-authored IDs, actor/kind, phase/status, allowlisted profile/tool identifiers, elapsed time, continuation mode, bounded counters/usage, and stable public error codes. They never contain task text, provider messages, model labels, arguments, result bodies, retrieved content, credentials, stacks, or reasoning carriers. Live snapshots and retained swipe/fallback summaries are bounded and evict detail deterministically while preserving aggregate counts. See [Generation](generation.md#preset-owned-agents--tools-during-generation) for effective host ceilings, environment settings, and recovery behavior.
+
+Provider dispatches use `GenerationRequest.toolMode` with `ordinary`,
+`required`, or `finalization`. `required` is provider-neutral: it requires some
+admitted host tool and never selects a named tool. The frozen provider must
+positively declare `ProviderCapabilities.requiredToolChoice`; unknown and custom
+providers default to false. Both orchestration and each provider serializer fail
+closed before a request when that declaration or an admitted tool is absent.
+OpenAI-compatible serializers emit `tool_choice: 'required'`, Anthropic emits
+`{ type: 'any' }`, and Google/Vertex emit function-calling mode `ANY`.
+`finalization` removes or explicitly disables every tool surface.
+
+See [Generation](generation.md#preset-owned-agents--tools-during-generation) for provider continuation, runtime limits, cancellation, and Dry Run/multiplayer behavior, and [World Books](world-books.md#agents--tools-lore-boundary) for the frozen lore-corpus boundary.
+
 ## Council Tool Integration
 
 When `council_eligible: true`, your tool appears in the user's Council panel alongside built-in tools. Users can assign it to any Council member. During generation, if the member is active (passes their dice roll), your tool is invoked.

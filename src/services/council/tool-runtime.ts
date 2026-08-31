@@ -55,9 +55,26 @@ export function buildCouncilMemberContext(
     definition?: string | null;
     personality?: string | null;
     behavior?: string | null;
-    gender_identity?: 0 | 1 | 2 | 3 | null;
+    gender_identity?: unknown;
   } | null,
 ): CouncilMemberContext {
+  const rawGenderIdentity = item?.gender_identity;
+  const genderIdentity =
+    rawGenderIdentity === undefined || rawGenderIdentity === null
+      ? 3
+      : rawGenderIdentity === 0 ||
+          rawGenderIdentity === 1 ||
+          rawGenderIdentity === 2 ||
+          rawGenderIdentity === 3
+        ? rawGenderIdentity
+        : (() => {
+            throw new Error("Invalid Council member context gender identity");
+          })();
+
+  // The public package predates the runtime's explicit "any" (3) value.
+  // Keep the boundary cast named and narrow only after exhaustive validation.
+  const wireGenderIdentity =
+    genderIdentity as unknown as CouncilMemberContext["genderIdentity"];
   return {
     memberId: member.id,
     itemId: member.itemId,
@@ -70,10 +87,27 @@ export function buildCouncilMemberContext(
     definition: item?.definition ?? "",
     personality: item?.personality ?? "",
     behavior: item?.behavior ?? "",
-    // The shared spindle types package still narrows this field to 0|1|2.
-    // Runtime values now allow 3 for "any", so cast at the boundary until the package catches up.
-    genderIdentity: (item?.gender_identity ?? 3) as CouncilMemberContext["genderIdentity"],
+    genderIdentity: wireGenderIdentity,
   };
+}
+
+export function validateCouncilMemberContext(
+  context: CouncilMemberContext,
+): CouncilMemberContext {
+  const candidate: unknown = context;
+  let genderIdentity: unknown;
+  if (candidate && typeof candidate === "object" && "genderIdentity" in candidate) {
+    genderIdentity = candidate.genderIdentity;
+  }
+  if (
+    genderIdentity !== 0 &&
+    genderIdentity !== 1 &&
+    genderIdentity !== 2 &&
+    genderIdentity !== 3
+  ) {
+    throw new Error("Invalid Council member context gender identity");
+  }
+  return context;
 }
 
 export function getCouncilToolExecution(
@@ -110,9 +144,10 @@ export function isCouncilToolInlineCallable(
 ): boolean {
   return getCouncilToolExecution(userId, tool) !== "llm" && getCouncilToolArgsSchema(userId, tool) !== null;
 }
-
 export function getExtensionToolRegistration(name: string): ToolRegistration | undefined {
-  return toolRegistry.getTool(name);
+  // Qualified lookups are authoritative. The bare-name fallback remains for
+  // legacy Council sidecar calls, but must never reinterpret a mapped name.
+  return toolRegistry.getToolQualified(name) ?? toolRegistry.getTool(name);
 }
 
 export async function invokeExtensionCouncilTool(
@@ -122,10 +157,19 @@ export async function invokeExtensionCouncilTool(
   timeoutMs: number,
   councilMember?: CouncilMemberContext,
   contextMessages?: LlmMessage[],
+  signal?: AbortSignal,
 ): Promise<string> {
   const host = getWorkerHost(extensionId);
   if (!host) {
     throw new Error(`Extension worker '${extensionId}' is not running`);
   }
-  return host.invokeExtensionTool(toolName, args, timeoutMs, councilMember, contextMessages);
+  if (councilMember) validateCouncilMemberContext(councilMember);
+  return host.invokeExtensionTool(
+    toolName,
+    args,
+    timeoutMs,
+    councilMember,
+    contextMessages,
+    signal,
+  );
 }

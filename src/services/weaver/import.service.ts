@@ -629,6 +629,6 @@ export async function enrichEntry(
     }
   }
 
-  updateEntry(userId, entryId, { content: enriched });
+  updateEntry(userId, bookId, entryId, { content: enriched });
   return { entry_id: entryId, enriched: true, content: enriched, note: "" };
 }

@@ -4,7 +4,7 @@ title: API Keys & Tickets
 
 # API Keys & Decryption Tickets
 
-By default, exports **do not** include API keys or any other content from your `secrets` table — those stay encrypted at rest on the source server. If you want a true 1:1 restore (no need to paste keys back in), enable the **Include API keys** option. This produces two files: the archive and a separate **decryption ticket** that holds the AES key.
+By default, exports **do not** include API keys or any other content from your `secrets` table — those stay encrypted at rest on the source server. If you want a 1:1 restore (no need to paste keys back in), enable **Include API keys**. This produces two files: the archive and a separate decryption ticket. The ticket contains the raw AES key, includes an issuer identity, expires after 24 hours, and is accepted at most once by each destination account and instance.
 
 ---
 
@@ -39,7 +39,15 @@ All of the above are bundled when you opt into the secrets flow. Connection prof
 
 5. **Save the ticket somewhere different from the archive.** A password manager is ideal. Anyone who holds *both* files can decrypt your keys.
 
-If a secret on the source instance can't be decrypted (legacy data, identity-key drift), it's silently dropped from the export and surfaced in a yellow warning under the export button: *"N secrets could not be decrypted on this server and were excluded from the archive. Affected keys: …"*. The ticket only binds to the secrets that actually made it in, so the import-side binding check passes cleanly.
+If any source secret cannot be enumerated or decrypted (legacy data, identity-key drift, or corruption), the key-bearing export fails as a whole. No partial ticket/archive pair is valid; repair the source secret and start a fresh export.
+
+The ticket is also bound to the exact image-generation private-data and encrypted-secret inventory present during preparation. If either changes before the archive snapshot starts, the download fails closed; discard the old ticket and start a fresh export so the pair describes one source state.
+
+If the archive download is interrupted or fails before completion, the server
+restores the owner-bound pending export for a retry (or wipes it if the
+bounded cache can no longer retain it). A successfully completed stream
+consumes the pending export and wipes the in-memory master key.
+
 
 ---
 
@@ -49,17 +57,24 @@ If a secret on the source instance can't be decrypted (legacy data, identity-key
 2. After upload + verify, if the archive carries encrypted secrets the import **pauses** in `Waiting for decryption ticket…`
 3. You see a prompt: *"This archive carries N encrypted secrets. Upload your ticket file to restore them."*
 4. Pick the matching `.ticket.json` file
-5. The server validates the ticket, decrypts each secret, and re-encrypts every value under your local instance's identity key before storing it
+5. The server validates the ticket and prepares each secret in bounded memory,
+   then commits the ticket tombstone, decrypted/re-encrypted rows, canonical
+   data, and receipt together in one durable transaction.
 
 If you can't find the ticket, click **Skip API keys** — the import continues and you re-enter the keys manually in **Settings → Connections** afterwards.
 
-### Reuse Is Allowed
+### One-Use Tickets
 
-Tickets never expire. You can restore the same backup multiple times — onto a fresh install, a backup machine, a staging server, after a disaster — and the ticket keeps working. The server records every use; on the second and subsequent uses you see:
-
-> Heads up: this ticket has been used 2 times (last used 2026-05-21 14:30:52). Proceeding will overwrite any matching API keys on this account.
-
-This is purely advisory. The import proceeds.
+Tickets expire after 24 hours. A destination account and instance can consume
+a ticket only once for an archive ID. A replay on that destination, a stale
+ticket, missing issuer fields, a wrong issuer, or a ticket for another archive
+is rejected before any secret is decrypted or applied. Validation and secret
+preparation happen before the commit fence, so decrypt failures, cancellation,
+filesystem failures, and pre-commit database failures leave the ticket
+retryable. Once the transaction commits, that destination stores a permanent
+tombstone for the account, archive, and ticket identity. The tombstone is
+local: another Lumiverse instance does not share it and may import the same
+archive/ticket pair while the ticket remains within its 24-hour lifetime.
 
 ---
 
@@ -68,12 +83,13 @@ This is purely advisory. The import proceeds.
 | Step | What Happens |
 |------|--------------|
 | Export prepare | Server generates a random 256-bit AES key (the "secret master key"). |
-| Export prepare | Server also computes a SHA-256 binding hash over the archive ID + algorithm + sorted secret-key list, and embeds it in the ticket. |
-| Export archive stream | Server reads each secret with its local identity key, re-encrypts it with the master key using AES-256-GCM (fresh IV per record), and writes the result into the archive. |
-| Export archive stream | Master key is wiped from memory the moment the archive download completes. |
+| Export prepare | Server computes a SHA-256 binding hash over the archive ID, algorithm, and sorted exact secret-key list, and embeds it in the ticket together with issuer, issuer instance, and issue time. |
+| Export archive stream | Server reads every bound secret with its local identity key, authenticates the original secret key as AES-GCM associated data, and writes the encrypted result into the archive. Any read/decryption failure aborts the export. |
+| Export archive stream | The master key is wiped from memory when the archive stream settles. |
 | Import upload | Archive is verified (ZIP magic + manifest parse). |
-| Import ticket submit | Server re-computes the binding hash from the archive and compares — mismatch means the archive was tampered with or the ticket is from a different export. |
-| Import secrets phase | Each secret is decrypted with the ticket's master key, then immediately re-encrypted with this instance's identity key. Plaintext never touches disk and never leaves the import job's stack frame. |
+| Import ticket submit | Server validates every required ticket field, freshness, archive ID, and exact secrets hash. |
+| Import secrets phase | Each secret is authenticated against its original key, decrypted with the ticket's master key, and immediately re-encrypted with this instance's identity key in bounded memory. Plaintext never touches disk or logs. |
+| Import commit | The one-use tombstone, re-encrypted secret rows, canonical graph, and final receipt commit synchronously together. A failure before that transaction leaves the ticket retryable. |
 
 ---
 
@@ -83,13 +99,10 @@ What this protects against — and what it doesn't:
 
 | Scenario | Result |
 |----------|--------|
-| Archive stolen alone | Secrets blob is AES-256-GCM. Computationally infeasible to brute-force. |
+| Archive stolen alone | Secrets blob is AES-GCM authenticated and computationally infeasible to brute-force. |
 | Ticket stolen alone | Without the matching archive, the AES key decrypts nothing. |
-| Both stolen together | Attacker can decrypt. **Defended operationally**: you keep them in different places. |
-| Archive tampered after export | Ticket binding hash no longer matches; import rejects with a `binding_mismatch` error. |
-| Ticket tampered (e.g. swapped archive ID) | Import rejects with `archive_mismatch`. |
-| Different archive's ticket used | Import rejects — ticket archiveId doesn't match the archive manifest. |
-| Bit-flipped ciphertext inside the archive | AES-GCM auth tag fails; that individual secret is skipped during import. |
+| Both stolen together | Attacker can decrypt. **Defended operationally**: keep the files in different secure locations. |
+| Archive or secret row tampered after export | Exact manifest/ticket binding or AES-GCM authentication fails; the import is rejected all-or-nothing before canonical commit. |
 
 What it **cannot** protect:
 
@@ -102,10 +115,15 @@ What it **cannot** protect:
 ## Tips & Caveats
 
 !!! tip "Use a password manager for the ticket"
-    The ticket is ~700 bytes of JSON. Most password managers let you attach a small file or paste the JSON as a secure note. That's the cleanest way to keep it durable and separate from the archive.
+    The ticket is a small JSON file containing the raw 256-bit AES key and
+    binding metadata. A destination's one-use tombstone does not revoke this
+    file: anyone with both files can still decrypt the secrets offline. Keep it
+    separate from the archive and upload it only to the matching import job.
 
-!!! tip "Restore on a per-key basis"
-    There's no way to selectively restore just *some* secrets from a ticket — it's all or nothing per import. If you want different secrets per instance, run the export with **Include API keys** unchecked and re-enter the specific keys by hand on each target.
+!!! tip "Secret restore is all-or-nothing"
+    A ticket covers the exact encrypted-secret set. You cannot selectively
+    restore individual keys, and a malformed or corrupt secret row aborts the
+    import rather than silently dropping a value.
 
 !!! warning "If you lose the ticket, the keys in the archive are gone"
     There is no backdoor. Without the ticket's AES key, the encrypted secrets blob is just random bytes. The archive itself is still useful — everything else (characters, chats, presets, etc.) imports normally — you just won't get keys back.

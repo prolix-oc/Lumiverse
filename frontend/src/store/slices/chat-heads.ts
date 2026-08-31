@@ -133,6 +133,7 @@ export const createChatHeadsSlice: StateCreator<ChatHeadsSlice> = (set, get) => 
           avatarUrl: null,
           status: entry.councilRetryPending ? 'council_failed' : entry.status as ChatHeadEntry['status'],
           model: entry.model || '',
+          ...(entry.provider ? { provider: entry.provider } : {}),
           startedAt: entry.startedAt || Date.now(),
           attentionCleared: existing?.attentionCleared || clearedKeys.has(attentionKey(entry.chatId, entry.generationId)),
         }

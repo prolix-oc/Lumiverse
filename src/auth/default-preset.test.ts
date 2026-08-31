@@ -4,10 +4,12 @@ import * as settingsSvc from "../services/settings.service";
 import {
   backfillDefaultPresets,
   BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY,
+  DEFAULT_PRESET_BLOCKS,
   BUILTIN_DEFAULT_PRESET_SLUG,
   seedDefaultPreset,
 } from "./default-preset";
 import { SYSTEM_SECRET_PRINCIPAL, SYSTEM_SECRET_PRINCIPAL_EMAIL } from "../services/secrets.service";
+import { createDisabledAgentConfigV2 } from "../types/agents";
 
 function initDefaultPresetTestDb(): void {
   closeDatabase();
@@ -34,6 +36,31 @@ function initDefaultPresetTestDb(): void {
     user_id TEXT,
     engine TEXT NOT NULL DEFAULT 'classic',
     cache_revision INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.run(`CREATE TABLE preset_agent_configs (
+    user_id TEXT NOT NULL,
+    preset_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 2,
+    agents_enabled INTEGER NOT NULL DEFAULT 0,
+    allowed_modes TEXT NOT NULL DEFAULT '["response"]',
+    default_mode TEXT NOT NULL DEFAULT 'response',
+    max_invocations INTEGER NOT NULL DEFAULT 64,
+    max_tool_calls INTEGER NOT NULL DEFAULT 64,
+    main_tool_ids TEXT NOT NULL DEFAULT '[]',
+    main_lore_scope TEXT NOT NULL DEFAULT 'active',
+    phase_policy_json TEXT NOT NULL DEFAULT '{}',
+    cognition_policy_json TEXT NOT NULL DEFAULT '{}',
+    task_policy_json TEXT NOT NULL DEFAULT '{}',
+    workspace_policy_json TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'ready',
+    review_code TEXT,
+    review_acknowledged INTEGER NOT NULL DEFAULT 0,
+    config_revision INTEGER NOT NULL DEFAULT 1,
+    binding_revision INTEGER NOT NULL DEFAULT 1,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, preset_id)
   )`);
 
   db.run(`CREATE TABLE settings (
@@ -76,6 +103,49 @@ function insertPreset(input: {
       0,
     ],
   );
+}
+function attachFullBuiltInLoomAuthority(userId: string, presetId: string): void {
+  const promptOrder = DEFAULT_PRESET_BLOCKS
+    .filter((block) => block.marker !== "category")
+    .slice(0, 11)
+    .map((block) => ({ ...block, revision: 1 }));
+  if (promptOrder.length !== 11) throw new Error("Expected eleven built-in content blocks");
+  const config = {
+    ...createDisabledAgentConfigV2(),
+    runtimePolicy: {
+      version: 1,
+      authority: "loom",
+      scope: "preset",
+      defaultMode: "response",
+      loomPolicy: {
+        version: 1,
+        workPolicy: promptOrder.map((block, promptOrderIndex) => ({
+          version: 1,
+          id: `built-in-${promptOrderIndex}`,
+          source: {
+            kind: "loom_block",
+            blockId: block.id,
+            presetRevision: 0,
+            blockRevision: 1,
+            promptOrder: promptOrderIndex,
+          },
+          destination: "root_work",
+          checkpoint: "WORK",
+          required: false,
+          visibility: "work_only",
+        })),
+        workspaceUsage: [],
+        completionCriteria: [],
+        renderPolicy: [],
+      },
+      phases: [],
+    },
+  };
+  const db = getDb();
+  db.query("UPDATE presets SET prompt_order = ? WHERE user_id = ? AND id = ?")
+    .run(JSON.stringify(promptOrder), userId, presetId);
+  db.query("INSERT INTO preset_agent_configs (user_id, preset_id, config_json) VALUES (?, ?, ?)")
+    .run(userId, presetId, JSON.stringify({ config }));
 }
 
 function countPresets(userId: string): number {
@@ -151,7 +221,7 @@ describe("default preset seeding", () => {
     expect(settingsSvc.getSetting("u1", "activeLoomPresetId")?.value).toBe("existing-openai-default");
   });
 
-  test("upgrades a legacy built-in preset in place instead of duplicating it", () => {
+  test("quarantines all eleven exact Loom sources during a legacy built-in metadata upgrade", () => {
     insertUser("u1", 1);
     insertPreset({
       id: "legacy-built-in",
@@ -164,6 +234,7 @@ describe("default preset seeding", () => {
         description: "",
       },
     });
+    attachFullBuiltInLoomAuthority("u1", "legacy-built-in");
 
     const result = seedDefaultPreset("u1", { setActiveIfNoPresets: true });
 
@@ -176,6 +247,38 @@ describe("default preset seeding", () => {
     expect(getDb().query("SELECT cache_revision FROM presets WHERE id = ?").get("legacy-built-in")).toEqual({
       cache_revision: 1,
     });
+    expect(getDb().query("SELECT state, review_code, review_acknowledged, config_revision FROM preset_agent_configs WHERE preset_id = ?").get("legacy-built-in")).toEqual({
+      state: "repair_required",
+      review_code: "loom_reference_repair_required",
+      review_acknowledged: 0,
+      config_revision: 2,
+    });
+  });
+  test("leaves an already-current built-in with eleven exact Loom sources revision-stable", () => {
+    insertUser("u1", 1);
+    insertPreset({
+      id: "current-built-in",
+      userId: "u1",
+      name: "Default",
+      provider: "loom",
+      metadata: {
+        isDefault: true,
+        _lumiverse_preset_slug: BUILTIN_DEFAULT_PRESET_SLUG,
+      },
+    });
+    attachFullBuiltInLoomAuthority("u1", "current-built-in");
+    const beforeConfig = getDb().query("SELECT config_json FROM preset_agent_configs WHERE preset_id = ?")
+      .get("current-built-in");
+
+    const result = seedDefaultPreset("u1", { setActiveIfNoPresets: true });
+
+    expect(result).toMatchObject({ seeded: false, upgradedLegacy: false, activated: false });
+    expect(getDb().query("SELECT cache_revision FROM presets WHERE id = ?").get("current-built-in"))
+      .toEqual({ cache_revision: 0 });
+    expect(getDb().query("SELECT state, review_code, review_acknowledged, config_revision FROM preset_agent_configs WHERE preset_id = ?").get("current-built-in"))
+      .toEqual({ state: "ready", review_code: null, review_acknowledged: 0, config_revision: 1 });
+    expect(getDb().query("SELECT config_json FROM preset_agent_configs WHERE preset_id = ?")
+      .get("current-built-in")).toEqual(beforeConfig);
   });
 
   test("startup backfill seeds all unmarked users once and only auto-activates empty accounts", () => {

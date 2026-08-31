@@ -1,36 +1,39 @@
-import { shouldUseBunWorkers, warnBunWorkerFallback } from "./bun-worker-guard";
-import { runRegexRequest } from "./regex-sandbox-core";
+import {
+  releaseIdleRegexIsolatePool,
+  runRegexInIsolate,
+  shutdownRegexIsolatePool,
+} from "../services/isolate-pool";
+import type { RegexIsolateRequest } from "../services/isolate-pool";
+import {
+  isRegexValidationErrorCode,
+  REGEX_LIMITS_V1,
+  RegexCancelledError,
+  RegexDeadlineError,
+  RegexLimitError,
+  assertRegexTextBytes,
+  throwIfRegexAborted,
+} from "./regex-limits";
 
 /**
- * Worker-backed regex sandbox.
- *
- * User-supplied patterns (regex scripts, the {{regex}} macro, the
- * {{regexInstalled}} macro, the test-regex API) used to run on the main event
- * loop, where catastrophic backtracking like `(a+)+$` would freeze the entire
- * server until the process was killed. This module evaluates those patterns
- * inside a Bun Worker pool with a hard wall-clock timeout. When the timeout
- * fires we kill the worker, reject the in-flight request, and respawn — the
- * main thread stays responsive.
- *
- * The pool is small (default 2 workers) because regex evaluation is normally
- * fast: the primary cost we're paying is the postMessage round-trip, not
- * concurrency. A second worker exists so that one runaway regex doesn't
- * stall every other regex in the same generation.
+ * Untrusted regexes execute only through the shared terminable isolate pool.
+ * A missing or unhealthy backend fails closed; there is deliberately no
+ * synchronous/main-process fallback.
  */
-
 const DEFAULT_TIMEOUT_MS = 500;
-const DEFAULT_POOL_SIZE = 2;
-export const REGEX_WORKER_START_TIMEOUT_MS = 5_000;
 
-export class RegexTimeoutError extends Error {
+
+export class RegexTimeoutError extends RegexLimitError {
   constructor(public readonly timeoutMs: number) {
-    super(`Regex evaluation exceeded ${timeoutMs}ms and was aborted`);
+    super("worker_timed_out", `Regex evaluation exceeded ${timeoutMs}ms and was aborted`);
     this.name = "RegexTimeoutError";
   }
 }
 
 export class RegexSandboxError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly code: "worker_unavailable" | "worker_crashed" | "worker_malformed" | "queue_full" = "worker_crashed",
+  ) {
     super(message);
     this.name = "RegexSandboxError";
   }
@@ -56,289 +59,108 @@ export interface SandboxCaptureReplacement {
   replacement: string;
 }
 
-interface QueueItem {
-  op: "replace" | "test" | "collect" | "capture-replacements";
-  payload: Record<string, unknown>;
-  timeoutMs: number;
-  resolve: (value: unknown) => void;
-  reject: (err: Error) => void;
+export interface RegexSandboxOptions {
+  userId?: string;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  maxMatches?: number;
+  maxExpansionBytes?: number;
+  maxOutputBytes?: number;
+  maxOperationBytes?: number;
 }
 
-interface InFlight {
-  id: string;
-  timer: unknown;
-  phase: "startup" | "execution";
-  resolve: (value: unknown) => void;
-  reject: (err: Error) => void;
-  timeoutMs: number;
+function getTimeoutMs(timeoutMs: number, deadlineAt?: number): number {
+  if (deadlineAt === undefined) return timeoutMs;
+  return Math.min(timeoutMs, deadlineAt - Date.now());
 }
-
-export interface RegexWorkerPoolDeps {
-  createWorker(): Worker;
-  scheduleTimer(fn: () => void, ms: number): unknown;
-  cancelTimer(timer: unknown): void;
-  createRequestId(): string;
-  startupTimeoutMs: number;
-}
-
-function defaultWorkerPoolDeps(): RegexWorkerPoolDeps {
-  return {
-    createWorker: () => new Worker(
-      new URL("./regex-sandbox.worker.ts", import.meta.url).href,
-      { type: "module" },
-    ),
-    scheduleTimer: (fn, ms) => setTimeout(fn, ms),
-    cancelTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-    createRequestId: () => crypto.randomUUID(),
-    startupTimeoutMs: REGEX_WORKER_START_TIMEOUT_MS,
+function mapIsolateError(error: unknown, timeoutMs: number): Error {
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    timeoutPhase?: unknown;
+    timeoutMs?: unknown;
   };
-}
-
-export class RegexWorkerPool {
-  private workers = new Set<Worker>();
-  private idle: Worker[] = [];
-  private inflight = new Map<Worker, InFlight>();
-  private queue: QueueItem[] = [];
-
-  constructor(
-    private readonly maxSize: number,
-    private readonly deps: RegexWorkerPoolDeps = defaultWorkerPoolDeps(),
-  ) {}
-
-  run<T>(op: QueueItem["op"], payload: Record<string, unknown>, timeoutMs: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const item: QueueItem = {
-        op,
-        payload,
-        timeoutMs,
-        resolve: resolve as (v: unknown) => void,
-        reject,
-      };
-      const worker = this.acquire();
-      if (worker) {
-        this.dispatch(worker, item);
-      } else {
-        this.queue.push(item);
-      }
-    });
-  }
-
-  private acquire(): Worker | null {
-    const idle = this.idle.pop();
-    if (idle) return idle;
-    if (this.workers.size < this.maxSize) {
-      return this.spawn();
-    }
-    return null;
-  }
-
-  private spawn(): Worker {
-    const worker = this.deps.createWorker();
-    worker.addEventListener("message", (e) => this.onMessage(worker, e as MessageEvent));
-    worker.addEventListener("error", (e) => this.onError(worker, e as ErrorEvent));
-    this.workers.add(worker);
-    return worker;
-  }
-
-  private dispatch(worker: Worker, item: QueueItem): void {
-    const id = this.deps.createRequestId();
-    // Worker construction, module loading and event-loop scheduling are not
-    // regex execution. Give that phase its own watchdog and start the regex
-    // budget only after the worker acknowledges this request.
-    const timer = this.deps.scheduleTimer(
-      () => this.onTimeout(worker),
-      this.deps.startupTimeoutMs,
+  const code = typeof candidate.code === "string" ? candidate.code : "worker_crashed";
+  const message = typeof candidate.message === "string" ? candidate.message : "Regex isolate failed";
+  if (
+    (code === "worker_timed_out" || code === "timed_out")
+    && candidate.timeoutPhase === "startup"
+  ) {
+    return new RegexWorkerStartupTimeoutError(
+      typeof candidate.timeoutMs === "number" ? candidate.timeoutMs : timeoutMs,
     );
-    this.inflight.set(worker, {
-      id,
-      timer,
-      phase: "startup",
-      resolve: item.resolve,
-      reject: item.reject,
-      timeoutMs: item.timeoutMs,
-    });
-    worker.postMessage({ id, op: item.op, ...item.payload });
   }
-
-  private onMessage(worker: Worker, event: MessageEvent): void {
-    const data = event.data as {
-      id: string;
-      type?: "started";
-      ok?: boolean;
-      result?: unknown;
-      error?: string;
-    };
-    const flight = this.inflight.get(worker);
-    if (!flight || flight.id !== data.id) return; // stale; ignore
-    if (data.type === "started") {
-      if (flight.phase !== "startup") return;
-      this.deps.cancelTimer(flight.timer);
-      flight.phase = "execution";
-      flight.timer = this.deps.scheduleTimer(
-        () => this.onTimeout(worker),
-        flight.timeoutMs,
-      );
-      return;
-    }
-    this.inflight.delete(worker);
-    this.deps.cancelTimer(flight.timer);
-    if (data.ok) flight.resolve(data.result);
-    else flight.reject(new RegexSandboxError(data.error || "Regex evaluation failed"));
-    this.release(worker);
-  }
-
-  private onError(worker: Worker, event: ErrorEvent): void {
-    const flight = this.inflight.get(worker);
-    if (flight) {
-      this.inflight.delete(worker);
-      this.deps.cancelTimer(flight.timer);
-      flight.reject(new RegexSandboxError(`Regex worker crashed: ${event.message || "unknown"}`));
-    }
-    this.discard(worker);
-    this.drainQueue();
-  }
-
-  private onTimeout(worker: Worker): void {
-    const flight = this.inflight.get(worker);
-    if (flight) {
-      this.inflight.delete(worker);
-      if (flight.phase === "execution") {
-        flight.reject(new RegexTimeoutError(flight.timeoutMs));
-      } else {
-        flight.reject(new RegexWorkerStartupTimeoutError(this.deps.startupTimeoutMs));
-      }
-    }
-    try { worker.terminate(); } catch { /* ignore */ }
-    this.discard(worker);
-    this.drainQueue();
-  }
-
-  private release(worker: Worker): void {
-    const next = this.queue.shift();
-    if (next) this.dispatch(worker, next);
-    else this.idle.push(worker);
-  }
-
-  private discard(worker: Worker): void {
-    this.workers.delete(worker);
-    this.idle = this.idle.filter((w) => w !== worker);
-  }
-
-  private drainQueue(): void {
-    while (this.queue.length > 0) {
-      const worker = this.acquire();
-      if (!worker) break;
-      const item = this.queue.shift();
-      if (!item) {
-        this.idle.push(worker);
-        break;
-      }
-      this.dispatch(worker, item);
-    }
-  }
-
-  releaseIdle(): number {
-    if (this.queue.length > 0) return 0;
-    const idle = this.idle;
-    this.idle = [];
-    for (const worker of idle) {
-      this.workers.delete(worker);
-      try { worker.terminate(); } catch { /* ignore */ }
-    }
-    return idle.length;
-  }
-
-  /** Tear down the pool — call from shutdown hooks. */
-  shutdown(): void {
-    for (const w of this.workers) {
-      try { w.terminate(); } catch { /* ignore */ }
-    }
-    this.workers.clear();
-    this.idle = [];
-    for (const flight of this.inflight.values()) {
-      this.deps.cancelTimer(flight.timer);
-      flight.reject(new RegexSandboxError("Regex sandbox shut down"));
-    }
-    this.inflight.clear();
-    for (const item of this.queue) {
-      item.reject(new RegexSandboxError("Regex sandbox shut down"));
-    }
-    this.queue = [];
-  }
+  if (code === "worker_timed_out" || code === "timed_out") return new RegexTimeoutError(timeoutMs);
+  if (code === "cancelled") return new RegexCancelledError(message);
+  if (code === "deadline_exceeded") return new RegexDeadlineError(message);
+  if (code === "queue_full") return new RegexSandboxError(message, "queue_full");
+  if (code === "worker_unavailable") return new RegexSandboxError(message, "worker_unavailable");
+  if (code === "worker_crashed" || code === "crashed") return new RegexSandboxError(message, "worker_crashed");
+  if (code === "worker_malformed") return new RegexSandboxError(message, "worker_malformed");
+  if (isRegexValidationErrorCode(code)) return new RegexLimitError(code, message);
+  return new RegexSandboxError(message, "worker_malformed");
 }
 
-let _pool: RegexWorkerPool | null = null;
-
-function getPool(): RegexWorkerPool {
-  if (!_pool) _pool = new RegexWorkerPool(DEFAULT_POOL_SIZE);
-  return _pool;
-}
-
-function runRegexInline<T>(
-  op: QueueItem["op"],
+async function runSandboxed<T>(
+  op: "replace" | "test" | "collect" | "capture-replacements",
   payload: Record<string, unknown>,
+  timeoutMs: number,
+  options?: RegexSandboxOptions,
 ): Promise<T> {
-  // Windows Bun worker crashes are worse than losing timeout isolation here.
-  warnBunWorkerFallback("regex sandbox");
-  if (op === "replace") {
-    return Promise.resolve(runRegexRequest({
-      id: "inline",
-      op,
-      pattern: String(payload.pattern ?? ""),
-      flags: String(payload.flags ?? ""),
-      input: String(payload.input ?? ""),
-      replacement: String(payload.replacement ?? ""),
-    }) as T);
+  throwIfRegexAborted(options?.signal, options?.deadlineAt);
+  const effectiveTimeoutMs = getTimeoutMs(timeoutMs, options?.deadlineAt);
+  if (effectiveTimeoutMs <= 0) throw new RegexDeadlineError();
+  const limits: Record<string, number> = {
+    maxInputBytes: REGEX_LIMITS_V1.maxInputBytes,
+    maxOutputBytes: options?.maxOutputBytes ?? REGEX_LIMITS_V1.maxOutputBytes,
+    maxExpansionBytes: options?.maxExpansionBytes ?? REGEX_LIMITS_V1.maxExpansionBytes,
+    maxOperationBytes: options?.maxOperationBytes ?? REGEX_LIMITS_V1.maxOperationBytes,
+    maxMatches: options?.maxMatches ?? REGEX_LIMITS_V1.maxMatchCount,
+    ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }),
+  };
+  const pattern = payload.pattern;
+  const flags = payload.flags;
+  const input = payload.input;
+  if (typeof pattern !== "string" || typeof flags !== "string" || typeof input !== "string") {
+    throw new RegexLimitError("invalid_input", "Regex isolate request is missing pattern, flags, or input");
   }
-
-  if (op === "test") {
-    return Promise.resolve(runRegexRequest({
-      id: "inline",
-      op,
-      pattern: String(payload.pattern ?? ""),
-      flags: String(payload.flags ?? ""),
-      input: String(payload.input ?? ""),
-      replacement: String(payload.replacement ?? ""),
-    }) as T);
-  }
-
-  if (op === "capture-replacements") {
-    return Promise.resolve(runRegexRequest({
-      id: "inline",
-      op,
-      pattern: String(payload.pattern ?? ""),
-      flags: String(payload.flags ?? ""),
-      input: String(payload.input ?? ""),
-      replacement: String(payload.replacement ?? ""),
-    }) as T);
-  }
-
-  return Promise.resolve(runRegexRequest({
-    id: "inline",
+  const replacement = payload.replacement;
+  const replacementMode = payload.replacementMode;
+  const request: RegexIsolateRequest = {
     op,
-    pattern: String(payload.pattern ?? ""),
-    flags: String(payload.flags ?? ""),
-    input: String(payload.input ?? ""),
-  }) as T);
+    pattern,
+    flags,
+    input,
+    ...(typeof replacement === "string" ? { replacement } : {}),
+    ...(replacementMode === "raw" || replacementMode === "native" ? { replacementMode } : {}),
+    limits,
+  };
+  try {
+    return await runRegexInIsolate(
+      request,
+      {
+        userId: options?.userId ?? "regex-host",
+        timeoutMs: effectiveTimeoutMs,
+        signal: options?.signal,
+        deadlineAt: options?.deadlineAt,
+      },
+    ) as T;
+  } catch (error) {
+    throw mapIsolateError(error, effectiveTimeoutMs);
+  }
 }
 
-export function shutdownRegexSandbox(): void {
-  if (_pool) {
-    _pool.shutdown();
-    _pool = null;
-  }
+export async function shutdownRegexSandbox(): Promise<void> {
+  await shutdownRegexIsolatePool();
 }
 
 export function releaseIdleRegexWorkers(): number {
-  return _pool?.releaseIdle() ?? 0;
+  return releaseIdleRegexIsolatePool();
 }
 
-/** Validate the pattern compiles before sending to a worker. */
-function assertCompilable(pattern: string, flags: string): void {
-  // A syntactically invalid pattern doesn't risk ReDoS — fail synchronously
-  // so callers don't pay the worker round-trip just to get a SyntaxError.
-  // eslint-disable-next-line no-new
-  new RegExp(pattern, flags);
+/** Validate pattern bytes before queueing; syntax compilation stays in the isolate. */
+function assertPatternBytes(pattern: string): void {
+  assertRegexTextBytes(pattern, REGEX_LIMITS_V1.maxPatternBytes, "pattern_too_large", "Regex pattern");
 }
 
 export async function regexReplaceSandboxed(
@@ -347,16 +169,12 @@ export async function regexReplaceSandboxed(
   input: string,
   replacement: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: RegexSandboxOptions,
 ): Promise<string> {
-  assertCompilable(pattern, flags);
-  if (!shouldUseBunWorkers()) {
-    return runRegexInline<string>("replace", { pattern, flags, input, replacement });
-  }
-  return getPool().run<string>(
-    "replace",
-    { pattern, flags, input, replacement },
-    timeoutMs,
-  );
+  assertPatternBytes(pattern);
+  assertRegexTextBytes(input, REGEX_LIMITS_V1.maxInputBytes, "invalid_input", "Regex input");
+  assertRegexTextBytes(replacement, REGEX_LIMITS_V1.maxReplacementBytes, "replacement_too_large", "Regex replacement");
+  return runSandboxed<string>("replace", { pattern, flags, input, replacement }, timeoutMs, options);
 }
 
 export async function regexCollectSandboxed(
@@ -364,22 +182,17 @@ export async function regexCollectSandboxed(
   flags: string,
   input: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: RegexSandboxOptions,
 ): Promise<SandboxMatch[]> {
-  assertCompilable(pattern, flags);
-  if (!shouldUseBunWorkers()) {
-    return runRegexInline<SandboxMatch[]>("collect", { pattern, flags, input });
-  }
-  return getPool().run<SandboxMatch[]>(
-    "collect",
-    { pattern, flags, input },
-    timeoutMs,
-  );
+  assertPatternBytes(pattern);
+  assertRegexTextBytes(input, REGEX_LIMITS_V1.maxInputBytes, "invalid_input", "Regex input");
+  return runSandboxed<SandboxMatch[]>("collect", { pattern, flags, input }, timeoutMs, options);
 }
 
 /**
  * Collect raw-mode replacement templates with captures already interpolated.
- * This keeps large capture arrays inside the worker instead of cloning them
- * across the worker boundary.
+ * This keeps large capture arrays inside the isolate instead of cloning them
+ * across the host boundary.
  */
 export async function regexCaptureReplacementsSandboxed(
   pattern: string,
@@ -387,18 +200,36 @@ export async function regexCaptureReplacementsSandboxed(
   input: string,
   replacement: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: RegexSandboxOptions,
 ): Promise<SandboxCaptureReplacement[]> {
-  assertCompilable(pattern, flags);
-  if (!shouldUseBunWorkers()) {
-    return runRegexInline<SandboxCaptureReplacement[]>(
-      "capture-replacements",
-      { pattern, flags, input, replacement },
-    );
-  }
-  return getPool().run<SandboxCaptureReplacement[]>(
+  assertPatternBytes(pattern);
+  assertRegexTextBytes(input, REGEX_LIMITS_V1.maxInputBytes, "invalid_input", "Regex input");
+  assertRegexTextBytes(replacement, REGEX_LIMITS_V1.maxReplacementBytes, "replacement_too_large", "Regex replacement");
+  return runSandboxed<SandboxCaptureReplacement[]>(
     "capture-replacements",
     { pattern, flags, input, replacement },
     timeoutMs,
+    options,
+  );
+}
+
+/** Collect ordinary replacement results with native GetSubstitution semantics. */
+export async function regexNativeCaptureReplacementsSandboxed(
+  pattern: string,
+  flags: string,
+  input: string,
+  replacement: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: RegexSandboxOptions,
+): Promise<SandboxCaptureReplacement[]> {
+  assertPatternBytes(pattern);
+  assertRegexTextBytes(input, REGEX_LIMITS_V1.maxInputBytes, "invalid_input", "Regex input");
+  assertRegexTextBytes(replacement, REGEX_LIMITS_V1.maxReplacementBytes, "replacement_too_large", "Regex replacement");
+  return runSandboxed<SandboxCaptureReplacement[]>(
+    "capture-replacements",
+    { pattern, flags, input, replacement, replacementMode: "native" },
+    timeoutMs,
+    options,
   );
 }
 
@@ -408,19 +239,15 @@ export async function regexTestSandboxed(
   input: string,
   replacement: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: RegexSandboxOptions,
 ): Promise<{ result: string; matches: number }> {
-  assertCompilable(pattern, flags);
-  if (!shouldUseBunWorkers()) {
-    return runRegexInline<{ result: string; matches: number }>("test", {
-      pattern,
-      flags,
-      input,
-      replacement,
-    });
-  }
-  return getPool().run<{ result: string; matches: number }>(
+  assertPatternBytes(pattern);
+  assertRegexTextBytes(input, REGEX_LIMITS_V1.maxInputBytes, "invalid_input", "Regex input");
+  assertRegexTextBytes(replacement, REGEX_LIMITS_V1.maxReplacementBytes, "replacement_too_large", "Regex replacement");
+  return runSandboxed<{ result: string; matches: number }>(
     "test",
     { pattern, flags, input, replacement },
     timeoutMs,
+    options,
   );
 }

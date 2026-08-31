@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { bumpChatGenerationRevision } from "./chat-generation-revision.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
@@ -9,6 +10,7 @@ import * as imagesSvc from "./images.service";
 import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
 import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
 
 export class InvalidCharacterLibraryScopeError extends Error {
   readonly code = "INVALID_CHARACTER_LIBRARY_SCOPE" as const;
@@ -536,6 +538,7 @@ function stringArraysEqual(a: string[], b: string[]): boolean {
  * Emits no per-character events; callers refresh the browser afterwards.
  */
 export function bulkUpdateCharacterTags(userId: string, input: CharacterTagBulkInput): CharacterTagBulkResult {
+  return withUserDataMutationSync(userId, () => {
   const ids = Array.from(new Set(input.ids.filter((id) => typeof id === "string" && id.length > 0)));
   if (ids.length === 0) throw new Error("At least one character id is required");
   const operation = input.operation;
@@ -573,6 +576,7 @@ export function bulkUpdateCharacterTags(userId: string, input: CharacterTagBulkI
   })();
 
   return { updated, unchanged };
+  });
 }
 
 // ─── Avatar info (lightweight, no JSON parsing) ───────────────────────────
@@ -753,10 +757,13 @@ function clearRemovedChatAvatarReferences(userId: string, removedImageIds: Itera
       if (Object.keys(entries).length > 0) metadata.group_active_avatar_entry_ids = entries;
       else delete metadata.group_active_avatar_entry_ids;
     }
-    if (!changed) continue;
     const now = Math.floor(Date.now() / 1000);
-    getDb().query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(JSON.stringify(metadata), now, row.id, userId);
+    const db = getDb();
+    db.transaction(() => {
+      db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(JSON.stringify(metadata), now, row.id, userId);
+      bumpChatGenerationRevision(db, row.id, userId);
+    })();
     eventBus.emit(EventType.CHAT_CHANGED, {
       chat: { ...row, metadata, updated_at: now },
       changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"],
@@ -921,6 +928,7 @@ export function createCharacter(
   input: CreateCharacterInput,
   options: CreateCharacterOptions = {},
 ): Character {
+  return withUserDataMutationSync(userId, () => {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
@@ -964,9 +972,11 @@ export function createCharacter(
     eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
   }
   return character;
+  });
 }
 
 export function updateCharacter(userId: string, id: string, input: UpdateCharacterInput): Character | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
   const oldImageIds = collectCharacterImageIds(existing);
@@ -1023,9 +1033,11 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
   }
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+  });
 }
 
 export function renameCharacterFolder(userId: string, oldName: string, newName: string): Character[] {
+  return withUserDataMutationSync(userId, () => {
   const source = oldName.trim();
   const target = newName.trim();
   if (!source || !target) return [];
@@ -1046,9 +1058,11 @@ export function renameCharacterFolder(userId: string, oldName: string, newName: 
     eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
   }
   return updated;
+  });
 }
 
 export function deleteCharacterFolder(userId: string, name: string): Character[] {
+  return withUserDataMutationSync(userId, () => {
   const folder = name.trim();
   if (!folder) return [];
 
@@ -1067,9 +1081,11 @@ export function deleteCharacterFolder(userId: string, name: string): Character[]
     eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
   }
   return updated;
+  });
 }
 
 export function bulkUpdateCharacterFolders(userId: string, ids: string[], folder: string): Character[] {
+  return withUserDataMutationSync(userId, () => {
   const target = folder.trim();
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const updated: Character[] = [];
@@ -1079,23 +1095,29 @@ export function bulkUpdateCharacterFolders(userId: string, ids: string[], folder
     if (character) updated.push(character);
   }
   return updated;
+  });
 }
 
 export function setCharacterAvatar(userId: string, id: string, avatarPath: string): boolean {
-  const result = getDb()
-    .query("UPDATE characters SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(avatarPath, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () => {
+    const result = getDb()
+      .query("UPDATE characters SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(avatarPath, Math.floor(Date.now() / 1000), id, userId);
+    return result.changes > 0;
+  });
 }
 
 export function setCharacterImage(userId: string, id: string, imageId: string): boolean {
-  const result = getDb()
-    .query("UPDATE characters SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(imageId, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () => {
+    const result = getDb()
+      .query("UPDATE characters SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(imageId, Math.floor(Date.now() / 1000), id, userId);
+    return result.changes > 0;
+  });
 }
 
 export function setCharacterAvatarFromImage(userId: string, id: string, imageId: string): Character | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
   const image = imagesSvc.getImage(userId, imageId);
@@ -1112,9 +1134,11 @@ export function setCharacterAvatarFromImage(userId: string, id: string, imageId:
     .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
 
   return getCharacter(userId, id);
+  });
 }
 
 export async function replaceCharacterAvatar(userId: string, id: string, file: File, originalFile?: File): Promise<Character | null> {
+  return withUserDataMutation(userId, async () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
@@ -1143,13 +1167,14 @@ export async function replaceCharacterAvatar(userId: string, id: string, file: F
     .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
   cleanupUnreferencedImageIds(userId, oldImageIds);
-  if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path);
+  if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path, userId);
 
   const updated = getCharacter(userId, id);
   if (!updated) return null;
 
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+  });
 }
 
 export async function setCharacterPerspectiveLayer(
@@ -1158,6 +1183,7 @@ export async function setCharacterPerspectiveLayer(
   layer: PerspectiveLayerKind,
   file: File,
 ): Promise<Character | null> {
+  return withUserDataMutation(userId, async () => {
   const updated = await addCharacterPerspectiveLayer(userId, id, file, {
     id: layer,
     label: layer[0].toUpperCase() + layer.slice(1),
@@ -1168,6 +1194,7 @@ export async function setCharacterPerspectiveLayer(
   const replacement = layers[layers.length - 1];
   const next = layers.filter((entry) => entry.id !== layer || entry.image_id === replacement.image_id);
   return updateCharacterPerspectiveLayers(userId, id, next);
+  });
 }
 
 export async function addCharacterPerspectiveLayer(
@@ -1176,6 +1203,7 @@ export async function addCharacterPerspectiveLayer(
   file: File,
   input: { label?: string; intensity?: number; id?: string } = {},
 ): Promise<Character | null> {
+  return withUserDataMutation(userId, async () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
@@ -1210,6 +1238,7 @@ export async function addCharacterPerspectiveLayer(
   cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+  });
 }
 
 export function updateCharacterPerspectiveLayers(
@@ -1217,6 +1246,7 @@ export function updateCharacterPerspectiveLayers(
   id: string,
   inputs: unknown,
 ): Character | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
@@ -1236,6 +1266,7 @@ export function updateCharacterPerspectiveLayers(
   cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+  });
 }
 
 export function clearCharacterPerspectiveLayer(
@@ -1243,6 +1274,7 @@ export function clearCharacterPerspectiveLayer(
   id: string,
   layer: PerspectiveLayerKind,
 ): Character | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
@@ -1263,16 +1295,20 @@ export function clearCharacterPerspectiveLayer(
   cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+  });
 }
 
 export function deleteCharacterPerspectiveLayer(userId: string, id: string, layerId: string): Character | null {
-  const existing = getCharacter(userId, id);
-  if (!existing) return null;
-  const layers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
-  return updateCharacterPerspectiveLayers(userId, id, layers.filter((entry) => entry.id !== layerId));
+  return withUserDataMutationSync(userId, () => {
+    const existing = getCharacter(userId, id);
+    if (!existing) return null;
+    const layers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+    return updateCharacterPerspectiveLayers(userId, id, layers.filter((entry) => entry.id !== layerId));
+  });
 }
 
 export function duplicateCharacter(userId: string, id: string): Character | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
@@ -1311,6 +1347,7 @@ export function duplicateCharacter(userId: string, id: string): Character | null
   const character = getCharacter(userId, newId)!;
   eventBus.emit(EventType.CHARACTER_CREATED, { id: newId, character }, userId);
   return character;
+  });
 }
 
 export function findCharactersByName(userId: string, name: string): Character[] {
@@ -1356,20 +1393,24 @@ export function listCharacterSourceFilenameIds(userId: string): Map<string, stri
 }
 
 export function setCharacterSourceFilename(userId: string, id: string, sourceFilename: string): void {
+  withUserDataMutationSync(userId, () => {
   const char = getCharacter(userId, id);
   if (!char) return;
   const extensions = { ...(char.extensions ?? {}), _lumiverse_source_filename: sourceFilename };
   getDb()
     .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+  });
 }
 
 export function deleteCharacter(userId: string, id: string): boolean {
   const existing = getCharacter(userId, id);
   if (!existing) return false;
-  const marked = getDb()
-    .query("UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0")
-    .run(id, userId);
+  const marked = withUserDataMutationSync(userId, () =>
+    getDb()
+      .query("UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0")
+      .run(id, userId)
+  );
   if (marked.changes > 0) eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
   void scheduleCharacterDeletionCascade(userId, id).catch((err) =>
     console.error(`[characters] deletion cascade failed for ${id}:`, err instanceof Error ? err.message : err)
@@ -1437,6 +1478,7 @@ function scheduleCharacterDeletionCascade(userId: string, id: string): Promise<v
 }
 
 async function runCharacterDeletionCascade(userId: string, id: string): Promise<void> {
+  return withUserDataMutation(userId, async () => {
   const existing = getCharacter(userId, id);
   if (!existing) return;
 
@@ -1493,7 +1535,7 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
         return false;
       }
     })();
-    if (!stillReferenced) await filesSvc.deleteAvatar(existing.avatar_path).catch(() => {});
+    if (!stillReferenced) await filesSvc.deleteAvatar(existing.avatar_path, userId).catch(() => {});
   }
   await deleteAutoManagedCharacterWorldBooks(userId, id);
 
@@ -1502,6 +1544,7 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
     deleteRegexScriptsByCharacterId(userId, id);
     getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
   })();
+  });
 }
 
 export async function resumePendingCharacterDeletions(): Promise<number> {

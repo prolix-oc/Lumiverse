@@ -1,6 +1,6 @@
 import { registry } from "../MacroRegistry";
 import type { MacroExecContext } from "../types";
-import { parseDelimitedList, formatList, MAX_LIST_ITEMS } from "../list-utils";
+import { parseDelimitedList, MAX_LIST_ITEMS } from "../list-utils";
 import { evaluateMacroCondition } from "../conditions";
 
 /**
@@ -61,6 +61,12 @@ function bindLoopVars(
   local.set(`${varName}_first`, i === 0 ? "true" : "");
   local.set(`${varName}_last`, i === count - 1 ? "true" : "");
 }
+async function resolveBoundedIterationBody(ctx: MacroExecContext): Promise<string> {
+  const value = await ctx.resolveNodes(ctx.bodyRaw);
+  ctx.budget.preflightOutput(value);
+  ctx.budget.preflightExpansion(value);
+  return value;
+}
 
 interface IterArgs {
   items: string[];
@@ -79,9 +85,9 @@ async function parseIterArgs(ctx: MacroExecContext): Promise<IterArgs | null> {
   const listStr = ctx.rawArgs[0] ? (await ctx.resolveNodes(ctx.rawArgs[0])).trim() : "";
   const varName = (ctx.rawArgs[1] ? (await ctx.resolveNodes(ctx.rawArgs[1])).trim() : "") || "item";
   const delimiter = ctx.rawArgs[2] ? await ctx.resolveNodes(ctx.rawArgs[2]) : ",";
-  let items = parseDelimitedList(listStr, delimiter);
+  let items = parseDelimitedList(listStr, delimiter, MAX_LIST_ITEMS + 1);
   if (items.length > MAX_LIST_ITEMS) {
-    ctx.warn(`{{${ctx.name}}} capped at ${MAX_LIST_ITEMS} items (got ${items.length})`);
+    ctx.warn(`{{${ctx.name}}} capped at ${MAX_LIST_ITEMS} items (got more than ${MAX_LIST_ITEMS})`);
     items = items.slice(0, MAX_LIST_ITEMS);
   }
   return { items, varName };
@@ -89,10 +95,12 @@ async function parseIterArgs(ctx: MacroExecContext): Promise<IterArgs | null> {
 
 /** Resolve the scoped body and evaluate it as an {{if}}-style condition. */
 async function bodyIsTruthy(ctx: MacroExecContext): Promise<boolean> {
+  ctx.budget.reserveTrimString();
   let s = (await ctx.resolveNodes(ctx.bodyRaw)).trim();
   // Safety re-resolve for the rare case where a value depends on state mutated
   // later in the same template (mirrors {{if}}).
   if (s.includes("{{")) {
+    ctx.budget.reserveTrimString();
     const next = (await ctx.resolve(s)).trim();
     if (next !== s) s = next;
   }
@@ -128,16 +136,16 @@ export function registerIterationMacros(): void {
 
       const local = ctx.env.variables.local;
       const saved = snapshotVars(local, loopKeys(varName));
-      let out = "";
+      const parts: string[] = [];
       try {
         for (let i = 0; i < items.length; i++) {
           bindLoopVars(local, varName, items[i], i, items.length);
-          out += await ctx.resolveNodes(ctx.bodyRaw);
+          parts.push(await resolveBoundedIterationBody(ctx));
         }
       } finally {
         restoreVars(local, saved);
       }
-      return out;
+      return ctx.budget.append(parts);
     },
   });
 
@@ -163,15 +171,17 @@ export function registerIterationMacros(): void {
       const local = ctx.env.variables.local;
       const saved = snapshotVars(local, loopKeys(varName));
       const mapped: string[] = [];
+      ctx.budget.reserveTrimString(items.length);
       try {
         for (let i = 0; i < items.length; i++) {
           bindLoopVars(local, varName, items[i], i, items.length);
-          mapped.push((await ctx.resolveNodes(ctx.bodyRaw)).trim());
+          mapped.push((await resolveBoundedIterationBody(ctx)).trim());
         }
       } finally {
         restoreVars(local, saved);
       }
-      return mapped.filter((item) => item !== "").join(outputDelimiter);
+      const filtered = mapped.filter((item) => item !== "");
+      return ctx.budget.join(filtered, outputDelimiter);
     },
   });
 
@@ -198,12 +208,16 @@ export function registerIterationMacros(): void {
       try {
         for (let i = 0; i < items.length; i++) {
           bindLoopVars(local, varName, items[i], i, items.length);
-          if (await bodyIsTruthy(ctx)) kept.push(items[i]);
+          if (await bodyIsTruthy(ctx)) {
+            ctx.budget.preflightOutput(items[i]);
+            ctx.budget.preflightExpansion(items[i]);
+            kept.push(items[i]);
+          }
         }
       } finally {
         restoreVars(local, saved);
       }
-      return formatList(kept);
+      return ctx.budget.join(kept, ", ");
     },
   });
 
@@ -303,6 +317,7 @@ export function registerIterationMacros(): void {
       }
       // First arg is either a count (last N) or — when non-numeric — the loop
       // variable name; the second arg is the variable name when a count is given.
+      ctx.budget.reserveTrimString((ctx.rawArgs[0] ? 1 : 0) + (ctx.rawArgs[1] ? 1 : 0));
       const a0 = ctx.rawArgs[0] ? (await ctx.resolveNodes(ctx.rawArgs[0])).trim() : "";
       const a1 = ctx.rawArgs[1] ? (await ctx.resolveNodes(ctx.rawArgs[1])).trim() : "";
       let count = 0; // 0 = all
@@ -326,19 +341,19 @@ export function registerIterationMacros(): void {
 
       const local = ctx.env.variables.local;
       const saved = snapshotVars(local, loopKeys(varName, ["_name", "_is_user"]));
-      let out = "";
+      const parts: string[] = [];
       try {
         for (let i = 0; i < messages.length; i++) {
           const m = messages[i];
           bindLoopVars(local, varName, m.content ?? "", i, messages.length);
           local.set(`${varName}_name`, m.name ?? "");
           local.set(`${varName}_is_user`, m.is_user ? "true" : "");
-          out += await ctx.resolveNodes(ctx.bodyRaw);
+          parts.push(await resolveBoundedIterationBody(ctx));
         }
       } finally {
         restoreVars(local, saved);
       }
-      return out;
+      return ctx.budget.append(parts);
     },
   });
 
@@ -398,6 +413,7 @@ async function runForeachVar(ctx: MacroExecContext, scopeMap: Map<string, string
     ctx.warn(`{{${ctx.name}}} needs a body: {{${ctx.name}::prefix}}...{{/${ctx.name}}}`);
     return "";
   }
+  ctx.budget.reserveTrimString((ctx.rawArgs[0] ? 1 : 0) + (ctx.rawArgs[1] ? 1 : 0));
   const prefix = ctx.rawArgs[0] ? (await ctx.resolveNodes(ctx.rawArgs[0])).trim() : "";
   const varName = (ctx.rawArgs[1] ? (await ctx.resolveNodes(ctx.rawArgs[1])).trim() : "") || "item";
 
@@ -414,7 +430,7 @@ async function runForeachVar(ctx: MacroExecContext, scopeMap: Map<string, string
 
   const local = ctx.env.variables.local;
   const saved = snapshotVars(local, loopKeys(varName, ["_key", "_value"]));
-  let out = "";
+  const parts: string[] = [];
   try {
     for (let i = 0; i < entries.length; i++) {
       const [fullKey, value] = entries[i];
@@ -422,10 +438,10 @@ async function runForeachVar(ctx: MacroExecContext, scopeMap: Map<string, string
       bindLoopVars(local, varName, id, i, entries.length);
       local.set(`${varName}_key`, fullKey);
       local.set(`${varName}_value`, value);
-      out += await ctx.resolveNodes(ctx.bodyRaw);
+      parts.push(await resolveBoundedIterationBody(ctx));
     }
   } finally {
     restoreVars(local, saved);
   }
-  return out;
+  return ctx.budget.append(parts);
 }

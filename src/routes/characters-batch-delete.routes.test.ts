@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
-import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { closeDatabaseAsync, getDb, initDatabase } from "../db/connection";
+import * as embeddingsSvc from "../services/embeddings.service";
 import { charactersRoutes } from "./characters.routes";
 
 const USER_ID = "batch-delete-user";
@@ -18,7 +19,8 @@ app.use("*", async (c, next) => {
 app.route("/", charactersRoutes);
 
 beforeEach(async () => {
-  closeDatabase();
+  spyOn(embeddingsSvc, "deleteChatChunkEmbeddings").mockResolvedValue(undefined);
+  await closeDatabaseAsync();
   initDatabase(":memory:");
   getDb().run(await Bun.file(new URL("../db/baseline.sql", import.meta.url)).text());
   getDb().query(`INSERT INTO "user" (id, name, email) VALUES (?, 'Batch User', 'batch@example.com')`).run(USER_ID);
@@ -50,7 +52,7 @@ beforeEach(async () => {
   ).run(USER_ID, MEMBER_ID, JSON.stringify({ group: true, character_ids: [TARGET_ID, MEMBER_ID, OTHER_ID] }));
 });
 
-afterEach(() => closeDatabase());
+afterEach(async () => closeDatabaseAsync());
 
 describe("POST /batch-delete", () => {
   test("deletes owned characters and cleans dependent records without removing shared images", async () => {

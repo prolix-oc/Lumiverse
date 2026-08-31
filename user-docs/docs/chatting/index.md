@@ -30,15 +30,28 @@ Chatting is the heart of Lumiverse. Once you have a character and a connection s
 
 ## How a Chat Works
 
-When you send a message, here's what happens behind the scenes:
+Lumiverse has two explicit turn modes:
 
-1. Your message is saved to the chat
-2. Lumiverse assembles the full **prompt** — your preset blocks, character data, persona, world book entries, chat history, and any active macros
-3. The assembled prompt is sent to your AI provider via the active **connection**
-4. Tokens stream back in real time, appearing word-by-word in the chat
-5. When generation finishes, the complete response is saved as a message
+**Response** follows the familiar message flow:
 
-The entire prompt assembly process is configurable through [Presets](../presets/index.md), and you can preview exactly what the AI sees using the **Dry Run** feature.
+1. Your message is saved to the chat.
+2. Lumiverse assembles the full **prompt** — preset blocks, character data, persona, World Book entries, chat history, and active macros.
+3. The assembled prompt is sent to your AI provider through the active **connection**.
+4. Response tokens stream into the chat.
+5. When generation finishes, the complete Response is saved as a message.
+
+**Agentic** creates one Turn Execution for the user turn. Its WORK stage can run
+multiple ordered Work Segments across an attempt. Every segment starts with a
+fresh context projected from the original objective, the current phase, accepted
+workspace records, open required work, and the previous bounded handoff. A
+segment's provider transcript and continuation carrier retire when that segment
+ends; they are not replayed into the next one. Segment boundaries do not create
+user messages or stream their internal provider tokens into the chat. Only after
+WORK has completed, tools-disabled final rendering has succeeded, and the final
+message has committed atomically does the chat receive its Agentic Response.
+
+The prompt assembly process is configurable through [Presets](../presets/index.md).
+Dry Run previews the ordinary assembled prompt; it does not execute Agentic WORK.
 
 ---
 

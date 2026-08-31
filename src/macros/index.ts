@@ -11,6 +11,16 @@ export type {
   EvaluateResult,
   AstNode,
 } from "./types";
+export {
+  HOST_PREPARATION_LIMITS_V1,
+  PreparationLimitExceededError,
+  createExpansionBudget,
+  lowerPreparationLimitsV1,
+  utf8ByteLength,
+  type ExpansionBudgetV1,
+  type PreparationLimitsV1,
+  type PreparationLimitsOverrideV1,
+} from "../types/agent-preprocessing";
 
 // Definition registrations
 import { registerCoreMacros } from "./definitions/primitives";

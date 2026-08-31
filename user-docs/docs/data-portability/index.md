@@ -32,7 +32,7 @@ An archive (a `.lvbak` file — really a renamed ZIP) carries every piece of dat
 Optionally, you can include:
 
 - **Vector embeddings** — restores instant search/RAG/memory cortex retrieval without waiting for re-vectorization
-- **API keys and secrets** — encrypted with a one-time decryption ticket (see [API Keys & Tickets](api-keys-and-tickets.md))
+- **API keys and secrets** — encrypted with a separate 24-hour decryption ticket (see [API Keys & Tickets](api-keys-and-tickets.md))
 
 ---
 
@@ -67,4 +67,9 @@ These never leave your instance:
 The panel has two cards: **Export your data** and **Import an archive**.
 
 !!! tip "Archives are forever"
-    Archives never expire and have no time-bound license. You can store a `.lvbak` for years and restore it into any compatible Lumiverse instance. The same applies to decryption tickets — they have no TTL.
+    Archives never expire and have no time-bound license. You can store a
+    `.lvbak` for years and restore it into any compatible Lumiverse instance.
+    Decryption tickets are different: they contain the raw archive key, expire
+    after 24 hours, and each destination account and instance accepts a given
+    archive/ticket pair at most once. That local tombstone neither revokes the
+    file nor synchronizes to other instances.

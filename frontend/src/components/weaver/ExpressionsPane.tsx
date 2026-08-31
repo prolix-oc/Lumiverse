@@ -88,7 +88,8 @@ export function ExpressionsPane({ sessionId, character, onCount }: ExpressionsPa
   useEffect(() => {
     void imageGenConnectionsApi.list({ limit: 100 }).then((r) => {
       setConnections(r.data)
-      const preferred = r.data.find((c) => c.is_default) ?? r.data[0]
+      const preferred = r.data.find((c) => c.is_default && c.review_required !== true)
+        ?? r.data.find((c) => c.review_required !== true)
       setConnId((prev) => prev ?? preferred?.id ?? null)
     })
     void imageGenConnectionsApi.providers().then((r) => {

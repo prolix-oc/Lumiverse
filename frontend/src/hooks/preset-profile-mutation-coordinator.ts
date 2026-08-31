@@ -1,3 +1,5 @@
+import { commitRuntimeAuthorityMutation } from '@/lib/agentRuntimeSelection'
+
 export interface PresetProfileFetchToken {
   fetchRevision: number
 }
@@ -22,6 +24,7 @@ export interface RunPresetProfileMutationOptions<TWrite, TRecovery> {
   scope: string
   operation: () => Promise<TWrite>
   canStart?: () => boolean
+  authorityCommittedByOperation?: boolean
   refresh: () => Promise<TRecovery>
   isCurrent: (revision: number) => boolean
   commit: (value: TWrite) => void
@@ -107,6 +110,7 @@ export async function runPresetProfileMutation<TWrite, TRecovery>({
   scope,
   operation,
   canStart,
+  authorityCommittedByOperation = false,
   refresh,
   isCurrent,
   commit,
@@ -120,6 +124,7 @@ export async function runPresetProfileMutation<TWrite, TRecovery>({
       operation,
       () => coordinator.isMutationEpochCurrent(scope, mutationEpoch) && (canStart?.() ?? true),
     )
+    if (!authorityCommittedByOperation) commitRuntimeAuthorityMutation()
     coordinator.invalidateFetch(scope)
     if (!isCurrent(revision)) return 'stale'
     commit(value)

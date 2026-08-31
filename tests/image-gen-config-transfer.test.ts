@@ -296,4 +296,93 @@ describe("image gen config import/export", () => {
     expect(imageGenSvc.getImageGenSettings(IMPORTER).autoGenerate).toBe(false);
     expect(imageGenSvc.getImageGenSettings(IMPORTER).sceneChangeThreshold).toBe(2);
   });
+
+  test("dedicated export recursively scrubs repeated provider encoding and preserves unrelated text", async () => {
+    const conn = await seedExporter();
+    const doubleEncoded = JSON.stringify(JSON.stringify({ apiKey: "drop-double", keep: "double" }));
+    const tripleEncoded = JSON.stringify(doubleEncoded);
+    getDb().query(
+      "UPDATE image_gen_connections SET default_parameters = ?, metadata = ? WHERE id = ? AND user_id = ?",
+    ).run(
+      JSON.stringify({ steps: 28, repeated: tripleEncoded }),
+      JSON.stringify({ apiKey: "drop-direct", repeated: doubleEncoded, note: "shared" }),
+      conn.id,
+      EXPORTER,
+    );
+    const setting = settingsSvc.getSetting(EXPORTER, "imageGeneration")!.value;
+    settingsSvc.putSetting(EXPORTER, "imageGeneration", {
+      ...setting,
+      customPrompt: "{ordinary template text",
+    });
+
+    const exported = imageGenSvc.exportImageGenConfig(EXPORTER);
+    const serialized = JSON.stringify(exported);
+    expect(serialized).not.toContain("drop-direct");
+    expect(serialized).not.toContain("drop-double");
+    expect(exported.settings?.customPrompt).toBe("{ordinary template text");
+    expect(JSON.parse(JSON.parse(exported.connections![0].metadata.repeated))).toEqual({ keep: "double" });
+    expect(JSON.parse(JSON.parse(JSON.parse(exported.connections![0].default_parameters.repeated)))).toEqual({
+      keep: "double",
+    });
+  });
+
+  test("dedicated export fails closed for malformed inner provider encoding", async () => {
+    const conn = await seedExporter();
+    const malformedInner = JSON.stringify('{"apiKey":"hidden"');
+    getDb().query(
+      "UPDATE image_gen_connections SET metadata = ? WHERE id = ? AND user_id = ?",
+    ).run(JSON.stringify({ malformedInner }), conn.id, EXPORTER);
+
+    expect(() => imageGenSvc.exportImageGenConfig(EXPORTER)).toThrow(
+      "imageGeneration settings contain malformed JSON-encoded provider data",
+    );
+  });
+
+  test("dedicated import scrubs private data before every persisted surface", async () => {
+    const encodedProvider = JSON.stringify(JSON.stringify(JSON.stringify({
+      nanogpt: { apiKey: "drop-setting", keep: "setting" },
+    })));
+    const encodedConnection = JSON.stringify(JSON.stringify({ apiKey: "drop-encoded", keep: "connection" }));
+    const result = await imageGenSvc.importImageGenConfig(IMPORTER, {
+      version: 1,
+      type: "lumiverse_image_gen_config",
+      settings: { customPrompt: encodedProvider },
+      connections: [{
+        name: "Imported NovelAI",
+        provider: "novelai",
+        default_parameters: { apiKey: "drop-parameters", encodedConnection, steps: 23 },
+        metadata: { apiKey: "drop-metadata", label: "keep" },
+      }],
+    });
+
+    expect(result.imported.settings).toBe(true);
+    expect(result.imported.connections).toBe(1);
+    const persistedSetting = settingsSvc.getSetting(IMPORTER, "imageGeneration")!.value;
+    expect(JSON.stringify(persistedSetting)).not.toContain("drop-setting");
+    expect(JSON.parse(JSON.parse(JSON.parse(persistedSetting.customPrompt)))).toEqual({
+      nanogpt: { keep: "setting" },
+    });
+    const connection = imageGenConnSvc.listConnections(IMPORTER, PAGINATION).data[0];
+    const persistedConnection = JSON.stringify(connection);
+    expect(persistedConnection).not.toContain("drop-parameters");
+    expect(persistedConnection).not.toContain("drop-encoded");
+    expect(persistedConnection).not.toContain("drop-metadata");
+    expect(JSON.parse(JSON.parse(connection.default_parameters.encodedConnection))).toEqual({
+      keep: "connection",
+    });
+    expect(connection.metadata).toEqual({ label: "keep" });
+  });
+
+  test("malformed private import fails before any settings or connections are written", async () => {
+    const malformedInner = JSON.stringify('{"apiKey":"hidden"');
+    await expect(imageGenSvc.importImageGenConfig(IMPORTER, {
+      version: 1,
+      type: "lumiverse_image_gen_config",
+      settings: { autoGenerate: false },
+      connections: [{ provider: "nanogpt", metadata: { malformedInner } }],
+    })).rejects.toThrow("imageGeneration settings contain malformed JSON-encoded provider data");
+
+    expect(settingsSvc.getSetting(IMPORTER, "imageGeneration")).toBeNull();
+    expect(imageGenConnSvc.listConnections(IMPORTER, PAGINATION).total).toBe(0);
+  });
 });

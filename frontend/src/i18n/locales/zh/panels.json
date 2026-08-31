@@ -1,4 +1,15 @@
 {
+  "connectionReview": {
+    "title": "需要审核",
+    "description": "此导入的连接在审核并启用前处于禁用状态。",
+    "enable": "启用连接",
+    "enabling": "正在启用…",
+    "reasons": {
+      "foreignImport": "导入的连接需要本地批准。",
+      "repairRequired": "连接数据需要修复后才能启用。",
+      "unknown": "启用前需要审核此连接。"
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "档案",
@@ -1402,6 +1413,10 @@
     "openChatToAdd": "打开聊天以添加聊天范围的世界书",
     "removeFromChat": "从当前聊天移除",
     "noChatActive": "当前聊天没有激活的世界书",
+    "chatAttachmentSaveFailed": "无法保存此聊天的世界书附件。",
+    "entrySaveFailed": "无法保存此世界书条目。",
+    "entryDeleteFailed": "无法删除此世界书条目。",
+    "entryMutationFailed": "无法更新此世界书条目。",
     "activationSettings": "激活设置",
     "selectBook": "选择世界书…",
     "selectWorldBookAria": "选择世界书",
@@ -2820,7 +2835,9 @@
     "fuseFailed": "合并数据库失败",
     "scrapeFailed": "抓取 URL 失败",
     "loadDocFailed": "加载文档内容失败",
-    "saveDocFailed": "保存文档失败"
+    "saveDocFailed": "保存文档失败",
+    "remoteDocumentRemoved": "该文档已被删除。",
+    "remoteDatabankRemoved": "该资料库已被删除。"
   },
   "creatorWorkshop": {
     "shared": {
@@ -3083,7 +3100,8 @@
     "unknownProvider": "未知",
     "editorTabs": {
       "ariaLabel": "预设编辑器标签",
-      "preset": "预设"
+      "preset": "预设",
+      "agenticRuntime": "智能体运行时"
     },
     "tokens": " 词元",
     "category": {
@@ -3132,6 +3150,14 @@
       "emptyOutput": "（空输出）",
       "noPreview": "无内容可预览",
       "lockBlock": "锁定块（防止误编辑）",
+      "sealedBlockTitle": "LumiHub 封存块",
+      "sealedBlockHint": "高级发布选项。将此预设上传到 LumiHub 时，块内容会从公开 JSON 中移除，并作为 Hub 端的私有块存储。本地副本在上传前仍会保留文本。",
+      "sealedBlockInstalledHint": "已从 LumiHub 安装。你可以在本地查看和编辑此块，但 Lumiverse 始终会从导出内容和分享数据中移除此内容。",
+      "sealedBlockKey": "封存块键",
+      "sealedBlockKeyPlaceholder": "dialogue.frame",
+      "sealedBlockKeyHint": "稳定的解析键。请使用字母、数字、点号、连字符、下划线或冒号。",
+      "sealedBlockEnable": "我了解此功能用于 LumiHub 发布，并希望在上传时封存此块。",
+      "sealedBlockInstalledEnable": "由于此块已从 LumiHub 安装，导出时始终会保持封存。",
       "categoryMode": "类别模式",
       "categoryModeNormal": "普通开关",
       "categoryModeMulti": "多选",
@@ -3331,6 +3357,601 @@
       "reapplied": "已重新应用默认配置",
       "alreadyDefault": "块状态已与默认一致"
     },
+    "agenticRuntime": {
+      "eyebrow": "预设运行时",
+      "title": "智能体运行时",
+      "description": "将创作激活、子智能体、分阶段指令、上下文、任务、工作区策略和本地修复整合为一个带版本的草稿。",
+      "nativeContextNotice": "世界信息（World Info）和数据银行（Databank）仍是 Loom 之外的实时原生来源。Loom 不会复制、固定版本或修复它们。",
+      "status": {
+        "enabled": "已启用",
+        "disabled": "已禁用"
+      },
+      "navigation": {
+        "ariaLabel": "智能体运行时各部分",
+        "saveBeforePresetAction": "在更改、导入或导出预设前，请保存或解决智能体运行时草稿中的问题。"
+      },
+      "sections": {
+        "activation": {
+          "nav": "激活与模式",
+          "title": "激活与模式",
+          "description": "选择此预设允许的模式。聊天或单轮选择将单独解析，且绝不会修改此预设。"
+        },
+        "agents": {
+          "nav": "智能体",
+          "title": "智能体",
+          "description": "定义可复用的子配置文件和可移植的连接槽位引用。"
+        },
+        "tools": {
+          "nav": "核心工具与依赖项",
+          "title": "核心工具与依赖项",
+          "description": "仅授予此预设所需的宿主所有检索工具和预算。"
+        },
+        "phases": {
+          "nav": "分阶段指令",
+          "title": "分阶段指令",
+          "description": "按精确修订版本选择 Loom 块、上下文交付和分阶段运行时的固定目标。Agentic 不会添加第二套自由格式提示词系统。"
+        },
+        "tasks": {
+          "nav": "动态任务",
+          "title": "动态任务",
+          "description": "定义有界任务模板、依赖闭包、必需性和激活条件。"
+        },
+        "workspace": {
+          "nav": "工作区保留与共享",
+          "title": "工作区保留与共享",
+          "description": "在宿主强制执行的上限内选择保留策略和仅查看共享。"
+        },
+        "repair": {
+          "nav": "可移植性与修复",
+          "title": "可移植性与修复",
+          "description": "在激活前解决本地槽位、过期修订版本、导入的审核项和能力不匹配问题。"
+        }
+      },
+      "activation": {
+        "reviewTitle": "本地审核尚未完成",
+        "reviewDescription": "确认每个审核项并完成所有必需的修复，然后才能启用此导入的配置。",
+        "enable": "启用预设智能体",
+        "enableHint": "使创作的配置可用于 Response 模式，并在完全就绪时可用于 Agentic 模式。",
+        "allowedModes": "允许的模式",
+        "defaultMode": "预设默认模式"
+      },
+      "modes": {
+        "response": "Response",
+        "responseHint": "使用既有的生成路径，并保持可用于修复或兼容。",
+        "agentic": "Agentic",
+        "agenticHint": "仅当每个有效运行时门控均已就绪时，才使用封闭的单轮阶段机。"
+      },
+      "agents": {
+        "connectionRef": "可移植连接槽位"
+      },
+      "generationTypes": {
+        "normal": "普通",
+        "continue": "继续",
+        "regenerate": "重新生成",
+        "swipe": "滑动切换"
+      },
+      "phases": {
+        "names": {
+          "assemble": "组装",
+          "work": "工作",
+          "complete": "完成",
+          "render": "渲染",
+          "prepare_commit": "准备提交",
+          "committing": "提交中",
+          "committed": "已提交",
+          "commit_failed": "提交失败",
+          "exhausted": "已耗尽",
+          "failed": "失败",
+          "cancelled": "已取消",
+          "timed_out": "已超时"
+        },
+        "workPolicy": {
+          "title": "工作策略",
+          "description": "仅在智能体私有工作期间可用的指令。"
+        },
+        "workspaceUsage": {
+          "title": "工作区使用",
+          "description": "关于使用有界任务、记录和提交内容的指令。"
+        },
+        "completionCriteria": {
+          "title": "完成标准",
+          "description": "宿主接受完成状态前评估的指令。"
+        },
+        "renderPolicy": {
+          "title": "渲染策略",
+          "description": "仅用于最终禁用工具渲染的指令。"
+        },
+        "source": "源块",
+        "sourceRevision": "预设修订版本 {{presetRevision}} · 块修订版本 {{blockRevision}} · 提示位置 {{promptOrder}}",
+        "notSelected": "未选择",
+        "stale": "块修订版本已更改 — 保存前请重新选择",
+        "required": "必需",
+        "requiredHint": "必需条目必须可用才能完成。",
+        "requiredFor": "将 {{name}} 设为必需",
+        "condition": "条件",
+        "conditionHint": "启用后，仅当类型化条件为 true 时才包含此区块。",
+        "conditionFor": "{{name}} 的条件",
+        "routing": "固定路由",
+        "routingHint": "每个策略桶都有固定目标和检查点。",
+        "routingValue": "目标：{{destination}} · 检查点：{{checkpoint}}",
+        "destinations": {
+          "root_work": "根 WORK",
+          "completion_handoff": "完成交接",
+          "render": "禁用工具的 RENDER"
+        },
+        "checkpoints": {
+          "WORK": "WORK",
+          "PREPARE_COMMIT": "准备提交",
+          "RENDER": "RENDER"
+        },
+        "responseOmissionTitle": "Response 模式会省略 Agentic 指令",
+        "responseOmissionHint": "这些 Loom 策略条目和自定义阶段指令仅供 Agentic 运行使用，不会包含在 Response 模式中。",
+        "responseOmissionRoute": "目标：{{destination}} · 检查点：{{checkpoint}}",
+        "responseOmissionEntry": "策略条目 {{id}}",
+        "responseOmissionPhaseInstruction": "阶段指令 {{blockId}} · 精确块修订版本 {{blockRevision}}"
+      },
+      "customPhases": {
+        "title": "自定义阶段",
+        "description": "添加包含精确指令、条件、能力和转换的有界阶段。",
+        "defaultLabel": "阶段 {{number}}",
+        "add": "添加自定义阶段",
+        "empty": "未配置自定义阶段。",
+        "summary": "阶段 {{number}} · {{id}}",
+        "order": "顺序 {{number}}",
+        "orderHint": "较早阶段先运行；转换可以重复或前进。",
+        "moveUp": "将 {{label}} 上移",
+        "moveDown": "将 {{label}} 下移",
+        "id": "阶段 ID",
+        "idFor": "{{label}} 的阶段 ID",
+        "label": "显示标签",
+        "labelFor": "阶段 {{id}} 的显示标签",
+        "required": "必需阶段",
+        "requiredHint": "必需阶段必须在运行完成前结束。",
+        "requiredFor": "将 {{label}} 设为必需",
+        "repeatLimit": "重复上限",
+        "repeatLimitFor": "{{label}} 的重复上限",
+        "repeatLimitHint": "此阶段最多可以重复的次数。",
+        "instructions": "指令",
+        "instructionsHint": "按精确的预设和块修订版本选择现有 Loom 块。",
+        "notSelected": "未选择",
+        "unavailableInstruction": "不可用的指令块 {{id}}",
+        "removeInstruction": "移除指令块 {{id}}",
+        "childInstructionSubsets": "委托子智能体阶段子集",
+        "childInstructionSubsetsHint": "仅将已选阶段指令块分配给每个已编写的子智能体配置。空子集不会发送阶段指令。",
+        "childInstructionSubsetsNoProfiles": "请先编写子智能体配置，再分配阶段指令。",
+        "childSubsetAssign": "分配子集",
+        "childSubsetAssignFor": "为 {{id}} 分配阶段子集",
+        "childSubsetProfileId": "配置 ID：{{id}}",
+        "childSubsetUnassigned": "未分配——此子智能体仅接收其配置的系统提示。",
+        "childSubsetEmpty": "空子集——此子智能体仅接收其配置的系统提示。",
+        "childSubsetCount": "已分配 {{count}} 个阶段指令块。",
+        "childSubsetRepair": "需要修复——此分配与阶段的精确来源不匹配。",
+        "childSubsetUnknownProfile": "未知子智能体配置 {{id}}",
+        "childSubsetRemove": "移除子智能体配置 {{id}} 的子集",
+        "enter": "进入条件",
+        "enterHint": "条件为真时阶段开始。",
+        "exit": "退出条件",
+        "exitHint": "条件为真时阶段完成。",
+        "skip": "跳过条件",
+        "skipEnabled": "允许跳过阶段",
+        "skipHint": "启用后，条件为真时跳过此阶段。",
+        "skipFor": "允许跳过 {{label}}",
+        "capabilities": "请求的能力",
+        "capabilitiesHint": "仅请求此阶段所需的宿主能力。",
+        "capabilitiesList": {
+          "core_retrieval": "核心检索",
+          "workspace_read": "读取工作区",
+          "workspace_write": "写入工作区",
+          "delegation": "委托给子智能体",
+          "council": "Council",
+          "cortex": "记忆 Cortex"
+        },
+        "transitions": "后续阶段",
+        "transitionsHint": "选择此阶段接下来可以进入的阶段。",
+        "transitionAutomatic": "自动顺序",
+        "transitionAutomaticHint": "空转换列表允许在上限内自我重复，然后前进到紧邻的下一阶段。",
+        "transitionAutomaticNext": "自动进入下一阶段：{{label}}",
+        "transitionAutomaticTerminal": "没有下一阶段。完成此阶段即结束序列。",
+        "transitionExplicit": "显式转换",
+        "transitionExplicitHint": "仅允许所选的自我重复和紧邻下一阶段转换。",
+        "useExplicitTransitions": "使用显式转换",
+        "useAutomaticTransition": "使用自动顺序",
+        "repeatTarget": "重复此阶段",
+        "nextTarget": "下一阶段：{{label}}",
+        "invalidTarget": "不可用的阶段：{{id}}",
+        "remove": "移除自定义阶段"
+      },
+      "tasks": {
+        "add": "添加任务模板",
+        "defaultName": "任务 {{number}}",
+        "id": "模板 ID",
+        "label": "标签",
+        "description": "任务描述",
+        "required": "必需",
+        "optional": "可选",
+        "requiredHint": "已激活的必需任务必须在完成前进入终态。模型创建的任务仍为可选。",
+        "dependencies": "依赖模板",
+        "quarantined": "已隔离的任务模板",
+        "quarantinedHint": "此导入的任务模板无效，丢弃前无法编辑。",
+        "discardQuarantined": "丢弃已隔离的任务模板",
+        "remove": "移除模板"
+      },
+      "workspace": {
+        "retention": "保留",
+        "sharing": "共享",
+        "retentionOptions": {
+          "turn_terminal": "轮次终止",
+          "chat_lifetime": "聊天生命周期"
+        },
+        "retentionHints": {
+          "turn_terminal": "仅在该轮次的终止保留窗口内保留仅查看工作区。",
+          "chat_lifetime": "在聊天生命周期内保留已授权发布的工作区元数据。"
+        },
+        "sharingOptions": {
+          "root_only": "仅根智能体",
+          "view_only": "仅查看参与者"
+        },
+        "sharingHints": {
+          "root_only": "仅根智能体获得工作区能力。",
+          "view_only": "用户可以查看已脱敏的工作区；该工作区仍不可编辑。"
+        },
+        "ceilings": "有效宿主上限",
+        "ceilingsHint": "由此宿主强制执行的信息性防护措施。预设和导入无法提高这些上限。",
+        "readOnly": "只读",
+        "loading": "正在加载宿主上限…",
+        "ceilingLabels": {
+          "childAdmissions": "子智能体准入",
+          "aggregateToolCalls": "工具调用总数",
+          "logicalProviderRequests": "逻辑提供商请求",
+          "physicalDispatchAttempts": "物理分发尝试",
+          "childOutputTokens": "子智能体输出令牌",
+          "workAttemptOutputTokens": "每次工作尝试的输出令牌",
+          "workAttemptProviderDispatches": "每次工作尝试的提供商调度",
+          "workAttemptUnsignedBoundaries": "每次工作尝试的未签名边界",
+          "workAttemptToolCalls": "每次工作尝试的工具调用",
+          "workAttemptWorkspaceOperations": "每次工作尝试的工作区操作",
+          "workSegmentOutputTokens": "每个工作分段的输出令牌",
+          "workSegmentProviderDispatches": "每个工作分段的提供商调度",
+          "workSegmentUnsignedBoundaries": "每个工作分段的未签名边界",
+          "workSegmentToolCalls": "每个工作分段的工具调用",
+          "workSegmentWorkspaceOperations": "每个工作分段的工作区操作",
+          "workDispatchOutputTokens": "每次工作调度的输出令牌",
+          "workRecoveryReserveOutputTokens": "为工作恢复预留的输出令牌",
+          "workFuturePhaseReserveOutputTokens": "为后续工作阶段预留的输出令牌",
+          "rootWallClockMs": "根代理实际时间（毫秒）",
+          "activityEvents": "活动事件",
+          "activityBytes": "活动字节数",
+          "lifecycleLogRecords": "生命周期日志记录",
+          "activeRootsPerUser": "每位用户的活动根代理数",
+          "activeRootsProcess": "每个进程的活动根代理数",
+          "providerDispatchesPerUser": "每位用户的提供商分发数",
+          "providerDispatchesProcess": "每个进程的提供商分发数",
+          "toolExecutionsPerUser": "每位用户的工具执行数",
+          "toolExecutionsProcess": "每个进程的工具执行数"
+        }
+      },
+      "limits": {
+        "customPhases": "一个预设最多可定义 64 个自定义阶段。",
+        "policyBucket": "每个 Loom 策略桶最多可包含 64 个条目。",
+        "policyTotal": "一个预设最多可包含 128 个 Loom 策略条目。",
+        "tasks": "一个预设最多可定义 256 个任务模板。",
+        "invalidBlockRevision": "此 Loom 块的修订版本无效，无法选择。"
+      },
+      "repair": {
+        "acknowledge": "我已审核此项",
+        "chooseConnection": "选择本地连接",
+        "searchConnections": "搜索连接…",
+        "noConnections": "没有兼容的连接",
+        "mapSlot": "将 {{name}} 映射到本地连接",
+        "ready": "没有需要处理的可移植性或修复项。",
+        "selectCurrentLoomRevisions": "选择当前 Loom 修订",
+        "selectCurrentLoomRevisionsHint": "将当前有效的 Loom 块、预设和提示顺序修订暂存以供审核并保存。缺失或无效的块保持未修复。不会自动接受较新修订。",
+        "selectCurrentLoomRevisionsPending": "当前 Loom 修订已暂存。请保存以持久化已编写的运行时，或重置以丢弃。",
+        "boundary": "此处仅提供预设智能体、核心检索工具、Loom 块、上下文包、任务和工作区策略。扩展工具、钩子、出站授权和角色编辑器不属于此运行时。",
+        "kinds": {
+          "unresolved_slot": "未解析的连接槽位",
+          "stale_slot": "过期的连接映射",
+          "disabled_import": "导入的配置已禁用",
+          "capability_mismatch": "提供商能力不匹配",
+          "stale_block": "过期的 Loom 块修订版本",
+          "unknown": "需要修复的运行时项"
+        },
+        "actions": {
+          "acknowledge": "审核",
+          "map_slot": "映射连接",
+          "select_revision": "选择修订版本",
+          "discard": "丢弃无效的创作值",
+          "choose_response": "使用 Response",
+          "unknown": "处理此项"
+        },
+        "reasons": {
+          "unresolved_slot": "请选择经过身份验证的本地连接。",
+          "stale_slot": "确认或替换之前的本地映射。",
+          "repair_required": "激活前请修复创作的数据。",
+          "capability_mismatch": "映射的提供商缺少所需能力。",
+          "stale_policy_source": "Loom 策略来源与当前区块修订版本或顺序不匹配。保存前请选择当前修订版本。",
+          "invalid_runtime_policy": "规范 Loom 运行时策略无效。",
+          "invalid_policy_entry": "Loom 策略条目无效。",
+          "invalid_predicate": "认知条件不完整。",
+          "predicate_limit_exceeded": "认知条件超出宿主的深度或大小限制。",
+          "unknown": "此运行时项需要修复。"
+        }
+      },
+      "predicate": {
+        "kind": "条件类型",
+        "add": "添加条件",
+        "remove": "移除条件",
+        "generationType": "生成类型",
+        "phase": "阶段",
+        "variableKey": "预设变量名称",
+        "factKey": "参与者事实名称",
+        "operator": "运算符",
+        "value": "值",
+        "valueType": "值类型",
+        "values": "成员值",
+        "addValue": "添加值",
+        "removeValue": "移除值 {{number}}",
+        "valueTypes": { "string": "文本", "number": "数字", "boolean": "布尔值", "stringList": "文本列表" },
+        "boolean": { "true": "真", "false": "假" },
+        "tool": "工具",
+        "available": "工具必须可用",
+        "task": "任务模板",
+        "chooseTask": "选择任务",
+        "transition": "状态转换",
+        "kinds": {
+          "all": "所有条件",
+          "any": "任一条件",
+          "not": "非",
+          "generation_type": "生成类型",
+          "phase": "当前阶段",
+          "preset_variable": "预设变量",
+          "participant_fact": "参与者事实",
+          "tool_available": "工具可用性",
+          "task_transition": "任务状态转换"
+        },
+        "operators": {
+          "equals": "等于",
+          "in": "在列表中",
+          "includes": "包含",
+          "present": "存在"
+        },
+        "transitions": {
+          "pending": "待处理",
+          "active": "活动中",
+          "blocked": "已阻塞",
+          "completed": "已完成",
+          "cancelled": "已取消",
+          "failed": "失败"
+        }
+      },
+      "load": {
+        "loading": "正在加载智能体运行时…",
+        "error": "无法加载智能体运行时。加载完成前，编辑和保存已停用。",
+        "retry": "重试加载"
+      },
+
+      "save": {
+        "action": "保存智能体运行时",
+        "saving": "正在保存完整的运行时草稿…",
+        "saved": "智能体运行时已保存",
+        "unsaved": "智能体运行时有未保存的更改",
+        "reset": "重置草稿",
+        "conflict": "预设或运行时已在其他位置更改。请重新加载并审核后再保存。",
+        "conflictHint": "请先重新加载规范的预设和 Agentic 配置，再进行审核或重试。您的本地草稿不会覆盖较新的修订版本。",
+        "reloadLatest": "重新加载最新版本以供审核",
+        "reloadingLatest": "正在重新加载最新版本…",
+        "reloadError": "无法加载最新规范状态。您的本地草稿仍会保留。",
+        "latestReady": "最新规范状态已准备好。请先审核，再编辑并重试。",
+        "reviewLatest": "审核最新版本",
+        "error": "无法保存智能体运行时。您的草稿仍然可用。"
+      },
+      "validation": {
+        "invalid_config": "运行时配置无效。",
+        "invalid_modes": "允许的模式必须唯一、有序，并首先包含 Response。",
+        "invalid_default_mode": "必须允许默认模式。",
+        "invalid_profile": "子配置文件不完整或使用了重复的 ID。",
+        "invalid_slot": "可移植连接槽位无效。",
+        "unresolved_slot": "请映射每个必需的连接槽位。",
+        "invalid_block_reference": "所选 Loom 块已不存在。",
+        "stale_block_revision": "所选 Loom 块的修订版本已更改。",
+        "invalid_runtime_policy": "规范 Loom 运行时策略无效。",
+        "invalid_policy_entry": "Loom 策略条目无效。",
+        "stale_policy_source": "Loom 策略来源与当前区块修订版本或顺序不匹配。保存前请选择当前修订版本。",
+        "invalid_predicate": "认知条件不完整。",
+        "predicate_limit_exceeded": "认知条件超出宿主的深度或大小限制。",
+        "invalid_task_template": "任务模板无效。",
+        "invalid_task_policy": "任务策略引用必须与已声明的任务模板一致。",
+        "missing_task_dependency": "任务依赖项已不存在。",
+        "cyclic_task_dependency": "任务依赖项必须无环。",
+        "review_acknowledgement_unknown": "请移除不属于当前审核的确认项。",
+        "review_acknowledgement_required": "启用前请确认每个导入的审核项。"
+      }
+    },
+    "agentsTools": {
+      "eyebrow": "预设能力",
+      "title": "智能体与工具",
+      "description": "授权此预设可使用的可复用子智能体和内置检索工具。启用并保存配置前不会执行任何内容。",
+      "limits": {
+        "title": "主机运行时上限",
+        "description": "此 Lumiverse 主机强制执行的只读有效上限。预设中编写的预算仍可移植，但执行不能超过这些值。",
+        "readOnly": "只读",
+        "loading": "正在加载主机上限…",
+        "rows": {
+          "childAdmissions": "子智能体准入",
+          "aggregateToolCalls": "工具调用总数",
+          "logicalProviderRequests": "逻辑提供商请求",
+          "physicalDispatchAttempts": "物理派发尝试",
+          "childOutputTokens": "子智能体输出词元",
+          "rootWallClockMs": "根运行墙钟时间（毫秒）",
+          "activityEvents": "活动事件",
+          "activityBytes": "活动字节数",
+          "lifecycleLogRecords": "生命周期日志记录",
+          "activeRootsPerUser": "每位用户的活动根运行",
+          "activeRootsProcess": "进程活动根运行",
+          "providerDispatchesPerUser": "每位用户的提供商派发",
+          "providerDispatchesProcess": "进程提供商派发",
+          "toolExecutionsPerUser": "每位用户的工具执行",
+          "toolExecutionsProcess": "进程工具执行"
+        }
+      },
+      "maxInvocations": {
+        "label": "子智能体最大调用次数",
+        "hint": "每次生成的子智能体调用次数上限。默认值：64；最小值：1；此预设没有最大值。请输入安全整数。",
+        "error": "请输入不小于 1 的安全整数。"
+      },
+      "maxToolCalls": {
+        "label": "工具最大调用次数",
+        "hint": "每次生成的工具调用总次数上限。默认值：64；最小值：1；此预设没有最大值。请输入安全整数。",
+        "error": "请输入不小于 1 的安全整数。"
+      },
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "enableAria": "为此预设启用智能体与工具",
+      "review": {
+        "title": "审核导入的能力",
+        "description": "为确保安全，导入的智能体配置默认禁用。在此设备上启用前，请审核配置、连接、工具和世界书访问权限。",
+        "action": "标记为已审核"
+      },
+      "unsupported": {
+        "title": "不支持的智能体配置",
+        "description": "此预设包含编辑器无法安全读取的设置。开始编辑会创建新的禁用配置；保存前仍会保留原有元数据。"
+      },
+      "main": {
+        "title": "主模型工具",
+        "description": "选择主模型可直接使用的核心检索工具，与各子智能体配置相互独立。"
+      },
+      "tools": {
+        "legend": "允许的核心工具",
+        "lore_list_books": {
+          "label": "列出世界书",
+          "description": "浏览可用世界书及其来源。"
+        },
+        "lore_get_book": {
+          "label": "获取世界书",
+          "description": "通过受限分页读取一本已启用的世界书。"
+        },
+        "lore_list_entries": {
+          "label": "列出世界书条目",
+          "description": "浏览所选世界书中的已启用条目。"
+        },
+        "lore_get_entry": {
+          "label": "获取世界书条目",
+          "description": "按准确标识符读取一条已启用条目。"
+        },
+        "lore_search_entries": {
+          "label": "搜索世界书条目",
+          "description": "在授权范围内搜索已启用的世界书内容。"
+        },
+        "chat_search_history": {
+          "label": "搜索当前聊天",
+          "description": "搜索为本次生成选定的不可变消息历史。"
+        }
+      },
+      "scope": {
+        "label": "世界书访问上限",
+        "active": "活动世界书",
+        "all_owned": "全部自有世界书",
+        "activeHint": "仅限本次生成已经可用的世界书内容。",
+        "all_ownedHint": "可搜索本地用户拥有的全部已启用世界书。"
+      },
+      "profiles": {
+        "title": "子智能体配置",
+        "description": "配置可复用的下级模型、授权范围和失败限制。",
+        "add": "添加配置",
+        "defaultName": "智能体 {{number}}",
+        "listAria": "子智能体配置",
+        "moveUp": "上移 {{name}}",
+        "moveDown": "下移 {{name}}",
+        "delete": "删除 {{name}}",
+        "confirmDeleteTitle": "删除此配置？",
+        "confirmDeleteDescription": "引用此配置的提示词块将失效。保存配置前，此更改不会写入。",
+        "name": "显示名称",
+        "id": "配置 ID",
+        "idHint": "提示词语法使用的稳定 snake_case ID。重命名配置不会改变它。",
+        "connection": "连接配置",
+        "selectConnection": "选择连接",
+        "searchConnections": "搜索连接…",
+        "noConnections": "尚未配置连接",
+        "useMainConnection": "使用主连接",
+        "connectionHint": "使用当前主连接，或将此子智能体绑定到已有连接配置。",
+        "systemPrompt": "系统提示词",
+        "systemPromptPlaceholder": "定义此智能体的职责、边界和输出要求。",
+        "systemPromptHint": "子智能体的原文指令。此处不会解析预设宏。",
+        "tools": "允许的工具",
+        "workspaceCapabilities": "工作区能力",
+        "workspaceCapabilitiesHint": "仅授予此子智能体所需的工作区操作。留空表示不授予工作区操作。",
+        "delegation": "允许主模型委派",
+        "delegationHint": "允许主模型通过 agent_delegate 选择此配置。",
+        "activity": "允许实时活动",
+        "activityHint": "当调用语法请求流式活动时显示状态和工具活动。不会流式传输子智能体正文。",
+        "failurePolicy": "失败策略",
+        "failureRequired": "必需 — 中止生成",
+        "failureOptional": "可选 — 以空结果继续",
+        "failureHint": "控制确定性提示词块的失败行为。",
+        "maxOutputTokens": "最大输出词元",
+        "timeout": "超时（秒）",
+        "timeoutHint": "每次调用的限制，以整秒为单位（最短 5 秒，无预设上限）。",
+        "empty": "添加子智能体配置以设置其连接、工具和提示词。"
+      },
+      "syntax": {
+        "title": "提示词语法",
+        "description": "复制用于手动编写的具名结果生成块，或创建可重复使用且不会发生结果名冲突的直接执行用户角色块。",
+        "taskPlaceholder": "描述要交给此智能体的任务。",
+        "copy": "复制智能体语法",
+        "copied": "已复制",
+        "copyFailed": "无法访问剪贴板。请手动选择并复制语法。",
+        "createBlock": "使用此智能体创建提示词块",
+        "saveFirst": "创建提示词块前请先保存智能体配置。",
+        "blockName": "智能体：{{name}}"
+      },
+      "navigation": {
+        "saveBeforePresetAction": "更改、导入或导出预设前，请先保存“智能体与工具”配置。"
+      },
+      "actions": {
+        "cancel": "取消",
+        "delete": "删除"
+      },
+      "save": {
+        "reviewFirst": "保存或启用导入能力前，请先完成审核。",
+        "notConfigured": "此预设尚未配置智能体与工具。",
+        "unsaved": "智能体配置尚未保存",
+        "saved": "智能体配置已保存",
+        "action": "保存配置"
+      },
+      "validation": {
+        "invalid_config": "智能体配置必须是对象。",
+        "unknown_config_key": "配置包含不支持的字段。",
+        "invalid_version": "仅支持智能体配置版本 1。",
+        "invalid_enabled": "启用状态无效。",
+        "invalid_max_invocations": "子智能体最大调用次数必须是有限且安全的整数。",
+        "max_invocations_below_minimum": "子智能体最大调用次数必须至少为 1。",
+        "invalid_main_tools": "主工具选择无效。",
+        "invalid_profiles": "配置列表无效。",
+        "too_many_profiles": "一个预设最多可包含 {{profileLimit}} 个子智能体配置。",
+        "unknown_profile_key": "此配置包含不支持的字段。",
+        "unknown_tool": "选择了未知的核心工具。",
+        "duplicate_tool": "每个核心工具只能选择一次。",
+        "invalid_main_scope": "主模型的世界书范围无效。",
+        "invalid_scope": "世界书范围无效。",
+        "scope_requires_lore_tool": "选择全部自有世界书时，至少需要一个世界书工具。",
+        "invalid_id": "请使用 1–64 个小写字母、数字或下划线，并以字母开头。",
+        "duplicate_id": "配置 ID 必须唯一。",
+        "invalid_name": "配置名称无效。",
+        "name_too_long": "显示名称不得超过 {{nameMax}} 个字符。",
+        "invalid_system_prompt": "系统提示词必须是文本。",
+        "system_prompt_too_long": "系统提示词不得超过 {{promptMax}} 个 UTF-8 字节。",
+        "invalid_connection": "请选择有效连接配置或使用主连接。",
+        "connection_not_found": "此连接配置已删除或不再可用。",
+        "main_connection_unavailable": "当前没有主连接，请选择已有连接。",
+        "invalid_delegation": "委派设置无效。",
+        "invalid_failure_policy": "请选择必需或可选失败处理。",
+        "invalid_stream_activity": "活动设置无效。",
+        "invalid_max_output_tokens": "最大输出词元必须是整数。",
+        "max_output_tokens_out_of_range": "最大输出词元必须介于 {{tokenMin}} 和 {{tokenMax}} 之间。",
+        "invalid_timeout": "超时必须为整秒数。",
+        "timeout_below_minimum": "超时不得少于 {{timeoutMin}} 秒。"
+      }
+    },
     "empty": {
       "loading": "加载中…",
       "noPresetTitle": "未选择预设",
@@ -3359,6 +3980,26 @@
     },
     "toast": {
       "exportFailed": "导出预设失败",
+      "importHydrationWarning": "预设已导入，但编辑器详情刷新失败。已保存的副本仍可用。",
+      "portableErrors": {
+        "PORTABLE_PRESET_INVALID": "便携预设无效。",
+        "PORTABLE_PROMPT_BLOCK_INVALID": "预设包含无效的提示词块。",
+        "PORTABLE_EXPORT_UNSTABLE": "导出期间预设发生变化，请重试。",
+        "AGENT_RUNTIME_PORTABLE_INVALID": "便携运行时数据无效。",
+        "AGENT_RUNTIME_PORTABLE_STALE": "便携运行时数据已过期，请重新导出。",
+        "AGENT_RUNTIME_PORTABLE_CONTRADICTORY": "便携运行时数据相互矛盾。",
+        "AGENT_RUNTIME_PORTABLE_REGEX_INVALID": "便携正则数据无效。",
+        "AGENT_RUNTIME_PORTABLE_PRESET_INVALID": "便携预设数据无效。",
+        "AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID": "便携运行时引用了不可用的上下文数据。",
+        "AGENT_RUNTIME_PORTABLE_RULE_INVALID": "便携上下文规则无效。",
+        "AGENT_RUNTIME_PORTABLE_SELECTION_INVALID": "便携上下文选择无效。",
+        "LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE": "密封块缺少可信的 LumiHub 来源信息。",
+        "LUMIHUB_LINK_UNAVAILABLE": "导入密封预设块前请先连接 LumiHub。",
+        "LUMIHUB_SEALED_RESOLUTION_FAILED": "LumiHub 无法解析密封预设块。",
+        "LUMIHUB_SEALED_DIGEST_MISMATCH": "LumiHub 返回的密封内容验证失败。",
+        "PRESET_REVISION_CONFLICT": "预设已在其他位置更改，请刷新后重试。",
+        "PRESET_REVISION_REQUIRED": "需要预设版本，请刷新后重试。"
+      },
       "importedRegexFromPreset": "从预设导入了 {{count}} 条正则脚本",
       "importedRegexFromPreset_plural": "从预设导入了 {{count}} 条正则脚本",
       "regexImportFailed": "{{count}} 条正则脚本导入失败",

@@ -8,6 +8,7 @@ function rawPreset(metadata: Record<string, unknown>, cacheRevision?: number): P
     id: 'preset-response-1',
     name: 'Coordinator response test',
     provider: 'loom',
+    engine: 'classic',
     parameters: {},
     prompt_order: [],
     prompts: {},
@@ -26,9 +27,12 @@ describe('preset save coordinator response preservation', () => {
     const adapter: PresetSaveAdapter = {
       async update(_presetId, input) {
         sent = structuredClone(input)
-        return rawPreset({
-          description: input.metadata?.description ?? '',
-        })
+        return {
+          ...rawPreset({
+            description: input.metadata?.description ?? '',
+          }),
+          engine: input.engine ?? 'classic',
+        }
       },
     }
     const coordinator = createPresetSaveCoordinator(adapter)
@@ -68,6 +72,7 @@ describe('preset save coordinator response preservation', () => {
           ...rawPreset(reorderedMetadata, 3),
           id: presetId,
           name: input.name ?? '',
+          engine: input.engine ?? 'classic',
           parameters: structuredClone(input.parameters ?? {}),
           prompt_order: structuredClone(input.prompt_order ?? []),
           prompts: structuredClone(input.prompts ?? {}),

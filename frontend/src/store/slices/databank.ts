@@ -7,6 +7,7 @@ export const createDatabankSlice: StateCreator<AppStore, [], [], DatabankSlice> 
   selectedDatabankId: null,
   databankScopeFilter: 'global',
   databankScopeCharacterId: null,
+  databankRevision: 0,
 
   setDatabanks: (banks) => set({ databanks: banks }),
   addDatabank: (bank) => set((s) => ({ databanks: [...s.databanks, bank] })),
@@ -22,6 +23,7 @@ export const createDatabankSlice: StateCreator<AppStore, [], [], DatabankSlice> 
   setSelectedDatabankId: (id) => set({ selectedDatabankId: id }),
   setDatabankScopeFilter: (scope) => set({ databankScopeFilter: scope }),
   setDatabankScopeCharacterId: (id) => set({ databankScopeCharacterId: id }),
+  markDatabanksStale: () => set((s) => ({ databankRevision: s.databankRevision + 1 })),
 
   setDatabankDocuments: (docs) => set({ databankDocuments: docs }),
   addDatabankDocument: (doc) => set((s) => ({ databankDocuments: [...s.databankDocuments, doc] })),

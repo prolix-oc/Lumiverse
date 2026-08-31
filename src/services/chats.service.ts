@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
-import { getDatabasePath, getDb } from "../db/connection";
+import {
+  assertDbGeneration,
+  getDatabasePath,
+  getDb,
+  getDbGeneration,
+  getDbGenerationSignal,
+  isDatabaseGenerationCancellation,
+  onDbReset,
+  runWithDbGeneration,
+} from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
+import { bumpChatAndMessageGenerationRevision, bumpChatGenerationRevision, bumpMessageGenerationRevision } from "./chat-generation-revision.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers } from "./characters.service";
@@ -14,6 +24,7 @@ import type {
   UpdateMessageInput,
   ChatMessageSearchResult,
 } from "../types/message";
+import type { AgentSummary } from "../types/agents";
 import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -22,7 +33,11 @@ import * as audioSvc from "./audio.service";
 import * as memoryCortex from "./memory-cortex";
 import * as regexScriptsSvc from "./regex-scripts.service";
 import { removePoolEntriesForChat } from "./generation-pool.service";
-import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
+import { invalidateChatMemoryCache, refreshChatMemoryCache } from "./chat-memory-cache.service";
+import {
+  trackChatChunkMaintenance,
+  waitForChatChunkMaintenance as waitForTrackedChatChunkMaintenance,
+} from "./chat-chunk-maintenance.service";
 import { enqueueChatPipelineTask } from "./chat-pipeline-coordinator.service";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { buildEnv, type MacroEnv } from "../macros";
@@ -38,6 +53,8 @@ import {
   resolveAvatarImageId,
   type AvatarBindingField,
 } from "./avatar-bindings";
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
+import { retainAgentInspectionSourceDeletionInTransaction } from "./agent-inspection-retention.service";
 
 // --- Chat helpers ---
 
@@ -242,6 +259,131 @@ function normalizeObjectEntries(
   while (normalized.length < swipeCount) normalized.push(null);
   return normalized;
 }
+function normalizeReasoningCarrier(value: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(value)) return null;
+  if (value.type === "reasoning_content" && typeof value.content === "string" && value.content.length > 0) {
+    return { type: "reasoning_content", content: value.content };
+  }
+  if (value.type === "thinking_blocks" && Array.isArray(value.blocks)) {
+    const blocks = value.blocks.filter(isPlainObject);
+    return blocks.length > 0 ? { type: "thinking_blocks", blocks } : null;
+  }
+  if (value.type === "reasoning_details" && Array.isArray(value.details)) {
+    const details = value.details.filter(isPlainObject);
+    return details.length > 0 ? { type: "reasoning_details", details } : null;
+  }
+  return null;
+}
+
+function normalizeReasoningCarrierEntries(
+  value: unknown,
+  swipeCount: number,
+): (Record<string, unknown> | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) => normalizeReasoningCarrier(entry))
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
+
+const AGENT_SUMMARY_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const AGENT_SUMMARY_MAX_ERROR_CODES = 8;
+
+function normalizeAgentMetric(value: unknown): number | null {
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * Normalize the compact persisted agent result. Only host-owned summary
+ * fields survive; malformed summaries are absent rather than leaking
+ * arbitrary child/provider data into message extras.
+ */
+function normalizeAgentSummary(value: unknown): AgentSummary | null {
+  if (!isPlainObject(value)) return null;
+
+  const status = value.status;
+  if (
+    status !== "succeeded"
+    && status !== "failed"
+    && status !== "cancelled"
+    && status !== "timed_out"
+  ) {
+    return null;
+  }
+
+  const invocationCount = normalizeAgentMetric(value.invocationCount);
+  const succeededCount = normalizeAgentMetric(value.succeededCount);
+  const failedCount = normalizeAgentMetric(value.failedCount);
+  const cancelledCount = normalizeAgentMetric(value.cancelledCount);
+  const timedOutCount = normalizeAgentMetric(value.timedOutCount);
+  const toolCallCount = normalizeAgentMetric(value.toolCallCount);
+  if (
+    invocationCount === null
+    || succeededCount === null
+    || failedCount === null
+    || cancelledCount === null
+    || timedOutCount === null
+    || toolCallCount === null
+  ) {
+    return null;
+  }
+
+  const usage = value.usage;
+  if (!isPlainObject(usage)) return null;
+  const inputTokens = normalizeAgentMetric(usage.inputTokens);
+  const outputTokens = normalizeAgentMetric(usage.outputTokens);
+  const totalTokens = normalizeAgentMetric(usage.totalTokens);
+  if (inputTokens === null || outputTokens === null || totalTokens === null) {
+    return null;
+  }
+
+  let errorCodes: string[] | undefined;
+  if (Object.hasOwn(value, "errorCodes")) {
+    if (!Array.isArray(value.errorCodes)) return null;
+    const uniqueCodes = new Set<string>();
+    for (const code of value.errorCodes) {
+      if (typeof code !== "string" || !AGENT_SUMMARY_ERROR_CODE_PATTERN.test(code)) {
+        return null;
+      }
+      if (uniqueCodes.size < AGENT_SUMMARY_MAX_ERROR_CODES) {
+        uniqueCodes.add(code);
+      }
+    }
+    if (uniqueCodes.size > 0) errorCodes = Array.from(uniqueCodes);
+  }
+
+  return {
+    status,
+    invocationCount,
+    succeededCount,
+    failedCount,
+    cancelledCount,
+    timedOutCount,
+    toolCallCount,
+    usage: { inputTokens, outputTokens, totalTokens },
+    ...(errorCodes ? { errorCodes } : {}),
+  };
+}
+
+function normalizeAgentSummaryEntries(
+  value: unknown,
+  swipeCount: number,
+): (AgentSummary | null)[] {
+  const normalized = Array.isArray(value)
+    ? value.slice(0, swipeCount).map((entry) => normalizeAgentSummary(entry))
+    : [];
+  while (normalized.length < swipeCount) normalized.push(null);
+  return normalized;
+}
+
+function hasAgentSummary(entry: AgentSummary | null): entry is AgentSummary {
+  return entry !== null;
+}
 
 function normalizeStoredMessageExtra(
   extra: Record<string, unknown> | null | undefined,
@@ -276,10 +418,22 @@ function normalizeStoredMessageExtra(
     normalized.usageBySwipe,
     safeSwipeCount,
   );
-  const reasoningCarrierBySwipe = normalizeObjectEntries(
+  const agentActivityBySwipe = normalizeAgentSummaryEntries(
+    normalized.agentActivityBySwipe,
+    safeSwipeCount,
+  );
+  const reasoningCarrierBySwipe = normalizeReasoningCarrierEntries(
     normalized.reasoningCarrierBySwipe,
     safeSwipeCount,
   );
+
+  if (normalized.reasoningCarrier === null) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = null;
+  } else if (isPlainObject(normalized.reasoningCarrier)) {
+    reasoningCarrierBySwipe[safeLegacySwipeId] = normalizeReasoningCarrier(normalized.reasoningCarrier);
+  }
+
+
 
   if (normalized.reasoning === null) {
     reasoningBySwipe[safeLegacySwipeId] = null;
@@ -320,11 +474,13 @@ function normalizeStoredMessageExtra(
     usageBySwipe[safeLegacySwipeId] = normalized.usage;
   }
 
-  if (normalized.reasoningCarrier === null) {
-    reasoningCarrierBySwipe[safeLegacySwipeId] = null;
-  } else if (isPlainObject(normalized.reasoningCarrier)) {
-    reasoningCarrierBySwipe[safeLegacySwipeId] = normalized.reasoningCarrier;
+  if (Object.hasOwn(normalized, "agentActivity")) {
+    agentActivityBySwipe[safeLegacySwipeId] =
+      normalized.agentActivity === null
+        ? null
+        : normalizeAgentSummary(normalized.agentActivity);
   }
+
 
   delete normalized.reasoning;
   delete normalized.reasoningDuration;
@@ -332,6 +488,9 @@ function normalizeStoredMessageExtra(
   delete normalized.generationMetrics;
   delete normalized.usage;
   delete normalized.reasoningCarrier;
+  delete normalized.agentActivity;
+
+
 
   if (reasoningBySwipe.some((entry) => entry !== null)) {
     normalized.reasoningBySwipe = reasoningBySwipe;
@@ -363,11 +522,18 @@ function normalizeStoredMessageExtra(
     delete normalized.usageBySwipe;
   }
 
+  if (agentActivityBySwipe.some(hasAgentSummary)) {
+    normalized.agentActivityBySwipe = agentActivityBySwipe;
+  } else {
+    delete normalized.agentActivityBySwipe;
+  }
   if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
     normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
   } else {
     delete normalized.reasoningCarrierBySwipe;
   }
+
+
 
   return normalized;
 }
@@ -375,8 +541,12 @@ function normalizeStoredMessageExtra(
 function projectActiveSwipeExtra(
   extra: Record<string, unknown>,
   swipeId: number,
+  includePrivateReasoningCarrier = false,
 ): Record<string, unknown> {
   const projected: Record<string, unknown> = { ...extra };
+  delete projected.reasoningCarrier;
+  delete projected.reasoningCarrierBySwipe;
+
   const activeReasoning = Array.isArray(extra.reasoningBySwipe)
     ? extra.reasoningBySwipe[swipeId]
     : null;
@@ -392,9 +562,14 @@ function projectActiveSwipeExtra(
   const activeUsage = Array.isArray(extra.usageBySwipe)
     ? extra.usageBySwipe[swipeId]
     : null;
+  const activeAgentActivity = Array.isArray(extra.agentActivityBySwipe)
+    ? extra.agentActivityBySwipe[swipeId]
+    : null;
   const activeReasoningCarrier = Array.isArray(extra.reasoningCarrierBySwipe)
     ? extra.reasoningCarrierBySwipe[swipeId]
     : null;
+
+
 
   if (typeof activeReasoning === "string" && activeReasoning.length > 0) {
     projected.reasoning = activeReasoning;
@@ -434,10 +609,15 @@ function projectActiveSwipeExtra(
     delete projected.usage;
   }
 
-  if (isPlainObject(activeReasoningCarrier)) {
-    projected.reasoningCarrier = activeReasoningCarrier;
+  if (isPlainObject(activeAgentActivity)) {
+    projected.agentActivity = activeAgentActivity;
   } else {
-    delete projected.reasoningCarrier;
+    delete projected.agentActivity;
+  }
+
+
+  if (includePrivateReasoningCarrier && isPlainObject(activeReasoningCarrier)) {
+    projected.reasoningCarrier = activeReasoningCarrier;
   }
 
   return projected;
@@ -499,6 +679,18 @@ function removeSwipeScopedExtraEntry(
     }
   }
 
+  if (Array.isArray(normalized.reasoningCarrierBySwipe)) {
+    const reasoningCarrierBySwipe = [
+      ...(normalized.reasoningCarrierBySwipe as (Record<string, unknown> | null)[]),
+    ];
+    reasoningCarrierBySwipe.splice(removedSwipeId, 1);
+    if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
+      normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
+    } else {
+      delete normalized.reasoningCarrierBySwipe;
+    }
+  }
+
   if (Array.isArray(normalized.usageBySwipe)) {
     const usageBySwipe = [
       ...(normalized.usageBySwipe as (Record<string, unknown> | null)[]),
@@ -511,17 +703,17 @@ function removeSwipeScopedExtraEntry(
     }
   }
 
-  if (Array.isArray(normalized.reasoningCarrierBySwipe)) {
-    const reasoningCarrierBySwipe = [
-      ...(normalized.reasoningCarrierBySwipe as (Record<string, unknown> | null)[]),
-    ];
-    reasoningCarrierBySwipe.splice(removedSwipeId, 1);
-    if (reasoningCarrierBySwipe.some((entry) => entry !== null)) {
-      normalized.reasoningCarrierBySwipe = reasoningCarrierBySwipe;
-    } else {
-      delete normalized.reasoningCarrierBySwipe;
-    }
+  const agentActivityBySwipe = normalizeAgentSummaryEntries(
+    normalized.agentActivityBySwipe,
+    swipeCount,
+  );
+  agentActivityBySwipe.splice(removedSwipeId, 1);
+  if (agentActivityBySwipe.some(hasAgentSummary)) {
+    normalized.agentActivityBySwipe = agentActivityBySwipe;
+  } else {
+    delete normalized.agentActivityBySwipe;
   }
+
 
   return normalized;
 }
@@ -544,6 +736,47 @@ function rowToMessage(row: any): Message {
     branch_id: row.branch_id || null,
   };
 }
+function rowToMessageForProviderHistory(row: Record<string, unknown>): Message {
+  let swipes: string[];
+  let swipe_dates: number[];
+  let extra: Record<string, unknown>;
+  const content = typeof row.content === "string" ? row.content : "";
+  const swipeId = typeof row.swipe_id === "number" ? row.swipe_id : 0;
+  try {
+    const parsed = typeof row.swipes === "string" ? JSON.parse(row.swipes) : null;
+    swipes = Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")
+      ? parsed
+      : [content];
+  } catch {
+    swipes = [content];
+  }
+  try {
+    const parsed = typeof row.swipe_dates === "string" ? JSON.parse(row.swipe_dates) : [];
+    swipe_dates = Array.isArray(parsed) && parsed.every((entry) => typeof entry === "number")
+      ? parsed
+      : [];
+  } catch {
+    swipe_dates = [];
+  }
+  try {
+    const parsed = typeof row.extra === "string" ? JSON.parse(row.extra) : {};
+    extra = isPlainObject(parsed) ? parsed : {};
+  } catch {
+    extra = {};
+  }
+  const storedExtra = normalizeStoredMessageExtra(extra, swipes.length, swipeId);
+  return {
+    ...row,
+    is_user: !!row.is_user,
+    swipes,
+    swipe_dates,
+    extra: projectActiveSwipeExtra(storedExtra, swipeId, true),
+    parent_message_id: typeof row.parent_message_id === "string" ? row.parent_message_id : null,
+    branch_id: typeof row.branch_id === "string" ? row.branch_id : null,
+  } as Message;
+}
+
+
 
 const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "reasoningBySwipe",
@@ -551,6 +784,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "tokenCountBySwipe",
   "generationMetricsBySwipe",
   "usageBySwipe",
+  "agentActivityBySwipe",
   "reasoningCarrierBySwipe",
 ] as const;
 
@@ -572,7 +806,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
  * not "delete" — seed it from the stored extra before normalization. Callers
  * that really want to clear an array must send it explicitly (e.g.
  * `reasoningBySwipe: []`); per-slot clearing still works via the top-level
- * projected keys (`reasoning: null`).
+ * projected keys (`reasoning: null`, `agentActivity: null`).
  */
 function preserveSwipeScopedExtraArrays(
   incoming: Record<string, unknown>,
@@ -1030,6 +1264,7 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
  * number of chats actually deleted.
  */
 export function deleteAllChatsForCharacter(userId: string, characterId: string): number {
+  return withUserDataMutationSync(userId, () => {
   const rows = getDb().query(`
     SELECT id FROM chats
     WHERE user_id = ? AND character_id = ?
@@ -1041,6 +1276,7 @@ export function deleteAllChatsForCharacter(userId: string, characterId: string):
     if (deleteChat(userId, row.id)) deleted++;
   }
   return deleted;
+  });
 }
 
 export function listGroupChatSummaries(userId: string, characterIds?: string[]): ChatSummary[] {
@@ -1112,6 +1348,7 @@ export function getChat(userId: string, id: string): Chat | null {
 }
 
 export function createChat(userId: string, input: CreateChatInput): Chat {
+  return withUserDataMutationSync(userId, () => {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const requestedGreetingIndex = input.greeting_index
@@ -1170,9 +1407,11 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
   }
   eventBus.emit(EventType.CHAT_CREATED, { id, chat: result }, userId);
   return result;
+  });
 }
 
 export function createGroupChat(userId: string, input: CreateGroupChatInput): Chat {
+  return withUserDataMutationSync(userId, () => {
   const greetingCharId = input.greeting_character_id || input.character_ids[0];
   const metadata = { group: true, character_ids: input.character_ids };
 
@@ -1184,9 +1423,11 @@ export function createGroupChat(userId: string, input: CreateGroupChatInput): Ch
   });
 
   return chat;
+  });
 }
 
 export function convertSoloChatToGroup(userId: string, chatId: string): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const source = getChat(userId, chatId);
   if (!source) return null;
   if (source.metadata?.group) throw new Error("Chat is already a group chat");
@@ -1227,11 +1468,16 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
   bulkInsertMessages(converted.id, messages, userId);
 
   const now = Math.floor(Date.now() / 1000);
-  getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, converted.id, userId);
+  const db = getDb();
+  db.transaction(() => {
+    db.query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, converted.id, userId);
+    bumpChatGenerationRevision(db, converted.id, userId);
+  })();
 
   const result = getChat(userId, converted.id)!;
   eventBus.emit(EventType.CHAT_CREATED, { id: result.id, chat: result }, userId);
   return result;
+  });
 }
 
 export function deleteChat(userId: string, id: string): boolean {
@@ -1249,7 +1495,15 @@ export function deleteChat(userId: string, id: string): boolean {
     console.warn(`[chats] Failed to scan messages for audio cleanup in chat ${id}:`, err);
   }
 
-  const result = getDb().query("DELETE FROM chats WHERE id = ? AND user_id = ?").run(id, userId);
+  const db = getDb();
+  const result = withUserDataMutationSync(userId, () => db.transaction(() => {
+    retainAgentInspectionSourceDeletionInTransaction(db, {
+      userId,
+      chatId: id,
+      sourceKind: "chat",
+    });
+    return db.query("DELETE FROM chats WHERE id = ? AND user_id = ?").run(id, userId);
+  })());
   if (result.changes > 0) {
     cleanupAudioAttachments(userId, audioAttachments);
     invalidateChatMemoryCache(id);
@@ -1395,6 +1649,7 @@ export function updateChat(
   input: UpdateChatInput,
   opts: { touchUpdatedAt?: boolean } = {},
 ): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getChat(userId, id);
   if (!existing) return null;
 
@@ -1414,7 +1669,11 @@ export function updateChat(
   values.push(id);
   values.push(userId);
 
-  getDb().query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  const db = getDb();
+  db.transaction(() => {
+    db.query(`UPDATE chats SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+    bumpChatGenerationRevision(db, id, userId);
+  })();
   const updated = getChat(userId, id)!;
   const changedFields = diffChatChangedFields(existing, updated);
   eventBus.emit(EventType.CHAT_CHANGED, { chat: updated, changedFields }, userId);
@@ -1449,6 +1708,7 @@ export function updateChat(
   }
 
   return updated;
+  });
 }
 
 /**
@@ -1473,6 +1733,7 @@ export function mergeChatMetadata(
   partial: Record<string, any>,
   opts: { touchUpdatedAt?: boolean } = {},
 ): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getChat(userId, id);
   if (!existing) return null;
   const merged: Record<string, any> = { ...(existing.metadata || {}) };
@@ -1481,6 +1742,7 @@ export function mergeChatMetadata(
     else merged[key] = value;
   }
   return updateChat(userId, id, { metadata: merged }, opts);
+  });
 }
 
 // ---- Group chat muting ----
@@ -1493,6 +1755,7 @@ export function getGroupMutedIds(chat: Chat): string[] {
 }
 
 export function setGroupMute(userId: string, chatId: string, characterId: string, muted: boolean): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat || !chat.metadata?.group) return null;
 
@@ -1509,6 +1772,7 @@ export function setGroupMute(userId: string, chatId: string, characterId: string
 
   const newMetadata = { ...chat.metadata, muted_character_ids: newMuted };
   return updateChat(userId, chatId, { metadata: newMetadata });
+  });
 }
 
 export function setGroupMemberAlternateFields(
@@ -1517,6 +1781,7 @@ export function setGroupMemberAlternateFields(
   characterId: string,
   selections: Record<string, unknown>,
 ): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat || !chat.metadata?.group) return null;
 
@@ -1553,6 +1818,7 @@ export function setGroupMemberAlternateFields(
   }
 
   return updateChat(userId, chatId, { metadata: nextMetadata });
+  });
 }
 
 export interface ChatAppearanceResult {
@@ -1707,6 +1973,7 @@ export function applyChatAppearance(
   chatId: string,
   action: ChatAppearanceAction,
 ): ChatAppearanceResult | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat) return null;
   const group = chat.metadata?.group === true;
@@ -1769,6 +2036,7 @@ export function applyChatAppearance(
     ? updateAppearanceGreetingMessage(userId, chatId, character, greetingIndex!, group)
     : undefined;
   return { chat: updated, ...(greetingMessage ? { greeting_message: greetingMessage } : {}) };
+  });
 }
 
 // ---- Group chat member management ----
@@ -1779,6 +2047,7 @@ export function addGroupMember(
   characterId: string,
   options?: { skip_greeting?: boolean; greeting_index?: number }
 ): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat || !chat.metadata?.group) return null;
 
@@ -1822,9 +2091,11 @@ export function addGroupMember(
   }
 
   return updated;
+  });
 }
 
 export function removeGroupMember(userId: string, chatId: string, characterId: string): Chat | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat || !chat.metadata?.group) return null;
 
@@ -1892,15 +2163,20 @@ export function removeGroupMember(userId: string, chatId: string, characterId: s
   // reassign to the first remaining member
   if (chat.character_id === characterId) {
     const now = Math.floor(Date.now() / 1000);
-    getDb()
-      .query("UPDATE chats SET character_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(newCharacterIds[0], now, chatId, userId);
+    const db = getDb();
+    db.transaction(() => {
+      db.query("UPDATE chats SET character_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(newCharacterIds[0], now, chatId, userId);
+      bumpChatGenerationRevision(db, chatId, userId);
+    })();
   }
 
   return updateChat(userId, chatId, { metadata: newMetadata });
+  });
 }
 
 export function reattributeUserMessages(userId: string, chatId: string, personaId: string, personaName: string): number | null {
+  return withUserDataMutationSync(userId, () => {
   const chat = getChat(userId, chatId);
   if (!chat) return null;
 
@@ -1922,6 +2198,10 @@ export function reattributeUserMessages(userId: string, chatId: string, personaI
       }
       extra.persona_id = personaId;
       update.run(personaName, JSON.stringify(extra), row.id, chatId);
+      bumpMessageGenerationRevision(db, row.id, chatId);
+    }
+    if (rows.length > 0) {
+      bumpChatGenerationRevision(db, chatId, userId);
     }
   })();
 
@@ -1930,9 +2210,11 @@ export function reattributeUserMessages(userId: string, chatId: string, personaI
   }
 
   return rows.length;
+  });
 }
 
 export function bulkReattributeByPersonaName(userId: string, personaMap: Map<string, { id: string; name: string }>): { chats_updated: number; messages_updated: number } {
+  return withUserDataMutationSync(userId, () => {
   const db = getDb();
 
   // Find all user messages across all user's chats that lack a persona_id
@@ -1966,13 +2248,18 @@ export function bulkReattributeByPersonaName(userId: string, personaMap: Map<str
 
       extra.persona_id = match.id;
       update.run(match.name, JSON.stringify(extra), row.id, row.chat_id);
+      bumpMessageGenerationRevision(db, row.id, row.chat_id);
       messagesUpdated++;
       updatedChatIds.add(row.chat_id);
+    }
+    for (const updatedChatId of updatedChatIds) {
+      bumpChatGenerationRevision(db, updatedChatId, userId);
     }
   });
   tx();
 
   return { chats_updated: updatedChatIds.size, messages_updated: messagesUpdated };
+  });
 }
 
 export function getLastAssistantMessage(userId: string, chatId: string): Message | null {
@@ -2060,6 +2347,15 @@ export function getMessages(userId: string, chatId: string): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(rowToMessage);
 }
+/**
+ * Provider-history-only message hydration. Native reasoning carriers are
+ * persisted for private replay but must never cross a public DTO boundary.
+ */
+export function getMessagesForProviderHistory(userId: string, chatId: string): Message[] {
+  const rows = getMsgStmts().all.all(chatId, userId) as Record<string, unknown>[];
+  return rows.map(rowToMessageForProviderHistory);
+}
+
 
 /**
  * Return the visible user messages at the end of a chat without hydrating the
@@ -2085,7 +2381,7 @@ export function getTrailingVisibleUserMessageIds(userId: string, chatId: string)
       let hidden = false;
       try {
         const extra = JSON.parse(row.extra || "{}");
-        hidden = extra?.hidden === true;
+        hidden = extra?.hidden === true || extra?.hidden === 1;
       } catch {
         // Match rowToMessage's malformed-extra fallback: treat it as visible.
       }
@@ -2156,7 +2452,7 @@ function visibleMessageTextForSearch(row: { content?: unknown; swipes?: unknown;
       : "";
 }
 
-function isLoomInjectedMessageForSearch(extra: unknown): boolean {
+export function isLoomInjectedMessageForSearch(extra: unknown): boolean {
   try {
     const parsed = typeof extra === "string" ? JSON.parse(extra) : extra;
     return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -2220,6 +2516,56 @@ export function getMessage(userId: string, id: string): Message | null {
   if (!row) return null;
   return rowToMessage(row);
 }
+/** Hydrate one message with its private active-swipe provider carrier. */
+export function getMessageForProviderHistory(userId: string, id: string): Message | null {
+  const row = getMsgStmts().byId.get(id, userId) as Record<string, unknown> | null;
+  if (!row) return null;
+  return rowToMessageForProviderHistory(row);
+}
+interface StoredMessageExtraSnapshot {
+  extra: Record<string, unknown>;
+  swipeCount: number;
+  swipeId: number;
+}
+
+function getStoredMessageExtraSnapshot(
+  userId: string,
+  id: string,
+): StoredMessageExtraSnapshot | null {
+  const row = getMsgStmts().byId.get(id, userId) as Record<string, unknown> | null;
+  if (!row) return null;
+
+  let swipeCount = 1;
+  if (typeof row.swipes === "string") {
+    try {
+      const parsed = JSON.parse(row.swipes);
+      if (Array.isArray(parsed) && parsed.length > 0) swipeCount = parsed.length;
+    } catch {
+      /* malformed legacy swipe JSON falls back to one slot */
+    }
+  }
+  const swipeId =
+    typeof row.swipe_id === "number"
+    && Number.isInteger(row.swipe_id)
+    && row.swipe_id >= 0
+    && row.swipe_id < swipeCount
+      ? row.swipe_id
+      : 0;
+  let extra: Record<string, unknown> = {};
+  if (typeof row.extra === "string") {
+    try {
+      const parsed = JSON.parse(row.extra);
+      if (isPlainObject(parsed)) extra = parsed;
+    } catch {
+      /* malformed legacy extra falls back to an empty object */
+    }
+  }
+  return {
+    extra: normalizeStoredMessageExtra(extra, swipeCount, swipeId),
+    swipeCount,
+    swipeId,
+  };
+}
 
 export interface AssociativeRegexActionUsage {
   script_id: string;
@@ -2273,7 +2619,7 @@ export function claimAssociativeRegexActions(
 ): ClaimAssociativeRegexActionsResult {
   if (inputs.length === 0) return { status: "claimed", messages: [], usages: [] };
   const db = getDb();
-  const outcome = db.transaction(() => {
+  const outcome = withUserDataMutationSync(userId, () => db.transaction(() => {
     const chatBefore = getChat(userId, chatId);
     if (!chatBefore) return { status: "not_found" as const };
     const messages = new Map<string, Message>();
@@ -2287,7 +2633,8 @@ export function claimAssociativeRegexActions(
       if (input.stateEffects?.length && existing.is_user) return { status: "forbidden" as const };
       messages.set(input.messageId, existing);
       if (!usageMaps.has(input.messageId)) {
-        const stored = existing.extra?.associative_regex_action_usage;
+        const storedExtra = getStoredMessageExtraSnapshot(userId, input.messageId)?.extra;
+        const stored = storedExtra?.associative_regex_action_usage;
         usageMaps.set(input.messageId,
           stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {},
         );
@@ -2332,21 +2679,24 @@ export function claimAssociativeRegexActions(
 
     for (const [messageId, usageByInstance] of usageMaps) {
       const existing = messages.get(messageId)!;
+      const storedExtra = getStoredMessageExtraSnapshot(userId, messageId)?.extra;
       const nextExtra = normalizeStoredMessageExtra(
-        { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
+        { ...(storedExtra ?? existing.extra ?? {}), associative_regex_action_usage: usageByInstance },
         existing.swipes.length,
         existing.swipe_id,
       );
       db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
         .run(JSON.stringify(nextExtra), messageId, chatId);
+      bumpChatAndMessageGenerationRevision(db, chatId, messageId, userId);
     }
     if (chatStateChanged) {
       const metadata = { ...(chatBefore.metadata || {}), chat_variables: chatVariables };
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
         .run(JSON.stringify(metadata), now, chatId, userId);
+      bumpChatGenerationRevision(db, chatId, userId);
     }
     return { status: "claimed" as const, usages, chatBefore, chatStateChanged };
-  })();
+  })());
 
   const messageIds = [...new Set(inputs.map((input) => input.messageId))];
   const messages = messageIds
@@ -2385,7 +2735,7 @@ export function claimAssociativeRegexAction(
   },
 ): ClaimAssociativeRegexActionResult {
   const db = getDb();
-  const outcome = db.transaction(() => {
+  const outcome = withUserDataMutationSync(userId, () => db.transaction(() => {
     if (!hasValidAssociativeRegexStateEffects(input.stateEffects)) return { status: "forbidden" as const };
     const chatBefore = getChat(userId, chatId);
     if (!chatBefore) return { status: "not_found" as const };
@@ -2395,7 +2745,8 @@ export function claimAssociativeRegexAction(
       return { status: "forbidden" as const };
     }
 
-    const stored = existing.extra?.associative_regex_action_usage;
+    const storedExtra = getStoredMessageExtraSnapshot(userId, messageId)?.extra;
+    const stored = storedExtra?.associative_regex_action_usage;
     const usageByInstance: Record<string, AssociativeRegexActionUsage> =
       stored && typeof stored === "object" && !Array.isArray(stored)
         ? { ...stored }
@@ -2417,12 +2768,13 @@ export function claimAssociativeRegexAction(
     };
     usageByInstance[claimKey] = usage;
     const nextExtra = normalizeStoredMessageExtra(
-      { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
+      { ...(storedExtra ?? existing.extra ?? {}), associative_regex_action_usage: usageByInstance },
       existing.swipes.length,
       existing.swipe_id,
     );
     db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
       .run(JSON.stringify(nextExtra), messageId, chatId);
+    bumpChatAndMessageGenerationRevision(db, chatId, messageId, userId);
     const chatVariables = {
       ...((chatBefore.metadata?.chat_variables as Record<string, string> | undefined) ?? {}),
     };
@@ -2438,12 +2790,13 @@ export function claimAssociativeRegexAction(
     if (chatStateChanged) {
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
         .run(JSON.stringify(metadata), usage.used_at, chatId, userId);
+      bumpChatGenerationRevision(db, chatId, userId);
     }
     const branchCreated = input.fork
       ? createChatBranchRows(userId, { ...chatBefore, metadata }, existing)
       : undefined;
     return { status: "claimed" as const, usage, chatBefore, chatStateChanged, branchCreated };
-  })();
+  })());
 
   if (outcome.status === "not_found" || outcome.status === "forbidden") return outcome;
   const message = getMessage(userId, messageId);
@@ -2476,7 +2829,8 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  const maxIndex = getDb()
+  const db = getDb();
+  const maxIndex = db
     .query("SELECT COALESCE(MAX(index_in_chat), -1) as max_idx FROM messages WHERE chat_id = ?")
     .get(chatId) as any;
   const nextIndex = (maxIndex?.max_idx ?? -1) + 1;
@@ -2484,19 +2838,21 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
   const swipes = [input.content];
   const swipeDates = [now];
 
-  getDb()
-    .query(
-      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
-      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
-      JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
-      input.parent_message_id || null, input.branch_id || null, now
-    );
-
-  getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db
+      .query(
+        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
+        now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
+        JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
+        null, null, now,
+      );
+    db.query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+    bumpChatGenerationRevision(db, chatId, userId);
+  })());
 
   // getMessage without userId — internal use after validated chat
   const row = getDb().query("SELECT * FROM messages WHERE id = ?").get(id) as any;
@@ -2505,7 +2861,9 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
 
   if (userId) {
     updateChatChunks(userId, chatId, message).catch(err => {
-      console.warn("[chats] Failed to update chunks:", err);
+      if (!isDatabaseGenerationCancellation(err)) {
+        console.warn("[chats] Failed to update chunks:", err);
+      }
     });
   }
 
@@ -2514,10 +2872,9 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
 
 /**
  * Lightweight attachment append for flows like image-gen "attach to last
- * message". Does one read + one update + one MESSAGE_EDITED emit, skipping the
- * extra read-back, chunk rebuild gate, and chat-memory cache invalidation that
- * updateMessage performs. Returns the synthesized updated message so callers
- * can include it in their response payload.
+ * message". It skips the chunk rebuild gate and chat-memory cache invalidation
+ * that updateMessage performs, while returning the canonical post-write message
+ * so callers receive its projected extra and bumped generation revision.
  */
 export function appendMessageAttachment(
   userId: string,
@@ -2528,9 +2885,10 @@ export function appendMessageAttachment(
   const existing = getMessage(userId, messageId);
   if (!existing) return null;
 
-  const existingExtra: Record<string, any> = existing.extra && typeof existing.extra === "object"
-    ? existing.extra as Record<string, any>
-    : {};
+  const storedExtra = getStoredMessageExtraSnapshot(userId, messageId)?.extra;
+  const existingExtra: Record<string, unknown> = storedExtra ?? (
+    existing.extra && typeof existing.extra === "object" ? existing.extra : {}
+  );
   const existingAttachments = Array.isArray(existingExtra.attachments) ? existingExtra.attachments : [];
 
   const nextExtra = {
@@ -2540,11 +2898,19 @@ export function appendMessageAttachment(
   };
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
 
-  getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
-
-  const updated: Message = { ...existing, extra: projectActiveSwipeExtra(normalizedExtra, existing.swipe_id) };
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+      .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
+    bumpChatAndMessageGenerationRevision(db, existing.chat_id, messageId, userId);
+  })());
+  const updated = getMessage(userId, messageId) ?? {
+    ...existing,
+    extra: projectActiveSwipeExtra(
+      normalizedExtra,
+      existing.swipe_id,
+    ),
+  };
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   return updated;
 }
@@ -2596,9 +2962,10 @@ export function removeMessageAttachment(
   const existing = getMessage(userId, messageId);
   if (!existing) return null;
 
-  const existingExtra: Record<string, any> = existing.extra && typeof existing.extra === "object"
-    ? existing.extra as Record<string, any>
-    : {};
+  const storedExtra = getStoredMessageExtraSnapshot(userId, messageId)?.extra;
+  const existingExtra: Record<string, unknown> = storedExtra ?? (
+    existing.extra && typeof existing.extra === "object" ? existing.extra : {}
+  );
   const existingAttachments = Array.isArray(existingExtra.attachments) ? existingExtra.attachments : [];
   const removed = existingAttachments.filter((a: any) => a && typeof a === "object" && a.image_id === imageId);
   const nextAttachments = existingAttachments.filter(
@@ -2611,18 +2978,25 @@ export function removeMessageAttachment(
 
   const nextExtra = { ...existingExtra, attachments: nextAttachments };
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
-
-  getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+      .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
+    bumpChatAndMessageGenerationRevision(db, existing.chat_id, messageId, userId);
+  })());
 
   // Free any audio_files blob backing a removed audio attachment so the
   // on-disk file doesn't outlive the message reference. Safe to call after
   // the UPDATE — if cleanup throws, the attachment is already gone from the
   // message and the orphan can be GC'd manually.
   cleanupAudioAttachments(userId, removed);
-
-  const updated: Message = { ...existing, extra: projectActiveSwipeExtra(normalizedExtra, existing.swipe_id) };
+  const updated = getMessage(userId, messageId) ?? {
+    ...existing,
+    extra: projectActiveSwipeExtra(
+      normalizedExtra,
+      existing.swipe_id,
+    ),
+  };
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   return updated;
 }
@@ -2635,14 +3009,18 @@ export function removeMessageAttachment(
 export function patchMessageExtra(userId: string, id: string, extra: Record<string, any>): void {
   const existing = getMessage(userId, id);
   if (!existing) return;
+  const storedExtra = getStoredMessageExtraSnapshot(userId, id)?.extra;
   const normalizedExtra = normalizeStoredMessageExtra(
-    extra,
+    preserveSwipeScopedExtraArrays(extra, storedExtra ?? existing.extra),
     existing.swipes.length,
     existing.swipe_id,
   );
-  getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+      .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+    bumpChatAndMessageGenerationRevision(db, existing.chat_id, id, userId);
+  })());
 }
 
 /** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
@@ -2652,6 +3030,7 @@ const SWIPE_SCOPED_EXTRA_KEYS = [
   "tokenCount",
   "generationMetrics",
   "usage",
+  "agentActivity",
   "reasoningCarrier",
 ] as const;
 
@@ -2686,7 +3065,8 @@ export function setSwipeScopedExtra(
   // scoped fields belong to that swipe. Drop them before re-normalizing against
   // the target swipe; the canonical `*BySwipe[]` arrays (also present) are kept,
   // which preserves every other swipe's data.
-  const base: Record<string, unknown> = { ...(existing.extra || {}) };
+  const storedExtra = getStoredMessageExtraSnapshot(userId, id)?.extra;
+  const base: Record<string, unknown> = { ...(storedExtra ?? existing.extra ?? {}) };
   for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete base[key];
   for (const [key, value] of Object.entries(fields)) base[key] = value;
 
@@ -2695,9 +3075,12 @@ export function setSwipeScopedExtra(
     existing.swipes.length,
     targetSwipeId,
   );
-  getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
-    .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+      .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+    bumpChatAndMessageGenerationRevision(db, existing.chat_id, id, userId);
+  })());
 }
 
 export function updateMessage(userId: string, id: string, input: UpdateMessageInput): Message | null {
@@ -2763,12 +3146,13 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     : swipeShapeTouched
       ? newSwipes[newSwipeId]
       : undefined;
+  const storedExtra = getStoredMessageExtraSnapshot(userId, id)?.extra;
   const normalizedExtra =
     input.extra !== undefined || swipeShapeTouched
       ? normalizeStoredMessageExtra(
           input.extra !== undefined
-            ? preserveSwipeScopedExtraArrays(input.extra, existing.extra)
-            : existing.extra,
+            ? preserveSwipeScopedExtraArrays(input.extra, storedExtra ?? existing.extra)
+            : storedExtra ?? existing.extra,
           newSwipes.length,
           input.extra !== undefined ? newSwipeId : existing.swipe_id,
         )
@@ -2797,7 +3181,11 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   values.push(id);
   values.push(existing.chat_id);
 
-  getDb().query(`UPDATE messages SET ${fields.join(", ")} WHERE id = ? AND chat_id = ?`).run(...values);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query(`UPDATE messages SET ${fields.join(", ")} WHERE id = ? AND chat_id = ?`).run(...values);
+    bumpChatAndMessageGenerationRevision(db, existing.chat_id, id, userId);
+  })());
   const updated = getMessage(userId, id)!;
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   if (swipeShapeTouched) {
@@ -2828,7 +3216,9 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     } catch { /* ignore if not loaded */ }
 
     rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]).catch(err => {
-      console.warn("[chats] Failed to rebuild chunks after message edit:", err);
+      if (!isDatabaseGenerationCancellation(err)) {
+        console.warn("[chats] Failed to rebuild chunks after message edit:", err);
+      }
     });
   }
 
@@ -2871,7 +3261,7 @@ export function bulkSetHidden(userId: string, chatId: string, messageIds: string
 
   const updated: Message[] = [];
 
-  const transaction = db.transaction(() => {
+  const transaction = () => withUserDataMutationSync(userId, () => db.transaction(() => {
     for (const msgId of messageIds) {
       const row = getStmt.get(msgId, chatId) as any;
       if (!row) continue;
@@ -2884,13 +3274,20 @@ export function bulkSetHidden(userId: string, chatId: string, messageIds: string
       }
 
       updateStmt.run(JSON.stringify(extra), msgId, chatId);
-      const updatedRow = { ...row, extra: JSON.stringify(extra) };
+      const messageRevision = bumpMessageGenerationRevision(db, msgId, chatId);
+      const updatedRow = {
+        ...row,
+        extra: JSON.stringify(extra),
+        generation_revision: messageRevision ?? Number(row.generation_revision ?? 0),
+      };
       updated.push(rowToMessage(updatedRow));
     }
-  });
+    if (updated.length > 0) {
+      bumpChatGenerationRevision(db, chatId, userId);
+    }
+  })());
 
   transaction();
-
   if (
     hidden &&
     typeof chat.metadata?.context_history_anchor_message_id === "string" &&
@@ -2937,20 +3334,28 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   const deletedIds: string[] = [];
   const attachmentsToCleanup: any[] = [];
 
-  const transaction = db.transaction(() => {
+  const transaction = () => withUserDataMutationSync(userId, () => db.transaction(() => {
     for (const msgId of messageIds) {
       const row = getStmt.get(msgId, chatId) as any;
       if (!row) continue;
 
       attachmentsToCleanup.push(...collectMessageAttachments(row));
+      retainAgentInspectionSourceDeletionInTransaction(db, {
+        userId,
+        chatId,
+        sourceKind: "message",
+        targetMessageId: msgId,
+      });
       deleteStmt.run(msgId, chatId);
       deleted++;
       deletedIds.push(msgId);
     }
-  });
+    if (deleted > 0) {
+      bumpChatGenerationRevision(db, chatId, userId);
+    }
+  })());
 
   transaction();
-
   if (
     typeof chat.metadata?.context_history_anchor_message_id === "string" &&
     deletedIds.includes(chat.metadata.context_history_anchor_message_id)
@@ -2986,7 +3391,18 @@ export function deleteMessage(userId: string, id: string): boolean {
   const msg = getMessage(userId, id);
   if (!msg) return false;
   const attachmentsToCleanup = collectMessageAttachments(msg);
-  const result = getDb().query("DELETE FROM messages WHERE id = ? AND chat_id = ?").run(id, msg.chat_id);
+  const db = getDb();
+  const result = withUserDataMutationSync(userId, () => db.transaction(() => {
+    retainAgentInspectionSourceDeletionInTransaction(db, {
+      userId,
+      chatId: msg.chat_id,
+      sourceKind: "message",
+      targetMessageId: id,
+    });
+    const deleted = db.query("DELETE FROM messages WHERE id = ? AND chat_id = ?").run(id, msg.chat_id);
+    if (deleted.changes > 0) bumpChatGenerationRevision(db, msg.chat_id, userId);
+    return deleted;
+  })());
   if (result.changes > 0) {
     const chat = getChat(userId, msg.chat_id);
     if (chat?.metadata?.context_history_anchor_message_id === id) {
@@ -3040,22 +3456,25 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   const swipeDates = [...msg.swipe_dates, now];
   const newSwipeId = swipes.length - 1;
   const normalizedExtra = normalizeStoredMessageExtra(
-    msg.extra,
+    getStoredMessageExtraSnapshot(userId, messageId)?.extra ?? msg.extra,
     swipes.length,
     msg.swipe_id,
   );
 
-  getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
-    .run(
-      JSON.stringify(swipes),
-      JSON.stringify(swipeDates),
-      newSwipeId,
-      content,
-      JSON.stringify(normalizedExtra),
-      messageId,
-      msg.chat_id,
-    );
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+      .run(
+        JSON.stringify(swipes),
+        JSON.stringify(swipeDates),
+        newSwipeId,
+        content,
+        JSON.stringify(normalizedExtra),
+        messageId,
+        msg.chat_id,
+      );
+    bumpChatAndMessageGenerationRevision(db, msg.chat_id, messageId, userId);
+  })());
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -3081,7 +3500,7 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
   const swipes = [...msg.swipes];
   swipes[swipeIdx] = content;
   const normalizedExtra = normalizeStoredMessageExtra(
-    msg.extra,
+    getStoredMessageExtraSnapshot(userId, messageId)?.extra ?? msg.extra,
     swipes.length,
     msg.swipe_id,
   );
@@ -3092,8 +3511,11 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
   const values = swipeIdx === msg.swipe_id
     ? [JSON.stringify(swipes), content, JSON.stringify(normalizedExtra), messageId, msg.chat_id]
     : [JSON.stringify(swipes), JSON.stringify(normalizedExtra), messageId, msg.chat_id];
-
-  getDb().query(`UPDATE messages SET ${updates} WHERE id = ? AND chat_id = ?`).run(...values);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query(`UPDATE messages SET ${updates} WHERE id = ? AND chat_id = ?`).run(...values);
+    bumpChatAndMessageGenerationRevision(db, msg.chat_id, messageId, userId);
+  })());
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
     EventType.MESSAGE_SWIPED,
@@ -3136,23 +3558,33 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
 
   const newContent = swipes[newSwipeId] ?? swipes[0];
   const normalizedExtra = removeSwipeScopedExtraEntry(
-    msg.extra,
+    getStoredMessageExtraSnapshot(userId, messageId)?.extra ?? msg.extra,
     msg.swipes.length,
     previousSwipeId,
     swipeIdx,
   );
 
-  getDb()
-    .query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
-    .run(
-      JSON.stringify(swipes),
-      JSON.stringify(swipeDates),
-      newSwipeId,
-      newContent,
-      JSON.stringify(normalizedExtra),
-      messageId,
-      msg.chat_id,
-    );
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    retainAgentInspectionSourceDeletionInTransaction(db, {
+      userId,
+      chatId: msg.chat_id,
+      sourceKind: "swipe",
+      targetMessageId: messageId,
+      targetSwipeId: swipeIdx,
+    });
+    db.query("UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+      .run(
+        JSON.stringify(swipes),
+        JSON.stringify(swipeDates),
+        newSwipeId,
+        newContent,
+        JSON.stringify(normalizedExtra),
+        messageId,
+        msg.chat_id,
+      );
+    bumpChatAndMessageGenerationRevision(db, msg.chat_id, messageId, userId);
+  })());
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -3182,14 +3614,16 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
   const previousSwipeId = msg.swipe_id;
   const nextContent = msg.swipes[nextIdx] ?? msg.content;
   const normalizedExtra = normalizeStoredMessageExtra(
-    msg.extra,
+    getStoredMessageExtraSnapshot(userId, messageId)?.extra ?? msg.extra,
     msg.swipes.length,
     previousSwipeId,
   );
-
-  getDb()
-    .query("UPDATE messages SET swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
-    .run(nextIdx, nextContent, JSON.stringify(normalizedExtra), messageId, msg.chat_id);
+  const db = getDb();
+  withUserDataMutationSync(userId, () => db.transaction(() => {
+    db.query("UPDATE messages SET swipe_id = ?, content = ?, extra = ? WHERE id = ? AND chat_id = ?")
+      .run(nextIdx, nextContent, JSON.stringify(normalizedExtra), messageId, msg.chat_id);
+    bumpChatAndMessageGenerationRevision(db, msg.chat_id, messageId, userId);
+  })());
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -3297,6 +3731,7 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
     db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?")
       .run(JSON.stringify(metadata), newChatId, userId);
   }
+  bumpChatGenerationRevision(db, newChatId, userId);
 
   return {
     sourceChatId: chat.id,
@@ -3335,7 +3770,7 @@ export function branchChat(userId: string, chatId: string, atMessageId: string, 
   let created: CreatedChatBranch;
 
   try {
-    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg, requestedName))();
+    created = withUserDataMutationSync(userId, () => getDb().transaction(() => createChatBranchRows(userId, chat, msg, requestedName))());
   } catch (err) {
     console.error("[chats] Branch failed:", err);
     return null;
@@ -3772,9 +4207,9 @@ export function createChatRaw(userId: string, input: { character_id: string; nam
   const createdAt = input.created_at ?? now;
   const updatedAt = input.updated_at ?? createdAt;
 
-  getDb()
+  withUserDataMutationSync(userId, () => getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id, input.name || "", JSON.stringify(input.metadata || {}), createdAt, updatedAt);
+    .run(id, userId, input.character_id, input.name || "", JSON.stringify(input.metadata || {}), createdAt, updatedAt));
 
   return getChat(userId, id)!;
 }
@@ -3805,7 +4240,7 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[],
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  const tx = db.transaction(() => {
+  const tx = () => withUserDataMutationSync(userId, () => db.transaction(() => {
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       const swipes = m.swipes && m.swipes.length > 0 ? m.swipes : [m.content];
@@ -3833,19 +4268,16 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[],
         sendDate
       );
     }
-  });
+    if (messages.length > 0) {
+      const lastDate = messages[messages.length - 1].send_date ?? now;
+      // Keep the membership revision in the same transaction as the inserts.
+      db.query("UPDATE chats SET updated_at = MAX(?, created_at) WHERE id = ? AND user_id = ?")
+        .run(lastDate, chatId, userId);
+      bumpChatGenerationRevision(db, chatId, userId);
+    }
+  })());
 
   tx();
-
-  // Update chat's updated_at to last message timestamp, clamped so it never
-  // predates created_at. Migrated chats (e.g. SillyTavern group chats) can have
-  // message send_dates older than the import-time created_at; an updated_at that
-  // precedes created_at breaks updated_at DESC sorting in recent/search lists.
-  if (messages.length > 0) {
-    const lastDate = messages[messages.length - 1].send_date ?? now;
-    db.query("UPDATE chats SET updated_at = MAX(?, created_at) WHERE id = ? AND user_id = ?").run(lastDate, chatId, userId);
-  }
-
   return messages.length;
 }
 
@@ -4176,7 +4608,16 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
   })();
 }
 
-async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
+function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
+  const generation = getDbGeneration();
+  return trackChatChunkMaintenance(
+    chatId,
+    runWithDbGeneration(generation, () => updateChatChunksImpl(userId, chatId, newMessage)),
+    generation,
+  );
+}
+
+async function updateChatChunksImpl(userId: string, chatId: string, newMessage: Message): Promise<void> {
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
 
@@ -4207,114 +4648,110 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
     vectorizationQueue.queueChunkVectorization(userId, chatId, lastChunk.id, 5);
   }
 
-  scheduleChatMemoryRefresh(userId, chatId, 8);
+  await refreshChatMemoryCache(userId, chatId);
 
   // Memory Cortex: process chunk for entity extraction, salience scoring, etc.
-  // Runs async and never blocks the main flow.
-  try {
-    const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
-    if (chunk) {
-      const cortexConfig = memoryCortex.getCortexConfig(userId);
-      if (!memoryCortex.isCortexEnabledForChat(cortexConfig, chat?.metadata)) return;
+  // The create-message hot path remains non-blocking because its maintenance
+  // promise is detached by that caller, but every deferred callback stays in
+  // the tracked maintenance graph so database teardown can await it.
+  const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
+  if (chunk) {
+    const cortexConfig = memoryCortex.getCortexConfig(userId);
+    if (!memoryCortex.isCortexEnabledForChat(cortexConfig, chat?.metadata)) return;
 
-      const characterNames: string[] = [];
-      const aliasMaps: Map<string, string>[] = [];
-      if (chat) {
-        const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
-        if (character) {
-          // Normalize sloppy bot-card names to extract the real character name
-          const normalized = memoryCortex.normalizeCharacterName(character.name);
-          characterNames.push(normalized);
-          aliasMaps.push(memoryCortex.extractDescriptionAliases(
-            normalized, character.description, character.personality, character.scenario,
-          ));
-        }
-        // Group chat: add all character names + extract aliases
-        if (chat.metadata?.character_ids) {
-          for (const cid of chat.metadata.character_ids as string[]) {
-            const c = getCharacter(userId, cid);
-            if (!c) continue;
-            const normalized = memoryCortex.normalizeCharacterName(c.name);
-            if (!characterNames.includes(normalized)) {
-              characterNames.push(normalized);
-              aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, c.description, c.personality));
-            }
+    const characterNames: string[] = [];
+    const aliasMaps: Map<string, string>[] = [];
+    if (chat) {
+      const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
+      if (character) {
+        // Normalize sloppy bot-card names to extract the real character name
+        const normalized = memoryCortex.normalizeCharacterName(character.name);
+        characterNames.push(normalized);
+        aliasMaps.push(memoryCortex.extractDescriptionAliases(
+          normalized, character.description, character.personality, character.scenario,
+        ));
+      }
+      // Group chat: add all character names + extract aliases
+      if (chat.metadata?.character_ids) {
+        for (const cid of chat.metadata.character_ids as string[]) {
+          const c = getCharacter(userId, cid);
+          if (!c) continue;
+          const normalized = memoryCortex.normalizeCharacterName(c.name);
+          if (!characterNames.includes(normalized)) {
+            characterNames.push(normalized);
+            aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, c.description, c.personality));
           }
         }
-        // User's persona
-        try {
-          const { resolvePersonaOrDefault } = require("./personas.service");
-          const persona = resolvePersonaOrDefault(userId);
-          if (persona?.name) {
-            const normalized = memoryCortex.normalizeCharacterName(persona.name);
-            if (!characterNames.includes(normalized)) {
-              characterNames.push(normalized);
-              aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, persona.description));
-            }
+      }
+      // User's persona
+      try {
+        const { resolvePersonaOrDefault } = require("./personas.service");
+        const persona = resolvePersonaOrDefault(userId);
+        if (persona?.name) {
+          const normalized = memoryCortex.normalizeCharacterName(persona.name);
+          if (!characterNames.includes(normalized)) {
+            characterNames.push(normalized);
+            aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, persona.description));
           }
-        } catch { /* non-fatal */ }
-      }
-      // Merge aliases with collision detection (safe for group chats)
-      const descriptionAliases = memoryCortex.mergeDescriptionAliases(...aliasMaps);
-
-      // Resolve sidecar connection for Tier 2 features (LLM-assisted extraction).
-      let sidecarConnectionId: string | undefined;
-
-      // Resolve the provider from the connection profile for structured output injection
-      let sidecarProvider: string | null = null;
-      if (memoryCortex.shouldUseCortexSidecar(cortexConfig)) {
-        const { resolveConnection } = require("./connections.service");
-        const { getProvider } = require("../llm/registry");
-        const requestedSidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
-        const conn = requestedSidecarConnectionId ? resolveConnection(userId, requestedSidecarConnectionId) : null;
-        const provider = conn ? getProvider(conn.provider) : null;
-        const apiKeyRequired = provider?.capabilities.apiKeyRequired ?? true;
-        if (conn && provider && (!apiKeyRequired || conn.has_api_key)) {
-          sidecarConnectionId = conn.id;
-          sidecarProvider = conn.provider;
         }
-      }
-
-      // Build a generateRaw adapter. Injects structured output params (response_format /
-      // responseMimeType + responseSchema) based on the provider so the LLM returns
-      // valid JSON natively instead of relying on prompt engineering.
-      const generateRawFn = sidecarConnectionId
-        ? memoryCortex.createCortexSidecarGenerateRawAdapter({
-            userId,
-            sidecarProvider: sidecarProvider!,
-            cortexConfig,
-          })
-        : undefined;
-
-      const chunkPayload = {
-        chunkId: chunk.id,
-        chatId,
-        userId,
-        characterId,
-        content: chunk.content,
-        messageIds: JSON.parse(chunk.message_ids || "[]"),
-        startMessageIndex: 0,
-        endMessageIndex: 0,
-        createdAt: chunk.created_at,
-      };
-
-      // Kick the cortex pass onto the next macrotask so chat creation and
-      // MESSAGE_SENT delivery complete before CPU-bound heuristics begin.
-      setTimeout(() => {
-        memoryCortex.scheduleProcessChunk(
-          chunkPayload,
-          characterNames,
-          generateRawFn,
-          sidecarConnectionId,
-          descriptionAliases.size > 0 ? descriptionAliases : undefined,
-        ).catch(err => {
-          console.warn("[chats] Memory cortex processing failed:", err);
-        });
-      }, 0);
+      } catch { /* non-fatal */ }
     }
-  } catch (err) {
-    // Non-fatal: cortex processing should never break chunk creation
-    console.warn("[chats] Memory cortex hook error:", err);
+    // Merge aliases with collision detection (safe for group chats)
+    const descriptionAliases = memoryCortex.mergeDescriptionAliases(...aliasMaps);
+
+    // Resolve sidecar connection for Tier 2 features (LLM-assisted extraction).
+    let sidecarConnectionId: string | undefined;
+
+    // Resolve the provider from the connection profile for structured output injection
+    let sidecarProvider: string | null = null;
+    if (memoryCortex.shouldUseCortexSidecar(cortexConfig)) {
+      const { resolveConnection } = require("./connections.service");
+      const { getProvider } = require("../llm/registry");
+      const requestedSidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
+      const conn = requestedSidecarConnectionId ? resolveConnection(userId, requestedSidecarConnectionId) : null;
+      const provider = conn ? getProvider(conn.provider) : null;
+      const apiKeyRequired = provider?.capabilities.apiKeyRequired ?? true;
+      if (conn && provider && (!apiKeyRequired || conn.has_api_key)) {
+        sidecarConnectionId = conn.id;
+        sidecarProvider = conn.provider;
+      }
+    }
+
+    // Build a generateRaw adapter. Injects structured output params (response_format /
+    // responseMimeType + responseSchema) based on the provider so the LLM returns
+    // valid JSON natively instead of relying on prompt engineering.
+    const generateRawFn = sidecarConnectionId
+      ? memoryCortex.createCortexSidecarGenerateRawAdapter({
+          userId,
+          sidecarProvider: sidecarProvider!,
+          cortexConfig,
+        })
+      : undefined;
+
+    const chunkPayload = {
+      chunkId: chunk.id,
+      chatId,
+      userId,
+      characterId,
+      content: chunk.content,
+      messageIds: JSON.parse(chunk.message_ids || "[]"),
+      startMessageIndex: 0,
+      endMessageIndex: 0,
+      createdAt: chunk.created_at,
+    };
+
+    // Kick the cortex pass onto the next macrotask so chat creation and
+    // MESSAGE_SENT delivery complete before CPU-bound heuristics begin. Await
+    // both the timer and the queued cortex task inside the maintenance promise;
+    // callers that need quiescence must never race either callback.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await memoryCortex.scheduleProcessChunk(
+      chunkPayload,
+      characterNames,
+      generateRawFn,
+      sidecarConnectionId,
+      descriptionAliases.size > 0 ? descriptionAliases : undefined,
+    );
   }
 }
 
@@ -4356,15 +4793,17 @@ export function getVectorizationStatus(userId: string, chatId: string): {
  * Called after chunks are built/rebuilt so we can detect staleness later.
  */
 async function stampChatMemoryHash(userId: string, chatId: string): Promise<void> {
-  try {
-    const hash = await getCurrentChatMemoryHash(userId);
-    if (!hash) return;
+  const hash = await getCurrentChatMemoryHash(userId);
+  if (!hash) return;
 
-    const chat = getChat(userId, chatId);
-    if (!chat) return;
-    const metadata = { ...chat.metadata, ltcm_config_hash: hash };
-    getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(metadata), chatId, userId);
-  } catch { /* non-fatal */ }
+  const chat = getChat(userId, chatId);
+  if (!chat) return;
+  const metadata = { ...chat.metadata, ltcm_config_hash: hash };
+  const db = getDb();
+  db.transaction(() => {
+    db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(metadata), chatId, userId);
+    bumpChatGenerationRevision(db, chatId, userId);
+  })();
 }
 
 export async function getCurrentChatMemoryHash(userId: string): Promise<string | null> {
@@ -4399,6 +4838,7 @@ export async function ensureChatMemoryFresh(userId: string, chatId: string): Pro
     await rebuildChatChunks(userId, chatId);
     return true;
   } catch (err) {
+    if (isDatabaseGenerationCancellation(err)) throw err;
     console.warn("[chats] LTCM freshness check failed:", err);
     return false;
   }
@@ -4456,6 +4896,14 @@ function snapshotSalienceForChunks(chatId: string, chunkIds: string[]): Map<stri
 }
 
 /**
+ * Wait for launched chunk updates and rebuilds to quiesce. Omitting chatId
+ * drains all chats, which is required before replacing the process database.
+ */
+export function waitForChatChunkMaintenance(chatId?: string): Promise<void> {
+  return waitForTrackedChatChunkMaintenance(chatId);
+}
+
+/**
  * In-flight rebuild tracking per chat — prevents concurrent rebuilds from
  * racing each other (each deleting the previous one's chunks). When a
  * rebuild is already running for a chatId, subsequent calls wait for it
@@ -4464,6 +4912,10 @@ function snapshotSalienceForChunks(chatId: string, chunkIds: string[]): Map<stri
  */
 const _rebuildInflight = new Map<string, Promise<void>>();
 const _rebuildPending = new Set<string>();
+onDbReset(() => {
+  _rebuildInflight.clear();
+  _rebuildPending.clear();
+});
 
 export function isChatChunkRebuildInProgress(chatId: string): boolean {
   return _rebuildInflight.has(chatId);
@@ -4477,23 +4929,40 @@ export function isChatChunkRebuildInProgress(chatId: string): boolean {
  * immediately, subsequent callers wait for it and then a single follow-up
  * rebuild runs to capture any changes that landed during the first.
  */
-export async function rebuildChatChunks(userId: string, chatId: string): Promise<void> {
+export function rebuildChatChunks(userId: string, chatId: string): Promise<void> {
+  const generation = getDbGeneration();
+  const signal = getDbGenerationSignal(generation);
+  return trackChatChunkMaintenance(
+    chatId,
+    runWithDbGeneration(generation, () => runChatChunkRebuild(userId, chatId, generation, signal)),
+    generation,
+  );
+}
+
+async function runChatChunkRebuild(
+  userId: string,
+  chatId: string,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   const inflight = _rebuildInflight.get(chatId);
   if (inflight) {
-    // Another rebuild is already running — mark pending and wait for it
     _rebuildPending.add(chatId);
     await inflight;
-    // If we're the one to run the follow-up, do it; otherwise another
-    // caller already picked it up.
+    assertDbGeneration(generation);
     if (!_rebuildPending.has(chatId)) return;
     _rebuildPending.delete(chatId);
   }
 
-  const promise = _rebuildChatChunksImpl(userId, chatId);
+  assertDbGeneration(generation);
+  const promise = _rebuildChatChunksImpl(userId, chatId, generation, signal);
   _rebuildInflight.set(chatId, promise);
   try {
     await promise;
+    assertDbGeneration(generation);
   } finally {
+    assertDbGeneration(generation);
     if (_rebuildInflight.get(chatId) === promise) {
       _rebuildInflight.delete(chatId);
     }
@@ -4513,60 +4982,95 @@ export async function rebuildChatChunks(userId: string, chatId: string): Promise
  *     because we can't know which scope covers the work that landed during
  *     the wait).
  */
-export async function rebuildChatChunksFromMessages(
+export function rebuildChatChunksFromMessages(
   userId: string,
   chatId: string,
   affectedMessageIds: Iterable<string>,
 ): Promise<void> {
+  const generation = getDbGeneration();
+  const signal = getDbGenerationSignal(generation);
+  return trackChatChunkMaintenance(
+    chatId,
+    runWithDbGeneration(
+      generation,
+      () => runChatChunkRebuildFromMessages(userId, chatId, affectedMessageIds, generation, signal),
+    ),
+    generation,
+  );
+}
+
+async function runChatChunkRebuildFromMessages(
+  userId: string,
+  chatId: string,
+  affectedMessageIds: Iterable<string>,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   const anchorChunkId = findAnchorChunkForMessages(chatId, affectedMessageIds);
   if (anchorChunkId === null) {
-    return rebuildChatChunks(userId, chatId);
+    assertDbGeneration(generation);
+    return _rebuildChatChunksImpl(userId, chatId, generation, signal);
   }
 
   const inflight = _rebuildInflight.get(chatId);
   if (inflight) {
     _rebuildPending.add(chatId);
     await inflight;
+    assertDbGeneration(generation);
     if (!_rebuildPending.has(chatId)) return;
     _rebuildPending.delete(chatId);
-    // Conservative follow-up: the in-flight rebuild may have already replaced
-    // the chunk graph, so the anchor we picked could be stale. A full rebuild
-    // is correct under any state.
-    return rebuildChatChunks(userId, chatId);
+    return _rebuildChatChunksImpl(userId, chatId, generation, signal);
   }
 
-  const promise = _rebuildChatChunksFromImpl(userId, chatId, anchorChunkId);
+  const promise = _rebuildChatChunksFromImpl(userId, chatId, anchorChunkId, generation, signal);
   _rebuildInflight.set(chatId, promise);
   try {
     await promise;
+    assertDbGeneration(generation);
   } finally {
+    assertDbGeneration(generation);
     if (_rebuildInflight.get(chatId) === promise) {
       _rebuildInflight.delete(chatId);
     }
   }
 }
 
-async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<void> {
+async function _rebuildChatChunksImpl(
+  userId: string,
+  chatId: string,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   await enqueueChatPipelineTask({
     chatId,
     kind: "chunk_rebuild",
     exclusive: true,
-    run: () => _rebuildChatChunksBody(userId, chatId),
+    run: () => _rebuildChatChunksBody(userId, chatId, generation, signal),
   });
+  assertDbGeneration(generation);
 }
 
-async function _rebuildChatChunksBody(userId: string, chatId: string): Promise<void> {
+async function _rebuildChatChunksBody(
+  userId: string,
+  chatId: string,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   invalidateChatMemoryCache(chatId);
 
-  // Clean up old vectors from LanceDB before wiping chat_chunks so they don't leak
-  // and aren't retrieved by future LanceDB searches.
   try {
-    await embeddingsSvc.deleteChatChunkEmbeddings(userId, chatId);
+    await embeddingsSvc.deleteChatChunkEmbeddings(userId, chatId, undefined, signal);
   } catch (err) {
+    if (isDatabaseGenerationCancellation(err)) throw err;
     console.warn(`[chats] Failed to delete LanceDB chat_chunk vectors for chat ${chatId}:`, err);
   }
+  assertDbGeneration(generation);
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  assertDbGeneration(generation);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) {
     getDb().query("DELETE FROM chat_chunks WHERE chat_id = ?").run(chatId);
     return;
@@ -4585,11 +5089,13 @@ async function _rebuildChatChunksBody(userId: string, chatId: string): Promise<v
     embeddingsSvc.loadChatMemorySettings(userId),
     cfg,
   );
-  await chunkAndPersistMessages(userId, chatId, messages, chatMemSettings, salienceByContent);
+  await chunkAndPersistMessages(userId, chatId, messages, chatMemSettings, salienceByContent, generation);
+  assertDbGeneration(generation);
 
-  // Stamp the config hash so we can detect staleness later
-  stampChatMemoryHash(userId, chatId);
-  scheduleChatMemoryRefresh(userId, chatId, 9);
+  await stampChatMemoryHash(userId, chatId);
+  assertDbGeneration(generation);
+  await refreshChatMemoryCache(userId, chatId);
+  assertDbGeneration(generation);
 
   console.info(`[chats] Rebuilt chunks for chat ${chatId}`);
 }
@@ -4606,7 +5112,9 @@ async function chunkAndPersistMessages(
   messages: Message[],
   chatMemSettings: embeddingsSvc.ChatMemorySettings,
   salienceByContent: Map<string, SalienceSnapshotRow[]>,
+  generation: number,
 ): Promise<void> {
+  assertDbGeneration(generation);
   if (messages.length === 0) return;
 
   const targetTokens = chatMemSettings.chunkTargetTokens;
@@ -4619,10 +5127,14 @@ async function chunkAndPersistMessages(
   const env = anyMessageHasMacros ? buildMacroEnvForChat(userId, chatId) : null;
   const sanitizedByMsgId = new Map<string, string>();
   for (const msg of messages) {
+    assertDbGeneration(generation);
     const memStripped = memoryScripts.length > 0
       ? await regexScriptsSvc.applyRegexScripts(msg.content, memoryScripts, "memory", undefined, undefined, undefined, { source: "prompt_backend" })
       : msg.content;
-    sanitizedByMsgId.set(msg.id, await resolveAndSanitizeForVectorization(memStripped, env, reasoningStrip));
+    assertDbGeneration(generation);
+    const sanitized = await resolveAndSanitizeForVectorization(memStripped, env, reasoningStrip);
+    assertDbGeneration(generation);
+    sanitizedByMsgId.set(msg.id, sanitized);
   }
 
   let currentChunk: Message[] = [];
@@ -4671,6 +5183,7 @@ async function chunkAndPersistMessages(
     }
 
     if (forceNewChunk) {
+      assertDbGeneration(generation);
       const chunk = createChatChunk(chatId, currentChunk, currentChunkSanitized);
       restoreSalienceForRebuiltChunk(chatId, chunk, salienceByContent);
       vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
@@ -4685,6 +5198,7 @@ async function chunkAndPersistMessages(
   }
 
   if (currentChunk.length > 0) {
+    assertDbGeneration(generation);
     const chunk = createChatChunk(chatId, currentChunk, currentChunkSanitized);
     restoreSalienceForRebuiltChunk(chatId, chunk, salienceByContent);
     vectorizationQueue.queueChunkVectorization(userId, chatId, chunk.id, 3);
@@ -4699,23 +5213,37 @@ async function chunkAndPersistMessages(
  * rebuild whenever the inputs make a surgical pass unsafe (anchor missing,
  * anchor is chunk 0, preserved chunk's tail message has been deleted).
  */
-async function _rebuildChatChunksFromImpl(userId: string, chatId: string, fromChunkId: string): Promise<void> {
+async function _rebuildChatChunksFromImpl(
+  userId: string,
+  chatId: string,
+  fromChunkId: string,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   await enqueueChatPipelineTask({
     chatId,
     kind: "chunk_rebuild",
     exclusive: true,
-    run: () => _rebuildChatChunksFromBody(userId, chatId, fromChunkId),
+    run: () => _rebuildChatChunksFromBody(userId, chatId, fromChunkId, generation, signal),
   });
+  assertDbGeneration(generation);
 }
 
-async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromChunkId: string): Promise<void> {
+async function _rebuildChatChunksFromBody(
+  userId: string,
+  chatId: string,
+  fromChunkId: string,
+  generation: number,
+  signal: AbortSignal,
+): Promise<void> {
+  assertDbGeneration(generation);
   invalidateChatMemoryCache(chatId);
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+  assertDbGeneration(generation);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) {
-    // Without embeddings, chunks have no purpose — fall back to the full
-    // rebuild path which handles the disabled-embeddings drop cleanly.
-    return _rebuildChatChunksBody(userId, chatId);
+    return _rebuildChatChunksBody(userId, chatId, generation, signal);
   }
 
   const allChunks = getDb()
@@ -4724,9 +5252,8 @@ async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromCh
   const fromIdx = allChunks.findIndex((c) => c.id === fromChunkId);
 
   if (fromIdx <= 0) {
-    // Anchor disappeared between selection and execution, or it was the very
-    // first chunk (preserving nothing → equivalent to full rebuild).
-    return _rebuildChatChunksBody(userId, chatId);
+    assertDbGeneration(generation);
+    return _rebuildChatChunksBody(userId, chatId, generation, signal);
   }
 
   const lastPreserved = allChunks[fromIdx - 1];
@@ -4735,26 +5262,28 @@ async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromCh
   const allMessages = getMessages(userId, chatId).filter((m) => m.extra?.hidden !== true);
   const preservedEndIdx = allMessages.findIndex((m) => m.id === lastPreserved.end_message_id);
   if (preservedEndIdx < 0) {
-    // The last preserved chunk's tail message was deleted; the surgical
-    // boundary is no longer well-defined. Full rebuild is safer.
-    return _rebuildChatChunksBody(userId, chatId);
+    assertDbGeneration(generation);
+    return _rebuildChatChunksBody(userId, chatId, generation, signal);
   }
   const messagesToChunk = allMessages.slice(preservedEndIdx + 1);
 
   const salienceByContent = snapshotSalienceForChunks(chatId, discardedChunkIds);
 
   try {
-    await embeddingsSvc.deleteChatChunkEmbeddings(userId, chatId, discardedChunkIds);
+    await embeddingsSvc.deleteChatChunkEmbeddings(userId, chatId, discardedChunkIds, signal);
   } catch (err) {
+    if (isDatabaseGenerationCancellation(err)) throw err;
     console.warn(`[chats] Failed to delete LanceDB chat_chunk vectors for chat ${chatId}:`, err);
   }
-
+  assertDbGeneration(generation);
   const placeholders = discardedChunkIds.map(() => "?").join(",");
   getDb().query(`DELETE FROM chat_chunks WHERE id IN (${placeholders})`).run(...discardedChunkIds);
 
   if (messagesToChunk.length === 0) {
-    stampChatMemoryHash(userId, chatId);
-    scheduleChatMemoryRefresh(userId, chatId, 9);
+    await stampChatMemoryHash(userId, chatId);
+    assertDbGeneration(generation);
+    await refreshChatMemoryCache(userId, chatId);
+    assertDbGeneration(generation);
     console.info(`[chats] Surgically rebuilt chat ${chatId}: dropped ${discardedChunkIds.length} trailing chunks (no replacement messages)`);
     return;
   }
@@ -4763,10 +5292,13 @@ async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromCh
     embeddingsSvc.loadChatMemorySettings(userId),
     cfg,
   );
-  await chunkAndPersistMessages(userId, chatId, messagesToChunk, chatMemSettings, salienceByContent);
+  await chunkAndPersistMessages(userId, chatId, messagesToChunk, chatMemSettings, salienceByContent, generation);
+  assertDbGeneration(generation);
 
-  stampChatMemoryHash(userId, chatId);
-  scheduleChatMemoryRefresh(userId, chatId, 9);
+  await stampChatMemoryHash(userId, chatId);
+  assertDbGeneration(generation);
+  await refreshChatMemoryCache(userId, chatId);
+  assertDbGeneration(generation);
 
   console.info(`[chats] Surgically rebuilt chat ${chatId}: ${discardedChunkIds.length} chunks → re-chunked ${messagesToChunk.length} messages (${fromIdx} chunks preserved)`);
 }

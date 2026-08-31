@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { join, resolve, sep } from "path";
 import { env } from "../env";
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
+import { MAX_NOTIFICATION_SOUND_BYTES } from "../types/media-limits";
+export { MAX_NOTIFICATION_SOUND_BYTES } from "../types/media-limits";
 
 const NOTIFICATION_SOUNDS_DIR = "notification-sounds";
 const COMPLETION_BASENAME = "completion";
 
-export const MAX_NOTIFICATION_SOUND_BYTES = 2 * 1024 * 1024;
 
 export interface NotificationSoundMetadata {
   /** Original filename supplied by the upload (sanitized). */
@@ -117,8 +119,7 @@ function sanitizeFilename(name: string): string {
   const cleaned = trimmed.replace(/[^A-Za-z0-9._ -]+/g, "_");
   return cleaned || "notification-sound";
 }
-
-export async function setCompletionSound(
+async function setCompletionSoundUnsafe(
   userId: string,
   file: File,
 ): Promise<NotificationSoundMetadata> {
@@ -156,6 +157,13 @@ export async function setCompletionSound(
   };
 }
 
+export async function setCompletionSound(
+  userId: string,
+  file: File,
+): Promise<NotificationSoundMetadata> {
+  return withUserDataMutation(userId, () => setCompletionSoundUnsafe(userId, file));
+}
+
 export function getCompletionSound(userId: string): StoredNotificationSound | null {
   const root = resolve(getRootDir());
   const userDir = resolve(root, userId);
@@ -181,8 +189,7 @@ export function getCompletionSound(userId: string): StoredNotificationSound | nu
     uploadedAt: 0,
   };
 }
-
-export function deleteCompletionSound(userId: string): boolean {
+function deleteCompletionSoundUnsafe(userId: string): boolean {
   const root = resolve(getRootDir());
   const userDir = resolve(root, userId);
   if (!(userDir === root || userDir.startsWith(root + sep))) return false;
@@ -191,4 +198,8 @@ export function deleteCompletionSound(userId: string): boolean {
   if (!filepath) return false;
   unlinkSync(filepath);
   return true;
+}
+
+export function deleteCompletionSound(userId: string): boolean {
+  return withUserDataMutationSync(userId, () => deleteCompletionSoundUnsafe(userId));
 }

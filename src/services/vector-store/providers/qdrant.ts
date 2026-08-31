@@ -144,21 +144,27 @@ export class QdrantStore implements VectorStore {
     return out;
   }
 
-  async deleteByFilter(collection: CollectionName, filter: VectorFilter): Promise<void> {
+  async deleteByFilter(collection: CollectionName, filter: VectorFilter, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     await this.request(`/collections/${encodeURIComponent(this.collectionName(collection))}/points/delete?wait=true`, {
       method: "POST",
       allow404: true,
+      signal,
       body: { filter: translateFilter(filter) },
     });
+    signal?.throwIfAborted();
   }
 
-  async deleteByIds(collection: CollectionName, ids: string[]): Promise<void> {
+  async deleteByIds(collection: CollectionName, ids: string[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (ids.length === 0) return;
     await this.request(`/collections/${encodeURIComponent(this.collectionName(collection))}/points/delete?wait=true`, {
       method: "POST",
       allow404: true,
+      signal,
       body: { points: ids.map(qdrantPointId) },
     });
+    signal?.throwIfAborted();
   }
 
   async vectorSearch(opts: SearchOptions): Promise<VectorHit[]> {
@@ -194,7 +200,8 @@ export class QdrantStore implements VectorStore {
     return Number(res?.result?.count ?? 0);
   }
 
-  async optimize(_collections?: CollectionName[]): Promise<void> {
+  async optimize(_collections?: CollectionName[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     // Qdrant handles segment optimization server-side.
   }
 

@@ -1,11 +1,12 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
-import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
+import { agentRuntimeErrorTranslationKey } from '@/lib/agentRuntimeSelection'
+import { startGenerationWithRecovery } from '@/lib/generation-recovery'
 import { Plus, VolumeX, Volume2, UserMinus, AudioLines } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
@@ -23,6 +24,19 @@ interface ContextMenuState extends ContextMenuPos {
   characterId: string
 }
 
+function fallbackGenerationError(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const source = error as { body?: unknown; message?: unknown }
+  const body = source.body && typeof source.body === 'object'
+    ? source.body as { error?: unknown }
+    : null
+  return typeof body?.error === 'string'
+    ? body.error
+    : typeof source.message === 'string'
+      ? source.message
+      : undefined
+}
+
 export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) {
   const { t } = useTranslation('chat')
   const { t: tc } = useTranslation('common')
@@ -32,10 +46,13 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const characters = useStore((s) => s.characters)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const isStreaming = useStore((s) => s.isStreaming)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
+  const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const setStreamingError = useStore((s) => s.setStreamingError)
   const toggleMuteCharacter = useStore((s) => s.toggleMuteCharacter)
@@ -43,31 +60,64 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
   const setMutedCharacterIds = useStore((s) => s.setMutedCharacterIds)
   const openModal = useStore((s) => s.openModal)
 
+  const forceGenerateNonceRef = useRef(0)
+  const generationAbortControllerRef = useRef<AbortController | null>(null)
+  useEffect(() => () => {
+    generationAbortControllerRef.current?.abort(new DOMException('Generation cancelled', 'AbortError'))
+    generationAbortControllerRef.current = null
+  }, [chatId])
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [barRef, { canScrollLeft, canScrollRight }] = useHorizontalScroll<HTMLDivElement>()
 
   const handleForceGenerate = useCallback(
     async (characterId: string) => {
-      if (isStreaming || mutedCharacterIds.includes(characterId)) return
+      if (
+        isStreaming
+        || mutedCharacterIds.includes(characterId)
+        || activeChatId !== chatId
+      ) return
+      const nonce = ++forceGenerateNonceRef.current
+      generationAbortControllerRef.current?.abort()
+      const generationAbortController = new AbortController()
+      generationAbortControllerRef.current = generationAbortController
+      beginStreaming()
       try {
         const presetId = getActivePresetForGeneration() || undefined
-        const res = await generateApi.start({
+        const res = await startGenerationWithRecovery('start', {
           chat_id: chatId,
           target_character_id: characterId,
           connection_id: activeProfileId || undefined,
-          persona_id: activePersonaId || undefined,
+          persona_id: activeChatMetadata?.temporary ? undefined : activePersonaId || undefined,
           preset_id: presetId,
           force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
           generation_type: 'normal',
+          mode: 'response',
+        }, {
+          forceResponse: true,
+          signal: generationAbortController.signal,
         })
+        if (
+          forceGenerateNonceRef.current !== nonce
+          || useStore.getState().activeChatId !== chatId
+        ) return
         startStreaming(res.generationId)
-      } catch (err: any) {
+      } catch (err: unknown) {
+        if (
+          forceGenerateNonceRef.current !== nonce
+          || useStore.getState().activeChatId !== chatId
+          || (err instanceof DOMException && err.name === 'AbortError')
+        ) return
         console.error('[GroupMemberBar] Force generate failed:', err)
-        const msg = err?.body?.error || err?.message || te('failedToGenerate')
+        const runtimeKey = agentRuntimeErrorTranslationKey(err)
+        const msg = runtimeKey ? t(runtimeKey) : fallbackGenerationError(err) || te('failedToGenerate')
         setStreamingError(msg)
+      } finally {
+        if (generationAbortControllerRef.current === generationAbortController) {
+          generationAbortControllerRef.current = null
+        }
       }
     },
-    [chatId, isStreaming, mutedCharacterIds, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, startStreaming, setStreamingError, te]
+    [chatId, isStreaming, mutedCharacterIds, activeChatId, activeProfileId, activePersonaId, activeChatMetadata?.temporary, activeCharacterId, getActivePresetForGeneration, beginStreaming, startGenerationWithRecovery, startStreaming, setStreamingError, t, te]
   )
 
   const openContextMenu = useCallback((characterId: string, pos: ContextMenuPos) => {
@@ -146,7 +196,6 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
 
   // Set of group member ids that have a per-chat voice override applied.
   // Used to badge the avatars so an override is discoverable at a glance.
-  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const overrideIds = useMemo(() => {
     const overrides = activeChatMetadata?.voiceOverrides
     if (!overrides || typeof overrides !== 'object') return new Set<string>()

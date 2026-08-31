@@ -5,6 +5,7 @@ import {
   collectionForSourceType,
   cosineSimilarity,
   distanceFromSimilarity,
+  isFiniteVector,
   mmrSelect,
   ownerScope,
   reciprocalRankFusion,
@@ -19,6 +20,15 @@ import type { VectorHit } from "./types";
 describe("rowId", () => {
   it("composes the canonical id", () => {
     expect(rowId("u1", "chat_chunk", "c9", 0)).toBe("u1:chat_chunk:c9:0");
+  });
+});
+
+describe("isFiniteVector", () => {
+  it("rejects empty and non-finite vectors while accepting finite values", () => {
+    expect(isFiniteVector([])).toBe(false);
+    expect(isFiniteVector([0, -1, 2.5])).toBe(true);
+    expect(isFiniteVector([Number.NaN])).toBe(false);
+    expect(isFiniteVector([Number.POSITIVE_INFINITY])).toBe(false);
   });
 });
 

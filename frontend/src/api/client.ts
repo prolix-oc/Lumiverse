@@ -148,14 +148,24 @@ export async function put<T>(path: string, body?: any, options?: RequestOptions)
   }
 }
 
-export async function del<T>(path: string, options?: RequestOptions): Promise<T> {
+export async function del<T>(
+  path: string,
+  options?: RequestOptions & { body?: unknown },
+): Promise<T> {
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
+    const body = options?.body
     const res = await fetch(url, {
       method: 'DELETE',
-      headers: { 'Accept': 'application/json' },
+      headers: body === undefined
+        ? { 'Accept': 'application/json' }
+        : {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
       credentials: 'include',
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal,
     })
     return handleResponse<T>(res)

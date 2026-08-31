@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { PresetProfileBinding } from '@/api/preset-profiles'
 import type { PromptVariableValues } from '@/lib/loom/types'
+import { getRuntimeAuthorityRevision } from '@/lib/agentRuntimeSelection'
 import {
   getEffectivePromptVariableValues,
   subscribePresetProfilePromptVariableChanges,
@@ -42,6 +43,7 @@ describe('preset profile prompt variables', () => {
     ['connection', 'updateConnectionPromptVariables'],
     ['defaults', 'updateDefaultsPromptVariables'],
   ] as const)('routes %s saves to its profile endpoint', async (source, expectedMethod) => {
+    const authorityBefore = getRuntimeAuthorityRevision()
     const api = {
       updateChatPromptVariables: mock(async () => binding),
       updatePersonaPromptVariables: mock(async () => binding),
@@ -58,6 +60,26 @@ describe('preset profile prompt variables', () => {
 
     expect(api[expectedMethod]).toHaveBeenCalledWith('profile-1', values)
     expect(Object.values(api).reduce((count, fn) => count + fn.mock.calls.length, 0)).toBe(1)
+    expect(getRuntimeAuthorityRevision()).toBe(authorityBefore + 1)
+  })
+
+  test('does not commit authority when a profile write fails', async () => {
+    const failure = new Error('write failed')
+    const api = {
+      updateChatPromptVariables: mock(async () => { throw failure }),
+      updatePersonaPromptVariables: mock(async () => binding),
+      updateCharacterPromptVariables: mock(async () => binding),
+      updateConnectionPromptVariables: mock(async () => binding),
+      updateDefaultsPromptVariables: mock(async () => binding),
+    }
+    const authorityBefore = getRuntimeAuthorityRevision()
+
+    await expect(updatePresetProfilePromptVariables(
+      api,
+      { source: 'chat', id: 'chat-1' },
+      values,
+    )).rejects.toBe(failure)
+    expect(getRuntimeAuthorityRevision()).toBe(authorityBefore)
   })
 
   test('publishes the committed scoped binding to other profile consumers', async () => {

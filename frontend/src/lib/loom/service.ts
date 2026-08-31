@@ -1,17 +1,43 @@
 import type { PromptBlockDTO, PromptVariableDefDTO, PromptVariableOptionDTO, PromptVariableValuesDTO } from 'lumiverse-spindle-types'
 import type { Preset, CreatePresetInput, UpdatePresetInput, ProviderInfo } from '@/types/api'
-import type {
-  PromptBlock,
-  PromptBlockPlacement,
-  PromptVariableValue,
-  PromptVariableDef,
-  PromptVariableValues,
-  LoomPreset,
-  LoomRegistryEntry,
-  LoomConnectionProfile,
-  MacroGroup,
-  CategoryGroup,
+import {
+  AGENTIC_PREDICATE_MAX_DEPTH,
+  AGENTIC_PREDICATE_MAX_LIST_BYTES,
+  AGENTIC_PREDICATE_MAX_LIST_ITEMS,
+  AGENT_PROFILE_ID_PATTERN,
+  AGENT_PROFILE_LIMIT,
+  AGENT_PROFILE_NAME_MAX_LENGTH,
+  AGENT_SYSTEM_PROMPT_MAX_BYTES,
+  AGENT_MAX_OUTPUT_TOKENS_MAX,
+  AGENT_MAX_OUTPUT_TOKENS_MIN,
+  AGENT_TIMEOUT_MS_MIN,
+  CORE_AGENT_TOOL_IDS,
+  isAgentTaskTemplate,
+  parseAgentRuntimePolicyV1,
+} from './agenticRuntime'
+import {
+  AGENT_INVOCATION_DEFAULT,
+  AGENT_INVOCATION_MIN,
+  AGENT_TOOL_CALL_DEFAULT,
+  AGENT_TOOL_CALL_MIN,
+  type AgentConfigV2,
+  type AgentRuntimePolicyV1,
+  type AgentTaskTemplate,
+  type PromptBlock,
+  type PromptBlockPlacement,
+  type PromptVariableValue,
+  type PromptVariableDef,
+  type PromptVariableValues,
+  type LoomPreset,
+  type LoomRegistryEntry,
+  type LoomConnectionProfile,
+  type MacroGroup,
+  type CategoryGroup,
+  type PortableSealedPresetDescriptorV1,
+  WORKSPACE_CAPABILITIES,
+  type WorkspaceCapability,
 } from './types'
+
 import { sanitizeCharacterTagTrigger } from './characterTagTrigger'
 import { generateUUID } from '@/lib/uuid'
 import {
@@ -31,6 +57,646 @@ import {
   ST_IDENTIFIER_TO_MARKER,
   MARKER_TO_ST_IDENTIFIER,
 } from './constants'
+
+export type PortableAgentConfigV1 = Omit<AgentConfigV2, 'version' | 'cognitionPolicy'> & {
+  portableVersion: 1
+  /** Optional bounded legacy repair data; never an executable authority. */
+  cognitionPolicy?: unknown
+}
+
+export interface PortableAgenticRuntimeEnvelopeV1 {
+  version: 1
+  agentConfig: PortableAgentConfigV1 | null
+  taskTemplates: AgentTaskTemplate[]
+  /** Backend compatibility alias; parsing moves this into agentConfig.runtimePolicy. */
+  runtimePolicy?: AgentRuntimePolicyV1 | null
+}
+
+const PORTABLE_ENCODER = new TextEncoder()
+
+const PORTABLE_AGENT_RUNTIME_REQUIRED_KEYS = [
+  'version',
+  'agentConfig',
+  'taskTemplates',
+] as const
+const PORTABLE_AGENT_RUNTIME_OPTIONAL_KEYS = ['runtimePolicy'] as const
+
+const PORTABLE_AGENT_CONFIG_REQUIRED_KEYS = [
+  'portableVersion',
+  'agentsEnabled',
+  'allowedModes',
+  'defaultMode',
+  'maxInvocations',
+  'maxToolCalls',
+  'mainToolIds',
+  'mainLoreScope',
+  'profiles',
+  'connectionSlots',
+] as const
+
+const PORTABLE_AGENT_CONFIG_OPTIONAL_KEYS = [
+  'cognitionPolicy',
+  'taskPolicy',
+  'workspacePolicy',
+  'runtimePolicy',
+] as const
+
+const PORTABLE_AGENT_PROFILE_REQUIRED_KEYS = [
+  'id',
+  'name',
+  'systemPrompt',
+  'connectionRef',
+  'toolIds',
+  'loreScope',
+  'allowMainDelegation',
+  'failurePolicy',
+  'streamActivity',
+  'maxOutputTokens',
+  'timeoutMs',
+] as const
+const PORTABLE_AGENT_PROFILE_OPTIONAL_KEYS = [
+  'workspaceCapabilities',
+] as const
+
+const PORTABLE_AGENT_SLOT_KEYS = [
+  'id',
+  'label',
+  'requiredCapabilities',
+] as const
+
+
+const PORTABLE_AGENT_RUNTIME_POLICY_REQUIRED_KEYS = [
+  'version',
+  'authority',
+  'scope',
+  'defaultMode',
+  'loomPolicy',
+] as const
+const PORTABLE_AGENT_RUNTIME_POLICY_OPTIONAL_KEYS = ['phases'] as const
+const PORTABLE_AGENT_SLOT_LIMIT = AGENT_PROFILE_LIMIT * 2
+const PORTABLE_GRAPH_ARRAY_LIMIT = AGENTIC_PREDICATE_MAX_LIST_ITEMS
+const PORTABLE_GRAPH_STRING_LIMIT = AGENTIC_PREDICATE_MAX_LIST_BYTES
+const PORTABLE_LEGACY_MAX_DEPTH = AGENTIC_PREDICATE_MAX_DEPTH
+const PORTABLE_SCAN_MAX_DEPTH = 64
+const PORTABLE_SCAN_MAX_NODES = 16_384
+const PORTABLE_SCAN_MAX_BYTES = 16 * 1024 * 1024
+const PORTABLE_FORBIDDEN_AUTHORITY_KEY = /^(?:connection(ProfileId|Id)|localConnectionId|connection_id|agentSlotBindings?|slotBindings?|bindingRevision|credential|secret|grant|acl|enabledAuthority)$/i
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index])
+}
+
+function hasAllowedKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const allowed = new Set([...required, ...optional])
+  return required.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).every((key) => allowed.has(key))
+}
+
+function isPortableAgentRuntimePolicy(value: unknown): boolean {
+  if (!isPlainDataRecord(value)
+    || !hasAllowedKeys(
+      value,
+      PORTABLE_AGENT_RUNTIME_POLICY_REQUIRED_KEYS,
+      PORTABLE_AGENT_RUNTIME_POLICY_OPTIONAL_KEYS,
+    )) return false
+  try {
+    parseAgentRuntimePolicyV1(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function hasSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+function isDensePortableArray(value: unknown, maxLength = PORTABLE_GRAPH_ARRAY_LIMIT): value is unknown[] {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return false
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor)) return false
+    const length = lengthDescriptor.value
+    if (!Number.isSafeInteger(length) || length < 0 || length > maxLength) return false
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return false
+    }
+    return Reflect.ownKeys(value).every((key) => (
+      typeof key === 'string'
+      && (key === 'length' || /^(?:0|[1-9]\d*)$/.test(key) && Number(key) < length)
+    ))
+  } catch {
+    return false
+  }
+}
+
+function hasNoPortableAuthorityLeak(value: unknown): boolean {
+  type ScanFrame =
+    | { kind: 'value'; value: unknown; depth: number }
+    | { kind: 'array'; value: unknown[]; depth: number; index: number }
+    | { kind: 'object'; value: Record<string, unknown>; depth: number; keys: string[]; index: number }
+
+  const stack: ScanFrame[] = [{ kind: 'value', value, depth: 0 }]
+  const active = new Set<object>()
+  let nodes = 0
+  let entries = 0
+  let bytes = 0
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!
+    if (frame.kind === 'array') {
+      if (frame.index >= frame.value.length) {
+        active.delete(frame.value)
+        continue
+      }
+      const index = frame.index
+      frame.index += 1
+      stack.push(frame)
+      if (++entries > PORTABLE_SCAN_MAX_NODES) return false
+      stack.push({ kind: 'value', value: frame.value[index], depth: frame.depth + 1 })
+      continue
+    }
+    if (frame.kind === 'object') {
+      if (frame.index >= frame.keys.length) {
+        active.delete(frame.value)
+        continue
+      }
+      const key = frame.keys[frame.index]!
+      frame.index += 1
+      stack.push(frame)
+      if (key === 'cognitionPolicy') continue
+      if (PORTABLE_FORBIDDEN_AUTHORITY_KEY.test(key)) return false
+      bytes += PORTABLE_ENCODER.encode(key).byteLength
+      if (bytes > PORTABLE_SCAN_MAX_BYTES || ++entries > PORTABLE_SCAN_MAX_NODES) return false
+      stack.push({ kind: 'value', value: frame.value[key], depth: frame.depth + 1 })
+      continue
+    }
+
+    const current = frame.value
+    if (current === null || typeof current !== 'object') {
+      if (++nodes > PORTABLE_SCAN_MAX_NODES) return false
+      if (typeof current === 'string') {
+        bytes += PORTABLE_ENCODER.encode(current).byteLength
+        if (bytes > PORTABLE_SCAN_MAX_BYTES) return false
+      }
+      continue
+    }
+    if (frame.depth > PORTABLE_SCAN_MAX_DEPTH || active.has(current) || ++nodes > PORTABLE_SCAN_MAX_NODES) return false
+    if (Array.isArray(current)) {
+      if (!isDensePortableArray(current) || entries > PORTABLE_SCAN_MAX_NODES - current.length) return false
+      active.add(current)
+      stack.push({ kind: 'array', value: current, depth: frame.depth, index: 0 })
+      continue
+    }
+    if (!isPlainDataRecord(current)) return false
+    const keys = Object.keys(current)
+    if (entries > PORTABLE_SCAN_MAX_NODES - keys.length) return false
+    active.add(current)
+    stack.push({ kind: 'object', value: current, depth: frame.depth, keys, index: 0 })
+  }
+  return true
+}
+
+
+function isBoundedLegacyCognition(value: unknown): boolean {
+  type JsonFrame = { value: unknown; depth: number; exit?: object }
+  const stack: JsonFrame[] = [{ value, depth: 0 }]
+  const active = new Set<object>()
+  let bytes = 0
+  while (stack.length > 0) {
+    const frame = stack.pop()!
+    if (frame.exit) {
+      active.delete(frame.exit)
+      continue
+    }
+    const current = frame.value
+    if (current === null || typeof current === 'boolean') continue
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) return false
+      continue
+    }
+    if (typeof current === 'string') {
+      bytes += PORTABLE_ENCODER.encode(current).byteLength
+      if (bytes > PORTABLE_GRAPH_STRING_LIMIT) return false
+      continue
+    }
+    if (typeof current !== 'object'
+      || frame.depth > PORTABLE_LEGACY_MAX_DEPTH
+      || active.has(current)) return false
+    if (Array.isArray(current)) {
+      if (!isDensePortableArray(current) || current.length > PORTABLE_GRAPH_ARRAY_LIMIT) return false
+      active.add(current)
+      stack.push({ value: null, depth: frame.depth, exit: current })
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        stack.push({ value: current[index], depth: frame.depth + 1 })
+      }
+      continue
+    }
+    if (!isPlainDataRecord(current)) return false
+    const entries = Object.entries(current)
+    if (entries.length > PORTABLE_GRAPH_ARRAY_LIMIT) return false
+    active.add(current)
+    stack.push({ value: null, depth: frame.depth, exit: current })
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const [key, entry] = entries[index]!
+      bytes += PORTABLE_ENCODER.encode(key).byteLength
+      if (bytes > PORTABLE_GRAPH_STRING_LIMIT) return false
+      stack.push({ value: entry, depth: frame.depth + 1 })
+    }
+  }
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string'
+      && PORTABLE_ENCODER.encode(serialized).byteLength <= PORTABLE_GRAPH_STRING_LIMIT
+  } catch {
+    return false
+  }
+}
+
+const PORTABLE_AGENT_CAPABILITIES = [
+  'generation',
+  'streaming',
+  'tool_calling',
+  'native_tool_continuation',
+  'tools_disabled_finalization',
+] as const
+
+function isSafePortableId(value: unknown, maxBytes: number): value is string {
+  if (typeof value !== 'string' || value.length === 0 || PORTABLE_ENCODER.encode(value).byteLength > maxBytes) return false
+  if (value.includes('{{') || value.includes('}}')) return false
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0
+    if (codePoint <= 0x20 || codePoint === 0x7f) return false
+  }
+  return true
+}
+
+function isPortableSafeIdList(value: unknown): value is string[] {
+  if (!isDensePortableArray(value) || value.length > PORTABLE_GRAPH_ARRAY_LIMIT) return false
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!isSafePortableId(entry, 256) || seen.has(entry)) return false
+    seen.add(entry)
+  }
+  return true
+}
+
+
+function isPortableToolList(value: unknown): boolean {
+  if (!isDensePortableArray(value)) return false
+  const seen = new Set<string>()
+  for (const toolId of value) {
+    if (typeof toolId !== 'string' || !CORE_AGENT_TOOL_IDS.includes(toolId as typeof CORE_AGENT_TOOL_IDS[number]) || seen.has(toolId)) return false
+    seen.add(toolId)
+  }
+  return true
+}
+
+function isPortableCapabilityList(value: unknown): boolean {
+  if (!isDensePortableArray(value)) return false
+  let previousIndex = -1
+  for (const capability of value) {
+    const currentIndex = typeof capability === 'string' ? PORTABLE_AGENT_CAPABILITIES.indexOf(capability as typeof PORTABLE_AGENT_CAPABILITIES[number]) : -1
+    if (currentIndex < 0 || currentIndex <= previousIndex) return false
+    previousIndex = currentIndex
+  }
+  return true
+}
+
+function isWorkspaceCapabilityList(value: unknown): value is WorkspaceCapability[] {
+  if (value === undefined) return true
+  if (!isDensePortableArray(value)) return false
+  let previousIndex = -1
+  const seen = new Set<string>()
+  for (const capability of value) {
+    const currentIndex = typeof capability === 'string'
+      ? WORKSPACE_CAPABILITIES.indexOf(capability as WorkspaceCapability)
+      : -1
+    if (currentIndex < 0 || currentIndex <= previousIndex || seen.has(String(capability))) return false
+    seen.add(String(capability))
+    previousIndex = currentIndex
+  }
+  return true
+}
+
+function isPortableTaskPolicy(value: unknown): value is { templateIds: string[] } {
+  return isPlainDataRecord(value)
+    && hasExactKeys(value, ['templateIds'])
+    && isPortableSafeIdList(value.templateIds)
+}
+
+function isPortableWorkspacePolicy(value: unknown): boolean {
+  return isPlainDataRecord(value)
+    && hasExactKeys(value, ['retention', 'sharing'])
+    && (value.retention === 'turn_terminal' || value.retention === 'chat_lifetime')
+    && (value.sharing === 'root_only' || value.sharing === 'view_only')
+}
+
+function hasPortableRuntimePolicyConflict(value: Record<string, unknown>): boolean {
+  return Object.hasOwn(value, 'runtimePolicy')
+    && Object.hasOwn(value, 'cognitionPolicy')
+}
+
+function isPortableConnectionRef(value: unknown): boolean {
+  return isPlainDataRecord(value)
+    && (
+      hasExactKeys(value, ['kind']) && value.kind === 'inherit_main'
+      || hasExactKeys(value, ['kind', 'slotId']) && value.kind === 'slot'
+        && typeof value.slotId === 'string'
+        && /^[a-z][a-z0-9_-]{0,63}(?:\/[a-z][a-z0-9_-]{0,63})?$/.test(value.slotId)
+    )
+}
+
+function isPortableProfile(value: unknown): value is PortableAgentConfigV1['profiles'][number] {
+  return isPlainDataRecord(value)
+    && hasAllowedKeys(value, PORTABLE_AGENT_PROFILE_REQUIRED_KEYS, PORTABLE_AGENT_PROFILE_OPTIONAL_KEYS)
+    && typeof value.id === 'string'
+    && AGENT_PROFILE_ID_PATTERN.test(value.id)
+    && typeof value.name === 'string'
+    && [...value.name].length <= AGENT_PROFILE_NAME_MAX_LENGTH
+    && typeof value.systemPrompt === 'string'
+    && PORTABLE_ENCODER.encode(value.systemPrompt).byteLength <= AGENT_SYSTEM_PROMPT_MAX_BYTES
+    && isPortableConnectionRef(value.connectionRef)
+    && isPortableToolList(value.toolIds)
+    && isWorkspaceCapabilityList(value.workspaceCapabilities)
+    && (value.loreScope === 'active' || value.loreScope === 'all_owned')
+    && (value.loreScope !== 'all_owned' || (value.toolIds as unknown[]).some((toolId) => typeof toolId === 'string' && toolId.startsWith('lore_')))
+    && typeof value.allowMainDelegation === 'boolean'
+    && (value.failurePolicy === 'required' || value.failurePolicy === 'optional')
+    && typeof value.streamActivity === 'boolean'
+    && Number.isSafeInteger(value.maxOutputTokens)
+    && value.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS_MIN
+    && value.maxOutputTokens <= AGENT_MAX_OUTPUT_TOKENS_MAX
+    && Number.isSafeInteger(value.timeoutMs)
+    && value.timeoutMs >= AGENT_TIMEOUT_MS_MIN
+    && value.timeoutMs % 1_000 === 0
+}
+
+function isPortableAgentConfig(value: unknown): value is PortableAgentConfigV1 {
+  if (!isPlainDataRecord(value)
+    || !hasAllowedKeys(value, PORTABLE_AGENT_CONFIG_REQUIRED_KEYS, PORTABLE_AGENT_CONFIG_OPTIONAL_KEYS)
+    || value.portableVersion !== 1
+    || typeof value.agentsEnabled !== 'boolean'
+    || !isDensePortableArray(value.allowedModes)
+    || value.allowedModes.length === 0
+    || !value.allowedModes.every((mode) => mode === 'response' || mode === 'agentic')
+    || value.allowedModes.includes('response') === false
+    || new Set(value.allowedModes).size !== value.allowedModes.length
+    || (value.defaultMode !== 'response' && value.defaultMode !== 'agentic')
+    || !value.allowedModes.includes(value.defaultMode)
+    || !value.agentsEnabled && (value.allowedModes.length !== 1 || value.defaultMode !== 'response')
+    || !Number.isSafeInteger(value.maxInvocations) || value.maxInvocations < AGENT_INVOCATION_MIN
+    || !Number.isSafeInteger(value.maxToolCalls) || value.maxToolCalls < AGENT_TOOL_CALL_MIN
+    || !isPortableToolList(value.mainToolIds)
+    || (value.mainLoreScope !== 'active' && value.mainLoreScope !== 'all_owned')
+    || value.mainLoreScope === 'all_owned' && !(value.mainToolIds as unknown[]).some((toolId) => typeof toolId === 'string' && toolId.startsWith('lore_'))
+    || !isDensePortableArray(value.profiles)
+    || value.profiles.length > AGENT_PROFILE_LIMIT
+    || !isDensePortableArray(value.connectionSlots)
+    || value.connectionSlots.length > PORTABLE_AGENT_SLOT_LIMIT
+    || !hasNoPortableAuthorityLeak(value)
+    || hasPortableRuntimePolicyConflict(value)
+    || Object.hasOwn(value, 'cognitionPolicy') && !isBoundedLegacyCognition(value.cognitionPolicy)
+    || Object.hasOwn(value, 'taskPolicy') && !isPortableTaskPolicy(value.taskPolicy)
+    || Object.hasOwn(value, 'workspacePolicy') && !isPortableWorkspacePolicy(value.workspacePolicy)
+    || Object.hasOwn(value, 'runtimePolicy') && !isPortableAgentRuntimePolicy(value.runtimePolicy)) return false
+
+  const profileIds = new Set<string>()
+  const profiles: PortableAgentConfigV1['profiles'] = []
+  const slotIds = new Set<string>()
+  for (const profile of value.profiles) {
+    if (!isPortableProfile(profile) || profileIds.has(profile.id)) return false
+    profileIds.add(profile.id)
+    profiles.push(profile)
+  }
+  for (const slot of value.connectionSlots) {
+    if (!isPlainDataRecord(slot)
+      || !hasExactKeys(slot, PORTABLE_AGENT_SLOT_KEYS)
+      || !isSafePortableId(slot.id, 128)
+      || !/^[a-z][a-z0-9_-]{0,63}(?:\/[a-z][a-z0-9_-]{0,63})?$/.test(slot.id)
+      || typeof slot.label !== 'string'
+      || [...slot.label].length > AGENT_PROFILE_NAME_MAX_LENGTH
+      || !isPortableCapabilityList(slot.requiredCapabilities)
+      || slotIds.has(slot.id)) return false
+    slotIds.add(slot.id)
+  }
+  return profiles.every((profile) => profile.connectionRef.kind !== 'slot' || slotIds.has(profile.connectionRef.slotId))
+}
+
+
+function isPortableTaskTemplate(value: unknown): value is AgentTaskTemplate {
+  return isAgentTaskTemplate(value)
+}
+
+function hasPortableGraphStringBudget(value: unknown): boolean {
+  type GraphFrame = { value: unknown; depth: number; exit?: object }
+  const stack: GraphFrame[] = [{ value, depth: 0 }]
+  const active = new Set<object>()
+  let bytes = 0
+  while (stack.length > 0) {
+    const frame = stack.pop()!
+    if (frame.exit) {
+      active.delete(frame.exit)
+      continue
+    }
+    const current = frame.value
+    if (typeof current === 'string') {
+      bytes += PORTABLE_ENCODER.encode(current).byteLength
+      if (bytes > PORTABLE_GRAPH_STRING_LIMIT) return false
+      continue
+    }
+    if (current === null || typeof current !== 'object') continue
+    if (frame.depth > AGENTIC_PREDICATE_MAX_DEPTH || active.has(current)) return false
+    active.add(current)
+    stack.push({ value: null, depth: frame.depth, exit: current })
+    if (Array.isArray(current)) {
+      if (!isDensePortableArray(current) || current.length > PORTABLE_GRAPH_ARRAY_LIMIT) return false
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        stack.push({ value: current[index], depth: frame.depth + 1 })
+      }
+    } else {
+      if (!isPlainDataRecord(current) || Object.keys(current).length > PORTABLE_GRAPH_ARRAY_LIMIT) return false
+      const entries = Object.entries(current)
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const [key, entry] = entries[index]!
+        bytes += PORTABLE_ENCODER.encode(key).byteLength
+        if (bytes > PORTABLE_GRAPH_STRING_LIMIT) return false
+        stack.push({ value: entry, depth: frame.depth + 1 })
+      }
+    }
+  }
+  return true
+}
+
+function hasPortableDependencyClosure(
+  items: readonly { id: string; dependencies?: readonly string[] }[],
+): boolean {
+  const dependencies = new Map(items.map((item) => [item.id, item.dependencies ?? []]))
+  for (const item of items) {
+    const seen = new Set<string>()
+    for (const dependency of item.dependencies ?? []) {
+      if (!dependencies.has(dependency) || seen.has(dependency)) return false
+      seen.add(dependency)
+    }
+  }
+  const state = new Map<string, 0 | 1 | 2>()
+  for (const root of dependencies.keys()) {
+    if (state.get(root) === 2) continue
+    const stack: Array<{ id: string; next: number }> = [{ id: root, next: 0 }]
+    state.set(root, 1)
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!
+      const children = dependencies.get(frame.id) ?? []
+      if (frame.next >= children.length) {
+        state.set(frame.id, 2)
+        stack.pop()
+        continue
+      }
+      const child = children[frame.next]!
+      frame.next += 1
+      const childState = state.get(child)
+      if (childState === 1) return false
+      if (childState === 2) continue
+      state.set(child, 1)
+      stack.push({ id: child, next: 0 })
+    }
+  }
+  return true
+}
+
+function isPortableTaskGraph(
+  taskTemplatesValue: unknown,
+  config: PortableAgentConfigV1 | null,
+): boolean {
+  if (!isDensePortableArray(taskTemplatesValue)
+    || taskTemplatesValue.length > PORTABLE_GRAPH_ARRAY_LIMIT
+    || !hasPortableGraphStringBudget(taskTemplatesValue)) return false
+
+  const taskTemplates = taskTemplatesValue.filter((value): value is AgentTaskTemplate => isPortableTaskTemplate(value))
+  if (taskTemplates.length !== taskTemplatesValue.length
+    || new Set(taskTemplates.map((template) => template.id)).size !== taskTemplates.length
+    || !hasPortableDependencyClosure(taskTemplates)) return false
+
+  const configValue = config as unknown as Record<string, unknown> | null
+  const taskPolicy = configValue?.taskPolicy
+  if (taskTemplates.length > 0 && !taskPolicy) return false
+  if (taskPolicy && (!isPortableTaskPolicy(taskPolicy)
+    || !taskPolicy.templateIds.every((id) => taskTemplates.some((template) => template.id === id)))) return false
+  return true
+}
+
+export function isPortableAgenticRuntimeEnvelope(value: unknown): boolean {
+  if (!isPlainDataRecord(value)
+    || !hasAllowedKeys(value, PORTABLE_AGENT_RUNTIME_REQUIRED_KEYS, PORTABLE_AGENT_RUNTIME_OPTIONAL_KEYS)
+    || value.version !== 1
+    || !isDensePortableArray(value.taskTemplates)
+    || value.taskTemplates.length > PORTABLE_GRAPH_ARRAY_LIMIT
+    || !hasNoPortableAuthorityLeak(value)) return false
+
+  const topRuntimePolicy = Object.hasOwn(value, 'runtimePolicy') ? value.runtimePolicy : undefined
+  let effectiveAgentConfig: unknown = value.agentConfig
+  if (topRuntimePolicy !== undefined && topRuntimePolicy !== null) {
+    if (value.agentConfig === null
+      || !isPlainDataRecord(value.agentConfig)
+      || Object.hasOwn(value.agentConfig, 'runtimePolicy')
+      || Object.hasOwn(value.agentConfig, 'cognitionPolicy')) return false
+    try {
+      effectiveAgentConfig = {
+        ...value.agentConfig,
+        runtimePolicy: parseAgentRuntimePolicyV1(topRuntimePolicy),
+      }
+    } catch {
+      return false
+    }
+  }
+  if (effectiveAgentConfig !== null && !isPortableAgentConfig(effectiveAgentConfig)) return false
+  return isPortableTaskGraph(
+    value.taskTemplates,
+    effectiveAgentConfig as PortableAgentConfigV1 | null,
+  )
+}
+
+export function parsePortableAgenticRuntimeEnvelope(value: unknown): PortableAgenticRuntimeEnvelopeV1 {
+  if (!isPortableAgenticRuntimeEnvelope(value)) {
+    throw new Error('AGENT_RUNTIME_PORTABLE_INVALID')
+  }
+  const clone = structuredClone(value) as PortableAgenticRuntimeEnvelopeV1
+  const topRuntimePolicy = Object.hasOwn(clone, 'runtimePolicy') ? clone.runtimePolicy : undefined
+  delete clone.runtimePolicy
+  if (clone.agentConfig) {
+    const runtimePolicy = topRuntimePolicy !== undefined && topRuntimePolicy !== null
+      ? parseAgentRuntimePolicyV1(topRuntimePolicy)
+      : Object.hasOwn(clone.agentConfig, 'runtimePolicy')
+        ? parseAgentRuntimePolicyV1(clone.agentConfig.runtimePolicy)
+        : undefined
+    clone.agentConfig = {
+      ...clone.agentConfig,
+      profiles: clone.agentConfig.profiles.map((profile) => ({
+        ...profile,
+        workspaceCapabilities: [...(profile.workspaceCapabilities ?? [])],
+      })),
+      ...(runtimePolicy === undefined
+        ? {}
+        : {
+            runtimePolicy: {
+              ...runtimePolicy,
+              phases: [...runtimePolicy.phases],
+            },
+          }),
+    }
+  }
+  return clone
+}
+
+function stripPortableAgentRuntimeField(value: object): Record<string, unknown> {
+  const clone = { ...(value as Record<string, unknown>) }
+  delete clone.agentRuntime
+  return clone
+}
+
+export function extractPortableAgenticRuntimeEnvelope(value: unknown): PortableAgenticRuntimeEnvelopeV1 | null {
+  if (!isPlainDataRecord(value)) return null
+  if (Object.hasOwn(value, 'agentRuntime')) {
+    return parsePortableAgenticRuntimeEnvelope(value.agentRuntime)
+  }
+  if (value.type === 'lumiverse_preset' && isPlainDataRecord(value.preset) && Object.hasOwn(value.preset, 'agentRuntime')) {
+    return parsePortableAgenticRuntimeEnvelope(value.preset.agentRuntime)
+  }
+  return null
+}
+/**
+ * Build the inert runtime envelope used when a portable preset has sealed
+ * material but no authored runtime configuration. The server's portable
+ * import endpoint still owns sealed resolution and digest verification; the
+ * null config only makes that import explicit rather than falling back to
+ * ordinary preset creation.
+ */
+export function createEmptyPortableAgenticRuntimeEnvelope(): PortableAgenticRuntimeEnvelopeV1 {
+  return {
+    version: 1,
+    agentConfig: null,
+    taskTemplates: [],
+  }
+}
+
+/** A committed portable import owns its sealed runtime material; never roll it back client-side. */
+export function shouldRollbackImportedPreset(
+  importedPresetId: string | null,
+  portableImportCommitted: boolean,
+): importedPresetId is string {
+  return importedPresetId !== null && !portableImportCommitted
+}
+
+function withoutPortableAgentRuntimeField(value: object): Record<string, unknown> {
+  return stripPortableAgentRuntimeField(value)
+}
 
 // ============================================================================
 // BLOCK FACTORY
@@ -197,7 +863,17 @@ export function projectPublicPromptBlocks(blocks: PromptBlock[]): PromptBlockDTO
 // PRESET MIGRATION
 // ============================================================================
 
+
+/** Preserve backend engine identifiers; only legacy payloads use the classic fallback. */
+function preservePresetEngine(engine: unknown): string {
+  return typeof engine === 'string' && engine.trim().length > 0 ? engine : 'classic'
+}
+
 function migratePreset(preset: LoomPreset): LoomPreset {
+  preset.engine = preservePresetEngine(preset.engine)
+  if (preset.portableSealedPreset !== undefined && preset.portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(preset.portableSealedPreset)
+  }
   preset.samplerOverrides = { ...DEFAULT_SAMPLER_OVERRIDES, ...(preset.samplerOverrides || {}) }
   preset.customBody = { ...DEFAULT_CUSTOM_BODY, ...(preset.customBody || {}) }
   preset.promptBehavior = { ...DEFAULT_PROMPT_BEHAVIOR, ...(preset.promptBehavior || {}) }
@@ -211,8 +887,29 @@ function migratePreset(preset: LoomPreset): LoomPreset {
   preset.presetVersion = typeof preset.presetVersion === 'string' && preset.presetVersion.trim()
     ? preset.presetVersion.trim()
     : null
+  preset.portableSourceVersion = typeof preset.portableSourceVersion === 'string' && preset.portableSourceVersion.trim()
+    ? preset.portableSourceVersion.trim()
+    : null
   preset.lumihubMeta = isRecord(preset.lumihubMeta) ? preset.lumihubMeta : null
-  preset.passthroughMetadata = isRecord(preset.passthroughMetadata) ? preset.passthroughMetadata : {}
+  preset.passthroughMetadata = isRecord(preset.passthroughMetadata)
+    ? preset.passthroughMetadata
+    : {}
+  preset.agentConfig ??= null
+  if (preset.agentConfig) {
+    preset.agentConfig = {
+      ...preset.agentConfig,
+      profiles: preset.agentConfig.profiles.map((profile) => ({
+        ...profile,
+        workspaceCapabilities: [...(profile.workspaceCapabilities ?? [])],
+      })),
+    }
+  }
+  preset.agentConfigRevision = Number.isSafeInteger(preset.agentConfigRevision)
+    ? preset.agentConfigRevision
+    : 0
+  preset.agentConfigReview ??= null
+  preset.agentSlotBindings = isRecord(preset.agentSlotBindings) ? { ...preset.agentSlotBindings } : {}
+  preset.agentTaskTemplates = Array.isArray(preset.agentTaskTemplates) ? preset.agentTaskTemplates : []
   if (Array.isArray(preset.blocks)) {
     for (const block of preset.blocks) {
       if (!Array.isArray(block.injectionTrigger)) {
@@ -249,6 +946,699 @@ function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isPlainDataRecord(value: unknown): value is Record<string, any> {
+  if (!isRecord(value)) return false
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return false
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') return false
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+export const PORTABLE_PRESET_ERROR_CODES = [
+  'PORTABLE_PRESET_INVALID',
+  'PORTABLE_PROMPT_BLOCK_INVALID',
+  'PORTABLE_EXPORT_UNSTABLE',
+  'AGENT_RUNTIME_PORTABLE_INVALID',
+  'AGENT_RUNTIME_PORTABLE_STALE',
+  'AGENT_RUNTIME_PORTABLE_CONTRADICTORY',
+  'AGENT_RUNTIME_PORTABLE_REGEX_INVALID',
+  'AGENT_RUNTIME_PORTABLE_PRESET_INVALID',
+  'AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID',
+  'LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE',
+  'LUMIHUB_LINK_UNAVAILABLE',
+  'LUMIHUB_SEALED_RESOLUTION_FAILED',
+  'LUMIHUB_SEALED_DIGEST_MISMATCH',
+  'PRESET_REVISION_CONFLICT',
+  'PRESET_REVISION_REQUIRED',
+] as const
+
+export type PortablePresetErrorCode = typeof PORTABLE_PRESET_ERROR_CODES[number]
+
+
+export class PortablePresetError extends Error {
+  readonly code: PortablePresetErrorCode
+
+  constructor(code: PortablePresetErrorCode, message: string = code) {
+    super(message)
+    this.name = 'PortablePresetError'
+    this.code = code
+  }
+}
+
+/**
+ * Only expose the stable public code from a failed portable operation. The
+ * server may include diagnostic text in an ApiError body, but it must never
+ * become user-visible UI copy.
+ */
+export function getPortablePresetErrorCode(error: unknown): PortablePresetErrorCode {
+  const candidate = isRecord(error) && isRecord(error.body)
+    ? error.body.code
+    : isRecord(error)
+      ? error.code
+      : undefined
+  if (typeof candidate === 'string' && PORTABLE_PRESET_ERROR_CODES.includes(candidate as PortablePresetErrorCode)) {
+    return candidate as PortablePresetErrorCode
+  }
+  if (error instanceof PortablePresetError) return error.code
+  const message = error instanceof Error ? error.message : ''
+  const prefix = message.match(/^[A-Z][A-Z0-9_]+/)
+  if (prefix && PORTABLE_PRESET_ERROR_CODES.includes(prefix[0] as PortablePresetErrorCode)) {
+    return prefix[0] as PortablePresetErrorCode
+  }
+  return 'PORTABLE_PRESET_INVALID'
+}
+
+const PORTABLE_PROMPT_BLOCK_KEYS: Record<string, true> = {
+  id: true,
+  name: true,
+  content: true,
+  role: true,
+  enabled: true,
+  position: true,
+  depth: true,
+  marker: true,
+  isLocked: true,
+  color: true,
+  injectionTrigger: true,
+  characterTagTrigger: true,
+  group: true,
+  categoryMode: true,
+  savedChildEnabled: true,
+  variables: true,
+  placementBinding: true,
+  stashId: true,
+  sealed: true,
+  sealedKey: true,
+  sealedSource: true,
+  sealedOriginPresetId: true,
+  sealedOriginVersion: true,
+  sealedSha256: true,
+  revision: true,
+  order: true,
+}
+const PORTABLE_PROMPT_VARIABLE_OPTION_KEYS: Record<string, true> = {
+  id: true,
+  label: true,
+  value: true,
+}
+const PORTABLE_PROMPT_PLACEMENT_KEYS: Record<string, true> = {
+  role: true,
+  position: true,
+  depth: true,
+}
+const PORTABLE_PROMPT_BINDING_KEYS: Record<string, true> = {
+  variableId: true,
+  options: true,
+}
+const PORTABLE_PROMPT_ARRAY_LIMIT = AGENTIC_PREDICATE_MAX_LIST_ITEMS
+const PORTABLE_PROMPT_FIELDS_MAX_BYTES = AGENTIC_PREDICATE_MAX_LIST_BYTES
+const PORTABLE_PROMPT_MAX_NODES = PORTABLE_SCAN_MAX_NODES
+
+type PortablePromptBudget = {
+  bytes: number
+  nodes: number
+}
+
+function portablePromptError(): never {
+  throw new PortablePresetError('PORTABLE_PROMPT_BLOCK_INVALID')
+}
+
+function chargePortablePromptNodes(budget: PortablePromptBudget, count = 1): void {
+  if (!Number.isSafeInteger(count) || count < 0 || budget.nodes > PORTABLE_PROMPT_MAX_NODES - count) {
+    portablePromptError()
+  }
+  budget.nodes += count
+}
+function assertPortablePromptChildBudget(budget: PortablePromptBudget, count: number): void {
+  if (!Number.isSafeInteger(count) || count < 0 || budget.nodes > PORTABLE_PROMPT_MAX_NODES - count) {
+    portablePromptError()
+  }
+}
+function chargePortablePromptBytes(value: string, budget: PortablePromptBudget): void {
+  if (value.length > PORTABLE_PROMPT_FIELDS_MAX_BYTES) portablePromptError()
+  let bytes: number
+  try {
+    bytes = PORTABLE_ENCODER.encode(value).byteLength
+  } catch {
+    portablePromptError()
+  }
+  budget.bytes += bytes
+  if (budget.bytes > PORTABLE_PROMPT_FIELDS_MAX_BYTES) portablePromptError()
+}
+
+function assertPortablePromptKnownKeys(
+  value: Record<string, unknown>,
+  allowed: Readonly<Record<string, true>>,
+  budget: PortablePromptBudget,
+): void {
+  const keys = Object.keys(value)
+  if (keys.some((key) => !Object.hasOwn(allowed, key))) portablePromptError()
+  // Native Loom state uses own `undefined` values for optional fields. They
+  // are omitted by JSON serialization; required fields still fail their
+  // dedicated validators below.
+  assertPortablePromptChildBudget(budget, keys.length)
+  for (const key of keys) chargePortablePromptBytes(key, budget)
+}
+
+function chargePortablePromptText(
+  value: unknown,
+  budget: PortablePromptBudget,
+  nonEmpty = false,
+): asserts value is string {
+  if (typeof value !== 'string' || (nonEmpty && value.length === 0)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  if (value.length > PORTABLE_PROMPT_FIELDS_MAX_BYTES) portablePromptError()
+  chargePortablePromptBytes(value, budget)
+}
+
+function chargePortablePromptBoolean(value: unknown, budget: PortablePromptBudget): asserts value is boolean {
+  if (typeof value !== 'boolean') portablePromptError()
+  chargePortablePromptNodes(budget)
+}
+
+function chargePortablePromptNumber(value: unknown, budget: PortablePromptBudget): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+}
+
+function chargePortablePromptNullableText(value: unknown, budget: PortablePromptBudget): void {
+  if (value === null) {
+    chargePortablePromptNodes(budget)
+    return
+  }
+  chargePortablePromptText(value, budget)
+}
+
+function assertPortablePromptStringArray(
+  value: unknown,
+  budget: PortablePromptBudget,
+): asserts value is string[] {
+  if (!isDensePortableArray(value, PORTABLE_PROMPT_ARRAY_LIMIT)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptChildBudget(budget, value.length)
+  for (let index = 0; index < value.length; index += 1) {
+    chargePortablePromptText(value[index], budget)
+  }
+}
+
+function assertPortablePromptVariableOption(
+  value: unknown,
+  budget: PortablePromptBudget,
+): asserts value is PromptVariableOptionDTO {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptKnownKeys(value, PORTABLE_PROMPT_VARIABLE_OPTION_KEYS, budget)
+  chargePortablePromptText(value.id, budget, true)
+  chargePortablePromptText(value.label, budget)
+  chargePortablePromptText(value.value, budget)
+}
+
+function assertPortablePromptPlacement(
+  value: unknown,
+  budget: PortablePromptBudget,
+): asserts value is PromptBlockPlacement {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptKnownKeys(value, PORTABLE_PROMPT_PLACEMENT_KEYS, budget)
+  if (typeof value.role !== 'string'
+    || !['system', 'user', 'assistant', 'user_append', 'assistant_append'].includes(value.role)) {
+    portablePromptError()
+  }
+  if (typeof value.position !== 'string'
+    || !['pre_history', 'post_history', 'in_history'].includes(value.position)) {
+    portablePromptError()
+  }
+  chargePortablePromptText(value.role, budget)
+  chargePortablePromptText(value.position, budget)
+  if (typeof value.depth !== 'number' || !Number.isFinite(value.depth) || value.depth < 0) portablePromptError()
+  chargePortablePromptNodes(budget)
+}
+
+function assertPortablePromptPlacementBinding(
+  value: unknown,
+  budget: PortablePromptBudget,
+): void {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptKnownKeys(value, PORTABLE_PROMPT_BINDING_KEYS, budget)
+  chargePortablePromptText(value.variableId, budget, true)
+  if (!isPlainDataRecord(value.options)) portablePromptError()
+  const optionIds = Object.keys(value.options)
+  if (optionIds.length > PORTABLE_PROMPT_ARRAY_LIMIT) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptChildBudget(budget, optionIds.length)
+  for (const optionId of optionIds) {
+    chargePortablePromptBytes(optionId, budget)
+    const descriptor = Object.getOwnPropertyDescriptor(value.options, optionId)
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) portablePromptError()
+    assertPortablePromptPlacement(descriptor.value, budget)
+  }
+}
+
+
+function assertPortablePromptVariable(
+  value: unknown,
+  budget: PortablePromptBudget,
+): asserts value is PromptVariableDef {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  const type = value.type
+  if (type !== 'text'
+    && type !== 'textarea'
+    && type !== 'number'
+    && type !== 'slider'
+    && type !== 'select'
+    && type !== 'switch'
+    && type !== 'multiselect') portablePromptError()
+
+  const allowed: Record<string, true> = {
+    id: true,
+    name: true,
+    label: true,
+    type: true,
+    defaultValue: true,
+    description: true,
+  }
+  if (type === 'textarea') allowed.rows = true
+  if (type === 'number' || type === 'slider') {
+    allowed.min = true
+    allowed.max = true
+    allowed.step = true
+  }
+  if (type === 'select' || type === 'multiselect') allowed.options = true
+  if (type === 'multiselect') allowed.separator = true
+  assertPortablePromptKnownKeys(value, allowed, budget)
+  chargePortablePromptText(type, budget)
+  chargePortablePromptText(value.id, budget, true)
+  chargePortablePromptText(value.name, budget, true)
+  chargePortablePromptText(value.label, budget)
+  if (value.description !== undefined) chargePortablePromptText(value.description, budget)
+
+  if (type === 'text') {
+    chargePortablePromptText(value.defaultValue, budget)
+    return
+  }
+  if (type === 'textarea') {
+    chargePortablePromptText(value.defaultValue, budget)
+    if (value.rows !== undefined) {
+      if (typeof value.rows !== 'number' || !Number.isFinite(value.rows) || !Number.isInteger(value.rows) || value.rows < 1) {
+        portablePromptError()
+      }
+      chargePortablePromptNodes(budget)
+    }
+    return
+  }
+  if (type === 'number' || type === 'slider') {
+    chargePortablePromptNumber(value.defaultValue, budget)
+    const min = value.min
+    const max = value.max
+    if (type === 'slider' && (typeof min !== 'number' || typeof max !== 'number')) portablePromptError()
+    if (min !== undefined) chargePortablePromptNumber(min, budget)
+    if (max !== undefined) chargePortablePromptNumber(max, budget)
+    if (typeof min === 'number' && typeof max === 'number' && min > max) portablePromptError()
+    if (typeof min === 'number' && value.defaultValue < min) portablePromptError()
+    if (typeof max === 'number' && value.defaultValue > max) portablePromptError()
+    if (value.step !== undefined) {
+      chargePortablePromptNumber(value.step, budget)
+      if (value.step <= 0) portablePromptError()
+    }
+    return
+  }
+  if (type === 'switch') {
+    if (value.defaultValue !== 0 && value.defaultValue !== 1) portablePromptError()
+    chargePortablePromptNodes(budget)
+    return
+  }
+
+  if (!isDensePortableArray(value.options, PORTABLE_PROMPT_ARRAY_LIMIT) || value.options.length === 0) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptChildBudget(budget, value.options.length)
+  const optionIds = new Set<string>()
+  for (let index = 0; index < value.options.length; index += 1) {
+    const option = value.options[index]
+    assertPortablePromptVariableOption(option, budget)
+    if (optionIds.has(option.id)) portablePromptError()
+    optionIds.add(option.id)
+  }
+  if (type === 'select') {
+    chargePortablePromptText(value.defaultValue, budget)
+    if (!optionIds.has(value.defaultValue)) portablePromptError()
+    return
+  }
+  if (!isDensePortableArray(value.defaultValue, PORTABLE_PROMPT_ARRAY_LIMIT)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptChildBudget(budget, value.defaultValue.length)
+  const defaults = new Set<string>()
+  for (let index = 0; index < value.defaultValue.length; index += 1) {
+    const selectedId = value.defaultValue[index]
+    chargePortablePromptText(selectedId, budget)
+    if (!optionIds.has(selectedId) || defaults.has(selectedId)) portablePromptError()
+    defaults.add(selectedId)
+  }
+  if (value.separator !== undefined) chargePortablePromptText(value.separator, budget)
+}
+
+function assertPortablePromptVariableState(
+  value: unknown,
+  budget: PortablePromptBudget,
+): void {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  const keys = Object.keys(value)
+  if (keys.length > PORTABLE_PROMPT_ARRAY_LIMIT) portablePromptError()
+  assertPortablePromptChildBudget(budget, keys.length)
+  for (const key of keys) {
+    chargePortablePromptBytes(key, budget)
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'boolean') {
+      portablePromptError()
+    }
+    chargePortablePromptNodes(budget)
+  }
+}
+
+function assertPortablePromptBlock(
+  value: unknown,
+  budget: PortablePromptBudget,
+): asserts value is PromptBlock {
+  if (!isPlainDataRecord(value)) portablePromptError()
+  chargePortablePromptNodes(budget)
+  assertPortablePromptKnownKeys(value, PORTABLE_PROMPT_BLOCK_KEYS, budget)
+  chargePortablePromptText(value.id, budget)
+  if (Object.hasOwn(value, 'name') && value.name !== undefined) chargePortablePromptText(value.name, budget)
+  chargePortablePromptText(value.content, budget)
+  if (typeof value.role !== 'string'
+    || !['system', 'user', 'assistant', 'user_append', 'assistant_append'].includes(value.role)) {
+    portablePromptError()
+  }
+  if (typeof value.position !== 'string'
+    || !['pre_history', 'post_history', 'in_history'].includes(value.position)) {
+    portablePromptError()
+  }
+  chargePortablePromptText(value.role, budget)
+  chargePortablePromptBoolean(value.enabled, budget)
+  chargePortablePromptText(value.position, budget)
+  if (!Number.isSafeInteger(value.depth) || value.depth < 0) portablePromptError()
+  chargePortablePromptNodes(budget)
+  if (value.marker !== null && typeof value.marker !== 'string') portablePromptError()
+  if (value.color !== null && typeof value.color !== 'string') portablePromptError()
+  if (value.group !== undefined && value.group !== null && typeof value.group !== 'string') portablePromptError()
+  chargePortablePromptNullableText(value.marker, budget)
+  chargePortablePromptNullableText(value.color, budget)
+  if (value.group !== undefined) chargePortablePromptNullableText(value.group, budget)
+  chargePortablePromptBoolean(value.isLocked, budget)
+  assertPortablePromptStringArray(value.injectionTrigger, budget)
+  if (value.characterTagTrigger !== undefined) assertPortablePromptStringArray(value.characterTagTrigger, budget)
+  if (value.categoryMode !== undefined
+    && value.categoryMode !== null
+    && value.categoryMode !== 'radio'
+    && value.categoryMode !== 'checkbox') portablePromptError()
+  if (value.categoryMode !== undefined) {
+    if (value.categoryMode === null) chargePortablePromptNodes(budget)
+    else chargePortablePromptText(value.categoryMode, budget)
+  }
+  if (value.savedChildEnabled !== undefined) assertPortablePromptVariableState(value.savedChildEnabled, budget)
+  if (value.variables !== undefined) {
+    if (!isDensePortableArray(value.variables, PORTABLE_PROMPT_ARRAY_LIMIT)) portablePromptError()
+    chargePortablePromptNodes(budget)
+    assertPortablePromptChildBudget(budget, value.variables.length)
+    for (let index = 0; index < value.variables.length; index += 1) {
+      assertPortablePromptVariable(value.variables[index], budget)
+    }
+  }
+  if (value.placementBinding !== undefined) assertPortablePromptPlacementBinding(value.placementBinding, budget)
+  for (const key of ['stashId', 'sealedKey', 'sealedSource', 'sealedOriginPresetId', 'sealedSha256'] as const) {
+    if (value[key] !== undefined) chargePortablePromptText(value[key], budget)
+  }
+  if (value.sealed !== undefined) chargePortablePromptBoolean(value.sealed, budget)
+  if (value.sealedOriginVersion !== undefined
+    && value.sealedOriginVersion !== null
+    && typeof value.sealedOriginVersion !== 'string') portablePromptError()
+  if (value.sealedOriginVersion !== undefined) {
+    chargePortablePromptNullableText(value.sealedOriginVersion, budget)
+  }
+  if (value.order !== undefined) {
+    if (!Number.isSafeInteger(value.order) || value.order < 0) portablePromptError()
+    chargePortablePromptNodes(budget)
+  }
+  if (value.revision !== undefined) {
+    if (typeof value.revision === 'string') chargePortablePromptText(value.revision, budget)
+    else {
+      if (!Number.isSafeInteger(value.revision) || value.revision < 0) portablePromptError()
+      chargePortablePromptNodes(budget)
+    }
+  }
+}
+
+/** Reject malformed prompt blocks before they reach selection or persistence. */
+export function assertPortablePromptBlocks(value: unknown): asserts value is PromptBlock[] {
+  if (!isDensePortableArray(value, PORTABLE_PROMPT_ARRAY_LIMIT)) portablePromptError()
+  const budget: PortablePromptBudget = { bytes: 0, nodes: 0 }
+  chargePortablePromptNodes(budget)
+  assertPortablePromptChildBudget(budget, value.length)
+  for (let index = 0; index < value.length; index += 1) {
+    assertPortablePromptBlock(value[index], budget)
+  }
+}
+function validateImportedPromptVariableSchema(preset: LoomPreset): LoomPreset {
+  try {
+    validatePromptVariableSchema(preset.blocks)
+  } catch (error) {
+    throw new PortablePresetError(
+      'PORTABLE_PROMPT_BLOCK_INVALID',
+      error instanceof Error ? error.message : 'PORTABLE_PROMPT_BLOCK_INVALID',
+    )
+  }
+  return preset
+}
+
+
+function isPortableSealedDescriptor(value: unknown): value is PortableSealedPresetDescriptorV1 {
+  if (!isPlainDataRecord(value)
+    || Object.keys(value).some((key) => key !== 'hubPresetId' && key !== 'hubPresetVersion' && key !== 'blocks')
+    || typeof value.hubPresetId !== 'string'
+    || !value.hubPresetId.trim()
+    || typeof value.hubPresetVersion !== 'string'
+    || !value.hubPresetVersion.trim()
+    || !isDensePortableArray(value.blocks, PORTABLE_PROMPT_ARRAY_LIMIT)
+    || value.blocks.length === 0) {
+    return false
+  }
+  const keys = new Set<string>()
+  for (let index = 0; index < value.blocks.length; index += 1) {
+    const entry = value.blocks[index]
+    if (!isPlainDataRecord(entry)
+      || Object.keys(entry).some((key) => key !== 'key' && key !== 'sha256')
+      || typeof entry.key !== 'string'
+      || !entry.key.trim()
+      || keys.has(entry.key.trim())
+      || typeof entry.sha256 !== 'string'
+      || !/^[a-f0-9]{64}$/i.test(entry.sha256)) {
+      return false
+    }
+    keys.add(entry.key.trim())
+  }
+  return true
+}
+
+function assertPortableSealedDescriptor(value: unknown): asserts value is PortableSealedPresetDescriptorV1 {
+  if (!isPortableSealedDescriptor(value)) {
+    throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+  }
+}
+
+const IMPORTED_AGENT_TOOL_IDS = [
+  'lore_list_books',
+  'lore_get_book',
+  'lore_list_entries',
+  'lore_get_entry',
+  'lore_search_entries',
+  'chat_search_history',
+] as const
+const IMPORTED_AGENT_TOOL_SET = new Set<string>(IMPORTED_AGENT_TOOL_IDS)
+const IMPORTED_AGENT_LORE_TOOL_SET = new Set<string>(IMPORTED_AGENT_TOOL_IDS.slice(0, 5))
+const IMPORTED_AGENT_PROFILE_KEYS = [
+  'id', 'name', 'systemPrompt', 'connectionProfileId', 'toolIds', 'loreScope',
+  'allowMainDelegation', 'failurePolicy', 'streamActivity', 'maxOutputTokens', 'timeoutMs',
+]
+const IMPORTED_AGENT_CONFIG_KEYS = [
+  'version',
+  'enabled',
+  'maxInvocations',
+  'maxToolCalls',
+  'mainToolIds',
+  'mainLoreScope',
+  'profiles',
+]
+
+function isImportedAgentToolList(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false
+  try {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false
+    const seen = new Set<string>()
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, String(index))) return false
+      const tool = value[index]
+      if (typeof tool !== 'string' || !IMPORTED_AGENT_TOOL_SET.has(tool) || seen.has(tool)) return false
+      seen.add(tool)
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/.test(key))) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isImportedAgentConfig(value: unknown): value is Record<string, any> {
+  if (!isPlainDataRecord(value)) return false
+  try {
+    const configKeys = Object.keys(value)
+    const hasMaxInvocations = Object.hasOwn(value, 'maxInvocations')
+    const hasMaxToolCalls = Object.hasOwn(value, 'maxToolCalls')
+    const expectedKeyCount = IMPORTED_AGENT_CONFIG_KEYS.length
+      - (hasMaxInvocations ? 0 : 1)
+      - (hasMaxToolCalls ? 0 : 1)
+    if (configKeys.some((key) => !IMPORTED_AGENT_CONFIG_KEYS.includes(key))) return false
+    if (configKeys.length !== expectedKeyCount
+      || value.version !== 1
+      || typeof value.enabled !== 'boolean'
+      || (hasMaxInvocations
+        && (!Number.isSafeInteger(value.maxInvocations)
+          || value.maxInvocations < AGENT_INVOCATION_MIN))
+      || (hasMaxToolCalls
+        && (!Number.isSafeInteger(value.maxToolCalls)
+          || value.maxToolCalls < AGENT_TOOL_CALL_MIN))
+      || !isImportedAgentToolList(value.mainToolIds)
+      || (value.mainLoreScope !== 'active'
+        && value.mainLoreScope !== 'all_owned')
+      || !Array.isArray(value.profiles)
+      || Object.getPrototypeOf(value.profiles) !== Array.prototype
+      || value.profiles.length > 16) return false
+    if (value.mainLoreScope === 'all_owned'
+      && !value.mainToolIds.some((tool: string) => IMPORTED_AGENT_LORE_TOOL_SET.has(tool))) return false
+
+    const ids = new Set<string>()
+    for (let index = 0; index < value.profiles.length; index += 1) {
+      if (!Object.hasOwn(value.profiles, String(index))) return false
+    }
+    return value.profiles.every((profile: unknown) => {
+      if (!isPlainDataRecord(profile)
+        || Object.keys(profile).length !== IMPORTED_AGENT_PROFILE_KEYS.length
+        || Object.keys(profile).some((key) => !IMPORTED_AGENT_PROFILE_KEYS.includes(key))
+        || typeof profile.id !== 'string'
+        || !/^[a-z][a-z0-9_]{0,63}$/.test(profile.id)
+        || ids.has(profile.id)
+        || typeof profile.name !== 'string' || profile.name.length > 80
+        || typeof profile.systemPrompt !== 'string'
+        || PORTABLE_ENCODER.encode(profile.systemPrompt).byteLength > 32 * 1024
+        || (profile.connectionProfileId !== null && typeof profile.connectionProfileId !== 'string')
+        || profile.connectionProfileId === ''
+        || !isImportedAgentToolList(profile.toolIds)
+        || (profile.loreScope !== 'active' && profile.loreScope !== 'all_owned')
+        || (profile.loreScope === 'all_owned'
+          && !profile.toolIds.some((tool: string) => IMPORTED_AGENT_LORE_TOOL_SET.has(tool)))
+        || typeof profile.allowMainDelegation !== 'boolean'
+        || (profile.failurePolicy !== 'required' && profile.failurePolicy !== 'optional')
+        || typeof profile.streamActivity !== 'boolean'
+        || !Number.isSafeInteger(profile.maxOutputTokens) || profile.maxOutputTokens < 64 || profile.maxOutputTokens > 8192
+        || !Number.isSafeInteger(profile.timeoutMs) || profile.timeoutMs < 5000 || profile.timeoutMs % 1000 !== 0) return false
+      ids.add(profile.id)
+      return true
+    })
+  } catch {
+    return false
+  }
+}
+
+/** Convert explicit imported V1 metadata into an inert normalized V2 draft. */
+function migrateImportedLegacyAgentConfigMetadataV1(
+  metadata: Record<string, unknown>,
+): { metadata: Record<string, unknown>; config: AgentConfigV2 | null } {
+  if (!isRecord(metadata) || !Object.hasOwn(metadata, 'agentConfig')) {
+    return { metadata: extractPassthroughMetadata(metadata), config: null }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(metadata, 'agentConfig')
+  if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+    throw new Error('metadata.agentConfig: must be a data property')
+  }
+  const legacy = descriptor.value
+  if (!isImportedAgentConfig(legacy)) {
+    throw new Error('metadata.agentConfig: invalid configuration')
+  }
+  const profiles = legacy.profiles.map((profile: Record<string, any>) => ({
+    id: profile.id,
+    name: profile.name,
+    systemPrompt: profile.systemPrompt,
+    connectionRef: profile.connectionProfileId === null
+      ? { kind: 'inherit_main' as const }
+      : { kind: 'slot' as const, slotId: `profile/${profile.id}` },
+    toolIds: [...profile.toolIds],
+    workspaceCapabilities: [],
+    loreScope: profile.loreScope,
+    allowMainDelegation: profile.allowMainDelegation,
+    failurePolicy: profile.failurePolicy,
+    streamActivity: profile.streamActivity,
+    maxOutputTokens: profile.maxOutputTokens,
+    timeoutMs: profile.timeoutMs,
+  }))
+  return {
+    metadata: extractPassthroughMetadata(metadata),
+    config: {
+      version: 2,
+      agentsEnabled: false,
+      allowedModes: ['response'],
+      defaultMode: 'response',
+      maxInvocations: Object.hasOwn(legacy, 'maxInvocations')
+        ? legacy.maxInvocations
+        : AGENT_INVOCATION_DEFAULT,
+      maxToolCalls: Object.hasOwn(legacy, 'maxToolCalls')
+        ? legacy.maxToolCalls
+        : AGENT_TOOL_CALL_DEFAULT,
+      mainToolIds: [...legacy.mainToolIds],
+      mainLoreScope: legacy.mainLoreScope,
+      profiles,
+      connectionSlots: profiles.flatMap((profile) => profile.connectionRef.kind === 'slot'
+        ? [{
+            id: profile.connectionRef.slotId,
+            label: profile.name,
+            requiredCapabilities: ['generation' as const],
+          }]
+        : []),
+    },
+  }
+}
+
+function migrateImportedLegacyAgentConfigV1(
+  preset: LoomPreset,
+  hasCanonicalRuntime = false,
+): LoomPreset {
+  // Canonical V2 data is authoritative. In particular, never let an
+  // obsolete metadata.agentConfig overwrite a top-level config or portable
+  // runtime envelope. Still strip the reserved metadata key so it cannot
+  // become executable authority on the next round-trip.
+  if (hasCanonicalRuntime || preset.agentConfig !== null) {
+    return {
+      ...preset,
+      passthroughMetadata: extractPassthroughMetadata(preset.passthroughMetadata),
+    }
+  }
+  const migrated = migrateImportedLegacyAgentConfigMetadataV1(preset.passthroughMetadata)
+  return {
+    ...preset,
+    passthroughMetadata: migrated.metadata,
+    agentConfig: migrated.config,
+  }
+}
+
 /** Version key is surfaced separately as `presetVersion`; the rest of the bag round-trips verbatim. */
 const LUMIHUB_VERSION_META_KEY = '_lumiverse_preset_version'
 const LOOM_OWNED_META_KEYS = new Set([
@@ -261,6 +1651,22 @@ const LOOM_OWNED_META_KEYS = new Set([
   'isDefault',
   'lastProfileKey',
   'promptVariables',
+  'portableSealedPreset',
+])
+
+const AGENT_RUNTIME_RESERVED_METADATA_KEYS = new Set([
+  'agent_config',
+  'agent_config_revision',
+  'agent_config_review',
+  'agent_config_review_required',
+  'agentConfig',
+  'agentConfigRevision',
+  'agentConfigReview',
+  'agentConfigReviewRequired',
+  'portableAgentConfig',
+  'portable_agent_config',
+  'agentRuntime',
+  'agent_runtime',
 ])
 
 export function isLoomOwnedPresetMetadataKey(key: string): boolean {
@@ -321,7 +1727,7 @@ function markPresetAsLocalImport(preset: LoomPreset): LoomPreset {
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (isLoomOwnedPresetMetadataKey(key)) continue
+    if (isLoomOwnedPresetMetadataKey(key) || AGENT_RUNTIME_RESERVED_METADATA_KEYS.has(key)) continue
     bag[key] = value
   }
   return bag
@@ -367,7 +1773,13 @@ export function detectImportedPresetKind(data: unknown): 'loom' | 'legacy' | nul
 }
 
 export function coerceImportedLoomPreset(data: unknown, fallbackName: string): LoomPreset {
+  // Validate the portable envelope before looking at legacy metadata. A
+  // canonical envelope (including one with a null config) is still an
+  // authority boundary and must prevent metadata.agentConfig fallback.
+  const hasCanonicalRuntime = extractPortableAgenticRuntimeEnvelope(data) !== null
   if (looksLikeWrappedLumiHubPresetData(data)) {
+    const presetData = withoutPortableAgentRuntimeField(data.preset)
+    assertPortablePromptBlocks(presetData.blocks)
     const wrappedCoverUrl = typeof data.cover_url === 'string'
       ? data.cover_url
       : typeof data.coverUrl === 'string'
@@ -377,26 +1789,32 @@ export function coerceImportedLoomPreset(data: unknown, fallbackName: string): L
           : typeof (data.preset as any).cover_url === 'string'
             ? (data.preset as any).cover_url
             : null
-    return markPresetAsLocalImport({
-      ...data.preset,
+    return validateImportedPromptVariableSchema(migrateImportedLegacyAgentConfigV1(markPresetAsLocalImport({
+      ...presetData,
       name: data.preset.name || fallbackName,
       coverUrl: wrappedCoverUrl,
-    } as LoomPreset)
+    } as LoomPreset), hasCanonicalRuntime))
   }
 
   if (looksLikeLoomPresetData(data)) {
-    return markPresetAsLocalImport({
-      ...data,
+    const presetData = withoutPortableAgentRuntimeField(data)
+    assertPortablePromptBlocks(presetData.blocks)
+    return validateImportedPromptVariableSchema(migrateImportedLegacyAgentConfigV1(markPresetAsLocalImport({
+      ...presetData,
       name: data.name || fallbackName,
-    })
+    } as LoomPreset), hasCanonicalRuntime))
   }
 
   if (looksLikeBackendLoomPresetData(data)) {
-    return markPresetAsLocalImport(unmarshalPreset(data))
+    return validateImportedPromptVariableSchema(migrateImportedLegacyAgentConfigV1(markPresetAsLocalImport({
+      ...unmarshalPreset(data),
+      passthroughMetadata: { ...data.metadata },
+    }), hasCanonicalRuntime))
   }
-
   if (looksLikeLegacyPresetData(data)) {
-    return markPresetAsLocalImport(importFromSTPreset(data, fallbackName))
+    return validateImportedPromptVariableSchema(migrateImportedLegacyAgentConfigV1(markPresetAsLocalImport(
+      importFromSTPreset(data, fallbackName),
+    ), hasCanonicalRuntime))
   }
 
   throw new Error('Unrecognized preset JSON format')
@@ -540,10 +1958,17 @@ export function toggleCategoryWithChildren(
 // ============================================================================
 
 export function marshalPreset(loom: LoomPreset): CreatePresetInput {
+  assertPortablePromptBlocks(loom.blocks)
+  const portableSealedPreset = loom.portableSealedPreset ?? null
+  if (portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(portableSealedPreset)
+  }
   const blocks = normalizeCategoryBlockState(loom.blocks)
+  assertPortableSealedDescriptorCorrespondence(blocks, portableSealedPreset)
   return {
     name: loom.name,
     provider: 'loom',
+    engine: preservePresetEngine(loom.engine),
     parameters: {
       samplerOverrides: loom.samplerOverrides,
       customBody: loom.customBody,
@@ -564,31 +1989,45 @@ export function marshalPreset(loom: LoomPreset): CreatePresetInput {
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
       promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
+      ...(loom.portableSealedPreset ? { portableSealedPreset: structuredClone(loom.portableSealedPreset) } : {}),
       // Preserve LumiHub provenance + version so an edit doesn't strip them from the metadata column.
       ...(loom.lumihubMeta ?? {}),
       ...(loom.presetVersion ? { _lumiverse_preset_version: loom.presetVersion } : {}),
     },
   }
 }
-
 export function unmarshalPreset(preset: Preset): LoomPreset {
   const params = preset.parameters || {}
   const prompts = preset.prompts || {}
   const meta = preset.metadata || {}
+  // Hydration accepts backend-owned legacy rows; portable admission validates
+  // prompt graphs before they can enter through an import or create boundary.
+  const rawBlocks = preset.prompt_order === undefined ? [] : preset.prompt_order
+  const portableSealedPreset = meta.portableSealedPreset
+  if (portableSealedPreset !== undefined && portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(portableSealedPreset)
+  }
 
   const loom: LoomPreset = {
     id: preset.id,
     name: preset.name,
+    engine: preservePresetEngine(preset.engine),
     description: meta.description || '',
     coverUrl: typeof meta.coverUrl === 'string' ? meta.coverUrl : (typeof meta.cover_url === 'string' ? meta.cover_url : null),
     presetVersion: typeof meta._lumiverse_preset_version === 'string' ? meta._lumiverse_preset_version : null,
     lumihubMeta: extractLumihubMeta(meta),
     passthroughMetadata: extractPassthroughMetadata(meta),
+    ...(portableSealedPreset ? { portableSealedPreset: structuredClone(portableSealedPreset) } : {}),
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
     ...(typeof preset.cache_revision === 'number' ? { cacheRevision: preset.cache_revision } : {}),
-    blocks: (preset.prompt_order || []) as PromptBlock[],
+    agentConfig: preset.agent_config ?? null,
+    agentConfigRevision: preset.agent_config_revision ?? 0,
+    agentConfigReview: preset.agent_config_review ?? null,
+    agentSlotBindings: { ...(preset.agent_slot_bindings ?? {}) },
+    agentTaskTemplates: [...(preset.agent_task_templates ?? [])],
+    blocks: rawBlocks,
     source: meta.source || null,
     isDefault: meta.isDefault || false,
     samplerOverrides: params.samplerOverrides || { ...DEFAULT_SAMPLER_OVERRIDES },
@@ -607,9 +2046,17 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
 }
 
 export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
+  // Existing presets can contain legacy identities and larger prompt graphs.
+  // Their editor path validates every changed public graph before this update.
+  const portableSealedPreset = loom.portableSealedPreset ?? null
+  if (portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(portableSealedPreset)
+  }
   const blocks = normalizeCategoryBlockState(loom.blocks)
+  assertPortableSealedDescriptorCorrespondence(blocks, portableSealedPreset, true)
   return {
     name: loom.name,
+    engine: preservePresetEngine(loom.engine),
     ...(typeof loom.cacheRevision === 'number'
       ? { expected_cache_revision: loom.cacheRevision }
       : {}),
@@ -633,6 +2080,7 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
       promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
+      ...(loom.portableSealedPreset ? { portableSealedPreset: structuredClone(loom.portableSealedPreset) } : {}),
       // Preserve LumiHub provenance + version so an edit doesn't strip them from the metadata column.
       ...(loom.lumihubMeta ?? {}),
       ...(loom.presetVersion ? { _lumiverse_preset_version: loom.presetVersion } : {}),
@@ -640,23 +2088,129 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
   }
 }
 
-export function sanitizeLumiHubSealedBlocksForExport<T extends LoomPreset>(loom: T): T {
-  const manifestKeys = getLumiHubSealedManifestKeys(loom)
-  if (!manifestKeys.size && !loom.blocks.some((block) => isLumiHubSealedBlock(block))) return loom
+/** Remove source-local ownership from regex companions before portable export. */
+export function stripPortableRegexOwnership(
+  scripts: readonly object[],
+): Record<string, unknown>[] {
+  return scripts.map((script) => {
+    if (!isPlainDataRecord(script)) {
+      throw new PortablePresetError('AGENT_RUNTIME_PORTABLE_REGEX_INVALID')
+    }
+    const portable: Record<string, unknown> = Object.fromEntries(Object.entries(script))
+    for (const field of [
+      'id',
+      'user_id',
+      'userId',
+      'pack_id',
+      'packId',
+      'preset_id',
+      'presetId',
+      'character_id',
+      'characterId',
+      'owner_extension_identifier',
+      'ownerExtensionIdentifier',
+      'validation_error_code',
+      'validationErrorCode',
+      'created_at',
+      'createdAt',
+      'updated_at',
+      'updatedAt',
+      'scope_id',
+      'scopeId',
+    ]) {
+      delete portable[field]
+    }
+    portable.scope = 'global'
+    portable.scope_id = null
+    return portable
+  })
+}
+export function sanitizeLumiHubSealedBlocksForExport(loom: LoomPreset): LoomPreset {
+  assertPortablePromptBlocks(loom.blocks)
+  const descriptor = getPortableSealedPresetDescriptor(loom)
+  assertPortableSealedDescriptorCorrespondence(loom.blocks, descriptor, true)
+  if (!descriptor) return loom
+  const digestByKey = new Map(descriptor.blocks.map((entry) => [entry.key.trim(), entry.sha256.toLowerCase()]))
+  const manifestKeys = new Set(digestByKey.keys())
 
   return {
     ...loom,
     blocks: loom.blocks.map((block) => {
+      if (!isLumiHubSealedBlock(block)) return block
       const key = getLumiHubSealedExportKey(block, manifestKeys)
-      if (!key) return block
+      const expectedDigest = key ? digestByKey.get(key) : undefined
+      if (!key || !expectedDigest
+        || (block.sealedSha256 !== undefined && block.sealedSha256.toLowerCase() !== expectedDigest)) {
+        throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+      }
       return {
         ...block,
         content: sealedPresetBlockPlaceholder(key),
         sealed: true,
         sealedKey: key,
+        sealedSource: 'lumihub',
       }
     }),
   }
+}
+
+export function toPortableAgentConfigV1(config: AgentConfigV2): PortableAgentConfigV1 {
+  const { version: _version, ...authored } = structuredClone(config)
+  return { portableVersion: 1, ...authored }
+}
+
+/**
+ * Legacy Loom payloads can carry runtime task rows beside agentConfig, but
+ * the agent-config-only import endpoint cannot import those rows. Rejecting
+ * the partial graph is safer than silently persisting a config with dangling
+ * task references.
+ */
+export function hasLegacyPortableAgenticRuntimeGraph(loom: LoomPreset): boolean {
+  const taskPolicy = loom.agentConfig?.taskPolicy
+  return loom.agentTaskTemplates.length > 0
+    || (taskPolicy !== undefined && taskPolicy.templateIds.length > 0)
+}
+
+export function createPortableLoomExportPayload(
+  loom: LoomPreset,
+  agentRuntime: PortableAgenticRuntimeEnvelopeV1,
+): Record<string, unknown> {
+  const exportLoom = sanitizeLumiHubSealedBlocksForExport(loom)
+  const descriptor = getPortableSealedPresetDescriptor(exportLoom)
+  if (exportLoom.portableSealedPreset !== undefined && exportLoom.portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(exportLoom.portableSealedPreset)
+  }
+  const portableBlocks = exportLoom.blocks.map((block) => {
+    if (!isLumiHubSealedBlock(block)) return block
+    const portable = { ...block }
+    delete portable.sealedOriginPresetId
+    delete portable.sealedOriginVersion
+    delete portable.sealedSha256
+    return portable
+  })
+  const portablePreset: Record<string, unknown> = {
+    ...exportLoom,
+    blocks: portableBlocks,
+  }
+  for (const field of [
+    'id',
+    'createdAt',
+    'updatedAt',
+    'cacheRevision',
+    'lumihubMeta',
+    'isDefault',
+    'agentConfig',
+    'agentConfigRevision',
+    'agentConfigReview',
+    'agentSlotBindings',
+    'agentTaskTemplates',
+  ]) {
+    delete portablePreset[field]
+  }
+  if (descriptor) portablePreset.portableSealedPreset = descriptor
+  portablePreset.passthroughMetadata = extractPassthroughMetadata(exportLoom.passthroughMetadata ?? {})
+  portablePreset.agentRuntime = structuredClone(parsePortableAgenticRuntimeEnvelope(agentRuntime))
+  return portablePreset
 }
 
 /** Remove the installation-local identity before a Loom preset leaves this library. */
@@ -664,6 +2218,36 @@ export function createPortableLoomPresetExport(loom: LoomPreset): Omit<LoomPrese
   const sanitized = sanitizeLumiHubSealedBlocksForExport(loom)
   const { id: _localPresetId, ...portable } = sanitized
   return portable
+}
+
+function getPortableSealedPresetDescriptor(loom: LoomPreset): PortableSealedPresetDescriptorV1 | null {
+  if (loom.portableSealedPreset !== undefined && loom.portableSealedPreset !== null) {
+    assertPortableSealedDescriptor(loom.portableSealedPreset)
+    return structuredClone(loom.portableSealedPreset)
+  }
+  const sealedBlocks = loom.blocks.filter((block) => isLumiHubSealedBlock(block))
+  if (sealedBlocks.length === 0 || sealedBlocks.every(isLocalPublisherSealedBlock)) return null
+
+  const hubPresetId = typeof loom.lumihubMeta?._lumiverse_lumihub_id === 'string'
+    ? loom.lumihubMeta._lumiverse_lumihub_id.trim()
+    : ''
+  const manifest = isRecord(loom.lumihubMeta?._lumiverse_sealed_preset)
+    ? loom.lumihubMeta._lumiverse_sealed_preset
+    : null
+  const hubPresetVersion = typeof manifest?.version === 'string' && manifest.version.trim()
+    ? manifest.version.trim()
+    : typeof loom.presetVersion === 'string' && loom.presetVersion.trim()
+      ? loom.presetVersion.trim()
+      : ''
+  const blocks = Array.isArray(manifest?.blocks)
+    ? manifest.blocks.map((entry) => ({
+        key: isRecord(entry) && typeof entry.key === 'string' ? entry.key.trim() : '',
+        sha256: isRecord(entry) && typeof entry.sha256 === 'string' ? entry.sha256.toLowerCase() : '',
+      }))
+    : []
+  const descriptor = { hubPresetId, hubPresetVersion, blocks }
+  assertPortableSealedDescriptor(descriptor)
+  return descriptor
 }
 
 function getLumiHubSealedExportKey(block: PromptBlock, manifestKeys: Set<string>): string | null {
@@ -675,24 +2259,71 @@ function getLumiHubSealedExportKey(block: PromptBlock, manifestKeys: Set<string>
 
   return null
 }
-
 function isLumiHubSealedBlock(block: PromptBlock): boolean {
-  return block.sealedSource === 'lumihub'
+  return block.sealed === true
+    || block.sealedSource !== undefined
+    || (block.sealed !== undefined && block.sealed !== false)
+    || extractExactSealedPlaceholder(block.content || '') !== null
 }
 
-function getLumiHubSealedManifestKeys(loom: LoomPreset): Set<string> {
-  const sealedPreset = isRecord(loom.lumihubMeta?._lumiverse_sealed_preset)
-    ? loom.lumihubMeta._lumiverse_sealed_preset
-    : null
-  const blocks = Array.isArray(sealedPreset?.blocks) ? sealedPreset.blocks : []
-  const keys = new Set<string>()
-  for (const block of blocks) {
-    if (isRecord(block) && typeof block.key === 'string' && block.key.trim()) {
-      keys.add(block.key.trim())
-    }
-  }
-  return keys
+
+
+function isLocalPublisherSealedBlock(block: PromptBlock): boolean {
+  return block.sealed === true
+    && block.sealedSource === undefined
+    && block.sealedOriginPresetId === undefined
+    && block.sealedOriginVersion === undefined
+    && block.sealedSha256 === undefined
+    && extractExactSealedPlaceholder(block.content || '') === null
 }
+
+function assertPortableSealedDescriptorCorrespondence(
+  blocks: readonly PromptBlock[],
+  descriptor: PortableSealedPresetDescriptorV1 | null,
+  allowLocalAuthoring = false,
+): void {
+  const sealedBlocks = blocks.filter((block) => isLumiHubSealedBlock(block))
+  if (sealedBlocks.length === 0) {
+    if (descriptor !== null) throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+    return
+  }
+  if (descriptor === null) {
+    if (allowLocalAuthoring && sealedBlocks.every(isLocalPublisherSealedBlock)) return
+    throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+  }
+
+  const expectedByKey = new Map(
+    descriptor.blocks.map((entry) => [entry.key.trim(), entry.sha256.toLowerCase()]),
+  )
+  const seenKeys = new Set<string>()
+  for (const block of sealedBlocks) {
+    if ((block.sealed !== undefined && block.sealed !== true)
+      || (block.sealedSource !== undefined && block.sealedSource !== 'lumihub')
+      || (block.sealedOriginPresetId !== undefined && block.sealedOriginPresetId !== descriptor.hubPresetId)
+      || (typeof block.sealedOriginVersion === 'string'
+        && block.sealedOriginVersion !== descriptor.hubPresetVersion)) {
+      throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+    }
+    const sealedKey = typeof block.sealedKey === 'string' && block.sealedKey.trim()
+      ? block.sealedKey.trim()
+      : null
+    const placeholderKey = extractExactSealedPlaceholder(block.content || '')
+    const key = sealedKey ?? placeholderKey
+    const expectedDigest = key === null ? undefined : expectedByKey.get(key)
+    if (!key || !expectedDigest || seenKeys.has(key)
+      || (sealedKey !== null && placeholderKey !== null && sealedKey !== placeholderKey)
+      || (block.sealedSha256 !== undefined && block.sealedSha256.toLowerCase() !== expectedDigest)) {
+      throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+    }
+    seenKeys.add(key)
+  }
+  if (seenKeys.size !== expectedByKey.size
+    || [...expectedByKey.keys()].some((key) => !seenKeys.has(key))) {
+    throw new PortablePresetError('LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE')
+  }
+}
+
+
 
 function sealedPresetBlockPlaceholder(key: string): string {
   return `{{presetBlock::${key}}}`
@@ -863,36 +2494,8 @@ function sameOrRepairablePromptVariableIdentity(previous: PromptBlock, next: Pro
     && !hasLegacyVariableIdentity(next.variables)
 }
 
-const PROMPT_BLOCK_IDENTITY_KEYS = [
-  'id',
-  'name',
-  'content',
-  'role',
-  'enabled',
-  'position',
-  'depth',
-  'marker',
-  'isLocked',
-  'color',
-  'injectionTrigger',
-  'characterTagTrigger',
-  'group',
-  'categoryMode',
-  'placementBinding',
-] as const
-
 function sameNativePromptBlockOccurrence(previous: PromptBlock, next: PromptBlock): boolean {
-  if (!sameOrRepairablePromptVariableIdentity(previous, next)) return false
-  return PROMPT_BLOCK_IDENTITY_KEYS.every((key) => {
-    const left = previous[key]
-    const right = next[key]
-    if (Object.is(left, right)) return true
-    try {
-      return JSON.stringify(left) === JSON.stringify(right)
-    } catch {
-      return false
-    }
-  })
+  return previous.id === next.id && sameOrRepairablePromptVariableIdentity(previous, next)
 }
 
 /**
@@ -932,28 +2535,30 @@ export function validatePromptVariableSchema(
       selectedBaselineOccurrences.set(id, [])
       continue
     }
-    let safe = true
-    const selected: number[] = []
-    if (finalOccurrences.length === baselineOccurrences.length) {
-      finalOccurrences.forEach((block, index) => {
-        if (sameNativePromptBlockOccurrence(baselineOccurrences[index]!, block)) selected.push(index)
-        else safe = false
-      })
-    } else {
-      let baselineIndex = 0
-      for (const block of finalOccurrences) {
-        const match = baselineOccurrences.findIndex((candidate, index) => (
-          index >= baselineIndex && sameNativePromptBlockOccurrence(candidate, block)
-        ))
-        if (match < 0) {
-          safe = false
-          break
-        }
-        selected.push(match)
-        baselineIndex = match + 1
-      }
+    const selected = new Array<number>(finalOccurrences.length).fill(-1)
+    const availableBaselineOccurrences = new Set(baselineOccurrences.keys())
+    for (let finalIndex = 0; finalIndex < finalOccurrences.length; finalIndex += 1) {
+      const block = finalOccurrences[finalIndex]!
+      const match = baselineOccurrences.findIndex((candidate, baselineIndex) => (
+        availableBaselineOccurrences.has(baselineIndex)
+        && samePromptVariableIdentity(candidate, block)
+      ))
+      if (match < 0) continue
+      selected[finalIndex] = match
+      availableBaselineOccurrences.delete(match)
     }
-    if (safe) {
+    for (let finalIndex = 0; finalIndex < finalOccurrences.length; finalIndex += 1) {
+      if (selected[finalIndex]! >= 0) continue
+      const block = finalOccurrences[finalIndex]!
+      const match = baselineOccurrences.findIndex((candidate, baselineIndex) => (
+        availableBaselineOccurrences.has(baselineIndex)
+        && sameNativePromptBlockOccurrence(candidate, block)
+      ))
+      if (match < 0) break
+      selected[finalIndex] = match
+      availableBaselineOccurrences.delete(match)
+    }
+    if (selected.every((match) => match >= 0)) {
       legacyBlockIds.add(id)
       selectedBaselineOccurrences.set(id, selected)
     }
@@ -1593,6 +3198,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
   return {
     id: generateUUID(),
     name,
+    engine: 'classic',
     description: `Imported from legacy preset "${stPresetData.name || name}"`,
     coverUrl: null,
     presetVersion: null,
@@ -1601,6 +3207,11 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
+    agentConfig: null,
+    agentConfigRevision: 0,
+    agentConfigReview: null,
+    agentSlotBindings: {},
+    agentTaskTemplates: [],
     // `createBlock` gives every block a `group: null` default. That is the
     // right default for a manually-created block, but a null group is explicit
     // to the category renderer, so it prevents the imported blocks from being
@@ -1787,6 +3398,7 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
   return {
     id: generateUUID(),
     name,
+    engine: 'classic',
     description,
     coverUrl: null,
     presetVersion: null,
@@ -1795,6 +3407,11 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
+    agentConfig: null,
+    agentConfigRevision: 0,
+    agentConfigReview: null,
+    agentSlotBindings: {},
+    agentTaskTemplates: [],
     blocks: [
       createBlock({ name: 'System Prompt', content: '', role: 'system', position: 'pre_history' }),
       createMarkerBlock('chat_history'),

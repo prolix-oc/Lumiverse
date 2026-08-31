@@ -1,8 +1,11 @@
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
-import { join, extname } from "path";
-
+import { withUserDataMutation, withUserDataMutationSync } from "./user-data/snapshot";
+import { join } from "path";
+import { detectAudioFormat } from "./notification-sounds.service";
+import { MAX_AUDIO_BYTES } from "../types/media-limits";
+export { MAX_AUDIO_BYTES } from "../types/media-limits";
 const AUDIO_DIR = "audio";
 
 export interface AudioFile {
@@ -26,28 +29,6 @@ function getAudioDir(): string {
   return dir;
 }
 
-function extForMime(mime: string): string {
-  switch ((mime || "").toLowerCase()) {
-    case "audio/mpeg":
-    case "audio/mp3":
-      return ".mp3";
-    case "audio/ogg":
-    case "audio/ogg; codecs=opus":
-    case "audio/opus":
-      return ".ogg";
-    case "audio/wav":
-    case "audio/x-wav":
-      return ".wav";
-    case "audio/webm":
-      return ".webm";
-    case "audio/aac":
-      return ".aac";
-    case "audio/flac":
-      return ".flac";
-    default:
-      return ".bin";
-  }
-}
 
 export interface SaveAudioInput {
   data: Uint8Array | Buffer;
@@ -61,13 +42,16 @@ export interface SaveAudioInput {
  * Mirrors images.service.uploadImage but skips all image-specific processing
  * (sharp metadata, thumbnail tiers).
  */
-export async function saveAudio(userId: string, input: SaveAudioInput): Promise<AudioFile> {
-  const id = crypto.randomUUID();
-  const ext = extForMime(input.mime_type) || extname(input.original_filename || "") || ".bin";
-  const filename = `${id}${ext}`;
-  const filepath = join(getAudioDir(), filename);
-
+async function saveAudioUnsafe(userId: string, input: SaveAudioInput): Promise<AudioFile> {
   const buffer = input.data instanceof Buffer ? input.data : Buffer.from(input.data);
+  if (buffer.byteLength === 0 || buffer.byteLength > MAX_AUDIO_BYTES) {
+    throw new Error(`Audio payload must be between 1 and ${MAX_AUDIO_BYTES} bytes`);
+  }
+  const detected = detectAudioFormat(buffer);
+  if (!detected) throw new Error("Unsupported or invalid audio payload");
+  const id = crypto.randomUUID();
+  const filename = `${id}${detected.extension}`;
+  const filepath = join(getAudioDir(), filename);
   await Bun.write(filepath, buffer);
 
   const now = Math.floor(Date.now() / 1000);
@@ -83,13 +67,17 @@ export async function saveAudio(userId: string, input: SaveAudioInput): Promise<
       userId,
       filename,
       input.original_filename || filename,
-      input.mime_type || "",
+      detected.mimeType,
       buffer.byteLength,
       input.duration_ms ?? null,
       now,
     );
 
   return getAudio(userId, id)!;
+}
+
+export async function saveAudio(userId: string, input: SaveAudioInput): Promise<AudioFile> {
+  return withUserDataMutation(userId, () => saveAudioUnsafe(userId, input));
 }
 
 export function getAudio(userId: string, id: string): AudioFile | null {
@@ -106,13 +94,21 @@ export function getAudioFilePath(userId: string, id: string): string | null {
   return existsSync(filepath) ? filepath : null;
 }
 
-export function deleteAudio(userId: string, id: string): boolean {
+function deleteAudioUnsafe(userId: string, id: string): boolean {
   const row = getAudio(userId, id);
   if (!row) return false;
   const filepath = join(getAudioDir(), row.filename);
   if (existsSync(filepath)) {
-    try { unlinkSync(filepath); } catch { /* tolerate races / missing files */ }
+    try {
+      unlinkSync(filepath);
+    } catch {
+      // Tolerate races where the file was removed concurrently.
+    }
   }
   const result = getDb().query("DELETE FROM audio_files WHERE id = ? AND user_id = ?").run(id, userId);
   return result.changes > 0;
+}
+
+export function deleteAudio(userId: string, id: string): boolean {
+  return withUserDataMutationSync(userId, () => deleteAudioUnsafe(userId, id));
 }

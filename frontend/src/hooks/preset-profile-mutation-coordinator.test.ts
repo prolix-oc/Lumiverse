@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createPresetProfileMutationCoordinator, runPresetProfileMutation } from './preset-profile-mutation-coordinator'
+import { getRuntimeAuthorityRevision } from '@/lib/agentRuntimeSelection'
 
 function deferred<T>() {
   return Promise.withResolvers<T>()
@@ -61,6 +62,35 @@ describe('preset profile mutation coordinator', () => {
 
     await expect(failure).rejects.toThrow('write failed')
     expect(coordinator.isFetchCurrent(scope, fetchToken)).toBe(true)
+  })
+
+  test('commits persisted profile authority even when the local surface became stale', async () => {
+    const coordinator = createPresetProfileMutationCoordinator()
+    const before = getRuntimeAuthorityRevision()
+    const stale = await runPresetProfileMutation({
+      coordinator,
+      scope: 'character-binding:character-a',
+      operation: async () => ({ preset_id: 'preset-bound' }),
+      refresh: async () => null,
+      isCurrent: () => false,
+      commit: () => { throw new Error('stale commit must not run') },
+      recover: () => {},
+    })
+
+    expect(stale).toBe('stale')
+    expect(getRuntimeAuthorityRevision()).toBe(before + 1)
+
+    await runPresetProfileMutation({
+      coordinator,
+      scope: 'character-binding:character-a',
+      operation: async () => ({ preset_id: 'preset-bound' }),
+      authorityCommittedByOperation: true,
+      refresh: async () => null,
+      isCurrent: () => false,
+      commit: () => {},
+      recover: () => {},
+    })
+    expect(getRuntimeAuthorityRevision()).toBe(before + 1)
   })
 
   test('older mutations cannot commit after a newer same-target mutation starts', async () => {

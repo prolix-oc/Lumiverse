@@ -9,9 +9,17 @@ import type {
   WorkerToHost,
   HostToWorker,
   LlmMessageDTO,
-  InterceptorResultDTO,
   SpindleAPI,
-  ConnectionProfileDTO,
+  UserPresetDTO,
+  UserPresetCreateDTO,
+  UserPresetUpdateDTO,
+  PromptBlockSnapshotDTO,
+  PromptBlockCreateDTO,
+  PromptBlockUpdateDTO,
+  PromptBlockOccurrenceDTO,
+  PromptBlockMutationTargetDTO,
+  PromptBlockCreateOptionsDTO,
+  PromptBlockCategoryGroupDTO,
   PermissionDeniedDetail,
   PermissionChangedDetail,
   CharacterDTO,
@@ -84,6 +92,8 @@ import type {
   ImageGenStreamRequestDTO,
   InterceptorContextDTO,
   InterceptorDisposer,
+  ConnectionProfileDTO,
+  InterceptorResultDTO,
   InterceptorHandler,
   InterceptorRegistrationMatchOptions,
   InterceptorRegistrationOptions,
@@ -108,7 +118,7 @@ import {
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
+import type { PromptBlock } from "../types/preset";
 import type { LumiaDlcCatalog } from "../types/pack";
 
 const nativeProcessExit = process.exit.bind(process);
@@ -143,11 +153,6 @@ type SpindleBatchOperation = {
 type SpindleBatchResult =
   | { ok: true; result: SpindleBatchJsonValue }
   | { ok: false; error: string };
-
-type PromptBlockCategoryGroup = {
-  categoryBlock: PromptBlock | null;
-  children: PromptBlock[];
-};
 
 type AssembleRequest = {
   blocks: PromptBlock[];
@@ -339,14 +344,10 @@ type RuntimeWorkerToHost =
   | { type: "user_get_role"; requestId: string; userId?: string }
   | { type: "presets_list"; requestId: string; limit?: number; offset?: number; userId?: string }
   | { type: "presets_get"; requestId: string; presetId: string; userId?: string }
-  | { type: "presets_create"; requestId: string; input: CreatePresetInput; userId?: string }
-  | { type: "presets_update"; requestId: string; presetId: string; input: UpdatePresetInput; userId?: string }
+  | { type: "presets_create"; requestId: string; input: UserPresetCreateDTO; userId?: string }
+  | { type: "presets_update"; requestId: string; presetId: string; input: UserPresetUpdateDTO; userId?: string }
   | { type: "presets_delete"; requestId: string; presetId: string; userId?: string }
   | { type: "preset_blocks_list"; requestId: string; presetId: string; userId?: string }
-  | { type: "preset_blocks_get"; requestId: string; presetId: string; blockId: string; userId?: string }
-  | { type: "preset_blocks_create"; requestId: string; presetId: string; input: Partial<PromptBlock>; index?: number; userId?: string }
-  | { type: "preset_blocks_update"; requestId: string; presetId: string; blockId: string; input: Partial<Omit<PromptBlock, "id">>; userId?: string }
-  | { type: "preset_blocks_delete"; requestId: string; presetId: string; blockId: string; userId?: string }
   | { type: "preset_categories_list"; requestId: string; presetId: string; userId?: string }
   | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
   | { type: "uploads_read_chunk"; requestId: string; uploadId: string; offset: number; userId?: string }
@@ -625,6 +626,7 @@ type RuntimeHostToWorker =
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "image_gen_stream_chunk"; requestId: string; event: ImageGenStreamEvent }
   | { type: "image_gen_stream_error"; requestId: string; error: string }
+  | { type: "tool_invocation_abort"; requestId: string; reason?: string }
   | {
       type: "provider_invoke";
       phase: "invoke";
@@ -683,11 +685,7 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
   };
 };
 
-// `presets` is replaced wholesale (not intersected) because the local
-// PromptBlock type also carries host-only sealed-block provenance. Keeping the
-// runtime CRUD surface on the native type avoids narrowing data returned by
-// newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "imageGen" | "world_books"> & {
   frontendCapabilities: {
     declare(capability: "message_tag_interceptor"): () => void;
   };
@@ -819,23 +817,6 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
     } | void>,
     priority?: number
   ): void;
-  presets: {
-    list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: Preset[]; total: number }>;
-    get(presetId: string, userId?: string): Promise<Preset | null>;
-    create(input: CreatePresetInput, userId?: string): Promise<Preset>;
-    update(presetId: string, input: UpdatePresetInput, userId?: string): Promise<Preset>;
-    delete(presetId: string, userId?: string): Promise<boolean>;
-    blocks: {
-      list(presetId: string, userId?: string): Promise<PromptBlock[]>;
-      get(presetId: string, blockId: string, userId?: string): Promise<PromptBlock | null>;
-      create(presetId: string, input: Partial<PromptBlock>, options?: { index?: number; userId?: string }): Promise<PromptBlock>;
-      update(presetId: string, blockId: string, input: Partial<Omit<PromptBlock, "id">>, userId?: string): Promise<PromptBlock>;
-      delete(presetId: string, blockId: string, userId?: string): Promise<boolean>;
-    };
-    categories: {
-      list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroup[]>;
-    };
-  };
   uploads: {
     get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null>;
     readChunk(uploadId: string, offset: number, userId?: string): Promise<{
@@ -1024,6 +1005,7 @@ const streamingImageGenerations = new Map<
   { push: (event: ImageGenStreamEvent) => void; fail: (reason: unknown) => void }
 >();
 const interceptorAbortControllers = new Map<string, AbortController>();
+const toolInvocationAbortControllers = new Map<string, AbortController>();
 const providerHandlers = new Map<
   string,
   (req: {
@@ -2685,7 +2667,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   presets: {
-    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: Preset[]; total: number }> {
+    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: UserPresetDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "presets_list",
@@ -2694,24 +2676,24 @@ const spindleApi: RuntimeSpindleAPI = {
         offset: options?.offset,
         userId: options?.userId,
       });
-      return result as { data: Preset[]; total: number };
+      return result as { data: UserPresetDTO[]; total: number };
     },
-    async get(presetId: string, userId?: string): Promise<Preset | null> {
+    async get(presetId: string, userId?: string): Promise<UserPresetDTO | null> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "presets_get", requestId, presetId, userId });
-      return result as Preset | null;
+      return result as UserPresetDTO | null;
     },
-    async create(input: CreatePresetInput, userId?: string): Promise<Preset> {
+    async create(input: UserPresetCreateDTO, userId?: string): Promise<UserPresetDTO> {
       assertMutationAllowed("spindle.presets.create()");
       const requestId = crypto.randomUUID();
       const result = await request({ type: "presets_create", requestId, input, userId });
-      return result as Preset;
+      return result as UserPresetDTO;
     },
-    async update(presetId: string, input: UpdatePresetInput, userId?: string): Promise<Preset> {
+    async update(presetId: string, input: UserPresetUpdateDTO, userId?: string): Promise<UserPresetDTO> {
       assertMutationAllowed("spindle.presets.update()");
       const requestId = crypto.randomUUID();
       const result = await request({ type: "presets_update", requestId, presetId, input, userId });
-      return result as Preset;
+      return result as UserPresetDTO;
     },
     async delete(presetId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.presets.delete()");
@@ -2720,17 +2702,17 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as boolean;
     },
     blocks: {
-      async list(presetId: string, userId?: string): Promise<PromptBlock[]> {
+      async list(presetId: string, userId?: string): Promise<PromptBlockSnapshotDTO[]> {
         const requestId = crypto.randomUUID();
         const result = await request({ type: "preset_blocks_list", requestId, presetId, userId });
-        return result as PromptBlock[];
+        return result as PromptBlockSnapshotDTO[];
       },
-      async get(presetId: string, blockId: string, userId?: string): Promise<PromptBlock | null> {
+      async get(presetId: string, occurrence: PromptBlockOccurrenceDTO, userId?: string): Promise<PromptBlockSnapshotDTO | null> {
         const requestId = crypto.randomUUID();
-        const result = await request({ type: "preset_blocks_get", requestId, presetId, blockId, userId });
-        return result as PromptBlock | null;
+        const result = await request({ type: "preset_blocks_get", requestId, presetId, occurrence, userId });
+        return result as PromptBlockSnapshotDTO | null;
       },
-      async create(presetId: string, input: Partial<PromptBlock>, options?: { index?: number; userId?: string }): Promise<PromptBlock> {
+      async create(presetId: string, input: PromptBlockCreateDTO, options: PromptBlockCreateOptionsDTO): Promise<PromptBlockSnapshotDTO> {
         assertMutationAllowed("spindle.presets.blocks.create()");
         const requestId = crypto.randomUUID();
         const result = await request({
@@ -2738,29 +2720,32 @@ const spindleApi: RuntimeSpindleAPI = {
           requestId,
           presetId,
           input,
-          index: options?.index,
-          userId: options?.userId,
+          options: {
+            expectedCacheRevision: options.expectedCacheRevision,
+            ...(options.index === undefined ? {} : { index: options.index }),
+          },
+          userId: options.userId,
         });
-        return result as PromptBlock;
+        return result as PromptBlockSnapshotDTO;
       },
-      async update(presetId: string, blockId: string, input: Partial<Omit<PromptBlock, "id">>, userId?: string): Promise<PromptBlock> {
+      async update(presetId: string, target: PromptBlockMutationTargetDTO, input: PromptBlockUpdateDTO, userId?: string): Promise<PromptBlockSnapshotDTO> {
         assertMutationAllowed("spindle.presets.blocks.update()");
         const requestId = crypto.randomUUID();
-        const result = await request({ type: "preset_blocks_update", requestId, presetId, blockId, input, userId });
-        return result as PromptBlock;
+        const result = await request({ type: "preset_blocks_update", requestId, presetId, target, input, userId });
+        return result as PromptBlockSnapshotDTO;
       },
-      async delete(presetId: string, blockId: string, userId?: string): Promise<boolean> {
+      async delete(presetId: string, target: PromptBlockMutationTargetDTO, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.presets.blocks.delete()");
         const requestId = crypto.randomUUID();
-        const result = await request({ type: "preset_blocks_delete", requestId, presetId, blockId, userId });
+        const result = await request({ type: "preset_blocks_delete", requestId, presetId, target, userId });
         return result as boolean;
       },
     },
     categories: {
-      async list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroup[]> {
+      async list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroupDTO[]> {
         const requestId = crypto.randomUUID();
         const result = await request({ type: "preset_categories_list", requestId, presetId, userId });
-        return result as PromptBlockCategoryGroup[];
+        return result as PromptBlockCategoryGroupDTO[];
       },
     },
   },
@@ -4443,11 +4428,14 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         break;
       }
 
+      const abortController = new AbortController();
+      toolInvocationAbortControllers.set(msg.requestId, abortController);
       try {
         const payload = {
           toolName: msg.toolName,
           args: msg.args,
           requestId: msg.requestId,
+          signal: abortController.signal,
           ...(msg.councilMember ? { councilMember: msg.councilMember } : {}),
           ...(msg.contextMessages ? { contextMessages: msg.contextMessages } : {}),
         };
@@ -4458,18 +4446,34 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             result = String(val);
           }
         }
+        if (abortController.signal.aborted) {
+          throw abortController.signal.reason ?? makeAbortError();
+        }
         post({
           type: "tool_invocation_result",
           requestId: msg.requestId,
           result: result ?? "",
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage =
+          err && typeof err === "object" && "message" in err && typeof err.message === "string"
+            ? err.message
+            : String(err);
         post({
           type: "tool_invocation_result",
           requestId: msg.requestId,
-          error: err?.message || "Tool invocation failed",
+          error: errorMessage || "Tool invocation failed",
         });
+      } finally {
+        toolInvocationAbortControllers.delete(msg.requestId);
       }
+      break;
+    }
+
+    case "tool_invocation_abort": {
+      toolInvocationAbortControllers
+        .get(msg.requestId)
+        ?.abort(makeAbortError(msg.reason));
       break;
     }
 

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { getConnInfo } from "hono/bun";
 import type { Context, Next } from "hono";
 import * as svc from "../services/generate.service";
+import type { GenerateInput } from "../services/generate.service";
 import * as breakdownSvc from "../services/breakdown.service";
 import * as poolSvc from "../services/generation-pool.service";
 import * as summarizePoolSvc from "../services/summarize-pool.service";
@@ -9,6 +10,13 @@ import { getSummarizationPromptDefaults } from "../services/summarization-prompt
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
+import {
+  normalizeAuthenticatedEffectiveRuntimeRequest,
+  resolveEffectiveRuntime,
+  RuntimeDecisionError,
+  toPublicRuntimeDecision,
+} from "../services/agent-runtime-decision.service";
+import { AgenticGenerationError } from "../services/agentic-generation.service";
 
 const LOCALHOST_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
@@ -22,18 +30,78 @@ async function localhostOnly(c: Context, next: Next) {
 }
 
 const app = new Hono();
+app.post("/effective-runtime", async (c) => {
+  const userId = c.get("userId");
+  try {
+    const body = await c.req.json();
+    const request = normalizeAuthenticatedEffectiveRuntimeRequest(body);
+    const decision = await resolveEffectiveRuntime(userId, request);
+    return c.json(toPublicRuntimeDecision(decision));
+  } catch (error) {
+    if (error instanceof RuntimeDecisionError) {
+      if (error.code === "not_found") {
+        return c.json({ error: "Not found", code: "NOT_FOUND" }, 404);
+      }
+      return c.json({
+        error: error.message,
+        code: error.code.toUpperCase(),
+      }, error.status as 400 | 404 | 409 | 503);
+    }
+    return c.json({ error: "Runtime decision unavailable", code: "RUNTIME_DECISION_UNAVAILABLE" }, 503);
+  }
+});
 
-function chatRoute(handler: (input: any) => Promise<any>, extras?: Record<string, string>) {
+function chatRoute(
+  handler: (input: GenerateInput) => Promise<unknown>,
+  extras?: Record<string, string>,
+) {
   return async (c: Context) => {
     const userId = c.get("userId");
-    const body = await c.req.json();
-    if (!body.chat_id) return c.json({ error: "chat_id is required" }, 400);
-    try {
-      const result = await handler({ ...body, userId, signal: c.req.raw.signal, ...extras });
-      return c.json(result);
-    } catch (err: any) {
-      return c.json({ error: clampErrorMessage(describeProviderError(err, "Generation failed")) }, 400);
+    const sessionUser = c.get("session").user;
+    const body = await c.req.json() as Record<string, unknown>;
+    if (typeof body.chat_id !== "string" || body.chat_id.length === 0) {
+      return c.json({ error: "chat_id is required" }, 400);
     }
+    try {
+      const result = await handler({
+        ...body,
+        userId,
+        userName: sessionUser.name?.trim() || sessionUser.username?.trim() || undefined,
+        signal: c.req.raw.signal,
+        ...extras,
+      } as GenerateInput);
+      return c.json(result);
+    } catch (err: unknown) {
+      if (err instanceof AgenticGenerationError) {
+        const status = err.code === "decision_refresh_required"
+          ? 409
+          : err.code === "agentic_runtime_unavailable"
+            ? 503
+            : 400;
+        return c.json({
+          error: err.message,
+          code: err.code,
+          responseModeAvailable: true,
+        }, status);
+      }
+      return c.json({
+        error: clampErrorMessage(describeProviderError(err, "Generation failed")),
+      }, 400);
+    }
+  };
+}
+
+function stopResultPayload(result: svc.GenerationStopResult) {
+  if (typeof result === "object") {
+    return {
+      stopped: false,
+      status: "terminal" as const,
+      terminal: result.run,
+    };
+  }
+  return {
+    stopped: result === true,
+    status: result === true ? "accepted" as const : result === "too_late" ? "too_late" as const : "not_found" as const,
   };
 }
 
@@ -41,27 +109,71 @@ app.post("/", chatRoute(svc.startGeneration));
 app.post("/regenerate", chatRoute(svc.startGeneration, { generation_type: "regenerate" }));
 app.post("/continue", chatRoute(svc.startGeneration, { generation_type: "continue" }));
 app.post("/dry-run", chatRoute(svc.dryRunGeneration));
+app.post("/dispatch-acknowledge", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{
+    chat_id?: string;
+    generation_id?: string;
+    request_authority_id?: string;
+  }>();
+  const state = svc.acknowledgeGenerationDispatch(
+    userId,
+    body.chat_id ?? "",
+    body.generation_id,
+    body.request_authority_id,
+  );
+  return state === false
+    ? c.json({ acknowledged: false as const, state: "rejected" as const }, 409)
+    : c.json({ acknowledged: true as const, state });
+});
+
 
 app.post("/stop", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
+  if (body.request_authority_id && body.generation_id) {
+    if (!body.chat_id) return c.json(stopResultPayload(false));
+    const exactAuthorityStop = await svc.stopGenerationRequestAuthority(
+      userId,
+      body.chat_id,
+      body.request_authority_id,
+      body.generation_id,
+    );
+    return c.json(stopResultPayload(exactAuthorityStop));
+  }
+  const requestAuthorityResult: svc.GenerationStopResult = body.chat_id && body.request_authority_id
+    ? await svc.stopGenerationRequestAuthority(userId, body.chat_id, body.request_authority_id)
+    : false;
+  const withRequestAuthority = (result: svc.GenerationStopResult): svc.GenerationStopResult => {
+    if (typeof result === "object") return result;
+    if (typeof requestAuthorityResult === "object") return requestAuthorityResult;
+    if (result === "too_late" || requestAuthorityResult === "too_late") return "too_late";
+    return result === true || requestAuthorityResult === true;
+  };
+
   if (body.generation_id) {
-    const stopped = svc.stopGeneration(userId, body.generation_id);
-    // Stale id (the client's generation state raced a newer generation, e.g.
-    // council retry or a quick regen): never let stop be a silent no-op —
-    // fall back to whatever is actually running for the chat.
+    const stopped = await svc.stopGeneration(userId, body.generation_id, body.chat_id);
     if (!stopped && body.chat_id) {
-      return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
+      const fallback = await svc.stopChatGenerations(userId, body.chat_id);
+      return c.json(stopResultPayload(withRequestAuthority(fallback)));
     }
-    return c.json({ stopped });
+    return c.json(stopResultPayload(withRequestAuthority(stopped)));
   }
-  // No generation id yet (optimistic phase). Prefer the chat-scoped stop so a
-  // background generation in another chat isn't collateral damage.
   if (body.chat_id) {
-    return c.json({ stopped: svc.stopChatGenerations(userId, body.chat_id) });
+    const stopped = await svc.stopChatGenerations(userId, body.chat_id);
+    return c.json(stopResultPayload(withRequestAuthority(stopped)));
   }
-  svc.stopUserGenerations(userId);
-  return c.json({ stopped: true });
+  const stopped = await svc.stopUserGenerations(userId);
+  return c.json(stopResultPayload(stopped));
+});
+// Legacy chat-scoped alias retains the boolean field and now exposes the
+// durable terminal race explicitly.
+app.post("/stop-chat/:chatId", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  if (!chatId) return c.json({ stopped: false }, 400);
+  const stopped = await svc.stopChatGenerations(userId, chatId);
+  return c.json(stopResultPayload(stopped));
 });
 
 // --- Generation status / recovery ---
@@ -73,11 +185,13 @@ app.get("/active", (c) => {
     return {
       generationId: e.generationId,
       chatId: e.chatId,
+      requestAuthorityId: e.requestAuthorityId,
       status: e.status,
       generationType: e.generationType,
       characterName: e.characterName,
       characterId: e.characterId,
       model: e.model,
+      provider: e.provider,
       startedAt: e.startedAt,
       councilRetryPending: e.councilRetryPending || false,
     };
@@ -127,6 +241,7 @@ app.get("/status/:chatId", (c) => {
   return c.json({
     active,
     generationId: entry.generationId,
+    requestAuthorityId: entry.requestAuthorityId,
     status: entry.status,
     councilRetryPending: entry.councilRetryPending || false,
     councilToolsFailure: entry.councilToolsFailure,
@@ -141,6 +256,7 @@ app.get("/status/:chatId", (c) => {
     characterName: entry.characterName,
     characterId: entry.characterId,
     model: entry.model,
+    provider: entry.provider,
     startedAt: entry.startedAt,
     reasoningStartedAt: entry.reasoningStartedAt,
     reasoningDurationMs: entry.reasoningDurationMs,

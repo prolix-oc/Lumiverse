@@ -3,6 +3,82 @@ import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import type { SpindleDisplayContext } from 'lumiverse-spindle-types'
 import { getRegexSearchEnd, replaceWithinRegexSearchWindow } from './search-window'
+export const REGEX_LIMITS_V1 = Object.freeze({
+  maxScripts: 512,
+  maxPatterns: 1024,
+  maxPatternBytes: 64 * 1024,
+  maxReplacementBytes: 128 * 1024,
+  maxActionBytes: 16 * 1024,
+  maxActionCount: 50,
+  maxTrimStrings: 512,
+  maxTrimStringBytes: 512,
+  maxMatches: 1024,
+  maxInputBytes: 8 * 1024 * 1024,
+  maxOutputBytes: 8 * 1024 * 1024,
+  maxExpansionBytes: 16 * 1024 * 1024,
+})
+const regexUtf8Encoder = new TextEncoder()
+
+export type RegexValidationErrorCode =
+  | 'invalid_input'
+  | 'invalid_regex'
+  | 'invalid_flags'
+  | 'pattern_too_large'
+  | 'replacement_too_large'
+  | 'action_too_large'
+  | 'action_count_exceeded'
+  | 'trim_string_empty'
+  | 'trim_string_too_large'
+  | 'trim_string_count_exceeded'
+  | 'script_count_exceeded'
+  | 'pattern_count_exceeded'
+  | 'match_limit_exceeded'
+  | 'output_limit_exceeded'
+
+export function regexUtf8ByteLength(value: string): number {
+  return regexUtf8Encoder.encode(value).byteLength
+}
+
+export interface RegexValidationResult {
+  code: RegexValidationErrorCode
+  message: string
+}
+
+export function validateRegexScriptInput(
+  input: Pick<RegexScript, 'find_regex' | 'replace_string' | 'flags' | 'trim_strings' | 'actions'>,
+): RegexValidationResult | null {
+  if (regexUtf8ByteLength(input.find_regex) > REGEX_LIMITS_V1.maxPatternBytes) {
+    return { code: 'pattern_too_large', message: 'Regex pattern exceeds its UTF-8 byte limit' }
+  }
+  if (regexUtf8ByteLength(input.replace_string) > REGEX_LIMITS_V1.maxReplacementBytes) {
+    return { code: 'replacement_too_large', message: 'Regex replacement exceeds its UTF-8 byte limit' }
+  }
+  if (input.actions.length > REGEX_LIMITS_V1.maxActionCount) {
+    return { code: 'action_count_exceeded', message: 'Regex action count exceeds its limit' }
+  }
+  for (const action of input.actions) {
+    for (const field of [action.id, action.cost, action.limit, action.title, action.subtitle, action.content]) {
+      if (regexUtf8ByteLength(field) > REGEX_LIMITS_V1.maxActionBytes) {
+        return { code: 'action_too_large', message: 'Regex action field exceeds its UTF-8 byte limit' }
+      }
+    }
+  }
+  if (input.trim_strings.length > REGEX_LIMITS_V1.maxTrimStrings) {
+    return { code: 'trim_string_count_exceeded', message: 'Regex trim string count exceeds its limit' }
+  }
+  for (const trim of input.trim_strings) {
+    if (trim.length === 0) return { code: 'trim_string_empty', message: 'Regex trim strings cannot be empty' }
+    if (regexUtf8ByteLength(trim) > REGEX_LIMITS_V1.maxTrimStringBytes) {
+      return { code: 'trim_string_too_large', message: 'Regex trim string exceeds its UTF-8 byte limit' }
+    }
+  }
+  try {
+    new RegExp(input.find_regex, input.flags)
+  } catch {
+    return { code: 'invalid_regex', message: 'Regex pattern is invalid' }
+  }
+  return null
+}
 
 interface DisplayRegexMatch {
   fullMatch: string
@@ -93,19 +169,20 @@ function decorateMatchReplacement(replacement: string, script: RegexScript, matc
     : replacement
 }
 
-// Compiled-regex cache: applyDisplayRegex recompiled every script's pattern
-// on every message render (per streaming chunk). Instances are shared, which
-// is safe here because all consumers match via String.replace or
-// collectRegexMatches — neither leaves lastIndex drifted.
-// Implementation lives in the import-free leaf module ./compile-regex so the
-// worker bundle can share it without pulling in this file's graph.
-import { compileRegex } from './compile-regex'
-export { compileRegex }
+// Compiled-regex cache: display transforms can evaluate every script on every
+// streaming chunk. Keep validation at this public boundary, then share the
+// import-free leaf cache with the worker bundle.
+import { compileRegex as compileCachedRegex } from './compile-regex'
+
+export function compileRegex(pattern: string, flags: string): RegExp | null {
+  if (regexUtf8ByteLength(pattern) > REGEX_LIMITS_V1.maxPatternBytes) return null
+  if (flags.length > 16 || new Set(flags).size !== flags.length) return null
+  return compileCachedRegex(pattern, flags)
+}
 
 // trim_strings removal can rejoin new occurrences each pass (e.g. 'bbcc' with
 // trim 'bc'), so the loop is bounded instead of a single replaceAll pass.
 const MAX_DISPLAY_TRIM_ITERATIONS = 32
-
 function hasMacroSyntax(value: string): boolean {
   return value.includes('{{') || value.includes('<USER>') || value.includes('<BOT>') || value.includes('<CHAR>')
 }
@@ -209,6 +286,7 @@ export function collectRegexMatches(
   pattern: string,
   flags: string,
   replacementTemplate: string,
+  maxMatches = REGEX_LIMITS_V1.maxMatches,
 ): DisplayRegexMatch[] {
   const matches: DisplayRegexMatch[] = []
   const searchEnd = getRegexSearchEnd(input, pattern, flags, replacementTemplate)
@@ -217,6 +295,7 @@ export function collectRegexMatches(
   regex.lastIndex = 0
   try {
     searchable.replace(regex, (fullMatch, ...args) => {
+      if (matches.length >= maxMatches) throw new Error('regex match limit exceeded')
       const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
       const namedGroups = hasNamedGroups ? args.pop() as Record<string, string | undefined> : undefined
       args.pop() as string
@@ -232,18 +311,48 @@ export function collectRegexMatches(
   return matches
 }
 
-export function rebuildFromMatches(input: string, matches: DisplayRegexMatch[], replacements: string[]): string {
-  let output = ''
+function rebuildFromMatches(
+  input: string,
+  matches: DisplayRegexMatch[],
+  replacementFor: (match: DisplayRegexMatch, index: number) => string,
+): string {
+  let outputBytes = 0
+  let generatedBytes = 0
   let lastIndex = 0
+  const chunks: string[] = []
 
-  for (let i = 0; i < matches.length; i += 1) {
-    output += input.slice(lastIndex, matches[i].offset)
-    output += replacements[i]
-    lastIndex = matches[i].offset + matches[i].fullMatch.length
+  const appendChunk = (chunk: string): void => {
+    outputBytes += regexUtf8ByteLength(chunk)
+    if (outputBytes > REGEX_LIMITS_V1.maxOutputBytes) {
+      throw new Error("regex output limit exceeded")
+    }
+    chunks.push(chunk)
   }
 
-  output += input.slice(lastIndex)
-  return output
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i]
+    const replacement = replacementFor(match, i)
+    if (
+      !Number.isSafeInteger(match.offset)
+      || match.offset < lastIndex
+      || match.offset < 0
+      || match.offset + match.fullMatch.length > input.length
+    ) throw new Error("regex replacement returned malformed match spans")
+    const replacementBytes = regexUtf8ByteLength(replacement)
+    if (replacementBytes > REGEX_LIMITS_V1.maxReplacementBytes) {
+      throw new Error("regex replacement operation limit exceeded")
+    }
+    generatedBytes += replacementBytes
+    if (generatedBytes > REGEX_LIMITS_V1.maxExpansionBytes) {
+      throw new Error("regex expansion limit exceeded")
+    }
+    appendChunk(input.slice(lastIndex, match.offset))
+    appendChunk(replacement)
+    lastIndex = match.offset + match.fullMatch.length
+  }
+
+  appendChunk(input.slice(lastIndex))
+  return chunks.join("")
 }
 
 type RegexRuntimeAction = 'move_top' | 'move_bottom' | 'repeat_back'
@@ -365,6 +474,12 @@ function applyDisplayActions(
           context,
         )
     const position = readRepeatPosition(script) ?? script.replace_string.split(' ', 2)[1]
+    const pieceBytes = regexUtf8ByteLength(piece)
+    const separatorBytes = position === 'start_nl' || position === 'end_nl' ? regexUtf8ByteLength('\n') : 0
+    if (
+      pieceBytes > REGEX_LIMITS_V1.maxReplacementBytes
+      || regexUtf8ByteLength(content) + pieceBytes + separatorBytes > REGEX_LIMITS_V1.maxOutputBytes
+    ) throw new Error('regex repeat output limit exceeded')
     if (position === 'start') return { handled: true, content: piece + content }
     if (position === 'start_nl') return { handled: true, content: `${piece}\n${content}` }
     if (position === 'end_nl') return { handled: true, content: `${content}\n${piece}` }
@@ -381,7 +496,12 @@ function applyDisplayActions(
       content,
       match.namedGroups,
     )
-    const remainder = rebuildFromMatches(content, [match], [''])
+    const remainder = rebuildFromMatches(content, [match], () => '')
+    const movedBytes = regexUtf8ByteLength(moved)
+    if (
+      movedBytes > REGEX_LIMITS_V1.maxReplacementBytes
+      || movedBytes + regexUtf8ByteLength(remainder) + regexUtf8ByteLength('\n') > REGEX_LIMITS_V1.maxOutputBytes
+    ) throw new Error('regex move output limit exceeded')
     return {
       handled: true,
       content: movesTop
@@ -507,14 +627,21 @@ export function applyDisplayRegex(
   onSlowRegex?: (report: SlowRegexReport) => void,
   onRecoveredRegex?: (report: SlowRegexReport) => void,
 ): string {
+  if (regexUtf8ByteLength(content) > REGEX_LIMITS_V1.maxInputBytes) return content
   let result = content
-
-  for (const script of scripts) {
+  let expansionBytes = 0
+  let patternCount = 0
+  for (const script of scripts.slice(0, REGEX_LIMITS_V1.maxScripts)) {
+    if (script.disabled) continue
+    if (script.actions.length > REGEX_LIMITS_V1.maxActionCount) continue
     // Determine placement from message role
     const placement: RegexPlacement = context.isUser ? 'user_input' : 'ai_output'
     if (!script.placement.includes(placement)) continue
 
     // Check depth bounds
+    patternCount += 1
+    if (patternCount > REGEX_LIMITS_V1.maxPatterns) continue
+    if (regexUtf8ByteLength(script.replace_string) > REGEX_LIMITS_V1.maxReplacementBytes) continue
     if (script.min_depth !== null && context.depth < script.min_depth) continue
     if (script.max_depth !== null && context.depth > script.max_depth) continue
 
@@ -527,10 +654,9 @@ export function applyDisplayRegex(
         findRegex = resolveRegexStringMacros(findRegex, context.macroCtx)
       }
     }
-
     const regex = compileRegex(findRegex, script.flags)
     if (!regex) continue
-
+    const beforeScript = result
     const startedAt = performance.now()
     try {
       let replaceString = script.replace_string
@@ -545,33 +671,32 @@ export function applyDisplayRegex(
       if (behaviorResult.handled) {
         result = behaviorResult.content
       } else if (script.substitute_macros === 'raw') {
-        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, (fullMatch, ...args) => {
-          const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
-          const namedGroups = hasNamedGroups ? args.pop() as Record<string, string | undefined> : undefined
-          const input = args.pop() as string
-          const offset = args.pop() as number
-          const groups = args as Array<string | undefined>
-          const withCaptures = substituteRegexCaptures(replaceString, fullMatch, groups, offset, input, namedGroups)
+        const input = result
+        const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
+        result = rebuildFromMatches(input, matches, (match) => {
+          const withCaptures = substituteRegexCaptures(
+            replaceString,
+            match.fullMatch,
+            match.groups,
+            match.offset,
+            input,
+            match.namedGroups,
+          )
           const replacement = context.macroCtx
             ? resolveReplacementMacros(withCaptures, 'raw', context.macroCtx)
             : withCaptures
-          return decorateMatchReplacement(
-            replacement,
-            script,
-            { fullMatch, groups, offset, namedGroups },
-            input,
-          )
+          return decorateMatchReplacement(replacement, script, match, input)
         })
       } else if (script.substitute_macros === 'after') {
         if (script.actions.length > 0) {
           const input = result
           const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
-          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+          result = rebuildFromMatches(input, matches, (match) => decorateMatchReplacement(
             substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
             script,
             match,
             input,
-          )))
+          ))
         } else {
           result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
         }
@@ -584,7 +709,7 @@ export function applyDisplayRegex(
               ? preResolved.replace(/\$/g, '$$$$')
               : preResolved
           } else if (context.macroCtx) {
-          // Fall back to client-side resolution for simple macros
+            // Fall back to client-side resolution for simple macros
             replaceString = resolveReplacementMacros(replaceString, script.substitute_macros, context.macroCtx)
           }
         }
@@ -592,20 +717,20 @@ export function applyDisplayRegex(
         if (script.actions.length > 0) {
           const input = result
           const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
-          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+          result = rebuildFromMatches(input, matches, (match) => decorateMatchReplacement(
             substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
             script,
             match,
             input,
-          )))
+          ))
         } else {
           result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
         }
       }
 
       // Apply trim_strings
-      for (const trim of script.trim_strings) {
-        if (trim === '') continue
+      for (const trim of script.trim_strings.slice(0, REGEX_LIMITS_V1.maxTrimStrings)) {
+        if (trim.length === 0 || regexUtf8ByteLength(trim) > REGEX_LIMITS_V1.maxTrimStringBytes) continue
         let iterations = 0
         while (result.includes(trim)) {
           result = result.replaceAll(trim, '')
@@ -616,7 +741,16 @@ export function applyDisplayRegex(
           }
         }
       }
-
+      const growth = regexUtf8ByteLength(result) - regexUtf8ByteLength(beforeScript)
+      if (growth > 0) expansionBytes += growth
+      if (expansionBytes > REGEX_LIMITS_V1.maxExpansionBytes) {
+        result = beforeScript
+        continue
+      }
+      if (regexUtf8ByteLength(result) > REGEX_LIMITS_V1.maxOutputBytes) {
+        result = beforeScript
+        continue
+      }
       const elapsedMs = Math.round(performance.now() - startedAt)
       if (shouldReportSlowRegex(script, elapsedMs)) {
         onSlowRegex?.({
@@ -702,9 +836,46 @@ export async function applyDisplayRegexLocalLoop(
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
 ): Promise<DisplayRegexBackendResult> {
-  let result = content
+  if (context.chatId && isDisplayChatOwned(context.chatId)) {
+    const resolver = getDisplayResolverForChat(context.chatId)
+    if (resolver) {
+      try {
+        const local = await resolver.applyScripts({
+          content,
+          scripts,
+          context: toSpindleDisplayContext(context),
+          ...(context.resolvedFindPatterns ? { resolvedFindPatterns: mapToRecord(context.resolvedFindPatterns) } : {}),
+          ...(context.resolvedReplacements ? { resolvedReplacements: mapToRecord(context.resolvedReplacements) } : {}),
+        })
+        if (local) {
+          return {
+            result: local.content,
+            ...(local.touchedVars ? { touchedVars: new Set(local.touchedVars) } : {}),
+            ...(typeof local.cacheable === 'boolean' ? { cacheable: local.cacheable } : {}),
+          }
+        }
+        console.error(`[display] resolver.applyScripts returned null for owned chat=${context.chatId}; showing raw (no backend fallback)`)
+      } catch (err) {
+        console.error(`[display] resolver.applyScripts threw for owned chat=${context.chatId}; showing raw (no backend fallback)`, err)
+      }
+    }
+    return { result: content, cacheable: false }
+  }
 
-  for (const script of scripts) {
+  const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
+  if (backendResult !== null) return backendResult
+
+  if (regexUtf8ByteLength(content) > REGEX_LIMITS_V1.maxInputBytes) {
+    return { result: content, cacheable: false }
+  }
+  let asyncExpansionBytes = 0
+  let asyncPatternCount = 0
+  let result = content
+  for (const script of scripts.slice(0, REGEX_LIMITS_V1.maxScripts)) {
+    if (script.disabled || script.actions.length > REGEX_LIMITS_V1.maxActionCount) continue
+    asyncPatternCount += 1
+    if (asyncPatternCount > REGEX_LIMITS_V1.maxPatterns) continue
+    const beforeScript = result
     const placement: RegexPlacement = context.isUser ? 'user_input' : 'ai_output'
     if (!script.placement.includes(placement)) continue
 
@@ -735,8 +906,9 @@ export async function applyDisplayRegexLocalLoop(
       if (behaviorResult.handled) {
         result = behaviorResult.content
       } else if (script.substitute_macros === 'raw') {
+        const input = result
         const matches = collectRegexMatches(
-          result,
+          input,
           regex,
           findRegex,
           script.flags,
@@ -744,48 +916,74 @@ export async function applyDisplayRegexLocalLoop(
         )
         if (matches.length > 0) {
           const templates: Record<string, string> = {}
-          const fallbackReplacements = matches.map((match, index) => {
+          const fallbackReplacements: string[] = []
+          let fallbackBytes = 0
+          for (let index = 0; index < matches.length; index += 1) {
+            const match = matches[index]
             const withCaptures = substituteRegexCaptures(
               script.replace_string,
               match.fullMatch,
               match.groups,
               match.offset,
-              result,
+              input,
               match.namedGroups,
             )
+            const replacementBytes = regexUtf8ByteLength(withCaptures)
+            if (replacementBytes > REGEX_LIMITS_V1.maxReplacementBytes) {
+              throw new Error('regex replacement operation limit exceeded')
+            }
+            fallbackBytes += replacementBytes
+            if (fallbackBytes > REGEX_LIMITS_V1.maxExpansionBytes) {
+              throw new Error('regex expansion limit exceeded')
+            }
             if (hasMacroSyntax(withCaptures)) {
               templates[`${script.id}:${index}`] = withCaptures
             }
-            return withCaptures
-          })
+            fallbackReplacements.push(withCaptures)
+          }
 
           const resolvedTemplates = Object.keys(templates).length > 0
             ? await resolveRawTemplates(templates)
             : {}
-
-          result = rebuildFromMatches(
-            result,
-            matches,
-            fallbackReplacements.map((value, index) => decorateMatchReplacement(
-              resolvedTemplates[`${script.id}:${index}`] ?? value,
-              script,
-              matches[index],
-              result,
-            )),
-          )
+          result = rebuildFromMatches(input, matches, (match, index) => decorateMatchReplacement(
+            resolvedTemplates[`${script.id}:${index}`] ?? fallbackReplacements[index],
+            script,
+            match,
+            input,
+          ))
         }
       } else if (script.substitute_macros === 'after') {
         const input = result
-        const matches = collectRegexMatches(input, regex, findRegex, script.flags, script.replace_string)
-        const substituted = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
-          substituteRegexCaptures(script.replace_string, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+        const matches = collectRegexMatches(
+          input,
+          regex,
+          findRegex,
+          script.flags,
+          script.replace_string,
+        )
+        const substituted = rebuildFromMatches(input, matches, (match) => decorateMatchReplacement(
+          substituteRegexCaptures(
+            script.replace_string,
+            match.fullMatch,
+            match.groups,
+            match.offset,
+            input,
+            match.namedGroups,
+          ),
           script,
           match,
           input,
-        )))
+        ))
         if (hasMacroSyntax(substituted)) {
-          const resolved = await resolveRawTemplates({ [`${script.id}:body`]: substituted })
-          result = resolved[`${script.id}:body`] ?? substituted
+          const key = `${script.id}:body`
+          const resolved = await resolveRawTemplates({ [key]: substituted })
+          const replacement = resolved[key] ?? substituted
+          if (
+            regexUtf8ByteLength(replacement) > REGEX_LIMITS_V1.maxOutputBytes
+            || Math.max(0, regexUtf8ByteLength(replacement) - regexUtf8ByteLength(input))
+              > REGEX_LIMITS_V1.maxExpansionBytes
+          ) throw new Error('regex resolved output limit exceeded')
+          result = replacement
         } else {
           result = substituted
         }
@@ -805,19 +1003,33 @@ export async function applyDisplayRegexLocalLoop(
         if (script.actions.length > 0) {
           const input = result
           const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
-          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
-            substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+          result = rebuildFromMatches(input, matches, (match) => decorateMatchReplacement(
+            substituteRegexCaptures(
+              replaceString,
+              match.fullMatch,
+              match.groups,
+              match.offset,
+              input,
+              match.namedGroups,
+            ),
             script,
             match,
             input,
-          )))
+          ))
         } else {
-          result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
+          result = replaceWithinRegexSearchWindow(
+            result,
+            regex,
+            findRegex,
+            script.flags,
+            replaceString,
+            replaceString,
+          )
         }
       }
 
-      for (const trim of script.trim_strings) {
-        if (trim === '') continue
+      for (const trim of script.trim_strings.slice(0, REGEX_LIMITS_V1.maxTrimStrings)) {
+        if (trim.length === 0 || regexUtf8ByteLength(trim) > REGEX_LIMITS_V1.maxTrimStringBytes) continue
         let iterations = 0
         while (result.includes(trim)) {
           result = result.replaceAll(trim, '')
@@ -827,6 +1039,14 @@ export async function applyDisplayRegexLocalLoop(
             break
           }
         }
+      }
+      const growth = regexUtf8ByteLength(result) - regexUtf8ByteLength(beforeScript)
+      if (growth > 0) asyncExpansionBytes += growth
+      if (
+        asyncExpansionBytes > REGEX_LIMITS_V1.maxExpansionBytes
+        || regexUtf8ByteLength(result) > REGEX_LIMITS_V1.maxOutputBytes
+      ) {
+        result = beforeScript
       }
     } catch (err) {
       console.warn(`[display] display regex script threw, skipping (script=${script.id} "${script.name}")`, err)

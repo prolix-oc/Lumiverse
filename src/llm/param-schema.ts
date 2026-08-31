@@ -11,6 +11,8 @@ export interface ParameterSchema {
 
 export type ParameterSchemaMap = Record<string, ParameterSchema>;
 
+export type ToolContinuationMode = "native" | "legacy" | "unsupported";
+
 export interface ProviderCapabilities {
   parameters: ParameterSchemaMap;
   requiresMaxTokens: boolean;
@@ -19,10 +21,45 @@ export interface ProviderCapabilities {
   apiKeyRequired: boolean;
   modelListStyle: "openai" | "anthropic" | "google" | "none";
   /**
+   * Whether this adapter can advertise and parse host function calls.
+   *
+   * This is intentionally separate from continuation mode: a legacy adapter
+   * may support the bounded assistant-text/user-result continuation used by
+   * Response and feature-active compatibility paths.
+   */
+  toolCalling: boolean;
+  /** True only when the adapter can force some admitted host tool without naming one. */
+  requiredToolChoice: boolean;
+  /**
+   * Whether this adapter has a provider-native tool continuation wire format.
+   * This remains explicit even when `toolContinuationMode` is legacy or
+   * unsupported so readiness cannot infer capabilities from an adapter base
+   * class.
+   */
+  nativeToolContinuation: boolean;
+  /**
+   * Provider wire contract for continuing a tool-bearing response.
+   *
+   * `native` preserves provider call identities and correlated results;
+   * `legacy` is retained for feature-inactive Council compatibility only;
+   * `unsupported` must reject agent tools before any provider request.
+   */
+  toolContinuationMode: ToolContinuationMode;
+  /**
+   * Whether the adapter can issue an explicit tools-disabled finalization
+   * request after a tool continuation reaches its budget.
+   */
+  toolsDisabledFinalization: boolean;
+  /**
+   * Compatibility projection consumed by the existing Response/Council loop.
+   * New readiness checks use `toolsDisabledFinalization`.
+   */
+  supportsToolFinalization: boolean;
+  /**
    * When true, inline tool-call continuations are sent back as native
    * `tool_use` / `tool_result` parts with the model's reasoning preserved,
-   * enabling interleaved thinking — the model keeps reasoning *between* tool
-   * calls instead of restarting its chain of thought each round.
+   * enabling interleaved thinking — the model keeps reasoning *between*
+   * tool calls instead of restarting its chain of thought each round.
    *
    * Only enable this for providers whose message serialization round-trips
    * reasoning across tool turns. Today the generation loop carries reasoning

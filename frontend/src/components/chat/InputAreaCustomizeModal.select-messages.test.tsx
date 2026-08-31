@@ -46,7 +46,9 @@ describe('composer selectMessages catalog and migration', () => {
     expect(matches[0].icon).toBe(ListChecks)
     expect(COMPOSER_ACTION_IDS).toContain('selectMessages')
     expect(COMPOSER_ACTION_IDS).toContain('connectionsPicker')
-    expect(COMPOSER_ACTION_CATALOG.some((action) => action.id === 'connectionsPicker' && action.label === 'Connections Picker')).toBe(true)
+    expect(COMPOSER_ACTION_CATALOG.some((action) => action.id === 'connectionsPicker' && action.label === 'composerCustomize.actions.connectionsPicker.label')).toBe(true)
+    expect(COMPOSER_ACTION_IDS).toContain('agentRetry')
+    expect(COMPOSER_ACTION_CATALOG.some((action) => action.id === 'agentRetry' && action.label === 'composerCustomize.actions.agentRetry.label')).toBe(true)
 
     const pristine = loadComposerActionBar()
     expect(pristine.order).toContain('selectMessages')
@@ -77,9 +79,9 @@ describe('composer selectMessages catalog and migration', () => {
     expect(withSuite.has('chat.customize-composer')).toBe(true)
     expect(withSuite.has('lumiverse_suite.lorebook.open_half')).toBe(true)
     expect(withSuite.has('lumiverse_suite.lorebook.open_enhanced')).toBe(true)
-    // The extension contribution is represented by the stable native launcher.
     expect(withSuite.has('lumiverse_suite.connections_picker.open')).toBe(false)
   })
+
   test('retains native composer actions when Suite-owned persisted actions are gated', () => {
     expect(isExtensionComposerActionId('chat.customize-composer')).toBe(true)
     expect(isExtensionComposerActionId('home')).toBe(false)
@@ -114,6 +116,15 @@ describe('composer selectMessages catalog and migration', () => {
       hidden: ['selectMessages'],
     })
     expect(hidden.hidden).toEqual(['selectMessages'])
+  })
+  test('A0 retry remains reorderable with native selectMessages customization', () => {
+    const customized = normalizeComposerActionBarState({
+      order: ['agentRetry', 'selectMessages', 'home'],
+      hidden: [],
+    })
+    expect(customized.order.slice(0, 3)).toEqual(['agentRetry', 'selectMessages', 'home'])
+    expect(customized.hidden).not.toContain('agentRetry')
+    expect(customized.hidden).not.toContain('selectMessages')
   })
 
   test('runComposerSelectMessages toggles the existing store setter', () => {

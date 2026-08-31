@@ -240,23 +240,35 @@ export class MilvusStore implements VectorStore {
     return rows.map(milvusRowToVectorRow).filter((row): row is VectorRow => row != null);
   }
 
-  async deleteByFilter(collection: CollectionName, filter: VectorFilter): Promise<void> {
+  async deleteByFilter(collection: CollectionName, filter: VectorFilter, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const client = await this.getClient();
+    signal?.throwIfAborted();
     const name = this.collectionName(collection);
-    if (!(await this.hasCollection(name))) return;
+    const exists = await this.hasCollection(name);
+    signal?.throwIfAborted();
+    if (!exists) return;
     await assertOk(client.delete({ collection_name: name, filter: translateFilter(filter) }));
+    signal?.throwIfAborted();
     await this.flush(name);
+    signal?.throwIfAborted();
   }
 
-  async deleteByIds(collection: CollectionName, ids: string[]): Promise<void> {
+  async deleteByIds(collection: CollectionName, ids: string[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (ids.length === 0) return;
     const client = await this.getClient();
+    signal?.throwIfAborted();
     const name = this.collectionName(collection);
-    if (!(await this.hasCollection(name))) return;
+    const exists = await this.hasCollection(name);
+    signal?.throwIfAborted();
+    if (!exists) return;
     for (let i = 0; i < ids.length; i += 512) {
       await assertOk(client.delete({ collection_name: name, ids: ids.slice(i, i + 512) }));
+      signal?.throwIfAborted();
     }
     await this.flush(name);
+    signal?.throwIfAborted();
   }
 
   async vectorSearch(opts: SearchOptions): Promise<VectorHit[]> {
@@ -422,12 +434,17 @@ export class MilvusStore implements VectorStore {
     return Number(res?.data ?? 0);
   }
 
-  async optimize(_collections?: CollectionName[]): Promise<void> {
+  async optimize(_collections?: CollectionName[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     for (const collection of _collections ?? ["embeddings", "embeddings_world_books"] as CollectionName[]) {
       const name = this.collectionName(collection);
-      if (await this.hasCollection(name)) {
+      const exists = await this.hasCollection(name);
+      signal?.throwIfAborted();
+      if (exists) {
         await this.flush(name);
+        signal?.throwIfAborted();
         await this.loadCollection(name, true);
+        signal?.throwIfAborted();
       }
     }
   }

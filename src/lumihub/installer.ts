@@ -20,8 +20,28 @@ import * as settingsSvc from "../services/settings.service";
 import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { applyCharxModulesAndAssets } from "../services/charx-import.service";
-import { resolveSealedPresetBlocksForInstall, type SealedManifest } from "./sealed-presets";
+import {
+  materializePortableSealedPresetImport,
+  parsePortableSealedPresetDescriptor,
+  parseSealedPresetManifest,
+  resolveSealedPresetBlocksForInstall,
+  type PortableSealedPresetDescriptor,
+  type SealedManifest,
+} from "./sealed-presets";
 import { cloneSafePlainJsonObject } from "./payload-validation";
+import {
+  migrateParsedLegacyAgentConfigV1,
+  parseLegacyAgentConfigV1,
+  toPortableAgentConfigV1,
+} from "../types/agents";
+import {
+  importPortablePresetRuntime,
+  parsePortablePresetPayload,
+  parsePortablePresetRuntimeEnvelope,
+  scrubPresetMetadata,
+  type PortablePresetRuntimeEnvelopeV1,
+  type PortablePresetRuntimeImportInput,
+} from "../services/agent-config-portability.service";
 import type { PromptBlock, PromptVariableDef, PromptVariableValue } from "../types/preset";
 import type {
   InstallCharacterPayload,
@@ -672,14 +692,34 @@ export async function installPreset(
       return { requestId, success: false, error: "Preset export is missing preset data" };
     }
     const p = preset as Record<string, any>;
+    const hasEmbeddedRuntime = Object.hasOwn(exported, "agentRuntime") || Object.hasOwn(p, "agentRuntime");
+    const embeddedRuntime = Object.hasOwn(exported, "agentRuntime") ? exported.agentRuntime : p.agentRuntime;
+    let runtimeEnvelope: ReturnType<typeof parsePortablePresetRuntimeEnvelope> | null = null;
+    if (hasEmbeddedRuntime) {
+      try {
+        runtimeEnvelope = parsePortablePresetRuntimeEnvelope(embeddedRuntime);
+      } catch {
+        throw new Error("AGENT_RUNTIME_PORTABLE_INVALID");
+      }
+    }
     const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
-    const blocks = Array.isArray(p.blocks) ? p.blocks : [];
-
-    // Version sits directly below `name` in the export; fall back to the top-level field.
-    const presetVersion =
-      typeof p.presetVersion === "string" ? p.presetVersion
-      : typeof payload.presetVersion === "string" ? payload.presetVersion
-      : null;
+    const blocks = Object.hasOwn(p, "blocks")
+      ? p.blocks
+      : [];
+    if (!Array.isArray(blocks)) {
+      throw new Error("AGENT_RUNTIME_PORTABLE_PRESET_INVALID");
+    }
+    // Version is carried both in the export and in the install command. If
+    // both sides provide it, disagreement is a protocol contradiction rather
+    // than a reason to silently choose one.
+    const embeddedPresetVersion = typeof p.presetVersion === "string" ? p.presetVersion : null;
+    const payloadPresetVersion = typeof payload.presetVersion === "string" ? payload.presetVersion : null;
+    if (embeddedPresetVersion !== null
+      && payloadPresetVersion !== null
+      && embeddedPresetVersion !== payloadPresetVersion) {
+      throw new Error("LumiHub returned inconsistent preset versions");
+    }
+    const presetVersion = embeddedPresetVersion ?? payloadPresetVersion;
     const presetSlug = typeof payload.presetSlug === "string" ? payload.presetSlug : null;
     const presetCreator = typeof payload.presetCreator === "string" ? payload.presetCreator : null;
     // LumiHub detects installed presets by canonical creator/name slug. Prefer
@@ -693,8 +733,40 @@ export async function installPreset(
     const existingPassthroughMetadata = existing
       ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
       : {};
+    delete existingPassthroughMetadata.portableSealedPreset;
     const passthroughMetadata = extractPresetPassthroughMetadata(p);
-    const sealedPreset = resolveInstallSealedManifest(payload);
+    delete passthroughMetadata.portableSealedPreset;
+    const portableDescriptor = resolveInstallPortableSealedDescriptor(p);
+    let sealedPreset = resolveInstallSealedManifest(payload);
+    if (sealedPreset?.version !== null
+      && typeof sealedPreset?.version === "string"
+      && presetVersion !== null
+      && sealedPreset.version !== presetVersion) {
+      throw new Error("LumiHub returned inconsistent sealed preset descriptors");
+    }
+    if (portableDescriptor) {
+      if (portableDescriptor.hubPresetId !== payload.presetId
+        || (presetVersion !== null && portableDescriptor.hubPresetVersion !== presetVersion)) {
+        throw new Error("LumiHub returned inconsistent sealed preset descriptors");
+      }
+      if (sealedPreset) {
+        const manifestVersion = typeof sealedPreset.version === "string" ? sealedPreset.version : presetVersion;
+        if (
+          portableDescriptor.hubPresetVersion !== manifestVersion
+          || !sealedManifestsEqual(
+            { version: manifestVersion, blocks: sealedPreset.blocks },
+            { version: portableDescriptor.hubPresetVersion, blocks: portableDescriptor.blocks },
+          )
+        ) {
+          throw new Error("LumiHub returned inconsistent sealed preset descriptors");
+        }
+      } else {
+        sealedPreset = {
+          version: portableDescriptor.hubPresetVersion,
+          blocks: portableDescriptor.blocks,
+        };
+      }
+    }
     const sealedPresetVersion = typeof sealedPreset?.version === "string" ? sealedPreset.version : presetVersion;
     const materializedBlocks = await materializeSealedPresetBlocks(
       userId,
@@ -704,6 +776,21 @@ export async function installPreset(
       sealedPreset,
       dependencies.resolveSealedBlocks ?? resolveSealedPresetBlocksForInstall,
     );
+    const hasMaterializedSealedBlocks = materializedBlocks.some((block) => (
+      isPlainObject(block) && (block.sealed === true || block.sealedSource === "lumihub")
+    ));
+    const installedPortableSealedDescriptor: PortableSealedPresetDescriptor | null = (
+      hasMaterializedSealedBlocks && sealedPreset && typeof sealedPresetVersion === "string"
+    )
+      ? {
+          hubPresetId: payload.presetId,
+          hubPresetVersion: sealedPresetVersion,
+          blocks: (sealedPreset.blocks ?? []).filter(
+            (entry): entry is { key: string; sha256: string } =>
+              typeof entry?.key === "string" && typeof entry.sha256 === "string",
+          ),
+        }
+      : null;
     const incomingSamplerOverrides = isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {};
     const incomingCustomBody = isPlainObject(p.customBody) ? p.customBody : {};
     const incomingPromptVariables = isPlainObject(p.promptVariables) ? p.promptVariables : {};
@@ -728,110 +815,152 @@ export async function installPreset(
         )
       : incomingPromptVariables;
 
-    const presetInput = {
-      name,
-      provider: "loom",
-      parameters: {
-        samplerOverrides,
-        customBody,
-      },
-      prompt_order: materializedBlocks,
-      prompts: {
-        promptBehavior: isPlainObject(p.promptBehavior) ? p.promptBehavior : {},
-        completionSettings: isPlainObject(p.completionSettings) ? p.completionSettings : {},
-        advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
-      },
-      metadata: {
-        ...existingPassthroughMetadata,
-        ...passthroughMetadata,
-        source: isPlainObject(p.source) ? p.source : null,
-        modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
-        schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
-        description: typeof p.description === "string" ? p.description : "",
-        isDefault: !!p.isDefault,
-        lastProfileKey: typeof p.lastProfileKey === "string" ? p.lastProfileKey : null,
-        promptVariables,
-        compatibility: isPlainObject(exported.compatibility) ? exported.compatibility : {},
-        coverUrl,
-        _lumiverse_install_source: payload.source,
-        ...(payload.source === "illarin"
-          ? { _lumiverse_illarin_asset_id: payload.presetId }
-          : { _lumiverse_lumihub_id: payload.presetId }),
-        _lumiverse_preset_version: presetVersion,
-        _lumiverse_preset_slug: presetSlug,
-        _lumiverse_preset_creator: presetCreator,
-        _lumiverse_sealed_preset: sealedPreset,
-      },
+    const authoredMetadata: Record<string, unknown> = {
+      ...existingPassthroughMetadata,
+      ...passthroughMetadata,
+      source: isPlainObject(p.source) ? p.source : null,
+      modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
+      schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
+      description: typeof p.description === "string" ? p.description : "",
+      isDefault: !!p.isDefault,
+      lastProfileKey: typeof p.lastProfileKey === "string" ? p.lastProfileKey : null,
+      promptVariables,
+      compatibility: isPlainObject(exported.compatibility) ? exported.compatibility : {},
+      coverUrl,
+      _lumiverse_install_source: payload.source,
+      ...(payload.source === "illarin"
+        ? { _lumiverse_illarin_asset_id: payload.presetId }
+        : { _lumiverse_lumihub_id: payload.presetId }),
+      _lumiverse_preset_version: presetVersion,
+      _lumiverse_preset_slug: presetSlug,
+      _lumiverse_preset_creator: presetCreator,
+      _lumiverse_sealed_preset: sealedPreset,
+      ...(installedPortableSealedDescriptor
+        ? { portableSealedPreset: installedPortableSealedDescriptor }
+        : {}),
     };
+    const legacyRuntimeEnvelope: PortablePresetRuntimeEnvelopeV1 | null = Object.hasOwn(authoredMetadata, "agentConfig")
+      ? {
+          version: 1,
+          agentConfig: toPortableAgentConfigV1(
+            migrateParsedLegacyAgentConfigV1(
+              parseLegacyAgentConfigV1(authoredMetadata.agentConfig),
+              () => false,
+            ).config,
+          ),
+          taskTemplates: [],
+        }
+      : null;
+    const importedMetadata = scrubPresetMetadata(authoredMetadata);
 
-    // Update an existing remote installation in place so "Update" advances the
-    // version instead of duplicating the preset.
+    const importedRegexScripts = extractPresetRegexScripts(exported);
+    let presetInput: ReturnType<typeof parsePortablePresetPayload>;
+    try {
+      presetInput = parsePortablePresetPayload({
+        name,
+        provider: "loom",
+        parameters: {
+          samplerOverrides,
+          customBody,
+        },
+        prompt_order: materializedBlocks,
+        prompts: {
+          promptBehavior: isPlainObject(p.promptBehavior) ? p.promptBehavior : {},
+          completionSettings: isPlainObject(p.completionSettings) ? p.completionSettings : {},
+          advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
+        },
+        metadata: importedMetadata,
+        regex_scripts: importedRegexScripts,
+      });
+    } catch (error) {
+      if (
+        payload.source === "illarin"
+        && error instanceof Error
+        && error.message === "AGENT_RUNTIME_PORTABLE_REGEX_INVALID"
+      ) {
+        throw new Error("Illarin preset regex import was incomplete", { cause: error });
+      }
+      throw error;
+    }
+    const { agent_config: _portableAgentConfig, ...ordinaryPresetInput } = presetInput;
+
+    // A runtime envelope is an authenticated portable wire contract. Parse it
+    // before any write and route the complete preset/config/task graph through
+    // the atomic importer; legacy metadata.agentConfig is never used as the
+    // runtime authority.
     let saved;
-    if (existing) {
+    const importedRuntimeEnvelope = runtimeEnvelope ?? legacyRuntimeEnvelope;
+    if (importedRuntimeEnvelope) {
+      const importer = dependencies.importPortablePresetRuntime ?? importPortablePresetRuntime;
+      const imported = importer(userId, {
+        preset: presetInput,
+        agentRuntime: importedRuntimeEnvelope,
+        existingPresetId: existing?.id,
+        expectedPresetRevision: existing?.cache_revision,
+      });
+      saved = imported.preset;
+      if (!existing) eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);
+    } else if (existing) {
       saved = presetsSvc.updatePreset(userId, existing.id, {
-        ...presetInput,
+        ...ordinaryPresetInput,
         expected_cache_revision: existing.cache_revision,
       })!;
     } else {
-      saved = presetsSvc.createPreset(userId, presetInput);
+      saved = presetsSvc.createPreset(userId, ordinaryPresetInput);
       eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);
     }
 
-    // Preset-bound regex scripts ride at the top level of a LumiHub export or
-    // inside Illarin's raw preset document. On update, preserve older remotely
-    // attributed versions as disabled history and replace only an existing copy
-    // of the incoming version. Folder
-    // names are never used as ownership, so same-named local folders are untouched.
-    // LumiHub retains its historical best-effort behavior. Illarin propagates an
-    // incomplete import so durable delivery work is not acknowledged prematurely.
-    try {
-      const regexScripts = extractPresetRegexScripts(exported);
-      const previousVersion = typeof existing?.metadata?._lumiverse_preset_version === "string"
-        ? existing.metadata._lumiverse_preset_version
-        : null;
-      if (payload.source === "illarin") {
-        const previousAssetId = typeof existing?.metadata?._lumiverse_illarin_asset_id === "string"
-          ? existing.metadata._lumiverse_illarin_asset_id
-          : typeof existing?.metadata?._lumiverse_lumihub_id === "string"
-            ? existing.metadata._lumiverse_lumihub_id
-            : null;
-        regexSvc.installIllarinPresetRegexScripts(userId, {
-          presetId: saved.id,
-          presetName: saved.name,
-          assetId: payload.presetId,
-          presetVersion,
-          scripts: regexScripts,
-          previous: existing ? {
-            assetId: previousAssetId,
-            version: previousVersion,
-            presetName: existing.name,
-          } : null,
-        });
-      } else {
-        regexSvc.installLumiHubPresetRegexScripts(userId, {
-          presetId: saved.id,
-          presetName: saved.name,
-          hubPresetId: payload.presetId,
-          presetVersion,
-          scripts: regexScripts,
-          previous: existing ? {
-            hubPresetId: typeof existing.metadata?._lumiverse_lumihub_id === "string"
+    if (!importedRuntimeEnvelope) {
+      // Preset-bound regex scripts ride at the top level of a LumiHub export or
+      // inside Illarin's raw preset document. On update, preserve older remotely
+      // attributed versions as disabled history and replace only an existing copy
+      // of the incoming version. Folder names are never used as ownership, so
+      // same-named local folders are untouched.
+      try {
+        const previousVersion = typeof existing?.metadata?._lumiverse_preset_version === "string"
+          ? existing.metadata._lumiverse_preset_version
+          : null;
+        if (payload.source === "illarin") {
+          const previousAssetId = typeof existing?.metadata?._lumiverse_illarin_asset_id === "string"
+            ? existing.metadata._lumiverse_illarin_asset_id
+            : typeof existing?.metadata?._lumiverse_lumihub_id === "string"
               ? existing.metadata._lumiverse_lumihub_id
-              : null,
-            version: previousVersion,
-            presetName: existing.name,
-          } : null,
-        });
+              : null;
+          regexSvc.installIllarinPresetRegexScripts(userId, {
+            presetId: saved.id,
+            presetName: saved.name,
+            assetId: payload.presetId,
+            presetVersion,
+            scripts: importedRegexScripts,
+            previous: existing ? {
+              assetId: previousAssetId,
+              version: previousVersion,
+              presetName: existing.name,
+            } : null,
+          });
+        } else {
+          regexSvc.installLumiHubPresetRegexScripts(userId, {
+            presetId: saved.id,
+            presetName: saved.name,
+            hubPresetId: payload.presetId,
+            presetVersion,
+            scripts: importedRegexScripts,
+            previous: existing ? {
+              hubPresetId: typeof existing.metadata?._lumiverse_lumihub_id === "string"
+                ? existing.metadata._lumiverse_lumihub_id
+                : null,
+              version: previousVersion,
+              presetName: existing.name,
+            } : null,
+          });
+        }
+        if (importedRegexScripts.length > 0 && presetsSvc.reconcileActiveLoomPreset(userId) === saved.id) {
+          regexSvc.activatePresetBoundRegexScripts(userId, saved.id);
+        }
+      } catch (err) {
+        console.warn(`[${payload.source === "illarin" ? "Illarin" : "LumiHub"} Installer] Preset regex import failed:`, err);
+        if (payload.source === "illarin") throw err;
       }
-      if (regexScripts.length > 0 && presetsSvc.reconcileActiveLoomPreset(userId) === saved.id) {
-        regexSvc.activatePresetBoundRegexScripts(userId, saved.id);
-      }
-    } catch (err) {
-      console.warn(`[${payload.source === "illarin" ? "Illarin" : "LumiHub"} Installer] Preset regex import failed:`, err);
-      // LumiHub remote installs historically treat regexes as best-effort.
-      // Illarin deliveries are durable work: acknowledging a preset whose
-      // packaged scripts were dropped would permanently lose part of it.
-      if (payload.source === "illarin") throw err;
     }
 
     eventBus.emit(EventType.LUMIHUB_INSTALL_COMPLETED, {
@@ -855,6 +984,7 @@ export async function installPreset(
 
 export interface InstallPresetDependencies {
   resolveSealedBlocks?: typeof resolveSealedPresetBlocksForInstall;
+  importPortablePresetRuntime?: (userId: string, input: PortablePresetRuntimeImportInput) => ReturnType<typeof importPortablePresetRuntime>;
 }
 
 /**
@@ -864,14 +994,25 @@ export interface InstallPresetDependencies {
  * unresolved install.
  */
 function resolveInstallSealedManifest(payload: InstallPresetPayload): SealedManifest | null {
-  const direct = parseSealedManifest(payload.sealedPreset);
+  const hasDirect = payload.sealedPreset !== undefined && payload.sealedPreset !== null;
+  const direct = hasDirect ? tryParseSealedManifest(payload.sealedPreset) : null;
+  if (hasDirect && !direct) {
+    throw new Error("LumiHub returned an invalid sealed preset manifest");
+  }
   const compatibility = isPlainObject(payload.presetData?.compatibility)
     ? payload.presetData.compatibility
     : null;
   const lumiverse = compatibility && isPlainObject(compatibility.lumiverse)
     ? compatibility.lumiverse
     : null;
-  const embedded = parseSealedManifest(lumiverse?.sealedPreset);
+  const hasEmbedded = !!lumiverse
+    && Object.hasOwn(lumiverse, "sealedPreset")
+    && lumiverse.sealedPreset !== undefined
+    && lumiverse.sealedPreset !== null;
+  const embedded = hasEmbedded ? tryParseSealedManifest(lumiverse?.sealedPreset) : null;
+  if (hasEmbedded && !embedded) {
+    throw new Error("LumiHub returned an invalid sealed preset manifest");
+  }
 
   if (direct && embedded && !sealedManifestsEqual(direct, embedded)) {
     throw new Error("LumiHub returned inconsistent sealed preset manifests");
@@ -879,22 +1020,46 @@ function resolveInstallSealedManifest(payload: InstallPresetPayload): SealedMani
   return direct ?? embedded;
 }
 
-function parseSealedManifest(value: unknown): SealedManifest | null {
-  if (!isPlainObject(value) || !Array.isArray(value.blocks) || value.blocks.length > 200) return null;
-  if (value.version !== null && value.version !== undefined && (typeof value.version !== "string" || value.version.length > 64)) {
+function tryParseSealedManifest(value: unknown): SealedManifest | null {
+  try {
+    return parseSealedPresetManifest(value);
+  } catch {
     return null;
   }
-  const blocks: Array<{ key: string; sha256: string }> = [];
-  for (const entry of value.blocks) {
-    if (!isPlainObject(entry) || typeof entry.key !== "string" || !entry.key || entry.key.length > 256) return null;
-    if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.sha256)) return null;
-    blocks.push({ key: entry.key, sha256: entry.sha256.toLowerCase() });
-  }
-  return {
-    version: typeof value.version === "string" ? value.version : null,
-    blocks,
-  };
 }
+
+function resolveInstallPortableSealedDescriptor(
+  preset: Record<string, unknown>,
+): PortableSealedPresetDescriptor | null {
+  const carriers: Array<Record<string, unknown>> = [preset];
+  const metadata = isPlainObject(preset.metadata) ? preset.metadata : null;
+  const passthroughMetadata = isPlainObject(preset.passthroughMetadata) ? preset.passthroughMetadata : null;
+  if (metadata) carriers.push(metadata);
+  if (passthroughMetadata) carriers.push(passthroughMetadata);
+
+  const descriptors: PortableSealedPresetDescriptor[] = [];
+  for (const carrier of carriers) {
+    if (!Object.hasOwn(carrier, "portableSealedPreset")) continue;
+    descriptors.push(parsePortableSealedPresetDescriptor(carrier.portableSealedPreset));
+  }
+  const first = descriptors[0];
+  if (!first) return null;
+  for (const descriptor of descriptors.slice(1)) {
+    if (
+      descriptor.hubPresetId !== first.hubPresetId
+      || descriptor.hubPresetVersion !== first.hubPresetVersion
+      || !sealedManifestsEqual(
+        { version: first.hubPresetVersion, blocks: first.blocks },
+        { version: descriptor.hubPresetVersion, blocks: descriptor.blocks },
+      )
+    ) {
+      throw new Error("LumiHub returned inconsistent portable sealed preset descriptors");
+    }
+  }
+  return first;
+}
+
+
 
 function sealedManifestsEqual(left: SealedManifest, right: SealedManifest): boolean {
   if ((left.version ?? null) !== (right.version ?? null)) return false;
@@ -1086,66 +1251,60 @@ function isPromptVariableOption(value: unknown): value is { id: string; label: s
 
 async function materializeSealedPresetBlocks(
   userId: string,
-  blocks: any[],
+  blocks: unknown[],
   hubPresetId: string,
   version: string | null,
   sealedPreset: SealedManifest | null,
   resolveSealedBlocks: typeof resolveSealedPresetBlocksForInstall,
-): Promise<any[]> {
-  const placeholderKeys = new Set<string>();
-  for (const block of blocks) {
-    if (!isPlainObject(block) || typeof block.content !== "string") continue;
-    const key = extractExactSealedPlaceholder(block.content);
-    if (key) placeholderKeys.add(key);
-  }
-  if (!placeholderKeys.size) return blocks;
-  if (!sealedPreset) {
-    throw new Error("LumiHub preset contains sealed placeholders but no sealed manifest");
-  }
-  const manifestBlocks = Array.isArray(sealedPreset?.blocks) ? sealedPreset.blocks : [];
-  if (!manifestBlocks.length) {
-    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is empty");
-  }
-
-  const manifestByKey = new Map<string, { sha256: string }>();
-  for (const entry of manifestBlocks) {
-    if (typeof entry?.key === "string" && typeof entry?.sha256 === "string") {
-      manifestByKey.set(entry.key, { sha256: entry.sha256 });
-    }
-  }
-  if (!manifestByKey.size) {
-    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is invalid");
-  }
-
-  for (const key of placeholderKeys) {
-    if (!manifestByKey.has(key)) {
-      throw new Error(`Sealed preset manifest is missing prompt block: ${key}`);
-    }
-  }
-
-  const resolved = await resolveSealedBlocks(userId, hubPresetId, version, sealedPreset);
-  for (const key of placeholderKeys) {
-    if (typeof resolved[key] !== "string") {
-      throw new Error(`Unable to fetch or verify sealed preset block: ${key}`);
-    }
-  }
-
-  return blocks.map((block) => {
+): Promise<unknown[]> {
+  const candidateBlocks = blocks.map((block) => {
     if (!isPlainObject(block) || typeof block.content !== "string") return block;
-    const key = extractExactSealedPlaceholder(block.content);
-    const manifestEntry = key ? manifestByKey.get(key) : null;
-    if (!key || !manifestEntry) return block;
-    return {
-      ...block,
-      content: resolved[key],
-      sealed: true,
-      sealedKey: key,
-      sealedSource: "lumihub",
-      sealedOriginPresetId: hubPresetId,
-      sealedOriginVersion: version,
-      sealedSha256: manifestEntry.sha256,
-    };
+    if (Object.hasOwn(block, "sealed") || Object.hasOwn(block, "sealedSource")) return block;
+    return extractExactSealedPlaceholder(block.content)
+      ? { ...block, sealed: true, sealedSource: "lumihub" }
+      : block;
   });
+  const hasSealedCandidate = candidateBlocks.some((block) => (
+    isPlainObject(block)
+    && (
+      block.sealed === true
+      || block.sealedSource === "lumihub"
+      || Object.hasOwn(block, "sealedSource")
+      || (Object.hasOwn(block, "sealed") && block.sealed !== false)
+      || (typeof block.content === "string"
+        && /^\{\{(?:presetBlock|pblock)::[^}]+\}\}$/.test(block.content.trim()))
+    )
+  ));
+  if (!sealedPreset) {
+    if (!hasSealedCandidate) return blocks;
+    throw new Error("LumiHub preset contains sealed blocks but no sealed manifest");
+  }
+
+  const descriptor = {
+    hubPresetId,
+    hubPresetVersion: typeof version === "string" ? version : "",
+    blocks: sealedPreset.blocks ?? [],
+  };
+  const materialized = await materializePortableSealedPresetImport(
+    userId,
+    {
+      prompt_order: candidateBlocks,
+      metadata: { portableSealedPreset: descriptor },
+    },
+    async (resolveUserId, portableDescriptor) => resolveSealedBlocks(
+      resolveUserId,
+      portableDescriptor.hubPresetId,
+      portableDescriptor.hubPresetVersion,
+      {
+        version: portableDescriptor.hubPresetVersion,
+        blocks: portableDescriptor.blocks,
+      },
+    ),
+  );
+  if (!Array.isArray(materialized.prompt_order)) {
+    throw new Error("LumiHub sealed preset materialization returned invalid prompt blocks");
+  }
+  return materialized.prompt_order;
 }
 
 function extractExactSealedPlaceholder(content: string): string | null {

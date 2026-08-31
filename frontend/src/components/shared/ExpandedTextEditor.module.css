@@ -539,13 +539,24 @@
   border-radius: 6px;
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   margin: 0 4px;
-  transition: background 0.15s ease;
+  transition: background var(--lumiverse-transition-fast);
   min-width: 0;
   overflow: hidden;
+  width: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
 }
 
 .macroItem:hover {
   background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+}
+
+.macroItem:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
 }
 
 .macroSyntax {

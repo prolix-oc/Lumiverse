@@ -117,67 +117,80 @@ export function parseHfSource(config: Record<string, any> | undefined | null): H
   return { repo, revision, repoUrl, files }
 }
 
-export const tokenizersApi = {
-  // Configs
-  list() {
-    return get<TokenizerConfig[]>('/tokenizers')
-  },
-  create(input: { name: string; type: string; config?: Record<string, any> }) {
-    return post<TokenizerConfig>('/tokenizers', input)
-  },
-  // Inspect a pasted HuggingFace model URL / slug. Longer timeout than the 30s
-  // default: the server downloads + verifies the tokenizer before responding.
-  resolve(url: string) {
-    return post<ResolveTokenizerResult>('/tokenizers/resolve', { url }, { timeout: 60_000 })
-  },
-  install(input: InstallTokenizerInput) {
-    return post<{ config: TokenizerConfig; pattern: TokenizerModelPattern | null }>('/tokenizers/install', input)
-  },
-
-  // HuggingFace access token (write-only; server returns only a `configured` flag).
-  getHfToken() {
-    return get<{ configured: boolean }>('/tokenizers/hf-token')
-  },
-  setHfToken(token: string | null) {
-    return put<{ configured: boolean }>('/tokenizers/hf-token', { token })
-  },
-  update(id: string, input: Partial<{ name: string; type: string; config: Record<string, any> }>) {
-    return put<TokenizerConfig>(`/tokenizers/${id}`, input)
-  },
-  remove(id: string) {
-    return del<{ deleted: boolean }>(`/tokenizers/${id}`)
-  },
-  test(tokenizerId: string, text: string) {
-    return post<TokenizerTestResult>('/tokenizers/test', { tokenizer_id: tokenizerId, text })
-  },
-  countForModel(modelId: string, text: string, options?: RequestOptions) {
-    return post<{ token_count: number | null; char_count: number }>(
-      '/tokenizers/count',
-      { model_id: modelId, text },
-      options,
-    )
-  },
-  countForModelBatch(modelId: string, texts: string[]) {
-    return post<{ results: Array<{ token_count: number | null; char_count: number }> }>('/tokenizers/count-batch', {
-      model_id: modelId,
-      texts,
-    })
-  },
-
-  // Patterns
-  listPatterns() {
-    return get<TokenizerModelPattern[]>('/tokenizers/patterns')
-  },
-  createPattern(input: { tokenizer_id: string; pattern: string; priority?: number }) {
-    return post<TokenizerModelPattern>('/tokenizers/patterns', input)
-  },
-  updatePattern(id: string, input: Partial<{ tokenizer_id: string; pattern: string; priority: number }>) {
-    return put<TokenizerModelPattern>(`/tokenizers/patterns/${id}`, input)
-  },
-  removePattern(id: string) {
-    return del<{ deleted: boolean }>(`/tokenizers/patterns/${id}`)
-  },
-  testPattern(modelId: string) {
-    return post<PatternTestResult>('/tokenizers/patterns/test', { model_id: modelId })
-  },
+export type TokenizersApiClient = {
+  get: typeof get
+  post: typeof post
+  put: typeof put
+  del: typeof del
 }
+
+const defaultTokenizersApiClient: TokenizersApiClient = { get, post, put, del }
+
+export function createTokenizersApi(client: TokenizersApiClient = defaultTokenizersApiClient) {
+  return {
+    // Configs
+    list() {
+      return client.get<TokenizerConfig[]>('/tokenizers')
+    },
+    create(input: { name: string; type: string; config?: Record<string, any> }) {
+      return client.post<TokenizerConfig>('/tokenizers', input)
+    },
+    // Inspect a pasted HuggingFace model URL / slug. Longer timeout than the 30s
+    // default: the server downloads + verifies the tokenizer before responding.
+    resolve(url: string) {
+      return client.post<ResolveTokenizerResult>('/tokenizers/resolve', { url }, { timeout: 60_000 })
+    },
+    install(input: InstallTokenizerInput) {
+      return client.post<{ config: TokenizerConfig; pattern: TokenizerModelPattern | null }>('/tokenizers/install', input)
+    },
+
+    // HuggingFace access token (write-only; server returns only a `configured` flag).
+    getHfToken() {
+      return client.get<{ configured: boolean }>('/tokenizers/hf-token')
+    },
+    setHfToken(token: string | null) {
+      return client.put<{ configured: boolean }>('/tokenizers/hf-token', { token })
+    },
+    update(id: string, input: Partial<{ name: string; type: string; config: Record<string, any> }>) {
+      return client.put<TokenizerConfig>(`/tokenizers/${id}`, input)
+    },
+    remove(id: string) {
+      return client.del<{ deleted: boolean }>(`/tokenizers/${id}`)
+    },
+    test(tokenizerId: string, text: string) {
+      return client.post<TokenizerTestResult>('/tokenizers/test', { tokenizer_id: tokenizerId, text })
+    },
+    countForModel(modelId: string, text: string, options?: RequestOptions) {
+      return client.post<{ token_count: number | null; char_count: number }>(
+        '/tokenizers/count',
+        { model_id: modelId, text },
+        options,
+      )
+    },
+    countForModelBatch(modelId: string, texts: string[]) {
+      return client.post<{ results: Array<{ token_count: number | null; char_count: number }> }>('/tokenizers/count-batch', {
+        model_id: modelId,
+        texts,
+      })
+    },
+
+    // Patterns
+    listPatterns() {
+      return client.get<TokenizerModelPattern[]>('/tokenizers/patterns')
+    },
+    createPattern(input: { tokenizer_id: string; pattern: string; priority?: number }) {
+      return client.post<TokenizerModelPattern>('/tokenizers/patterns', input)
+    },
+    updatePattern(id: string, input: Partial<{ tokenizer_id: string; pattern: string; priority: number }>) {
+      return client.put<TokenizerModelPattern>(`/tokenizers/patterns/${id}`, input)
+    },
+    removePattern(id: string) {
+      return client.del<{ deleted: boolean }>(`/tokenizers/patterns/${id}`)
+    },
+    testPattern(modelId: string) {
+      return client.post<PatternTestResult>('/tokenizers/patterns/test', { model_id: modelId })
+    },
+  }
+}
+
+export const tokenizersApi = createTokenizersApi()

@@ -119,7 +119,7 @@ export async function completeOAuth(
 
   if (connectionId) {
     // Existing connection — verify it belongs to this user
-    const conn = connSvc.getConnection(userId, connectionId);
+    const conn = connSvc.getUsableConnection(userId, connectionId);
     if (!conn) throw new Error("Connection not found");
     if (conn.provider !== "openrouter") throw new Error("Connection is not an OpenRouter profile");
   }
@@ -163,8 +163,8 @@ export async function completeOAuth(
   // Clean up
   pendingOAuth.delete(sessionToken);
 
-  const profile = connSvc.getConnection(userId, connectionId)!;
-  return { success: true, connection_id: connectionId, created, profile };
+  const profile = connSvc.getUsableConnection(userId, connectionId)!;
+  return { success: true, connection_id: connectionId, created, profile: connSvc.toPublicConnection(profile) };
 }
 
 // ── Credits & Usage ──────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ function getOpenRouterProvider(): OpenRouterProvider {
 }
 
 export async function fetchCredits(userId: string, connectionId: string): Promise<OpenRouterCreditsInfo | null> {
-  const conn = connSvc.getConnection(userId, connectionId);
+  const conn = connSvc.getUsableConnection(userId, connectionId);
   if (!conn || conn.provider !== "openrouter") return null;
 
   const apiKey = await secretsSvc.getSecret(userId, connSvc.connectionSecretKey(connectionId));
@@ -191,7 +191,7 @@ export async function fetchCredits(userId: string, connectionId: string): Promis
 // ── Model Metadata ───────────────────────────────────────────────────────────
 
 export async function fetchModelsWithMetadata(userId: string, connectionId: string): Promise<OpenRouterModelInfo[] | null> {
-  const conn = connSvc.getConnection(userId, connectionId);
+  const conn = connSvc.getUsableConnection(userId, connectionId);
   if (!conn || conn.provider !== "openrouter") return null;
 
   const apiKey = await secretsSvc.getSecret(userId, connSvc.connectionSecretKey(connectionId));
@@ -204,7 +204,7 @@ export async function fetchModelsWithMetadata(userId: string, connectionId: stri
 // ── Generation Stats ─────────────────────────────────────────────────────────
 
 export async function fetchGenerationStats(userId: string, connectionId: string, generationId: string): Promise<any | null> {
-  const conn = connSvc.getConnection(userId, connectionId);
+  const conn = connSvc.getUsableConnection(userId, connectionId);
   if (!conn || conn.provider !== "openrouter") return null;
 
   const apiKey = await secretsSvc.getSecret(userId, connSvc.connectionSecretKey(connectionId));
@@ -217,7 +217,7 @@ export async function fetchGenerationStats(userId: string, connectionId: string,
 // ── Provider List ────────────────────────────────────────────────────────────
 
 export async function fetchProviderList(userId: string, connectionId: string): Promise<OpenRouterProviderEntry[] | null> {
-  const conn = connSvc.getConnection(userId, connectionId);
+  const conn = connSvc.getUsableConnection(userId, connectionId);
   if (!conn || conn.provider !== "openrouter") return null;
 
   const apiKey = await secretsSvc.getSecret(userId, connSvc.connectionSecretKey(connectionId));

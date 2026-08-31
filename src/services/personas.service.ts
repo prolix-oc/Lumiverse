@@ -11,6 +11,7 @@ import {
   type PersonaAddonToggleOrder,
   type PersonaAvatarInfo,
 } from "./persona-addon-states";
+import { withUserDataMutationSync } from "./user-data/snapshot";
 
 function rowToPersona(row: any): Persona {
   return {
@@ -63,6 +64,7 @@ export function getPersonaAvatarInfo(
 }
 
 export function createPersona(userId: string, input: CreatePersonaInput): Persona {
+  return withUserDataMutationSync(userId, () => {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
@@ -103,6 +105,7 @@ export function createPersona(userId: string, input: CreatePersonaInput): Person
   const persona = getPersona(userId, id)!;
   eventBus.emit(EventType.PERSONA_CHANGED, { id, persona }, userId);
   return persona;
+  });
 }
 
 /** Load SillyTavern persona identities once so reruns stay linear. */
@@ -123,6 +126,7 @@ export function listPersonaSourceFilenameIds(userId: string): Map<string, { id: 
 }
 
 export function updatePersona(userId: string, id: string, input: UpdatePersonaInput): Persona | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getPersona(userId, id);
   if (!existing) return null;
 
@@ -161,9 +165,11 @@ export function updatePersona(userId: string, id: string, input: UpdatePersonaIn
   const updated = getPersona(userId, id)!;
   eventBus.emit(EventType.PERSONA_CHANGED, { id, persona: updated }, userId);
   return updated;
+  });
 }
 
 export function renamePersonaFolder(userId: string, oldName: string, newName: string): Persona[] {
+  return withUserDataMutationSync(userId, () => {
   const source = oldName.trim();
   const target = newName.trim();
   if (!source || !target) return [];
@@ -187,9 +193,11 @@ export function renamePersonaFolder(userId: string, oldName: string, newName: st
     eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
   }
   return updated;
+  });
 }
 
 export function deletePersonaFolder(userId: string, name: string): Persona[] {
+  return withUserDataMutationSync(userId, () => {
   const folder = name.trim();
   if (!folder) return [];
 
@@ -208,6 +216,7 @@ export function deletePersonaFolder(userId: string, name: string): Persona[] {
     eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
   }
   return updated;
+  });
 }
 
 export function isPersonaAvatarPathReferenced(userId: string, avatarPath: string): boolean {
@@ -227,6 +236,7 @@ export function bulkUpdatePersonas(
   ids: string[],
   input: BulkPersonaUpdateInput
 ): Persona[] {
+  return withUserDataMutationSync(userId, () => {
   const uniqueIds = [...new Set(ids.filter(Boolean))];
   const updated: Persona[] = [];
 
@@ -246,20 +256,25 @@ export function bulkUpdatePersonas(
   }
 
   return updated;
+  });
 }
 
 export function setPersonaAvatar(userId: string, id: string, avatarPath: string): boolean {
-  const result = getDb()
-    .query("UPDATE personas SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(avatarPath, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () => {
+    const result = getDb()
+      .query("UPDATE personas SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(avatarPath, Math.floor(Date.now() / 1000), id, userId);
+    return result.changes > 0;
+  });
 }
 
 export function setPersonaImage(userId: string, id: string, imageId: string): boolean {
-  const result = getDb()
-    .query("UPDATE personas SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(imageId, Math.floor(Date.now() / 1000), id, userId);
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () => {
+    const result = getDb()
+      .query("UPDATE personas SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(imageId, Math.floor(Date.now() / 1000), id, userId);
+    return result.changes > 0;
+  });
 }
 
 /**
@@ -273,6 +288,7 @@ export function setPersonaAddonAvatar(
   addonId: string,
   avatar: { image_id: string | null; avatar_crop_image_id?: string | null },
 ): Persona | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getPersona(userId, personaId);
   if (!existing) return null;
 
@@ -301,9 +317,11 @@ export function setPersonaAddonAvatar(
   };
   if (!found) return null;
   return updatePersona(userId, personaId, { metadata: nextMetadata });
+  });
 }
 
 export function duplicatePersona(userId: string, id: string): Persona | null {
+  return withUserDataMutationSync(userId, () => {
   const existing = getPersona(userId, id);
   if (!existing) return null;
 
@@ -343,6 +361,7 @@ export function duplicatePersona(userId: string, id: string): Persona | null {
   const persona = getPersona(userId, newId)!;
   eventBus.emit(EventType.PERSONA_CHANGED, { id: newId, persona }, userId);
   return persona;
+  });
 }
 
 export function getDefaultPersona(userId: string): Persona | null {
@@ -367,9 +386,11 @@ export function resolvePersonaOrDefault(userId: string, personaId?: string | nul
 }
 
 export function deletePersona(userId: string, id: string): boolean {
-  const result = getDb().query("DELETE FROM personas WHERE id = ? AND user_id = ?").run(id, userId);
-  if (result.changes > 0) {
-    eventBus.emit(EventType.PERSONA_CHANGED, { id, deleted: true }, userId);
-  }
-  return result.changes > 0;
+  return withUserDataMutationSync(userId, () => {
+    const result = getDb().query("DELETE FROM personas WHERE id = ? AND user_id = ?").run(id, userId);
+    if (result.changes > 0) {
+      eventBus.emit(EventType.PERSONA_CHANGED, { id, deleted: true }, userId);
+    }
+    return result.changes > 0;
+  });
 }

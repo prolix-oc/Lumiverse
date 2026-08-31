@@ -88,6 +88,12 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "openai",
+    toolCalling: true,
+    requiredToolChoice: true,
+    nativeToolContinuation: true,
+    toolContinuationMode: "native",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
     // OpenRouter preserves reasoning across tool calls via its normalized,
     // opaque `reasoning_details` blocks. OpenAICompatibleProvider captures them
     // (streaming + non-streaming) and flattenForChat replays the sequence
@@ -133,6 +139,24 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
       if (routing.quantizations?.length) providerObj.quantizations = routing.quantizations;
       if (routing.sort) providerObj.sort = routing.sort;
       if (Object.keys(providerObj).length > 0) body.provider = providerObj;
+    }
+
+    // Feature-active modes suppress provider-hosted plugins. Ordinary mode
+    // retains the immutable host tool catalog emitted by the base serializer;
+    // finalization removes every tool surface and explicitly disables calls.
+    if (request.toolMode === "ordinary" || request.toolMode === "required") {
+      delete body.plugins;
+      return body;
+    }
+    if (request.toolMode === "finalization") {
+      delete body.plugins;
+      delete body.tools;
+      delete body.tool_choice;
+      delete body.parallel_tool_calls;
+      body.tools = [];
+      body.tool_choice = "none";
+      body.parallel_tool_calls = false;
+      return body;
     }
 
     // Plugins

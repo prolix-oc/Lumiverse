@@ -115,4 +115,3 @@ Changing a picker layout does not change the active connection by itself. Your s
 | An action is missing from the toolbar | Search **Visible icons and order**, make sure it is enabled, and confirm that its contributing extension is running. |
 | The toolbar covers chat text | Enable an opaque backdrop, use the chat-top dock, or turn on **Hide when overlaid**. |
 | Embedding or Cortex fallback controls are missing | Re-enable the corresponding option under **Optional surfaces & navigation**. |
-

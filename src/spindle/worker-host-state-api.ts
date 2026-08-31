@@ -1,23 +1,129 @@
-import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
+import { PERMISSION_DENIED_PREFIX, type HostResponseErrorDTO, type HostToWorker } from "lumiverse-spindle-types";
 import * as chatsSvc from "../services/chats.service";
 import * as settingsSvc from "../services/settings.service";
 import * as presetsSvc from "../services/presets.service";
-import { PresetRevisionConflictError, type CreatePresetInput, type UpdatePresetInput } from "../types/preset";
+import {
+  AGENT_RUNTIME_RESERVED_PRESET_KEYS,
+  scrubPresetMetadata,
+} from "../services/agent-config-portability.service";
+import { PresetRevisionConflictError, type CreatePresetInput, type Preset, type UpdatePresetInput } from "../types/preset";
 
-type PresetConflictWorkerError = {
-  code: string;
-  message: string;
-  presetId?: string;
-  expectedCacheRevision?: number;
-  actualCacheRevision?: number;
-};
+/**
+ * Agentic runtime configuration is host-owned. These keys are accepted only
+ * by authenticated host config/import surfaces, never by Spindle preset state.
+ */
+const SPINDLE_PRESET_RESERVED_KEYS = new Set<string>(AGENT_RUNTIME_RESERVED_PRESET_KEYS);
+
+export class SpindlePresetReservedKeyError extends Error {
+  readonly code = "SPINDLE_PRESET_RESERVED_KEY";
+  readonly path: string;
+
+  constructor(path: string) {
+    super(`Preset field ${path} is reserved for host Agentic runtime authority`);
+    this.name = "SpindlePresetReservedKeyError";
+    this.path = path;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertSpindlePresetMetadataMutationSafe(metadata: unknown): void {
+  if (!isRecord(metadata)) return;
+
+  // Reuse the authenticated projection helper so the canonical marker set
+  // cannot drift between host and Spindle boundaries.
+  const scrubbed = scrubPresetMetadata(metadata);
+  for (const key of Object.keys(metadata)) {
+    if (!Object.hasOwn(scrubbed, key) || SPINDLE_PRESET_RESERVED_KEYS.has(key)) {
+      throw new SpindlePresetReservedKeyError(`metadata.${key}`);
+    }
+  }
+}
+
+/**
+ * Reject a complete Spindle preset create/update/import-like payload before
+ * the general preset service sees it. This deliberately rejects writes rather
+ * than stripping authority fields and silently persisting the remainder.
+ */
+export function assertSpindlePresetMutationSafe(input: unknown): void {
+  if (!isRecord(input)) return;
+  for (const key of Object.keys(input)) {
+    if (SPINDLE_PRESET_RESERVED_KEYS.has(key)) {
+      throw new SpindlePresetReservedKeyError(key);
+    }
+  }
+  assertSpindlePresetMetadataMutationSafe(input.metadata);
+}
+
+export type SpindlePresetProjection = Pick<
+  Preset,
+  "id" | "name" | "provider" | "engine" | "parameters" | "prompt_order" | "prompts" | "metadata" | "cache_revision" | "created_at" | "updated_at"
+>;
+
+/**
+ * Project the host preset into the documented Spindle DTO. The normalized
+ * Agentic config/review projection is intentionally not part of this DTO.
+ */
+export function projectSpindlePreset(preset: Preset | null): SpindlePresetProjection | null {
+  if (!preset) return null;
+  const metadata = projectSpindlePresetMetadata(preset.metadata);
+  return {
+    id: preset.id,
+    name: preset.name,
+    provider: preset.provider,
+    engine: preset.engine,
+    parameters: preset.parameters,
+    prompt_order: preset.prompt_order,
+    prompts: preset.prompts,
+    metadata,
+    cache_revision: preset.cache_revision ?? 0,
+    created_at: preset.created_at,
+    updated_at: preset.updated_at,
+  };
+}
+
+/**
+ * Entity-extension writes for presets use the metadata column. Their result
+ * must therefore receive the same reserved-marker projection as preset reads.
+ */
+export function projectSpindlePresetEntityExtension<T extends { entity: string; extensions: Record<string, unknown> }>(result: T): T {
+  if (result.entity !== "preset") return result;
+  return { ...result, extensions: projectSpindlePresetMetadata(result.extensions) };
+}
+
+function projectSpindlePresetMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  const projected = scrubPresetMetadata(metadata);
+  for (const key of Object.keys(projected)) {
+    if (SPINDLE_PRESET_RESERVED_KEYS.has(key)) delete projected[key];
+  }
+  return projected;
+}
+
+type HostResponseMessage = Extract<HostToWorker, { type: "response" }>;
+type HostResponseError = NonNullable<HostResponseMessage["error"]>;
+
+function presetWorkerError(err: unknown): HostResponseError {
+  if (!(err instanceof PresetRevisionConflictError)) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  const conflict: HostResponseErrorDTO = {
+    code: err.code,
+    message: err.message,
+    presetId: err.presetId,
+    expectedCacheRevision: err.expectedCacheRevision,
+    actualCacheRevision: err.actualCacheRevision,
+  };
+  return conflict;
+}
 
 export type WorkerHostStateApiContext = {
   getChatOwnerId: (chatId: string) => string | null;
   enforceScopedUser: (userId: string | null | undefined) => void;
   resolveEffectiveUserId: (requestUserId?: string) => string | null;
   hasPermission: (permission: "presets") => boolean;
-  postResponse: (message: { type: "response"; requestId: string; result?: unknown; error?: string }) => void;
+  postResponse: (message: HostResponseMessage) => void;
 };
 
 /** Owns persisted variable and preset API state for a single extension host. */
@@ -48,10 +154,10 @@ export class WorkerHostStateApi {
       case "presets_update": this.handlePresetsUpdate(msg.requestId, msg.presetId, msg.input, msg.userId); return true;
       case "presets_delete": this.handlePresetsDelete(msg.requestId, msg.presetId, msg.userId); return true;
       case "preset_blocks_list": this.handlePresetBlocksList(msg.requestId, msg.presetId, msg.userId); return true;
-      case "preset_blocks_get": this.handlePresetBlocksGet(msg.requestId, msg.presetId, msg.blockId, msg.userId); return true;
-      case "preset_blocks_create": this.handlePresetBlocksCreate(msg.requestId, msg.presetId, msg.input, msg.index, msg.userId); return true;
-      case "preset_blocks_update": this.handlePresetBlocksUpdate(msg.requestId, msg.presetId, msg.blockId, msg.input, msg.userId); return true;
-      case "preset_blocks_delete": this.handlePresetBlocksDelete(msg.requestId, msg.presetId, msg.blockId, msg.userId); return true;
+      case "preset_blocks_get": this.handlePresetBlocksGet(msg.requestId, msg.presetId, msg.occurrence, msg.userId); return true;
+      case "preset_blocks_create": this.handlePresetBlocksCreate(msg.requestId, msg.presetId, msg.input, msg.options, msg.userId); return true;
+      case "preset_blocks_update": this.handlePresetBlocksUpdate(msg.requestId, msg.presetId, msg.target, msg.input, msg.userId); return true;
+      case "preset_blocks_delete": this.handlePresetBlocksDelete(msg.requestId, msg.presetId, msg.target, msg.userId); return true;
       case "preset_categories_list": this.handlePresetCategoriesList(msg.requestId, msg.presetId, msg.userId); return true;
       default: return false;
     }
@@ -61,7 +167,7 @@ export class WorkerHostStateApi {
   private enforceScopedUser(userId: string | null | undefined): void { this.context.enforceScopedUser(userId); }
   private resolveEffectiveUserId(userId?: string): string | null { return this.context.resolveEffectiveUserId(userId); }
   private hasPermission(permission: "presets"): boolean { return this.context.hasPermission(permission); }
-  private postToWorker(message: { type: "response"; requestId: string; result?: unknown; error?: string }): void { this.context.postResponse(message); }
+  private postToWorker(message: HostResponseMessage): void { this.context.postResponse(message); }
 
   private getLocalVars(chatId: string): Record<string, string> {
     const userId = this.getChatOwnerId(chatId);
@@ -307,7 +413,7 @@ export class WorkerHostStateApi {
       this.postToWorker({
         type: "response",
         requestId,
-        result: { data: result.data, total: result.total },
+        result: { data: result.data.map((preset) => projectSpindlePreset(preset)!), total: result.total },
       });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -317,7 +423,11 @@ export class WorkerHostStateApi {
   private handlePresetsGet(requestId: string, presetId: string, userId?: string): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.getPreset(resolvedUserId, presetId) });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: projectSpindlePreset(presetsSvc.getPreset(resolvedUserId, presetId)),
+      });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -326,6 +436,7 @@ export class WorkerHostStateApi {
   private handlePresetsCreate(requestId: string, input: CreatePresetInput, userId?: string): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
+      assertSpindlePresetMutationSafe(input);
       if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
         throw new Error("Preset name is required");
       }
@@ -333,7 +444,7 @@ export class WorkerHostStateApi {
         throw new Error("Preset provider is required");
       }
       const preset = presetsSvc.createPreset(resolvedUserId, input);
-      this.postToWorker({ type: "response", requestId, result: preset });
+      this.postToWorker({ type: "response", requestId, result: projectSpindlePreset(preset) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -343,25 +454,15 @@ export class WorkerHostStateApi {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
       const requestedInput = input || {};
+      assertSpindlePresetMutationSafe(requestedInput);
       if (requestedInput.expected_cache_revision === undefined) {
         throw new Error("Preset revision is required for preset updates");
       }
       const preset = presetsSvc.updatePreset(resolvedUserId, presetId, requestedInput);
       if (!preset) throw new Error("Preset not found");
-      this.postToWorker({ type: "response", requestId, result: preset });
-    } catch (err: any) {
-      const error: string | PresetConflictWorkerError = err instanceof PresetRevisionConflictError
-        ? {
-            code: err.code,
-            message: err.message,
-            presetId: err.presetId,
-            expectedCacheRevision: err.expectedCacheRevision,
-            actualCacheRevision: err.actualCacheRevision,
-          }
-        : err.message;
-      // The published 0.6.2 host contract types errors as strings; the
-      // revision-safe candidate widens this field to structured metadata.
-      this.postToWorker({ type: "response", requestId, error: error as unknown as string });
+      this.postToWorker({ type: "response", requestId, result: projectSpindlePreset(preset) });
+    } catch (err: unknown) {
+      this.postToWorker({ type: "response", requestId, error: presetWorkerError(err) });
     }
   }
 
@@ -385,10 +486,15 @@ export class WorkerHostStateApi {
     }
   }
 
-  private handlePresetBlocksGet(requestId: string, presetId: string, blockId: string, userId?: string): void {
+  private handlePresetBlocksGet(
+    requestId: string,
+    presetId: string,
+    occurrence: presetsSvc.PromptBlockOccurrence,
+    userId?: string,
+  ): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.getPromptBlock(resolvedUserId, presetId, blockId) });
+      this.postToWorker({ type: "response", requestId, result: presetsSvc.getPromptBlock(resolvedUserId, presetId, occurrence) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -398,42 +504,47 @@ export class WorkerHostStateApi {
     requestId: string,
     presetId: string,
     input: presetsSvc.CreatePromptBlockInput,
-    index?: number,
+    options: presetsSvc.CreatePromptBlockOptions,
     userId?: string,
   ): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const block = presetsSvc.createPromptBlock(resolvedUserId, presetId, input || {}, index);
+      const block = presetsSvc.createPromptBlock(resolvedUserId, presetId, input || {}, options);
       if (!block) throw new Error("Preset not found");
       this.postToWorker({ type: "response", requestId, result: block });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
+    } catch (err: unknown) {
+      this.postToWorker({ type: "response", requestId, error: presetWorkerError(err) });
     }
   }
 
   private handlePresetBlocksUpdate(
     requestId: string,
     presetId: string,
-    blockId: string,
+    target: presetsSvc.PromptBlockMutationTarget,
     input: presetsSvc.UpdatePromptBlockInput,
     userId?: string,
   ): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const block = presetsSvc.updatePromptBlock(resolvedUserId, presetId, blockId, input || {});
+      const block = presetsSvc.updatePromptBlock(resolvedUserId, presetId, target, input || {});
       if (!block) throw new Error("Prompt block not found");
       this.postToWorker({ type: "response", requestId, result: block });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
+    } catch (err: unknown) {
+      this.postToWorker({ type: "response", requestId, error: presetWorkerError(err) });
     }
   }
 
-  private handlePresetBlocksDelete(requestId: string, presetId: string, blockId: string, userId?: string): void {
+  private handlePresetBlocksDelete(
+    requestId: string,
+    presetId: string,
+    target: presetsSvc.PromptBlockMutationTarget,
+    userId?: string,
+  ): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.deletePromptBlock(resolvedUserId, presetId, blockId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
+      this.postToWorker({ type: "response", requestId, result: presetsSvc.deletePromptBlock(resolvedUserId, presetId, target) });
+    } catch (err: unknown) {
+      this.postToWorker({ type: "response", requestId, error: presetWorkerError(err) });
     }
   }
 

@@ -3,16 +3,39 @@ import * as svc from "../services/regex-scripts.service";
 import { parsePagination } from "../services/pagination";
 import { applyDisplayRegex } from "../services/display-regex.service";
 import type { RegexMacroMode, RegexPlacement, RegexScope, RegexScript, RegexTarget } from "../types/regex-script";
+import { REGEX_LIMITS_V1, utf8ByteLength } from "../utils/regex-limits";
 
 const app = new Hono();
-
 const APPLY_MAX_CONTENT_LENGTH = 500_000;
 const APPLY_MAX_SCRIPT_COUNT = 500;
-const APPLY_MAX_PATTERN_LENGTH = 10_000;
-const APPLY_MAX_RESOLVED_TEMPLATE_LENGTH = 100_000;
+const APPLY_MAX_PATTERN_LENGTH = REGEX_LIMITS_V1.maxPatternBytes;
+const APPLY_MAX_RESOLVED_TEMPLATE_LENGTH = REGEX_LIMITS_V1.maxReplacementBytes;
 const APPLY_VALID_PLACEMENTS = new Set<RegexPlacement>(["user_input", "ai_output", "world_info", "reasoning"]);
 const APPLY_VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
-const APPLY_VALID_MACRO_MODES = new Set<RegexMacroMode>(["none", "find", "raw", "escaped", "after"]);
+const APPLY_VALID_TARGETS = new Set<RegexTarget>(["prompt", "response", "display"]);
+const APPLY_VALID_MACRO_MODES: Record<RegexMacroMode, true> = {
+  none: true,
+  find: true,
+  raw: true,
+  escaped: true,
+  after: true,
+};
+function runRegexAuthorityMutation<T>(userId: string, mutate: () => T): {
+  value: T;
+  presetAuthorityChanged: boolean;
+  presetAuthorities: ReturnType<typeof svc.resolveRegexPresetAuthorities>["presetAuthorities"];
+} {
+  const before = svc.captureRegexPresetAuthorities(userId);
+  const value = mutate();
+  return { value, ...svc.resolveRegexPresetAuthorities(userId, before) };
+}
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+function isRegexMacroMode(value: unknown): value is RegexMacroMode {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(APPLY_VALID_MACRO_MODES, value);
+}
 
 function isStringRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -20,11 +43,18 @@ function isStringRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeResolvedMap(value: unknown): Map<string, string> | undefined {
   if (!isStringRecord(value)) return undefined;
-  const entries = Object.entries(value).filter((entry): entry is [string, string] => (
-    typeof entry[0] === "string" &&
-    typeof entry[1] === "string" &&
-    entry[1].length <= APPLY_MAX_RESOLVED_TEMPLATE_LENGTH
-  ));
+  const entries: Array<[string, string]> = [];
+  for (const [key, candidate] of Object.entries(value)) {
+    if (entries.length >= REGEX_LIMITS_V1.maxPatterns) break;
+    if (
+      typeof key === "string"
+      && typeof candidate === "string"
+      && utf8ByteLength(key) <= REGEX_LIMITS_V1.maxActionBytes
+      && utf8ByteLength(candidate) <= APPLY_MAX_RESOLVED_TEMPLATE_LENGTH
+    ) {
+      entries.push([key, candidate]);
+    }
+  }
   return entries.length > 0 ? new Map(entries) : undefined;
 }
 
@@ -51,16 +81,37 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
 
     if (!id) return "script id is required";
     if (findRegex === undefined) return "script find_regex is required";
-    if (findRegex.length > APPLY_MAX_PATTERN_LENGTH) return "script find_regex exceeds maximum length";
+    if (utf8ByteLength(id) > REGEX_LIMITS_V1.maxActionBytes) return "script id exceeds maximum byte length";
+    if (utf8ByteLength(findRegex) > APPLY_MAX_PATTERN_LENGTH) return "script find_regex exceeds maximum byte length";
+    if (utf8ByteLength(replaceString) > REGEX_LIMITS_V1.maxReplacementBytes) {
+      return "script replace_string exceeds maximum byte length";
+    }
     if (!validateFlags(flags)) return "script flags are invalid";
     if (!Array.isArray(placement) || !placement.every((p): p is RegexPlacement => (
       typeof p === "string" && APPLY_VALID_PLACEMENTS.has(p as RegexPlacement)
     ))) {
       return "script placement is invalid";
     }
-    const normalizedTarget: RegexTarget[] = Array.isArray(target) ? target : (typeof target === "string" ? [target] : ["display"]);
-    if (!normalizedTarget.includes("display")) return "only display regex scripts can be applied";
-    if (!APPLY_VALID_MACRO_MODES.has(substituteMacros as RegexMacroMode)) return "script substitute_macros is invalid";
+    const normalizedTarget: RegexTarget[] = Array.isArray(target)
+      ? target.filter((candidate): candidate is RegexTarget => typeof candidate === "string")
+      : (typeof target === "string" ? [target as RegexTarget] : ["display"]);
+    if (
+      normalizedTarget.length === 0
+      || !normalizedTarget.every((candidate) => APPLY_VALID_TARGETS.has(candidate))
+      || !normalizedTarget.includes("display")
+    ) return "script target is invalid";
+    if (!isRegexMacroMode(substituteMacros)) return "script substitute_macros is invalid";
+
+    if (Array.isArray(raw.trim_strings)) {
+      if (raw.trim_strings.length > REGEX_LIMITS_V1.maxTrimStrings) return "script trim_strings exceeds maximum count";
+      for (const trim of raw.trim_strings) {
+        if (typeof trim !== "string" || trim.length === 0) return "script trim_strings must be non-empty strings";
+        if (utf8ByteLength(trim) > REGEX_LIMITS_V1.maxTrimStringBytes) return "script trim_string exceeds maximum byte length";
+      }
+    }
+    const metadata = isStringRecord(raw.metadata) ? raw.metadata : {};
+    const metadataJson = JSON.stringify(metadata);
+    if (utf8ByteLength(metadataJson) > REGEX_LIMITS_V1.maxActionBytes) return "script metadata exceeds maximum byte length";
 
     scripts.push({
       id,
@@ -75,26 +126,25 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
       scope: raw.scope === "character" || raw.scope === "chat" ? raw.scope : "global",
       scope_id: typeof raw.scope_id === "string" ? raw.scope_id : null,
       target: normalizedTarget,
-      min_depth: typeof raw.min_depth === "number" ? raw.min_depth : null,
-      max_depth: typeof raw.max_depth === "number" ? raw.max_depth : null,
+      min_depth: isSafeInteger(raw.min_depth) ? raw.min_depth : null,
+      max_depth: isSafeInteger(raw.max_depth) ? raw.max_depth : null,
       trim_strings: Array.isArray(raw.trim_strings)
         ? raw.trim_strings.filter((trim): trim is string => typeof trim === "string")
         : [],
       run_on_edit: !!raw.run_on_edit,
-      substitute_macros: substituteMacros as RegexMacroMode,
+      substitute_macros: substituteMacros,
       disabled: !!raw.disabled,
-      sort_order: typeof raw.sort_order === "number" ? raw.sort_order : 0,
+      sort_order: isSafeInteger(raw.sort_order) ? raw.sort_order : 0,
       description: typeof raw.description === "string" ? raw.description : "",
       folder: typeof raw.folder === "string" ? raw.folder : "",
       pack_id: typeof raw.pack_id === "string" ? raw.pack_id : null,
-      preset_id: typeof raw.preset_id === "string" ? raw.preset_id : null,
       character_id: typeof raw.character_id === "string" ? raw.character_id : null,
-      // Request-supplied display scripts are transient and never acquire
-      // persisted extension ownership.
+      preset_id: typeof raw.preset_id === "string" ? raw.preset_id : null,
       owner_extension_identifier: null,
-      metadata: isStringRecord(raw.metadata) ? raw.metadata : {},
-      created_at: typeof raw.created_at === "number" ? raw.created_at : 0,
-      updated_at: typeof raw.updated_at === "number" ? raw.updated_at : 0,
+      validation_error_code: null,
+      metadata,
+      created_at: isSafeInteger(raw.created_at) ? raw.created_at : 0,
+      updated_at: isSafeInteger(raw.updated_at) ? raw.updated_at : 0,
     });
   }
 
@@ -150,9 +200,10 @@ app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   const { active_preset_id, ...input } = body ?? {};
-  const result = svc.createRegexScript(userId, input, { activePresetId: active_preset_id ?? null });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.createRegexScript(userId, input, { activePresetId: active_preset_id ?? null }));
+  const result = mutation.value;
   if (typeof result === "string") return c.json({ error: result }, 400);
-  return c.json(result, 201);
+  return c.json({ script: result, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities }, 201);
 });
 
 // POST /apply — apply display regex using the backend sandboxed regex engine.
@@ -162,17 +213,39 @@ app.post("/apply", async (c) => {
   if (!isStringRecord(body)) return c.json({ error: "invalid request body" }, 400);
 
   const content = body.content;
-  if (typeof content !== "string") return c.json({ error: "content is required" }, 400);
-  if (content.length > APPLY_MAX_CONTENT_LENGTH) return c.json({ error: "content exceeds maximum length" }, 413);
+  if (typeof content !== "string") return c.json({ error: "content is required", code: "invalid_input" }, 400);
+  if (
+    content.length > APPLY_MAX_CONTENT_LENGTH
+    || utf8ByteLength(content) > REGEX_LIMITS_V1.maxInputBytes
+  ) return c.json({ error: "content exceeds maximum length", code: "input_too_large" }, 413);
 
   const scripts = normalizeDisplayScripts(body.scripts, userId);
-  if (typeof scripts === "string") return c.json({ error: scripts }, 400);
+  if (typeof scripts === "string") return c.json({ error: scripts, code: "invalid_input" }, 400);
 
   const context = body.context;
-  if (!isStringRecord(context)) return c.json({ error: "context is required" }, 400);
+  if (!isStringRecord(context)) return c.json({ error: "context is required", code: "invalid_input" }, 400);
 
-  const dynamicMacros = isStringRecord(body.dynamic_macros)
-    ? Object.fromEntries(Object.entries(body.dynamic_macros).filter(([, v]) => typeof v === "string")) as Record<string, string>
+  const dynamicMacrosRecord = body.dynamic_macros;
+  if (dynamicMacrosRecord !== undefined && !isStringRecord(dynamicMacrosRecord)) {
+    return c.json({ error: "dynamic_macros must be an object", code: "invalid_input" }, 400);
+  }
+  const dynamicEntries = isStringRecord(dynamicMacrosRecord)
+    ? Object.entries(dynamicMacrosRecord)
+    : [];
+  if (dynamicEntries.length > REGEX_LIMITS_V1.maxCount) {
+    return c.json({ error: "dynamic_macros exceeds maximum entries", code: "limit_exceeded" }, 413);
+  }
+  for (const [key, value] of dynamicEntries) {
+    if (
+      typeof value !== "string"
+      || utf8ByteLength(key) > REGEX_LIMITS_V1.maxActionBytes
+      || utf8ByteLength(value) > REGEX_LIMITS_V1.maxReplacementBytes
+    ) {
+      return c.json({ error: "dynamic_macros contains an oversized or invalid value", code: "limit_exceeded" }, 413);
+    }
+  }
+  const dynamicMacros = dynamicEntries.length > 0
+    ? Object.fromEntries(dynamicEntries) as Record<string, string>
     : undefined;
 
   const ctxRole = typeof context.role === "string"
@@ -188,10 +261,7 @@ app.post("/apply", async (c) => {
       character_id: typeof context.character_id === "string" ? context.character_id : undefined,
       persona_id: typeof context.persona_id === "string" ? context.persona_id : undefined,
       is_user: !!context.is_user,
-      depth: typeof context.depth === "number" ? context.depth : 0,
-      ...(typeof context.message_id === "string" ? { message_id: context.message_id } : {}),
-      ...(typeof context.message_index === "number" ? { message_index: context.message_index } : {}),
-      ...(ctxRole ? { role: ctxRole } : {}),
+      depth: isSafeInteger(context.depth) ? context.depth : 0,
     },
     userId,
     resolvedFindPatterns: normalizeResolvedMap(body.resolved_find_patterns),
@@ -210,17 +280,62 @@ app.post("/apply", async (c) => {
 
 // POST /test — test regex
 app.post("/test", async (c) => {
-  const { find_regex, replace_string, flags, content, match_actions } = await c.req.json();
-  if (!find_regex || content === undefined) return c.json({ error: "find_regex and content are required" }, 400);
-  const actions = Array.isArray(match_actions)
-    ? match_actions.filter(
+  const body = await c.req.json().catch(() => null);
+  if (!isStringRecord(body)) {
+    return c.json({ error: "request body must be an object", code: "invalid_input" }, 400);
+  }
+  const findRegex = body.find_regex;
+  const replaceString = body.replace_string;
+  const flags = body.flags;
+  const content = body.content;
+  if (typeof findRegex !== "string" || findRegex.length === 0) {
+    return c.json({ error: "find_regex must be a non-empty string", code: "invalid_input" }, 400);
+  }
+  if (typeof content !== "string") {
+    return c.json({ error: "content must be a string", code: "invalid_input" }, 400);
+  }
+  if (replaceString !== undefined && typeof replaceString !== "string") {
+    return c.json({ error: "replace_string must be a string", code: "invalid_input" }, 400);
+  }
+  if (flags !== undefined && typeof flags !== "string") {
+    return c.json({ error: "flags must be a string", code: "invalid_input" }, 400);
+  }
+  if (utf8ByteLength(findRegex) > REGEX_LIMITS_V1.maxPatternBytes) {
+    return c.json({ error: "find_regex exceeds its UTF-8 byte limit", code: "pattern_too_large" }, 413);
+  }
+  if (typeof replaceString === "string" && utf8ByteLength(replaceString) > REGEX_LIMITS_V1.maxReplacementBytes) {
+    return c.json({ error: "replace_string exceeds its UTF-8 byte limit", code: "replacement_too_large" }, 413);
+  }
+  if (utf8ByteLength(content) > REGEX_LIMITS_V1.maxInputBytes) {
+    return c.json({ error: "content exceeds its UTF-8 byte limit", code: "invalid_input" }, 413);
+  }
+  const resolvedFlags = flags ?? "gi";
+  if (!validateFlags(resolvedFlags)) {
+    return c.json({ error: "flags are invalid", code: "invalid_flags" }, 400);
+  }
+  const actionsValue = body.match_actions;
+  if (actionsValue !== undefined && !Array.isArray(actionsValue)) {
+    return c.json({ error: "match_actions must be an array", code: "invalid_input" }, 400);
+  }
+  const actions = Array.isArray(actionsValue)
+    ? actionsValue.filter(
         (action): action is "move_top" | "move_bottom" | "repeat_back" =>
           action === "move_top"
           || action === "move_bottom"
           || action === "repeat_back",
       )
     : [];
-  return c.json(await svc.testRegex(find_regex, replace_string ?? "", flags ?? "gi", content, actions));
+  const result = await svc.testRegex(
+    findRegex,
+    replaceString ?? "",
+    resolvedFlags,
+    content,
+    actions,
+  );
+  if (result.error_code) {
+    return c.json({ ...result, code: result.error_code }, 400);
+  }
+  return c.json(result);
 });
 
 // POST /export — export scripts
@@ -238,7 +353,8 @@ app.post("/export", async (c) => {
 app.post("/import", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  return c.json(svc.importRegexScripts(userId, body, { activePresetId: body?.active_preset_id ?? null }), 201);
+  const mutation = runRegexAuthorityMutation(userId, () => svc.importRegexScripts(userId, body, { activePresetId: body?.active_preset_id ?? null }));
+  return c.json({ ...mutation.value, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities }, 201);
 });
 
 // PUT /reorder — bulk reorder
@@ -246,8 +362,8 @@ app.put("/reorder", async (c) => {
   const userId = c.get("userId");
   const { ids } = await c.req.json();
   if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
-  svc.reorderRegexScripts(userId, ids);
-  return c.json({ success: true });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.reorderRegexScripts(userId, ids));
+  return c.json({ success: true, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // POST /bulk-delete — delete many scripts in one transaction
@@ -256,8 +372,8 @@ app.post("/bulk-delete", async (c) => {
   const { ids } = await c.req.json();
   if (!Array.isArray(ids)) return c.json({ error: "ids must be an array" }, 400);
   const stringIds = ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
-  const deleted = svc.deleteRegexScripts(userId, stringIds);
-  return c.json({ deleted, count: deleted.length });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.deleteRegexScripts(userId, stringIds));
+  return c.json({ deleted: mutation.value, count: mutation.value.length, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // POST /bulk-toggle — enable/disable an explicit selection in one transaction
@@ -266,10 +382,10 @@ app.post("/bulk-toggle", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
   const stringIds = body.ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
-  const result = svc.toggleRegexScriptsByIds(userId, stringIds, !!body?.disabled, {
+  const mutation = runRegexAuthorityMutation(userId, () => svc.toggleRegexScriptsByIds(userId, stringIds, !!body?.disabled, {
     activePresetId: body?.active_preset_id ?? null,
-  });
-  return c.json(result);
+  }));
+  return c.json({ ...mutation.value, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // GET /:id — get by ID
@@ -285,17 +401,19 @@ app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   const { active_preset_id, ...input } = body ?? {};
-  const result = svc.updateRegexScript(userId, c.req.param("id"), input, { activePresetId: active_preset_id ?? null });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.updateRegexScript(userId, c.req.param("id"), input, { activePresetId: active_preset_id ?? null }));
+  const result = mutation.value;
   if (result === null) return c.json({ error: "Not found" }, 404);
   if (typeof result === "string") return c.json({ error: result }, 400);
-  return c.json(result);
+  return c.json({ script: result, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // DELETE /:id — delete
 app.delete("/:id", (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteRegexScript(userId, c.req.param("id"))) return c.json({ error: "Not found" }, 404);
-  return c.json({ success: true });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.deleteRegexScript(userId, c.req.param("id")));
+  if (!mutation.value) return c.json({ error: "Not found" }, 404);
+  return c.json({ success: true, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // POST /:id/duplicate — duplicate
@@ -357,9 +475,10 @@ app.post("/:id/report-evidence", async (c) => {
 app.put("/:id/toggle", async (c) => {
   const userId = c.get("userId");
   const { disabled, active_preset_id } = await c.req.json();
-  const script = svc.toggleRegexScript(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null });
+  const mutation = runRegexAuthorityMutation(userId, () => svc.toggleRegexScript(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null }));
+  const script = mutation.value;
   if (!script) return c.json({ error: "Not found" }, 404);
-  return c.json(script);
+  return c.json({ script, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 // POST /folders/toggle — bulk enable/disable every script in a folder
@@ -368,10 +487,10 @@ app.post("/folders/toggle", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const folder = typeof body?.folder === "string" ? body.folder : undefined;
   if (folder === undefined) return c.json({ error: "folder is required" }, 400);
-  const result = svc.toggleRegexScriptsByFolder(userId, folder, !!body?.disabled, {
+  const mutation = runRegexAuthorityMutation(userId, () => svc.toggleRegexScriptsByFolder(userId, folder, !!body?.disabled, {
     activePresetId: body?.active_preset_id ?? null,
-  });
-  return c.json(result);
+  }));
+  return c.json({ ...mutation.value, presetAuthorityChanged: mutation.presetAuthorityChanged, presetAuthorities: mutation.presetAuthorities });
 });
 
 export { app as regexScriptsRoutes };

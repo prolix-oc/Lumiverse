@@ -15,7 +15,7 @@ export interface SynthesizeInput {
 
 function resolveConnection(userId: string, connectionId?: string) {
   const profile = connectionId
-    ? ttsConnSvc.getConnection(userId, connectionId)
+    ? ttsConnSvc.getUsableConnection(userId, connectionId)
     : ttsConnSvc.getDefaultConnection(userId);
 
   if (!profile) {

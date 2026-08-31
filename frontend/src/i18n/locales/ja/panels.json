@@ -1,4 +1,15 @@
 {
+  "connectionReview": {
+    "title": "確認が必要です",
+    "description": "このインポートされた接続は、確認して有効にするまで無効です。",
+    "enable": "接続を有効にする",
+    "enabling": "有効化中…",
+    "reasons": {
+      "foreignImport": "インポートされた接続にはローカルでの承認が必要です。",
+      "repairRequired": "有効にする前に接続データの修復が必要です。",
+      "unknown": "有効にする前に接続の確認が必要です。"
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "材料形状",
@@ -1402,6 +1413,10 @@
     "openChatToAdd": "チャットを開き、チャット範囲のワールド ブックを追加",
     "removeFromChat": "このチャットから削除",
     "noChatActive": "このチャットでアクティブなワールドブックはありません",
+    "chatAttachmentSaveFailed": "このチャットのワールドブックの添付を保存できませんでした。",
+    "entrySaveFailed": "このワールドブックのエントリを保存できませんでした。",
+    "entryDeleteFailed": "このワールドブックのエントリを削除できませんでした。",
+    "entryMutationFailed": "このワールドブックのエントリを更新できませんでした。",
     "activationSettings": "アクティベーション設定",
     "selectBook": "本を選択してください…",
     "selectWorldBookAria": "ワールド ブックを選択",
@@ -2820,7 +2835,9 @@
     "fuseFailed": "データバンクの融合に失敗しました",
     "scrapeFailed": "URLのスクレイピングに失敗しました",
     "loadDocFailed": "ドキュメント コンテンツのロードに失敗しました",
-    "saveDocFailed": "ドキュメントの保存に失敗しました"
+    "saveDocFailed": "ドキュメントの保存に失敗しました",
+    "remoteDocumentRemoved": "このドキュメントは削除されました。",
+    "remoteDatabankRemoved": "このデータバンクは削除されました。"
   },
   "creatorWorkshop": {
     "shared": {
@@ -3083,7 +3100,8 @@
     "unknownProvider": "不明",
     "editorTabs": {
       "ariaLabel": "プリセットエディターのタブ",
-      "preset": "プリセット"
+      "preset": "プリセット",
+      "agenticRuntime": "エージェントランタイム"
     },
     "tokens": " トークン",
     "category": {
@@ -3132,6 +3150,14 @@
       "emptyOutput": "(空の出力)",
       "noPreview": "プレビューするコンテンツがありません",
       "lockBlock": "ブロックをロックします (誤って編集しないようにします)",
+      "sealedBlockTitle": "LumiHub 封印ブロック",
+      "sealedBlockHint": "高度な公開設定です。このプリセットを LumiHub にアップロードすると、ブロックの内容は公開 JSON から削除され、Hub 側の非公開ブロックとして保存されます。アップロードするまでは、ローカルのコピーにテキストが残ります。",
+      "sealedBlockInstalledHint": "LumiHub からインストールされました。このブロックはローカルで表示・編集できますが、Lumiverse はエクスポートや共有データからこの内容を常に削除します。",
+      "sealedBlockKey": "封印ブロックキー",
+      "sealedBlockKeyPlaceholder": "dialogue.frame",
+      "sealedBlockKeyHint": "安定したリゾルバーキー。英字、数字、ドット、ハイフン、アンダースコア、コロンを使用してください。",
+      "sealedBlockEnable": "これは LumiHub への公開用であることを理解し、アップロード時にこのブロックを封印することを希望します。",
+      "sealedBlockInstalledEnable": "このブロックは LumiHub からインストールされたため、エクスポート時は常に封印されます。",
       "categoryMode": "カテゴリ モード",
       "categoryModeNormal": "通常切り替え",
       "categoryModeMulti": "複数選択",
@@ -3331,6 +3357,601 @@
       "reapplied": "デフォルトのプロファイルが再適用されました",
       "alreadyDefault": "ブロック状態はすでにデフォルトと一致しています"
     },
+    "agenticRuntime": {
+      "eyebrow": "プリセットランタイム",
+      "title": "エージェント型ランタイム",
+      "description": "有効化、子エージェント、フェーズ別指示、コンテキスト、タスク、ワークスペースポリシー、ローカル修復を、1つのバージョン管理されたドラフトとして作成します。",
+      "nativeContextNotice": "World Info と Databank は Loom の外部にあるライブなネイティブソースのままです。Loom はそれらをコピー、固定、修復しません。",
+      "status": {
+        "enabled": "有効",
+        "disabled": "無効"
+      },
+      "navigation": {
+        "ariaLabel": "エージェント型ランタイムのセクション",
+        "saveBeforePresetAction": "プリセットを変更、インポート、またはエクスポートする前に、エージェント型ランタイムのドラフトを保存するか、問題を解決してください。"
+      },
+      "sections": {
+        "activation": {
+          "nav": "有効化とモード",
+          "title": "有効化とモード",
+          "description": "このプリセットで許可するモードを選択します。チャットまたは1ターンの選択は別途解決され、このプリセットを変更することはありません。"
+        },
+        "agents": {
+          "nav": "エージェント",
+          "title": "エージェント",
+          "description": "再利用可能な子プロファイルと、移植可能な接続スロット参照を定義します。"
+        },
+        "tools": {
+          "nav": "コアツールと依存関係",
+          "title": "コアツールと依存関係",
+          "description": "このプリセットに必要な、ホスト所有の検索ツールと予算のみを付与します。"
+        },
+        "phases": {
+          "nav": "フェーズ別指示",
+          "title": "フェーズ別指示",
+          "description": "既存の Loom ブロックの正確なリビジョン、コンテキスト配信、フェーズランタイムの固定宛先を選択します。Agentic は第2の自由形式プロンプトシステムを追加しません。"
+        },
+        "tasks": {
+          "nav": "動的タスク",
+          "title": "動的タスク",
+          "description": "制約付きタスクテンプレート、依存関係の閉包、必須性、有効化を定義します。"
+        },
+        "workspace": {
+          "nav": "ワークスペースの保持と共有",
+          "title": "ワークスペースの保持と共有",
+          "description": "ホストが強制する上限内で、保持期間と閲覧専用共有を選択します。"
+        },
+        "repair": {
+          "nav": "移植性と修復",
+          "title": "移植性と修復",
+          "description": "有効化する前に、ローカルスロット、古いリビジョン、インポートされたレビュー項目、機能の不一致を解決します。"
+        }
+      },
+      "activation": {
+        "reviewTitle": "ローカルレビューが完了していません",
+        "reviewDescription": "このインポートされた構成を有効にする前に、すべてのレビュー項目を確認し、必要な修復をすべて完了してください。",
+        "enable": "プリセットエージェントを有効化",
+        "enableHint": "作成済みの構成を Response で使用可能にし、完全に準備が整っている場合は Agentic モードでも使用可能にします。",
+        "allowedModes": "許可するモード",
+        "defaultMode": "プリセットのデフォルトモード"
+      },
+      "modes": {
+        "response": "Response",
+        "responseHint": "確立済みの生成経路を使用し、修復または互換性維持のために引き続き利用できます。",
+        "agentic": "Agentic",
+        "agenticHint": "有効なランタイムのすべてのゲートが準備完了の場合にのみ、閉じたシングルターンのフェーズマシンを使用します。"
+      },
+      "agents": {
+        "connectionRef": "移植可能な接続スロット"
+      },
+      "generationTypes": {
+        "normal": "通常",
+        "continue": "続行",
+        "regenerate": "再生成",
+        "swipe": "スワイプ"
+      },
+      "phases": {
+        "names": {
+          "assemble": "組み立て",
+          "work": "作業",
+          "complete": "完了",
+          "render": "レンダー",
+          "prepare_commit": "コミット準備",
+          "committing": "コミット中",
+          "committed": "コミット済み",
+          "commit_failed": "コミット失敗",
+          "exhausted": "上限到達",
+          "failed": "失敗",
+          "cancelled": "キャンセル済み",
+          "timed_out": "タイムアウト"
+        },
+        "workPolicy": {
+          "title": "作業ポリシー",
+          "description": "エージェントの非公開作業中にのみ利用可能な指示です。"
+        },
+        "workspaceUsage": {
+          "title": "ワークスペースの使用",
+          "description": "制約付きタスク、レコード、提出物を使用するための指示です。"
+        },
+        "completionCriteria": {
+          "title": "完了条件",
+          "description": "ホストが完了を受け入れる前に評価される指示です。"
+        },
+        "renderPolicy": {
+          "title": "レンダリングポリシー",
+          "description": "ツールが無効化された最終レンダリングでのみ使用される指示です。"
+        },
+        "source": "ソースブロック",
+        "sourceRevision": "プリセットリビジョン {{presetRevision}} · ブロックリビジョン {{blockRevision}} · プロンプト位置 {{promptOrder}}",
+        "notSelected": "未選択",
+        "stale": "ブロックのリビジョンが変更されました — 保存する前に再選択してください",
+        "required": "必須",
+        "requiredHint": "必須項目は完了前に利用可能でなければなりません。",
+        "requiredFor": "{{name}} を必須にする",
+        "condition": "条件",
+        "conditionHint": "有効にすると、型付き条件が true の場合にのみこのブロックを含めます。",
+        "conditionFor": "{{name}} の条件",
+        "routing": "固定ルーティング",
+        "routingHint": "各ポリシーバケットには固定の宛先とチェックポイントがあります。",
+        "routingValue": "宛先: {{destination}} · チェックポイント: {{checkpoint}}",
+        "destinations": {
+          "root_work": "ルート WORK",
+          "completion_handoff": "完了の引き継ぎ",
+          "render": "ツール無効の RENDER"
+        },
+        "checkpoints": {
+          "WORK": "WORK",
+          "PREPARE_COMMIT": "コミット準備",
+          "RENDER": "RENDER"
+        },
+        "responseOmissionTitle": "Response モードでは Agentic 指示を省略します",
+        "responseOmissionHint": "これらの Loom ポリシー項目とカスタムフェーズ指示は Agentic 実行専用で、Response モードには含まれません。",
+        "responseOmissionRoute": "宛先: {{destination}} · チェックポイント: {{checkpoint}}",
+        "responseOmissionEntry": "ポリシー項目 {{id}}",
+        "responseOmissionPhaseInstruction": "フェーズ指示 {{blockId}} · 正確なブロックリビジョン {{blockRevision}}"
+      },
+      "customPhases": {
+        "title": "カスタムフェーズ",
+        "description": "正確な指示、条件、機能、遷移を持つ、範囲を限定したフェーズを追加します。",
+        "defaultLabel": "フェーズ {{number}}",
+        "add": "カスタムフェーズを追加",
+        "empty": "カスタムフェーズは設定されていません。",
+        "summary": "フェーズ {{number}} · {{id}}",
+        "order": "順序 {{number}}",
+        "orderHint": "前のフェーズが先に実行されます。遷移で繰り返しまたは前進できます。",
+        "moveUp": "{{label}} を上に移動",
+        "moveDown": "{{label}} を下に移動",
+        "id": "フェーズ ID",
+        "idFor": "{{label}} のフェーズ ID",
+        "label": "表示ラベル",
+        "labelFor": "フェーズ {{id}} の表示ラベル",
+        "required": "必須フェーズ",
+        "requiredHint": "必須フェーズは実行を完了する前に終了する必要があります。",
+        "requiredFor": "{{label}} を必須にする",
+        "repeatLimit": "繰り返し上限",
+        "repeatLimitFor": "{{label}} の繰り返し上限",
+        "repeatLimitHint": "このフェーズを繰り返せる最大回数。",
+        "instructions": "指示",
+        "instructionsHint": "プリセットとブロックの正確なリビジョンで既存の Loom ブロックを選択します。",
+        "notSelected": "未選択",
+        "unavailableInstruction": "利用できない指示ブロック {{id}}",
+        "removeInstruction": "指示ブロック {{id}} を削除",
+        "childInstructionSubsets": "委任する子エージェントのフェーズサブセット",
+        "childInstructionSubsetsHint": "選択したフェーズ指示ブロックだけを、作成済みの各子エージェントプロファイルに割り当てます。空のサブセットではフェーズ指示を送信しません。",
+        "childInstructionSubsetsNoProfiles": "フェーズ指示を割り当てる前に、子エージェントプロファイルを作成してください。",
+        "childSubsetAssign": "サブセットを割り当てる",
+        "childSubsetAssignFor": "{{id}} にフェーズサブセットを割り当てる",
+        "childSubsetProfileId": "プロファイル ID: {{id}}",
+        "childSubsetUnassigned": "未割り当て — この子はプロファイルのシステムプロンプトだけを受け取ります。",
+        "childSubsetEmpty": "空のサブセット — この子はプロファイルのシステムプロンプトだけを受け取ります。",
+        "childSubsetCount": "{{count}} 個のフェーズ指示ブロックを割り当て済み。",
+        "childSubsetRepair": "修復が必要 — この割り当てはフェーズの正確なソースと一致しません。",
+        "childSubsetUnknownProfile": "不明な子エージェントプロファイル {{id}}",
+        "childSubsetRemove": "子エージェントプロファイル {{id}} のサブセットを削除",
+        "enter": "開始条件",
+        "enterHint": "この条件が真になるとフェーズを開始します。",
+        "exit": "終了条件",
+        "exitHint": "この条件が真になるとフェーズを完了します。",
+        "skip": "スキップ条件",
+        "skipEnabled": "フェーズのスキップを許可",
+        "skipHint": "有効にすると、条件が真の場合にこのフェーズをスキップします。",
+        "skipFor": "{{label}} のスキップを許可",
+        "capabilities": "要求する機能",
+        "capabilitiesHint": "このフェーズに必要なホスト機能だけを要求します。",
+        "capabilitiesList": {
+          "core_retrieval": "コア検索",
+          "workspace_read": "ワークスペースを読む",
+          "workspace_write": "ワークスペースに書き込む",
+          "delegation": "子エージェントに委任",
+          "council": "Council",
+          "cortex": "Memory Cortex"
+        },
+        "transitions": "次のフェーズ",
+        "transitionsHint": "このフェーズから次に進めるフェーズを選択します。",
+        "transitionAutomatic": "自動シーケンス",
+        "transitionAutomaticHint": "遷移リストが空の場合、上限内の自己反復後、直後のフェーズへ進みます。",
+        "transitionAutomaticNext": "自動的に進む次のフェーズ: {{label}}",
+        "transitionAutomaticTerminal": "次のフェーズはありません。このフェーズの完了でシーケンスが終了します。",
+        "transitionExplicit": "明示的な遷移",
+        "transitionExplicitHint": "選択した自己反復と直後のフェーズへの遷移だけを許可します。",
+        "useExplicitTransitions": "明示的な遷移を使用",
+        "useAutomaticTransition": "自動シーケンスを使用",
+        "repeatTarget": "このフェーズを繰り返す",
+        "nextTarget": "次のフェーズ: {{label}}",
+        "invalidTarget": "利用できないフェーズ: {{id}}",
+        "remove": "カスタムフェーズを削除"
+      },
+      "tasks": {
+        "add": "タスクテンプレートを追加",
+        "defaultName": "タスク {{number}}",
+        "id": "テンプレート ID",
+        "label": "ラベル",
+        "description": "タスクの説明",
+        "required": "必須",
+        "optional": "任意",
+        "requiredHint": "有効化された必須タスクは、完了前に確定している必要があります。モデルが作成したタスクは任意のままです。",
+        "dependencies": "依存テンプレート",
+        "quarantined": "隔離されたタスクテンプレート",
+        "quarantinedHint": "このインポートされたタスクテンプレートは無効で、破棄するまで編集できません。",
+        "discardQuarantined": "隔離されたタスクテンプレートを破棄",
+        "remove": "テンプレートを削除"
+      },
+      "workspace": {
+        "retention": "保持",
+        "sharing": "共有",
+        "retentionOptions": {
+          "turn_terminal": "ターン終了時まで",
+          "chat_lifetime": "チャット存続期間"
+        },
+        "retentionHints": {
+          "turn_terminal": "閲覧専用ワークスペースを、そのターンの終了時保持期間が終わるまでのみ保持します。",
+          "chat_lifetime": "承認済みの公開ワークスペースメタデータを、チャットの存続期間中保持します。"
+        },
+        "sharingOptions": {
+          "root_only": "ルートのみ",
+          "view_only": "閲覧専用の参加者"
+        },
+        "sharingHints": {
+          "root_only": "ルートエージェントのみがワークスペース機能を受け取ります。",
+          "view_only": "参加者は秘匿化されたワークスペースを確認できますが、編集はできません。"
+        },
+        "ceilings": "有効なホスト上限",
+        "ceilingsHint": "このホストが強制する参考情報としての保護制限です。プリセットやインポートによって引き上げることはできません。",
+        "readOnly": "読み取り専用",
+        "loading": "ホスト上限を読み込み中…",
+        "ceilingLabels": {
+          "childAdmissions": "子エージェントの許可数",
+          "aggregateToolCalls": "ツール呼び出し合計",
+          "logicalProviderRequests": "論理プロバイダー要求",
+          "physicalDispatchAttempts": "物理ディスパッチ試行",
+          "childOutputTokens": "子エージェント出力トークン",
+          "workAttemptOutputTokens": "作業試行あたりの出力トークン",
+          "workAttemptProviderDispatches": "作業試行あたりのプロバイダー送信",
+          "workAttemptUnsignedBoundaries": "作業試行あたりの未署名境界",
+          "workAttemptToolCalls": "作業試行あたりのツール呼び出し",
+          "workAttemptWorkspaceOperations": "作業試行あたりのワークスペース操作",
+          "workSegmentOutputTokens": "作業セグメントあたりの出力トークン",
+          "workSegmentProviderDispatches": "作業セグメントあたりのプロバイダー送信",
+          "workSegmentUnsignedBoundaries": "作業セグメントあたりの未署名境界",
+          "workSegmentToolCalls": "作業セグメントあたりのツール呼び出し",
+          "workSegmentWorkspaceOperations": "作業セグメントあたりのワークスペース操作",
+          "workDispatchOutputTokens": "作業ディスパッチあたりの出力トークン",
+          "workRecoveryReserveOutputTokens": "作業リカバリー用の予約出力トークン",
+          "workFuturePhaseReserveOutputTokens": "将来の作業フェーズ用の予約出力トークン",
+          "rootWallClockMs": "ルート実時間（ミリ秒）",
+          "activityEvents": "アクティビティイベント",
+          "activityBytes": "アクティビティバイト数",
+          "lifecycleLogRecords": "ライフサイクルログレコード",
+          "activeRootsPerUser": "ユーザーあたりのアクティブルート数",
+          "activeRootsProcess": "プロセスあたりのアクティブルート数",
+          "providerDispatchesPerUser": "ユーザーあたりのプロバイダーディスパッチ数",
+          "providerDispatchesProcess": "プロセスあたりのプロバイダーディスパッチ数",
+          "toolExecutionsPerUser": "ユーザーあたりのツール実行数",
+          "toolExecutionsProcess": "プロセスあたりのツール実行数"
+        }
+      },
+      "limits": {
+        "customPhases": "1 つのプリセットで定義できるカスタムフェーズは最大 64 個です。",
+        "policyBucket": "Loom ポリシーバケットに含められる項目は最大 64 個です。",
+        "policyTotal": "1 つのプリセットに含められる Loom ポリシー項目は最大 128 個です。",
+        "tasks": "1 つのプリセットで定義できるタスクテンプレートは最大 256 個です。",
+        "invalidBlockRevision": "この Loom ブロックのリビジョンは無効なため選択できません。"
+      },
+      "repair": {
+        "acknowledge": "この項目を確認しました",
+        "chooseConnection": "ローカル接続を選択",
+        "searchConnections": "接続を検索…",
+        "noConnections": "互換性のある接続がありません",
+        "mapSlot": "{{name}} をローカル接続に割り当て",
+        "ready": "対応が必要な移植性または修復項目はありません。",
+        "selectCurrentLoomRevisions": "現在の Loom リビジョンを選択",
+        "selectCurrentLoomRevisionsHint": "現在有効な Loom ブロック、プリセット、プロンプト順のリビジョンを確認して保存できるようにします。欠落または無効なブロックは未修復のままです。新しいリビジョンは自動承認されません。",
+        "selectCurrentLoomRevisionsPending": "現在の Loom リビジョンを準備しました。保存してオーサリング済みランタイムを確定するか、リセットして破棄してください。",
+        "boundary": "ここで利用できるのは、プリセットエージェント、コア検索ツール、Loom ブロック、コンテキストパック、タスク、ワークスペースポリシーのみです。拡張ツール、フック、外部送信許可、ロールエディターは、このランタイムには含まれません。",
+        "kinds": {
+          "unresolved_slot": "未解決の接続スロット",
+          "stale_slot": "古い接続マッピング",
+          "disabled_import": "インポートされた構成は無効です",
+          "capability_mismatch": "プロバイダー機能の不一致",
+          "stale_block": "古い Loom ブロックリビジョン",
+          "unknown": "修復が必要なランタイム項目"
+        },
+        "actions": {
+          "acknowledge": "確認",
+          "map_slot": "接続を割り当て",
+          "select_revision": "リビジョンを選択",
+          "discard": "無効な作成値を破棄",
+          "choose_response": "Response を使用",
+          "unknown": "この項目を処理"
+        },
+        "reasons": {
+          "unresolved_slot": "認証済みのローカル接続を選択してください。",
+          "stale_slot": "以前のローカルマッピングを確認するか、置き換えてください。",
+          "repair_required": "有効化する前に作成データを修復してください。",
+          "capability_mismatch": "割り当てられたプロバイダーに必要な機能がありません。",
+          "stale_policy_source": "保存する前に現在の Loom ブロックのリビジョンと順序を選択してください。",
+          "invalid_runtime_policy": "正規 Loom ランタイムポリシーが無効です。",
+          "invalid_policy_entry": "Loom ポリシー項目が無効です。",
+          "invalid_predicate": "認知条件が未完成です。",
+          "predicate_limit_exceeded": "認知条件がホストの深度またはサイズ制限を超えています。",
+          "unknown": "このランタイム項目を修復してください。"
+        }
+      },
+      "predicate": {
+        "kind": "条件タイプ",
+        "add": "条件を追加",
+        "remove": "条件を削除",
+        "generationType": "生成タイプ",
+        "phase": "フェーズ",
+        "variableKey": "プリセット変数名",
+        "factKey": "参加者ファクト名",
+        "operator": "演算子",
+        "value": "値",
+        "valueType": "値の型",
+        "values": "メンバーシップ値",
+        "addValue": "値を追加",
+        "removeValue": "値 {{number}} を削除",
+        "valueTypes": { "string": "テキスト", "number": "数値", "boolean": "真偽値", "stringList": "テキストリスト" },
+        "boolean": { "true": "真", "false": "偽" },
+        "tool": "ツール",
+        "available": "ツールが利用可能であること",
+        "task": "タスクテンプレート",
+        "chooseTask": "タスクを選択",
+        "transition": "遷移",
+        "kinds": {
+          "all": "すべての条件",
+          "any": "いずれかの条件",
+          "not": "否定",
+          "generation_type": "生成タイプ",
+          "phase": "現在のフェーズ",
+          "preset_variable": "プリセット変数",
+          "participant_fact": "参加者ファクト",
+          "tool_available": "ツールの利用可能性",
+          "task_transition": "タスク遷移"
+        },
+        "operators": {
+          "equals": "等しい",
+          "in": "リスト内にある",
+          "includes": "含む",
+          "present": "存在する"
+        },
+        "transitions": {
+          "pending": "保留中",
+          "active": "有効",
+          "blocked": "ブロック中",
+          "completed": "完了",
+          "cancelled": "キャンセル済み",
+          "failed": "失敗"
+        }
+      },
+      "load": {
+        "loading": "エージェント型ランタイムを読み込んでいます…",
+        "error": "エージェント型ランタイムを読み込めませんでした。読み込みが完了するまで編集と保存は無効です。",
+        "retry": "読み込みを再試行"
+      },
+
+      "save": {
+        "action": "エージェント型ランタイムを保存",
+        "saving": "完全なランタイムドラフトを保存しています…",
+        "saved": "エージェント型ランタイムを保存しました",
+        "unsaved": "エージェント型ランタイムに未保存の変更があります",
+        "reset": "ドラフトをリセット",
+        "conflict": "プリセットまたはランタイムが別の場所で変更されました。保存する前に再読み込みして確認してください。",
+        "conflictHint": "確認または再試行する前に、正規のプリセットと Agentic 構成を再読み込みしてください。ローカルのドラフトが新しいリビジョンを上書きすることはありません。",
+        "reloadLatest": "確認のため最新版を再読み込み",
+        "reloadingLatest": "最新版を再読み込み中…",
+        "reloadError": "最新の正規状態を読み込めませんでした。ローカルのドラフトは保持されています。",
+        "latestReady": "最新の正規状態を準備しました。編集して再試行する前に確認してください。",
+        "reviewLatest": "最新版を確認",
+        "error": "エージェント型ランタイムを保存できませんでした。ドラフトは引き続き利用できます。"
+      },
+      "validation": {
+        "invalid_config": "ランタイム構成が無効です。",
+        "invalid_modes": "許可するモードは重複せず、順序付けされ、Response を先頭に含める必要があります。",
+        "invalid_default_mode": "デフォルトモードは許可されている必要があります。",
+        "invalid_profile": "子プロファイルが未完成であるか、重複した ID を使用しています。",
+        "invalid_slot": "移植可能な接続スロットが無効です。",
+        "unresolved_slot": "必要なすべての接続スロットを割り当ててください。",
+        "invalid_block_reference": "選択した Loom ブロックは存在しません。",
+        "stale_block_revision": "選択した Loom ブロックのリビジョンが変更されました。",
+        "invalid_runtime_policy": "正規 Loom ランタイムポリシーが無効です。",
+        "invalid_policy_entry": "Loom ポリシー項目が無効です。",
+        "stale_policy_source": "Loom ポリシーの出典が現在のブロックリビジョンまたは順序と一致しません。保存する前に現在のリビジョンを選択してください。",
+        "invalid_predicate": "認知条件が未完成です。",
+        "predicate_limit_exceeded": "認知条件がホストの深度またはサイズ制限を超えています。",
+        "invalid_task_template": "タスクテンプレートが無効です。",
+        "invalid_task_policy": "タスクポリシーの参照は宣言されたタスクテンプレートと一致する必要があります。",
+        "missing_task_dependency": "タスクの依存先が存在しません。",
+        "cyclic_task_dependency": "タスクの依存関係は非循環である必要があります。",
+        "review_acknowledgement_unknown": "現在のレビューに含まれない確認項目を削除してください。",
+        "review_acknowledgement_required": "有効化する前に、インポートされたすべてのレビュー項目を確認してください。"
+      }
+    },
+    "agentsTools": {
+      "eyebrow": "プリセットの機能",
+      "title": "エージェントとツール",
+      "description": "このプリセットで使用できる再利用可能な子エージェントと組み込み検索ツールを許可します。有効化して保存するまで実行されません。",
+      "limits": {
+        "title": "ホスト実行時の上限",
+        "description": "この Lumiverse ホストが適用する読み取り専用の実効上限です。プリセットに記述した予算は移植できますが、実行はこれらの値を超えられません。",
+        "readOnly": "読み取り専用",
+        "loading": "ホスト上限を読み込み中…",
+        "rows": {
+          "childAdmissions": "子エージェントの受付",
+          "aggregateToolCalls": "ツール呼び出し合計",
+          "logicalProviderRequests": "論理プロバイダー要求",
+          "physicalDispatchAttempts": "物理ディスパッチ試行",
+          "childOutputTokens": "子エージェント出力トークン",
+          "rootWallClockMs": "ルートの実時間（ミリ秒）",
+          "activityEvents": "アクティビティイベント",
+          "activityBytes": "アクティビティバイト数",
+          "lifecycleLogRecords": "ライフサイクルログ記録",
+          "activeRootsPerUser": "ユーザーごとのアクティブルート",
+          "activeRootsProcess": "プロセスごとのアクティブルート",
+          "providerDispatchesPerUser": "ユーザーごとのプロバイダーディスパッチ",
+          "providerDispatchesProcess": "プロセスごとのプロバイダーディスパッチ",
+          "toolExecutionsPerUser": "ユーザーごとのツール実行",
+          "toolExecutionsProcess": "プロセスごとのツール実行"
+        }
+      },
+      "maxInvocations": {
+        "label": "子エージェントの最大呼び出し回数",
+        "hint": "生成ごとの子エージェント呼び出し回数の上限です。デフォルトは64、最小値は1、プリセットによる上限はありません。安全な整数を入力してください。",
+        "error": "1以上の安全な整数を入力してください。"
+      },
+      "maxToolCalls": {
+        "label": "ツールの最大呼び出し回数",
+        "hint": "生成ごとのツール呼び出し総数の上限です。デフォルトは64、最小値は1、プリセットによる上限はありません。安全な整数を入力してください。",
+        "error": "1以上の安全な整数を入力してください。"
+      },
+      "enabled": "有効",
+      "disabled": "無効",
+      "enableAria": "このプリセットのエージェントとツールを有効にする",
+      "review": {
+        "title": "インポートした機能を確認",
+        "description": "安全のため、インポートしたエージェント設定は無効です。この端末で有効にする前に、プロファイル、接続、ツール、ロアへのアクセスを確認してください。",
+        "action": "確認済みにする"
+      },
+      "unsupported": {
+        "title": "未対応のエージェント設定",
+        "description": "このプリセットにはエディターが安全に読み取れない設定があります。編集すると新しい無効な設定が作成され、保存するまでは既存のメタデータが保持されます。"
+      },
+      "main": {
+        "title": "メインモデルのツール",
+        "description": "各子プロファイルとは独立して、メインモデルが直接使用できる検索ツールを選択します。"
+      },
+      "tools": {
+        "legend": "許可するコアツール",
+        "lore_list_books": {
+          "label": "ロアブック一覧",
+          "description": "利用可能なロアブックと出典を参照します。"
+        },
+        "lore_get_book": {
+          "label": "ロアブックを取得",
+          "description": "有効なロアブックを制限付きページで読み取ります。"
+        },
+        "lore_list_entries": {
+          "label": "ロア項目一覧",
+          "description": "選択したブック内の有効な項目を参照します。"
+        },
+        "lore_get_entry": {
+          "label": "ロア項目を取得",
+          "description": "正確な識別子で有効な項目を読み取ります。"
+        },
+        "lore_search_entries": {
+          "label": "ロア項目を検索",
+          "description": "許可された範囲内で有効なロア内容を検索します。"
+        },
+        "chat_search_history": {
+          "label": "現在のチャットを検索",
+          "description": "この生成用に選択された変更不能な履歴を検索します。"
+        }
+      },
+      "scope": {
+        "label": "ロアアクセスの上限",
+        "active": "アクティブなロア",
+        "all_owned": "所有するすべてのロア",
+        "activeHint": "この生成ですでに利用可能なロアのみです。",
+        "all_ownedHint": "ローカルユーザーが所有する有効なすべてのロアブックを検索できます。"
+      },
+      "profiles": {
+        "title": "子エージェントのプロファイル",
+        "description": "再利用可能な下位モデル、その権限、失敗時の制限を定義します。",
+        "add": "プロファイルを追加",
+        "defaultName": "エージェント {{number}}",
+        "listAria": "子エージェントのプロファイル",
+        "moveUp": "{{name}} を上へ移動",
+        "moveDown": "{{name}} を下へ移動",
+        "delete": "{{name}} を削除",
+        "confirmDeleteTitle": "このプロファイルを削除しますか？",
+        "confirmDeleteDescription": "このプロファイルを参照するプロンプトブロックは無効になります。設定を保存するまで変更は保存されません。",
+        "name": "表示名",
+        "id": "プロファイル ID",
+        "idHint": "プロンプト構文で使う安定した snake_case ID です。表示名を変更しても変わりません。",
+        "connection": "接続プロファイル",
+        "selectConnection": "接続を選択",
+        "searchConnections": "接続を検索…",
+        "noConnections": "接続プロファイルが設定されていません",
+        "useMainConnection": "メイン接続を使用",
+        "connectionHint": "現在のメイン接続を使うか、この子を既存の接続プロファイルに割り当てます。",
+        "systemPrompt": "システムプロンプト",
+        "systemPromptPlaceholder": "このエージェントの役割、境界、期待する出力を定義します。",
+        "systemPromptHint": "子エージェントへの文字どおりの指示です。ここではプリセットマクロは評価されません。",
+        "tools": "許可するツール",
+        "workspaceCapabilities": "ワークスペース権限",
+        "workspaceCapabilitiesHint": "この子エージェントに必要なワークスペース操作だけを許可します。空欄の場合、操作は許可されません。",
+        "delegation": "メインモデルからの委任を許可",
+        "delegationHint": "メインモデルが agent_delegate でこのプロファイルを選択できるようにします。",
+        "activity": "ライブアクティビティを許可",
+        "activityHint": "構文がストリーミングを要求したときに状態とツール活動を表示します。子の本文は配信されません。",
+        "failurePolicy": "失敗時の方針",
+        "failureRequired": "必須 — 生成を中止",
+        "failureOptional": "任意 — 空の結果で続行",
+        "failureHint": "決定的なプロンプトブロックの失敗を制御します。",
+        "maxOutputTokens": "最大出力トークン",
+        "timeout": "タイムアウト（秒）",
+        "timeoutHint": "呼び出しごとの制限を秒単位の整数で指定します（最低 5 秒。プリセットによる上限はありません）。",
+        "empty": "子プロファイルを追加して、接続、ツール、プロンプトを設定します。"
+      },
+      "syntax": {
+        "title": "プロンプト構文",
+        "description": "手動作成用の名前付き結果プロデューサーをコピーするか、結果名が衝突せず再利用できる直接実行の有効なユーザーブロックを作成します。",
+        "taskPlaceholder": "このエージェントへのタスクを記述します。",
+        "copy": "エージェント構文をコピー",
+        "copied": "コピーしました",
+        "copyFailed": "クリップボードにアクセスできませんでした。構文を選択して手動でコピーしてください。",
+        "createBlock": "このエージェントでプロンプトブロックを作成",
+        "saveFirst": "ブロックを作成する前にエージェント設定を保存してください。",
+        "blockName": "エージェント: {{name}}"
+      },
+      "navigation": {
+        "saveBeforePresetAction": "プリセットを変更、インポート、またはエクスポートする前に、エージェントとツールの設定を保存してください。"
+      },
+      "actions": {
+        "cancel": "キャンセル",
+        "delete": "削除"
+      },
+      "save": {
+        "reviewFirst": "保存または有効化する前に、インポートした機能を確認してください。",
+        "notConfigured": "このプリセットにはエージェントとツールが設定されていません。",
+        "unsaved": "エージェント設定は未保存です",
+        "saved": "エージェント設定を保存しました",
+        "action": "設定を保存"
+      },
+      "validation": {
+        "invalid_config": "エージェント設定はオブジェクトである必要があります。",
+        "unknown_config_key": "設定に未対応のフィールドがあります。",
+        "invalid_version": "エージェント設定はバージョン 1 のみ対応しています。",
+        "invalid_enabled": "有効状態が無効です。",
+        "invalid_max_invocations": "子エージェントの最大呼び出し回数は有限の安全な整数である必要があります。",
+        "max_invocations_below_minimum": "子エージェントの最大呼び出し回数は1以上である必要があります。",
+        "invalid_main_tools": "メインツールの選択が無効です。",
+        "invalid_profiles": "プロファイル一覧が無効です。",
+        "too_many_profiles": "プリセットに含められる子プロファイルは最大 {{profileLimit}} 個です。",
+        "unknown_profile_key": "このプロファイルに未対応のフィールドがあります。",
+        "unknown_tool": "不明なコアツールが選択されています。",
+        "duplicate_tool": "同じコアツールは一度だけ選択できます。",
+        "invalid_main_scope": "メインモデルのロア範囲が無効です。",
+        "invalid_scope": "ロア範囲が無効です。",
+        "scope_requires_lore_tool": "所有するすべてのロアには、1 つ以上のロアツールが必要です。",
+        "invalid_id": "先頭を英字にし、1～64 文字の小文字、数字、アンダースコアを使用してください。",
+        "duplicate_id": "プロファイル ID は一意である必要があります。",
+        "invalid_name": "プロファイル名が無効です。",
+        "name_too_long": "表示名は {{nameMax}} 文字以下にしてください。",
+        "invalid_system_prompt": "システムプロンプトはテキストである必要があります。",
+        "system_prompt_too_long": "システムプロンプトは {{promptMax}} UTF-8 バイト以下にしてください。",
+        "invalid_connection": "有効な接続を選択するか、メイン接続を使用してください。",
+        "connection_not_found": "この接続プロファイルは削除されたか、利用できません。",
+        "main_connection_unavailable": "メイン接続がないため、既存の接続を選択してください。",
+        "invalid_delegation": "委任設定が無効です。",
+        "invalid_failure_policy": "必須または任意の失敗処理を選択してください。",
+        "invalid_stream_activity": "アクティビティ設定が無効です。",
+        "invalid_max_output_tokens": "最大出力トークンは整数で入力してください。",
+        "max_output_tokens_out_of_range": "最大出力トークンは {{tokenMin}}～{{tokenMax}} にしてください。",
+        "invalid_timeout": "タイムアウトは秒単位の整数で入力してください。",
+        "timeout_below_minimum": "タイムアウトは {{timeoutMin}} 秒以上にしてください。"
+      }
+    },
     "empty": {
       "loading": "読み込み中...",
       "noPresetTitle": "プリセットが選択されていません",
@@ -3359,6 +3980,26 @@
     },
     "toast": {
       "exportFailed": "プリセットのエクスポートに失敗しました",
+      "importHydrationWarning": "プリセットをインポートしましたが、エディターの詳細を更新できませんでした。保存済みのコピーは利用できます。",
+      "portableErrors": {
+        "PORTABLE_PRESET_INVALID": "ポータブルプリセットが無効です。",
+        "PORTABLE_PROMPT_BLOCK_INVALID": "プリセットに無効なプロンプトブロックがあります。",
+        "PORTABLE_EXPORT_UNSTABLE": "エクスポート中にプリセットが変更されました。もう一度お試しください。",
+        "AGENT_RUNTIME_PORTABLE_INVALID": "ポータブルランタイムデータが無効です。",
+        "AGENT_RUNTIME_PORTABLE_STALE": "ポータブルランタイムデータが古くなっています。再度エクスポートしてください。",
+        "AGENT_RUNTIME_PORTABLE_CONTRADICTORY": "ポータブルランタイムデータに矛盾があります。",
+        "AGENT_RUNTIME_PORTABLE_REGEX_INVALID": "ポータブル正規表現データが無効です。",
+        "AGENT_RUNTIME_PORTABLE_PRESET_INVALID": "ポータブルプリセットデータが無効です。",
+        "AGENT_RUNTIME_PORTABLE_CONFIG_REFERENCE_INVALID": "ポータブルランタイムが利用できないコンテキストデータを参照しています。",
+        "AGENT_RUNTIME_PORTABLE_RULE_INVALID": "ポータブルコンテキストルールが無効です。",
+        "AGENT_RUNTIME_PORTABLE_SELECTION_INVALID": "ポータブルコンテキスト選択が無効です。",
+        "LUMIHUB_SEALED_DESCRIPTOR_INCOMPLETE": "封印ブロックに信頼できる LumiHub 出所情報がありません。",
+        "LUMIHUB_LINK_UNAVAILABLE": "封印されたプリセットブロックをインポートする前に LumiHub にリンクしてください。",
+        "LUMIHUB_SEALED_RESOLUTION_FAILED": "LumiHub が封印されたプリセットブロックを解決できませんでした。",
+        "LUMIHUB_SEALED_DIGEST_MISMATCH": "LumiHub の封印コンテンツの検証に失敗しました。",
+        "PRESET_REVISION_CONFLICT": "プリセットが別の場所で変更されました。更新して再試行してください。",
+        "PRESET_REVISION_REQUIRED": "プリセットのリビジョンが必要です。更新して再試行してください。"
+      },
       "importedRegexFromPreset": "プリセットから {{count}} 正規表現スクリプトをインポートしました",
       "importedRegexFromPreset_plural": "{{count}} 正規表現スクリプトをプリセットからインポートしました",
       "regexImportFailed": "{{count}} 正規表現スクリプトのインポートに失敗しました",

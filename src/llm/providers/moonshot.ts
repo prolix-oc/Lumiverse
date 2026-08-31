@@ -22,6 +22,12 @@ export class MoonshotProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "openai",
+    toolCalling: true,
+    requiredToolChoice: true,
+    nativeToolContinuation: true,
+    toolContinuationMode: "native",
+    toolsDisabledFinalization: true,
+    supportsToolFinalization: true,
     // Kimi K2/K3 Thinking is end-to-end trained to interleave chain-of-thought
     // with tool calls. Like DeepSeek it carries reasoning via `reasoning_content`
     // (streamed before `content`), which the inherited

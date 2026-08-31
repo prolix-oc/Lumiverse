@@ -57,6 +57,21 @@ Keep responses between 2-4 paragraphs.
 Always stay in character as {{char}}.
 ```
 
+### Agent prompt blocks
+
+To run a configured child profile, use **Create prompt block with this agent** in the **Agents & Tools** tab. The editor inserts a directly authored `user` block with direct intrinsic syntax; keep the entire `{{agent}}` block in that block rather than splitting its opening and closing tags across blocks:
+
+```text
+{{agent::researcher::tools=lore_search_entries::stream}}
+Check the current scene for conflicts with active lore.
+{{/agent}}
+```
+
+The generated block does not create a named result. The syntax preview/copy action can add the optional `as=scene_notes` producer name. Add `as=unique_name` only when a later separate directly authored user block will contain the matching `{{agentResult::unique_name}}` reference; named-result examples are shown in [Understanding Presets](understanding-presets.md) and the [Macros Reference](macros-reference.md).
+
+Agent blocks are not ordinary macros. Their options and result names are validated before child work, they run serially in prompt-block order, and nested or macro-generated agent blocks are rejected. A profile's literal system prompt is not macro-evaluated. Child tasks receive only the resolved task and host safety framing—not the root prompt, arbitrary transcript rows, attachments, or credentials. Child output remains lower-authority derived data and cannot override the system, preset, or current-user instructions.
+
+
 ### Category Markers
 
 Visual dividers in the block list — they don't produce output, just help organize your blocks in the editor.
@@ -139,13 +154,19 @@ Groups are useful for creating alternative instruction sets (e.g., different wri
 
 ---
 
+## Prompt stash
+
+The Prompt Stash lets you reuse a shared block across presets. Removing an entry from the stash removes its stash link from every preset that owns it in one operation; it does not discard unrelated unsaved edits in an open Loom editor. If the entry was only in the stash, no preset or Agent Runtime authority changes. Repeating a removal after the entry is gone has no effect.
+
+---
+
 ## Tips
 
 !!! tip "Start simple"
     Begin with just a system prompt block and the structural markers. Add custom blocks as you learn what influences the AI's behavior.
 
 !!! tip "Use the dry run"
-    After configuring blocks, use **Dry Run** to see the assembled prompt. This shows you exactly what the AI receives, including resolved macros and injected world info.
+    After configuring ordinary blocks, use **Dry Run** to inspect the assembled prompt, resolved macros, and injected world info. Dry Run never runs child agents or exposes Agents & Tools; a prompt containing an executable agent intrinsic reports that inspection is unsupported.
 
 !!! tip "Disable, don't delete"
     If a block isn't working well, disable it instead of deleting it. You can re-enable it later or reference it when building other blocks.

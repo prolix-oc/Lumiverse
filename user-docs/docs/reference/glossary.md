@@ -10,6 +10,9 @@ Key terms used throughout Lumiverse and these guides.
 
 ## A
 
+**Agentic**
+: An opt-in turn mode where one Turn Execution can perform bounded internal WORK before producing one final chat Response.
+
 **Alternate Fields**
 : Variant versions of a character's description, personality, or scenario that can be selected per-chat.
 
@@ -81,7 +84,7 @@ Key terms used throughout Lumiverse and these guides.
 ## G
 
 **Generation**
-: The process of sending a prompt to the AI and receiving a response. Types: normal, regenerate, continue, swipe, impersonate, quiet.
+: A turn request. In Response mode this sends the assembled prompt and receives the chat response directly; in Agentic mode one Turn Execution may run internal Work Segments before one final Response. Types include normal, regenerate, continue, swipe, impersonate, and quiet.
 
 **Global Add-On**
 : A persona add-on stored in a shared library, attachable to any number of personas. Edits propagate everywhere it's attached.
@@ -146,6 +149,9 @@ Key terms used throughout Lumiverse and these guides.
 **Regex Script**
 : A text transformation rule using regular expressions, applied at various stages of the pipeline.
 
+**Response**
+: The ordinary generation mode and the single final user-visible assistant output. Agentic internal Work Segments are not separate Responses.
+
 **Runner**
 : The supervisor process that the start scripts attach. Performs updates, branch switches, and restarts on behalf of the Operator Panel. Disable with `--no-runner` if you don't want it.
 
@@ -195,12 +201,18 @@ Key terms used throughout Lumiverse and these guides.
 **Token**
 : The basic unit of text for AI models. Roughly 3/4 of a word. Used to measure context size and response length.
 
+**Turn Execution**
+: The durable host-owned execution of one Agentic user turn and attempt, including its ordered internal Work Segments and one final atomic commit.
+
 ## V
 
 **Vault**
 : A frozen snapshot of a chat's Memory Cortex state (chunks, entities, relationships) packaged as a reusable, read-only knowledge object. Attach it to other chats so they "remember" the source chat.
 
 ## W
+
+**Work Segment**
+: One bounded unit of Agentic WORK with fresh current-phase context, independent segment budget, a classified provider boundary, and at most one durable handoff to the next segment.
 
 **World Book**
 : A collection of entries that inject contextual information into the prompt when their keywords appear in the conversation. Also called a lorebook.

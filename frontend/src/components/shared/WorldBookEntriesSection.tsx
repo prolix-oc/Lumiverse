@@ -87,6 +87,8 @@ import type {
 import styles from './WorldBookEntriesSection.module.css'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
 import { classifyWorldBookEntryMutationError, type WorldBookEntryMutationIssue } from '@/lib/worldBookEntryConflict'
+import { toast } from '@/lib/toast'
+
 import { estimateTokens } from '@/lib/tokenEstimate'
 import {
   createEntrySearchIndex,
@@ -340,7 +342,7 @@ function EntryTokenCell({ bookId, entry, selected }: { bookId: string; entry: Wo
     entryId: entry.id,
     content: entry.content,
     extensions: entry.extensions,
-  })
+  }, { store: useStore })
   const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const displayedCount = count ?? estimateTokens(entry.content)
   const displayedApproximate = count == null || approximate
@@ -944,7 +946,7 @@ export default function WorldBookEntriesSection({
       : filteredEntries.slice((entryPage - 1) * pageSize, entryPage * pageSize),
     [entryPage, filteredEntries, fullCorpusMode, pageSize],
   )
-  useTokenCountSweep(visibleEntries)
+  useTokenCountSweep(visibleEntries, true, useStore)
   const entrySearchResultsById = useMemo(
     () => new Map(entrySearchResults?.map((result) => [result.entry.id, result]) ?? []),
     [entrySearchResults],
@@ -1046,9 +1048,12 @@ export default function WorldBookEntriesSection({
       }
     }).catch((error) => {
       const classified = recordMutationIssue(operationIds, error, retry, bookId, generation)
-      if (!classified) liveRefetchRef.current()
+      if (!classified) {
+        toast.error(t('entryMutationFailed'))
+        liveRefetchRef.current()
+      }
     })
-  }, [recordMutationIssue])
+  }, [recordMutationIssue, t])
 
   const acceptServerConflict = useCallback((entryId: string) => {
     const conflict = entryConflicts[entryId]
@@ -1301,9 +1306,13 @@ export default function WorldBookEntriesSection({
       if (!mountedRef.current || selectedBookIdRef.current !== selectedBookId || requestGenerationRef.current !== generation) return
       if (entryIntentsRef.current.get(entryId) !== intent) return
       const classified = recordMutationIssue([entryId], error, () => persistEntryUpdate(entryId, intent), selectedBookId, generation)
-      if (!classified) void refetchCurrentPage()
+      if (!classified) {
+        toast.error(t('entrySaveFailed'))
+        void refetchCurrentPage()
+      }
     }
-  }, [recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId])
+  }, [recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId, t])
+
 
   const updateEntry = useCallback((entryId: string, updates: Record<string, any>) => {
     if (Object.prototype.hasOwnProperty.call(updates, 'content')) invalidateTokenCountsForEntry(entryId)
@@ -1371,9 +1380,13 @@ export default function WorldBookEntriesSection({
         else await worldBooksApi.bulkEntryAction(selectedBookId, { action: 'delete', entry_ids: entryIds, expected_revisions: revisions })
         await refetchCurrentPage()
       }, selectedBookId, generation)
-      if (!classified) void refetchCurrentPage()
+      if (!classified) {
+        toast.error(t('entryDeleteFailed'))
+        void refetchCurrentPage()
+      }
     }
-  }, [expectedRevisionsFor, recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId])
+  }, [expectedRevisionsFor, recordMutationIssue, refetchCurrentPage, refreshVectorSummary, selectedBookId, t])
+
 
   const handleDuplicateHere = useCallback(async (entryId: string) => {
     const generation = requestGenerationRef.current

@@ -2,6 +2,7 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getProvider } from "../llm/registry";
+import type { ProviderCapabilities } from "../llm/param-schema";
 import { env } from "../env";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
@@ -11,7 +12,13 @@ import type {
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import { describeProviderError } from "../utils/provider-errors";
-
+import {
+  clearImportedConnectionReview,
+  importedConnectionReviewCode,
+  isImportedConnectionReviewRequired,
+  markImportedConnectionForReview,
+  sanitizeConnectionMetadata,
+} from "./connection-authority";
 const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000;
 const ZAI_GENERAL_API_URL = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_API_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -23,6 +30,32 @@ export const POLLINATIONS_APP_KEY_SECRET = "pollinations_app_key";
 export interface ConnectionRouletteConfig {
   connection_ids: string[];
 }
+/**
+ * The frozen, internal connection identity consumed by runtime admission.
+ *
+ * This is deliberately not a public/API DTO: `credentialSecretRef` and
+ * `fingerprint` are only for server-side revision and trust-domain checks.
+ * No credential value is ever loaded while resolving this descriptor.
+ */
+export interface FrozenConcreteConnectionV1 {
+  readonly logicalId: string;
+  readonly concreteId: string;
+  readonly label: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly endpoint: string;
+  /** Alias consumed by runtime decision normalization; same frozen value. */
+  readonly effectiveEndpoint: string;
+  readonly endpointRevision: string;
+  readonly credentialSecretRef: string;
+  readonly credentialRevision: string;
+  readonly candidateRevision: string;
+  readonly fingerprint: string;
+  readonly capabilities: Readonly<ProviderCapabilities>;
+}
+
+/** Stable name used by runtime services for the frozen descriptor. */
+export type ResolvedConcreteConnectionV1 = FrozenConcreteConnectionV1;
 
 function resolveZaiApiUrl(rawUrl: string, useCodingPlanEndpoint: boolean): string {
   const trimmed = rawUrl.trim();
@@ -137,7 +170,7 @@ export function connectionSecretKey(id: string): string {
   return `connection_${id}_api_key`;
 }
 
-/** Resolve effective API URL, accounting for provider-specific metadata flags. */
+/** Resolve the canonical endpoint used by readiness, freezing, and dispatch. */
 export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: string | null; metadata?: Record<string, any> | null }): string {
   const url = (profile.api_url || "").trim();
   if (profile.provider === "nanogpt" && profile.metadata?.use_subscription_api) {
@@ -164,7 +197,9 @@ export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: st
       ? `https://bedrock-runtime.${region}.amazonaws.com/v1`
       : `https://bedrock-mantle.${region}.api.aws/v1`;
   }
-  return url;
+  if (url) return url;
+  const provider = getProvider(profile.provider);
+  return typeof provider?.defaultUrl === "string" ? provider.defaultUrl.trim() : "";
 }
 
 export function resolveNanoGptSubscriptionUsageUrl(profile: { api_url?: string | null }): string {
@@ -265,13 +300,24 @@ export async function buildPollinationsAuthorizeUrl(
 }
 
 function rowToProfile(row: any): ConnectionProfile {
+  const metadata = JSON.parse(row.metadata || "{}") as Record<string, unknown>;
   return {
     ...row,
     preset_id: row.preset_id || null,
     is_default: !!row.is_default,
     has_api_key: !!row.has_api_key,
-    metadata: JSON.parse(row.metadata),
+    review_required: isImportedConnectionReviewRequired(metadata),
+    review_code: importedConnectionReviewCode(metadata),
+    metadata,
   };
+}
+
+export function toPublicConnection(profile: ConnectionProfile): ConnectionProfile {
+  return { ...profile, metadata: sanitizeConnectionMetadata(profile.metadata) };
+}
+
+export function isConnectionUsable(profile: Pick<ConnectionProfile, "review_required"> | null | undefined): boolean {
+  return profile?.review_required !== true;
 }
 
 export function isModelRouletteProfile(profile: Pick<ConnectionProfile, "provider"> | null | undefined): boolean {
@@ -333,13 +379,20 @@ export function getConnection(userId: string, id: string): ConnectionProfile | n
   return row ? rowToProfile(row) : null;
 }
 
-export function getDefaultConnection(userId: string): ConnectionProfile | null {
-  const row = getConnStmts().byDefault.get(userId) as any;
-  return row ? rowToProfile(row) : null;
+export function getUsableConnection(userId: string, id: string): ConnectionProfile | null {
+  const profile = getConnection(userId, id);
+  return isConnectionUsable(profile) ? profile : null;
 }
 
+export function getDefaultConnection(userId: string): ConnectionProfile | null {
+  const row = getConnStmts().byDefault.get(userId) as any;
+  const profile = row ? rowToProfile(row) : null;
+  return isConnectionUsable(profile) ? profile : null;
+}
+
+
 export function resolveConnection(userId: string, id?: string): ConnectionProfile | null {
-  const profile = id ? getConnection(userId, id) : getDefaultConnection(userId);
+  const profile = id ? getUsableConnection(userId, id) : getDefaultConnection(userId);
   if (!profile) return null;
   if (!isModelRouletteProfile(profile)) return profile;
 
@@ -347,7 +400,7 @@ export function resolveConnection(userId: string, id?: string): ConnectionProfil
     .filter((targetId) => targetId !== profile.id);
   const candidates: ConnectionProfile[] = [];
   for (const targetId of targetIds) {
-    const candidate = getConnection(userId, targetId);
+    const candidate = getUsableConnection(userId, targetId);
     if (!candidate || isModelRouletteProfile(candidate)) continue;
     candidates.push(candidate);
   }
@@ -357,6 +410,250 @@ export function resolveConnection(userId: string, id?: string): ConnectionProfil
   }
 
   return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function resolveExpectedConcreteConnection(
+  userId: string,
+  logical: ConnectionProfile,
+  expectedConcreteId: string,
+): ConnectionProfile | null {
+  if (!isModelRouletteProfile(logical)) {
+    return logical.id === expectedConcreteId && isConnectionUsable(logical) ? logical : null;
+  }
+  const allowed = getConnectionRouletteConfig(logical).connection_ids;
+  if (!allowed.includes(expectedConcreteId) || expectedConcreteId === logical.id) return null;
+  const candidate = getUsableConnection(userId, expectedConcreteId);
+  if (!candidate || isModelRouletteProfile(candidate)) return null;
+  return candidate;
+}
+
+type SecretIdentityRow = {
+  updated_at: number | null;
+  encrypted_value: string;
+  iv: string;
+  tag: string;
+};
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "null";
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? (JSON.stringify(value) ?? "null") : "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(String(value)) ?? "null";
+}
+
+function sha256Canonical(value: unknown): string {
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(canonicalJson(value));
+  return hasher.digest("hex");
+}
+
+export function cloneAndFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const copy = value.map((entry) => cloneAndFreeze(entry));
+    return Object.freeze(copy) as T;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    copy[key] = cloneAndFreeze(entry);
+  }
+  return Object.freeze(copy) as T;
+}
+
+/**
+ * Normalize only the endpoint identity. This keeps endpoint revisions stable
+ * across host casing, default ports, query ordering, and trailing slashes
+ * without changing the existing provider URL resolver used by Response mode.
+ */
+export function normalizeEffectiveEndpointV1(rawEndpoint: string): string {
+  const trimmed = rawEndpoint.trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    if ((url.protocol === "https:" && url.port === "443") ||
+        (url.protocol === "http:" && url.port === "80")) {
+      url.port = "";
+    }
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    const query = [...url.searchParams.entries()]
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+        if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
+        if (leftValue === rightValue) return 0;
+        return leftValue < rightValue ? -1 : 1;
+      });
+    url.search = "";
+    for (const [key, value] of query) url.searchParams.append(key, value);
+
+    const rendered = url.toString();
+    if (url.pathname === "/" && rendered.startsWith(`${url.origin}/`)) {
+      return `${url.origin}${rendered.slice(url.origin.length + 1)}`;
+    }
+    return rendered;
+  } catch {
+    // Keep malformed custom endpoints usable for existing Response behavior,
+    // but still make equivalent whitespace/trailing-slash values stable.
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+function endpointAffectingMetadata(
+  profile: Pick<ConnectionProfile, "provider" | "api_url" | "metadata">,
+): Record<string, unknown> {
+  const metadata = profile.metadata || {};
+  switch (profile.provider) {
+    case "nanogpt":
+      return { use_subscription_api: metadata.use_subscription_api === true };
+    case "zai":
+      return { use_coding_plan_endpoint: metadata.use_coding_plan_endpoint === true };
+    case "google_vertex": {
+      const rawRegion = typeof metadata.vertex_region === "string"
+        ? metadata.vertex_region.trim().toLowerCase()
+        : "";
+      return { vertex_region: rawRegion || "global" };
+    }
+    case "bedrock":
+      if (profile.api_url?.trim()) return {};
+      return {
+        region: typeof metadata.region === "string" && metadata.region.trim()
+          ? metadata.region.trim().toLowerCase()
+          : "us-east-1",
+        bedrock_endpoint: metadata.bedrock_endpoint === "runtime" ? "runtime" : "mantle",
+      };
+    default:
+      return {};
+  }
+}
+
+function readCredentialIdentity(
+  userId: string,
+  concreteId: string,
+): { secretRef: string; revision: string; fingerprintIdentity: string } {
+  const secretRef = connectionSecretKey(concreteId);
+  const row = getDb().query(
+    "SELECT updated_at, encrypted_value, iv, tag FROM secrets WHERE key = ? AND user_id = ?",
+  ).get(secretRef, userId) as SecretIdentityRow | null;
+  // Hash encrypted storage metadata only. The resolver never decrypts or
+  // handles the credential plaintext, while a same-second rotation still
+  // changes identity because AES-GCM writes a fresh IV/ciphertext.
+  const encryptedIdentity = row
+    ? sha256Canonical({
+      encrypted_value: row.encrypted_value,
+      iv: row.iv,
+      tag: row.tag,
+    })
+    : null;
+  const fingerprintIdentity = sha256Canonical({
+    present: !!row,
+    updated_at: row?.updated_at ?? null,
+    encrypted_identity: encryptedIdentity,
+  });
+  return {
+    secretRef,
+    fingerprintIdentity,
+    revision: sha256Canonical({
+      secret_ref: secretRef,
+      present: !!row,
+      updated_at: row?.updated_at ?? null,
+      encrypted_identity: encryptedIdentity,
+    }),
+  };
+}
+
+/**
+ * Resolve a logical connection exactly once into a frozen concrete identity.
+ *
+ * A model roulette profile is selected by the existing resolver one time; the
+ * selected candidate is then used for every revision/fingerprint calculation.
+ * The returned descriptor intentionally contains no API-key value.
+ */
+export function resolveConcreteConnectionV1(
+  userId: string,
+  logicalId?: string,
+  expectedConcreteId?: string | null,
+): ResolvedConcreteConnectionV1 | null {
+  const logical = logicalId
+    ? getUsableConnection(userId, logicalId)
+    : getDefaultConnection(userId);
+  if (!logical) return null;
+
+
+  // During decision-token consumption/commit, revalidate the concrete member
+  // already admitted instead of rerolling a model-roulette profile.
+  const concrete = expectedConcreteId
+    ? resolveExpectedConcreteConnection(userId, logical, expectedConcreteId)
+    : resolveConnection(userId, logical.id);
+  if (!concrete) return null;
+  const provider = getProvider(concrete.provider);
+  if (!provider) {
+    throw new Error(`Unknown provider: ${concrete.provider}`);
+  }
+
+  const endpointMetadata = endpointAffectingMetadata(concrete);
+  const endpoint = normalizeEffectiveEndpointV1(resolveEffectiveApiUrl(concrete));
+  const endpointRevision = sha256Canonical({
+    provider: concrete.provider,
+    endpoint,
+    endpoint_metadata: endpointMetadata,
+  });
+  const credential = readCredentialIdentity(userId, concrete.id);
+  const candidateRevision = sha256Canonical({
+    user_id: userId,
+    id: concrete.id,
+    name: concrete.name,
+    provider: concrete.provider,
+    api_url: concrete.api_url,
+    model: concrete.model,
+    preset_id: concrete.preset_id,
+    is_default: concrete.is_default,
+    has_api_key: concrete.has_api_key,
+    metadata: concrete.metadata,
+    created_at: concrete.created_at,
+    updated_at: concrete.updated_at,
+    endpoint_revision: endpointRevision,
+    credential_revision: credential.revision,
+  });
+  const fingerprint = sha256Canonical({
+    provider: concrete.provider,
+    endpoint,
+    credential_identity: credential.fingerprintIdentity,
+  });
+  const capabilities = cloneAndFreeze(provider.capabilities) as Readonly<ProviderCapabilities>;
+
+  return cloneAndFreeze({
+    logicalId: logical.id,
+    concreteId: concrete.id,
+    label: concrete.name,
+    provider: concrete.provider,
+    model: concrete.model,
+    endpoint,
+    effectiveEndpoint: endpoint,
+    endpointRevision,
+    credentialSecretRef: credential.secretRef,
+    credentialRevision: credential.revision,
+    candidateRevision,
+    fingerprint,
+    capabilities,
+  });
 }
 
 /**
@@ -470,19 +767,26 @@ export async function createConnection(userId: string, input: CreateConnectionPr
     hasApiKey = 1;
   }
 
-  getDb()
-    .query(
-      "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      id, userId, input.name, input.provider,
-      input.api_url || "", input.model || "",
-      input.preset_id || null,
-      input.is_default ? 1 : 0,
-      hasApiKey,
-      JSON.stringify(input.metadata || {}),
-      now, now
-    );
+  try {
+    getDb()
+      .query(
+        "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      )
+      .run(
+        id, userId, input.name, input.provider,
+        input.api_url || "", input.model || "",
+        input.preset_id || null,
+        input.is_default ? 1 : 0,
+        hasApiKey,
+        JSON.stringify(clearImportedConnectionReview(input.metadata || {})),
+        now, now
+      );
+  } catch (error) {
+    // The secret is written before the profile row; a failed insert must not
+    // leave an orphaned credential behind.
+    if (hasApiKey) secretsSvc.deleteSecret(userId, connectionSecretKey(id));
+    throw error;
+  }
 
   return getConnection(userId, id)!;
 }
@@ -490,8 +794,11 @@ export async function createConnection(userId: string, input: CreateConnectionPr
 export async function updateConnection(userId: string, id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile | null> {
   const existing = getConnection(userId, id);
   if (!existing) return null;
+  const reviewRequested = input.reviewed === true;
+  const wasReviewRequired = existing.review_required;
+  const canSetDefault = !wasReviewRequired || reviewRequested;
 
-  if (input.is_default) {
+  if (input.is_default && canSetDefault) {
     getDb().query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
   }
 
@@ -512,8 +819,18 @@ export async function updateConnection(userId: string, id: string, input: Update
   if (input.api_url !== undefined) { fields.push("api_url = ?"); values.push(input.api_url); }
   if (input.model !== undefined) { fields.push("model = ?"); values.push(input.model); }
   if (input.preset_id !== undefined) { fields.push("preset_id = ?"); values.push(input.preset_id || null); }
-  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default ? 1 : 0); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
+  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default && canSetDefault ? 1 : 0); }
+  if (input.metadata !== undefined) {
+    fields.push("metadata = ?");
+    values.push(JSON.stringify(reviewRequested
+      ? clearImportedConnectionReview(input.metadata)
+      : wasReviewRequired
+        ? markImportedConnectionForReview(input.metadata, existing.review_code || "foreign_import")
+        : clearImportedConnectionReview(input.metadata)));
+  } else if (reviewRequested) {
+    fields.push("metadata = ?");
+    values.push(JSON.stringify(clearImportedConnectionReview(existing.metadata)));
+  }
 
   if (fields.length === 0 && input.api_key === undefined) return existing;
 
@@ -524,7 +841,7 @@ export async function updateConnection(userId: string, id: string, input: Update
 
   getDb().query(`UPDATE connection_profiles SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
   const updated = getConnection(userId, id)!;
-  eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id, profile: updated }, userId);
+  eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id, profile: toPublicConnection(updated) }, userId);
   return updated;
 }
 
@@ -535,12 +852,13 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
   const newId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  // Strip reasoningBindings from metadata copy to avoid bound state conflicts
-  const cleanMetadata = { ...existing.metadata };
+  const cleanMetadata = clearImportedConnectionReview({ ...existing.metadata });
   delete cleanMetadata.reasoningBindings;
-
+  if (existing.review_required) {
+    Object.assign(cleanMetadata, markImportedConnectionForReview(cleanMetadata, existing.review_code ?? "foreign_import"));
+  }
   let hasApiKey = 0;
-  if (existing.has_api_key) {
+  if (!existing.review_required && existing.has_api_key) {
     try {
       const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(id));
       if (apiKey) {
@@ -548,7 +866,7 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
         hasApiKey = 1;
       }
     } catch {
-      // If key read fails, duplicate without the key
+      // Duplicate without the key if secret retrieval fails.
     }
   }
 
@@ -560,16 +878,17 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
       newId, userId, `${existing.name} (Copy)`, existing.provider,
       existing.api_url, existing.model,
       existing.preset_id || null,
-      0, // never default
+      0,
       hasApiKey,
       JSON.stringify(cleanMetadata),
       now, now
     );
 
   const profile = getConnection(userId, newId)!;
-  eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id: newId, profile }, userId);
+  eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id: newId, profile: toPublicConnection(profile) }, userId);
   return profile;
 }
+
 
 export async function deleteConnection(userId: string, id: string): Promise<boolean> {
   const deleted = getDb().query("DELETE FROM connection_profiles WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
@@ -600,22 +919,26 @@ export async function testConnection(
 ): Promise<ConnectionTestResult> {
   const startedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? DEFAULT_CONNECTION_TEST_TIMEOUT_MS;
-  const profile = getConnection(userId, id);
+  const profile = getUsableConnection(userId, id);
   if (!profile) {
     return {
       success: false,
-      message: "Connection not found",
+      message: "Connection is unavailable until it is reviewed.",
       provider: "",
       durationMs: Date.now() - startedAt,
       timedOut: false,
-      error: "Connection not found",
+      error: "Connection requires owner review",
     };
   }
+
 
   if (isModelRouletteProfile(profile)) {
     const targetIds = getConnectionRouletteConfig(profile).connection_ids;
     const validTargets = targetIds
-      .map((targetId) => getConnection(userId, targetId))
+    // imported/review-required roulette profiles are inert just like ordinary
+    // imported connection rows.
+
+      .map((targetId) => getUsableConnection(userId, targetId))
       .filter((target): target is ConnectionProfile => !!target && !isModelRouletteProfile(target));
 
     if (validTargets.length === 0) {
@@ -691,8 +1014,9 @@ export async function testConnection(
 }
 
 export async function listConnectionModels(userId: string, id: string): Promise<{ models: string[]; model_labels?: Record<string, string>; provider: string; error?: string }> {
-  const profile = getConnection(userId, id);
-  if (!profile) return { models: [], provider: "", error: "Connection not found" };
+  const profile = getUsableConnection(userId, id);
+  if (!profile) return { models: [], provider: "", error: "Connection requires owner review" };
+
   if (isModelRouletteProfile(profile)) {
     return { models: [], provider: MODEL_ROULETTE_PROVIDER, error: "Model roulette uses the selected member profile models." };
   }
@@ -712,7 +1036,11 @@ export async function listConnectionModelsPreview(
   input: ConnectionModelsPreviewInput
 ): Promise<{ models: string[]; model_labels?: Record<string, string>; provider: string; error?: string }> {
   const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  if (existing && !isConnectionUsable(existing)) {
+    return { models: [], provider: input.provider, error: "Connection requires owner review" };
+  }
   const providerId = input.provider;
+
   const metadata = input.metadata ?? existing?.metadata ?? {};
   const apiUrl = resolveEffectiveApiUrl({
     provider: providerId,
@@ -754,8 +1082,9 @@ export async function listConnectionModelsPreview(
 }
 
 export async function fetchNanoGptSubscriptionUsage(userId: string, id: string): Promise<NanoGptSubscriptionUsage | null> {
-  const profile = getConnection(userId, id);
+  const profile = getUsableConnection(userId, id);
   if (!profile || profile.provider !== "nanogpt") return null;
+
 
   const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(id));
   if (!apiKey) return null;
@@ -787,8 +1116,8 @@ export async function fetchNanoGptSubscriptionUsage(userId: string, id: string):
 }
 
 export async function listConnectionRegions(userId: string, id: string): Promise<{ regions: string[]; error?: string }> {
-  const profile = getConnection(userId, id);
-  if (!profile) return { regions: [], error: "Connection not found" };
+  const profile = getUsableConnection(userId, id);
+  if (!profile) return { regions: [], error: "Connection requires owner review" };
 
   if (profile.provider !== "google_vertex") {
     return { regions: [], error: "Region listing is only supported for Google Vertex AI" };

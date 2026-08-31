@@ -25,7 +25,85 @@ import { BedrockProvider } from "./providers/bedrock";
 
 const providers = new Map<string, LlmProvider>();
 
+const REQUIRED_TOOL_CAPABILITY_KEYS = [
+  "supportsStreaming",
+  "toolCalling",
+  "requiredToolChoice",
+  "nativeToolContinuation",
+  "toolContinuationMode",
+  "toolsDisabledFinalization",
+  "supportsToolFinalization",
+] as const;
+
+/**
+ * Validate the closed provider/tool contract at registration time. Checking
+ * own properties is deliberate: a base class or prototype must not silently
+ * supply an adapter's feature capability.
+ */
+export function validateProviderCapabilities(provider: Pick<LlmProvider, "name" | "capabilities">): void {
+  const capabilities = provider.capabilities;
+  for (const key of REQUIRED_TOOL_CAPABILITY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(capabilities, key)) {
+      throw new Error(`Provider "${provider.name}" must declare capabilities.${key}`);
+    }
+  }
+
+  if (typeof capabilities.supportsStreaming !== "boolean") {
+    throw new Error(`Provider "${provider.name}" has invalid capabilities.supportsStreaming`);
+  }
+  if (typeof capabilities.toolCalling !== "boolean") {
+    throw new Error('Provider "' + provider.name + '" has invalid capabilities.toolCalling');
+  }
+  if (typeof capabilities.requiredToolChoice !== "boolean") {
+    throw new Error('Provider "' + provider.name + '" has invalid capabilities.requiredToolChoice');
+  }
+  if (capabilities.requiredToolChoice && !capabilities.toolCalling) {
+    throw new Error('Provider "' + provider.name + '" cannot require a tool without tool calling');
+  }
+  if (typeof capabilities.nativeToolContinuation !== "boolean") {
+    throw new Error('Provider "' + provider.name + '" has invalid capabilities.nativeToolContinuation');
+  }
+  if (
+    capabilities.toolContinuationMode !== "native" &&
+    capabilities.toolContinuationMode !== "legacy" &&
+    capabilities.toolContinuationMode !== "unsupported"
+  ) {
+    throw new Error(`Provider "${provider.name}" has invalid capabilities.toolContinuationMode`);
+  }
+  if (typeof capabilities.toolsDisabledFinalization !== "boolean") {
+    throw new Error(`Provider "${provider.name}" has invalid capabilities.toolsDisabledFinalization`);
+  }
+  if (typeof capabilities.supportsToolFinalization !== "boolean") {
+    throw new Error(`Provider "${provider.name}" has invalid capabilities.supportsToolFinalization`);
+  }
+  if (
+    (capabilities.toolCalling && capabilities.toolContinuationMode === "unsupported") ||
+    (!capabilities.toolCalling && capabilities.toolContinuationMode !== "unsupported")
+  ) {
+    throw new Error(`Provider "${provider.name}" has incoherent tool calling capabilities`);
+  }
+  if (
+    capabilities.nativeToolContinuation !==
+    (capabilities.toolContinuationMode === "native")
+  ) {
+    throw new Error(`Provider "${provider.name}" has incoherent native continuation capabilities`);
+  }
+  if (
+    (capabilities.toolContinuationMode === "unsupported") !==
+    (!capabilities.toolsDisabledFinalization)
+  ) {
+    throw new Error(`Provider "${provider.name}" has incoherent finalization capabilities`);
+  }
+  if (capabilities.supportsToolFinalization !== capabilities.toolsDisabledFinalization) {
+    throw new Error(`Provider "${provider.name}" has incoherent finalization compatibility`);
+  }
+  if (capabilities.interleavedThinking === true && !capabilities.nativeToolContinuation) {
+    throw new Error(`Provider "${provider.name}" cannot interleave thinking without native continuation`);
+  }
+}
+
 export function registerProvider(provider: LlmProvider): void {
+  validateProviderCapabilities(provider);
   providers.set(provider.name, provider);
 }
 
