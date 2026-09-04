@@ -84,17 +84,34 @@ describe('shouldAdjustMessageListScrollOnResize', () => {
     })).toBe(true)
   })
 
-  test('skips remeasurement compensation while scrolling backward', () => {
+  test('skips remeasurement compensation during active backward scrolling', () => {
     expect(shouldAdjustMessageListScrollOnResize({
       delta: 48,
       itemStart: 1200,
       itemEnd: 1300,
       scrollOffset: 1350,
       scrollDirection: 'backward',
+      isScrolling: true,
       hasMeasuredSize: true,
       isPinned: false,
       isStreamingTail: false,
     })).toBe(false)
+  })
+
+  test('preserves a settled viewport when the last direction was backward', () => {
+    const input = {
+      itemStart: 900,
+      itemEnd: 1200,
+      scrollOffset: 1350,
+      scrollDirection: 'backward' as const,
+      isScrolling: false,
+      hasMeasuredSize: true,
+      isPinned: false,
+      isStreamingTail: false,
+    }
+
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, delta: 240 })).toBe(true)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, delta: -180 })).toBe(true)
   })
 
   test('preserves the viewport for programmatic content reflow while scrolling backward', () => {

@@ -948,6 +948,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
         itemEnd: item.end,
         scrollOffset: instance.scrollOffset ?? lastScrollTopRef.current,
         scrollDirection: instance.scrollDirection,
+        isScrolling: instance.isScrolling,
         hasMeasuredSize: instance.itemSizeCache.has(item.key),
         isPinned: isPinnedRef.current,
         isStreamingTail,
