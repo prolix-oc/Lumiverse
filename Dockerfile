@@ -90,6 +90,9 @@ COPY --from=frontend-build /app/frontend/package.json ./frontend/package.json
 COPY package.json ./
 COPY src/ ./src/
 
+# User guide docs for built-in help
+COPY user-docs/ ./user-docs/
+
 # Create data directory with correct ownership
 RUN mkdir -p /app/data && chown -R bun:bun /app/data
 
