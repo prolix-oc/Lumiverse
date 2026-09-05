@@ -35,11 +35,13 @@ interface RoleDef {
 const ROLE_DEFS: readonly RoleDef[] = [
   { semantic: 'positive_prompt', group: 'core', required: true },
   { semantic: 'negative_prompt', group: 'core' },
+  { semantic: 'init_image', group: 'core' },
   { semantic: 'seed', group: 'core' },
   { semantic: 'width', group: 'core' },
   { semantic: 'height', group: 'core' },
   { semantic: 'steps', group: 'sampling' },
   { semantic: 'cfg', group: 'sampling' },
+  { semantic: 'denoise', group: 'sampling' },
   { semantic: 'sampler_name', group: 'sampling' },
   { semantic: 'scheduler', group: 'sampling' },
   { semantic: 'checkpoint', group: 'model' },

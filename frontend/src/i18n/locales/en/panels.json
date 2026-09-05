@@ -47,11 +47,13 @@
     "role": {
       "positive_prompt": "Positive prompt",
       "negative_prompt": "Negative prompt",
+      "init_image": "Initial / Reference image",
       "seed": "Seed",
       "width": "Width",
       "height": "Height",
       "steps": "Steps",
       "cfg": "CFG",
+      "denoise": "Denoise",
       "sampler_name": "Sampler",
       "scheduler": "Scheduler",
       "checkpoint": "Checkpoint",

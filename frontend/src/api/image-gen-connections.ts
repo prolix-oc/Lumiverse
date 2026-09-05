@@ -17,9 +17,11 @@ import type {
 export type ComfyUIMappedFieldSemantic =
   | 'positive_prompt'
   | 'negative_prompt'
+  | 'init_image'
   | 'seed'
   | 'steps'
   | 'cfg'
+  | 'denoise'
   | 'sampler_name'
   | 'scheduler'
   | 'width'
