@@ -265,6 +265,42 @@ describe("chat lifecycle events", () => {
       unsubscribe();
     }
   });
+
+  test("emits CHAT_FORKED with the source-to-fork message ID map", async () => {
+    seedChat("source-chat", "c1", "Source", "{}", 100);
+    seedMessage("source-message-1", "source-chat", "Opening", {}, { index: 0 });
+    seedMessage("source-message-2", "source-chat", "Reply", {}, { index: 1, isUser: true });
+    seedMessage("source-message-3", "source-chat", "Not copied", {}, { index: 2 });
+
+    const events: EventMessage[] = [];
+    const unsubscribe = eventBus.on(EventType.CHAT_FORKED, (event) => events.push(event));
+
+    try {
+      const fork = branchChat("u1", "source-chat", "source-message-2");
+      expect(fork).not.toBeNull();
+
+      const forkedMessages = getMessages("u1", fork!.id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]?.userId).toBe("u1");
+      expect(events[0]?.payload).toEqual(expect.objectContaining({
+        sourceChatId: "source-chat",
+        forkedChatId: fork!.id,
+        forkedAtMessageId: "source-message-2",
+        forkedAtMessageIndex: 1,
+        messageIdMap: {
+          "source-message-1": forkedMessages[0]?.id,
+          "source-message-2": forkedMessages[1]?.id,
+        },
+      }));
+      expect(events[0]?.payload.messageIdMap).not.toHaveProperty("source-message-3");
+      expect(forkedMessages.map((message) => message.id)).not.toContain("source-message-1");
+      expect(forkedMessages.map((message) => message.id)).not.toContain("source-message-2");
+    } finally {
+      unsubscribe();
+    }
+  });
 });
 
 describe("chat message search", () => {

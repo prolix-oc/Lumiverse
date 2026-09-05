@@ -3337,6 +3337,7 @@ function emitCreatedChatBranch(userId: string, created: CreatedChatBranch): Chat
       branchId: created.branchId,
       forkedAtMessageId: created.atMessageId,
       forkedAtMessageIndex: created.atMessageIndex,
+      messageIdMap: Object.fromEntries(created.idMap),
     },
     userId,
   );
