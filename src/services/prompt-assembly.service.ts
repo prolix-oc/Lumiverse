@@ -7319,7 +7319,10 @@ export function buildParameters(
     const effort = reasoningSettings.reasoningEffort || "auto";
     const requiresExplicitOnSwitch =
       providerName === "moonshot" || providerName === "zai";
-    if (effort !== "auto" || requiresExplicitOnSwitch) {
+    // Google requires includeThoughts even when the model chooses its own effort.
+    const requiresThoughtSummaries =
+      providerName === "google" || providerName === "google_vertex";
+    if (effort !== "auto" || requiresExplicitOnSwitch || requiresThoughtSummaries) {
       injectReasoningParams(
         params,
         providerName,
@@ -7464,8 +7467,12 @@ export function injectReasoningParams(
     // emits zero `part.thought` parts and our parser sees nothing).
     params.thinkingConfig = {
       ...existing,
-      thinkingLevel:
-        existing.thinkingLevel ?? (validLevels.has(effort) ? effort : "medium"),
+      ...(effort !== "auto"
+        ? {
+            thinkingLevel:
+              existing.thinkingLevel ?? (validLevels.has(effort) ? effort : "medium"),
+          }
+        : {}),
       includeThoughts: true,
     };
   } else if (providerName === "openrouter") {

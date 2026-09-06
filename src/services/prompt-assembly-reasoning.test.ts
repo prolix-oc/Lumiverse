@@ -304,3 +304,41 @@ describe("applyProviderReasoningOffSwitch (zai & moonshot)", () => {
     expect(params.reasoning_effort).toBeUndefined();
   });
 });
+
+describe("buildParameters (Google thought summaries)", () => {
+  for (const provider of ["google", "google_vertex"]) {
+    for (const effort of [undefined, "auto", "high"]) {
+      test(`${provider} requests summaries with effort ${effort ?? "unset"}`, () => {
+        const params = buildParameters(null, null, {
+          apiReasoning: true, reasoningEffort: effort,
+        }, provider, "gemini-3.8-flash");
+        expect(params.thinkingConfig).toEqual(effort === "high"
+          ? { includeThoughts: true, thinkingLevel: "high" }
+          : { includeThoughts: true });
+      });
+    }
+
+    test(`${provider} does not request summaries when reasoning is disabled`, () => {
+      const params = buildParameters(null, null, {
+        apiReasoning: false, reasoningEffort: "auto",
+      }, provider, "gemini-3.8-flash");
+      expect(params.thinkingConfig).toBeUndefined();
+    });
+
+    test(`${provider} preserves custom body precedence`, () => {
+      const params = buildParameters(null, null, {
+        apiReasoning: true, reasoningEffort: "auto",
+        customBody: { enabled: true, rawJson: JSON.stringify({
+          thinkingConfig: { thinkingBudget: 1024, includeThoughts: false },
+        }) },
+      }, provider, "gemini-3.8-flash");
+      expect(params.thinkingConfig).toEqual({ thinkingBudget: 1024, includeThoughts: false });
+    });
+
+    test(`${provider} auto injection preserves an explicit budget without adding a level`, () => {
+      const params: Record<string, any> = { thinkingConfig: { thinkingBudget: 1024 } };
+      injectReasoningParams(params, provider, "auto", "gemini-3.8-flash");
+      expect(params.thinkingConfig).toEqual({ thinkingBudget: 1024, includeThoughts: true });
+    });
+  }
+});
