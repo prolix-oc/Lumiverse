@@ -65,3 +65,23 @@ describe('resolveGalleryImageSourcesInHtml', () => {
     })).toBe(content)
   })
 })
+
+describe('gallery source boundaries', () => {
+  test.each([
+    ["<IMG class='scene' SRC = 'gallery://first' style='width:42%' data-panel='hero'>", "<img class='scene' src='/api/v1/images/local%20image%2Fid' style='width:42%' data-panel='hero'>"],
+    ['<img src="gallery://first" src="gallery://last">', '<img src="/api/v1/images/local%20image%2Fid" src="gallery://last">'],
+    ['<img src="missing" src="gallery://first">', '<img src="missing" src="gallery://first">'],
+    ['<img data-src="gallery://first">', '<img data-src="gallery://first">'],
+    ['<img src="gallery://first\'>', '<img src="gallery://first\'>'],
+    ['<img src="gallery://a>b">', '<img src="/api/v1/images/greater-id">'],
+  ])('preserves gallery attributes and source selection for %s', (raw, expected) => {
+    expect(resolveGalleryImageSourcesInHtml(raw, { 'gallery://first': 'local image/id', 'gallery://last': 'last-id', 'gallery://a>b': 'greater-id' })).toBe(expected)
+  })
+
+  test('keeps malformed source runs unchanged', () => {
+    const raw = '<img '.repeat(512) + 'src="a" '.repeat(512)
+    expect(resolveGalleryImageSourcesInHtml(raw, { 'gallery://a': 'image-id' })).toBe(raw)
+    const invalid = '<img '.repeat(512) + 'src="" '.repeat(512) + '>'
+    expect(resolveGalleryImageSourcesInHtml(invalid, {})).toBe(invalid)
+  })
+})
