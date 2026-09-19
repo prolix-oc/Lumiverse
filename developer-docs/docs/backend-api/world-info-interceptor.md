@@ -2,7 +2,7 @@
 
 !!! warning "Permission required: `generation`"
 
-World info interceptors run *before* world info activation. They receive the candidate entries plus the current chat state, and return a list of entry IDs to disable for this turn and/or per-entry content overrides.
+World info interceptors run *before* world info activation. They receive the candidate entries plus the current chat state, and return a list of entry IDs to disable for this turn and/or per-entry content and output-order overrides.
 
 ```ts
 spindle.registerWorldInfoInterceptor(async (ctx) => {
@@ -20,7 +20,7 @@ Use this when an entry's stored fields can't express the activation rule (turn-b
 
 | Param | Type | Description |
 | --- | --- | --- |
-| `handler` | `(ctx: WorldInfoInterceptorCtx) => Promise<WorldInfoInterceptorResult \| void>` | Returns disable + content-override decisions, or `void` to pass through |
+| `handler` | `(ctx: WorldInfoInterceptorCtx) => Promise<WorldInfoInterceptorResult \| void>` | Returns disable + content/output-order overrides, or `void` to pass through |
 | `priority` | `number` | Optional. Lower values run first. Default:`100` |
 
 One interceptor per extension; a second registration replaces the first.
@@ -70,6 +70,7 @@ interface WorldInfoInterceptorEntry {
   exclude_greeting: boolean
   scan_depth: number | null
   order_value: number
+  outputOrder?: "selection" | "insertion"
   // Which attachment scope contributed the entry's book to this chat.
   // When a book is attached at multiple scopes the narrowest one wins.
   book_source?: "character" | "persona" | "chat" | "global"
@@ -104,6 +105,7 @@ interface WorldInfoInterceptorResult {
     id: string
     content?: string
     selectionContent?: string
+    outputOrder?: "selection" | "insertion"
   }[]
   activationOverrides?: {
     disableRecursion?: true
@@ -120,9 +122,18 @@ Return `void` or omit all fields for a no-op pass-through. The fields are indepe
 | `forced` | Sets `constant: true` for this turn (activates regardless of key match). No effect if any handler voted to disable. Independent of `enabled`. To force a stored-disabled entry, vote both `enabled` and `forced`. |
 | `mutated.content` | Replaces the content inserted for this prompt. The stored entry is unchanged. |
 | `mutated.selectionContent` | Replaces content only for selection, duplicate checks, and token limits. |
+| `mutated.outputOrder` | `"insertion"` requests insertion order after selection. `"selection"` clears an earlier request. Omission leaves the current request unchanged. |
 | `activationOverrides.disableRecursion` | Disables recursive activation for this prompt. |
 
 Mutating an entry that another interceptor disabled is allowed but inert.
+
+## Output Order
+
+`outputOrder: "insertion"` sorts selected entries by `order_value` ascending after token-budget selection. Equal values appear in reverse selection order. This changes prompt order only.
+
+Each extension reorders only the entries it requested; other entries keep their positions in the selected list. The last request for an entry wins. Explicit chat-depth placements keep their existing order.
+
+Requires `spindle.contracts.worldInfoOutputOrdering === 1`. Types are included in `lumiverse-spindle-types` 0.6.33.
 
 ## Composition Order
 
@@ -149,6 +160,6 @@ Each interceptor runs inside a 10-second wall-clock budget. On timeout or thrown
 
 | Hook | When it fires | What it changes |
 | --- | --- | --- |
-| **World Info Interceptor** | Before world info activation | Per-entry disable + content overrides |
+| **World Info Interceptor** | Before world info activation | Per-entry disable + content/output-order overrides |
 | [Context Handler](context-handlers.md) | Before prompt assembly | The generation context |
 | [Interceptor](interceptors.md) | After assembly, before LLM call | The outgoing message array |

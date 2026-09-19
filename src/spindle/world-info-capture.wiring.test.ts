@@ -19,5 +19,6 @@ describe('world-info capture wiring', () => {
     expect(block).not.toBeNull()
     expect(block![1]).toContain('worldInfoActivationCapture: 1')
     expect(block![1]).toContain('worldInfoRuntimePlacement: 1')
+    expect(block![1]).toContain('worldInfoOutputOrdering: 1')
   })
 })

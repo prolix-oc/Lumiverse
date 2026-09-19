@@ -3986,6 +3986,7 @@ const spindleApi: RuntimeSpindleAPI = {
     preAssemblyGenerationContext: 1,
     worldInfoActivationCapture: 1,
     worldInfoRuntimePlacement: 1,
+    worldInfoOutputOrdering: 1,
   }),
 
   registerContextHandler(

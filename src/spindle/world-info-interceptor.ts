@@ -39,6 +39,7 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly cooldown: number;
   readonly delay: number;
   readonly placement?: WorldInfoInterceptorPlacementDTO;
+  readonly outputOrder?: "selection" | "insertion";
   readonly book_source?: BookSource;
 }
 
@@ -82,6 +83,8 @@ export interface WorldInfoInterceptorMutationDTO {
   readonly selectionContent?: string;
   /** Prompt-local placement relative to the selected chat history. */
   readonly placement?: WorldInfoInterceptorPlacementDTO;
+  /** Prompt-local output ordering; never changes activation or budget competition. */
+  readonly outputOrder?: "selection" | "insertion";
 }
 
 export interface WorldInfoInterceptorResultDTO {
@@ -102,6 +105,7 @@ export interface WorldInfoInterceptorChainResult {
     string,
     WorldInfoInterceptorPlacementDTO
   >;
+  readonly insertionOrderByEntryId: ReadonlyMap<string, string>;
 }
 
 function normalizePlacement(
@@ -170,6 +174,7 @@ export class WorldInfoInterceptorChain {
         activationOverrides: {},
         selectionContentByEntryId: new Map(),
         placementByEntryId: new Map(),
+        insertionOrderByEntryId: new Map(),
       };
     }
 
@@ -177,6 +182,7 @@ export class WorldInfoInterceptorChain {
       string,
       WorldInfoInterceptorPlacementDTO
     >();
+    const insertionOrderByEntryId = new Map<string, string>();
     const buildDto = (
       src: readonly WorldBookEntry[]
     ): WorldInfoInterceptorEntryDTO[] =>
@@ -216,6 +222,9 @@ export class WorldInfoInterceptorChain {
         delay: e.delay,
         ...(placementByEntryId.has(e.id)
           ? { placement: placementByEntryId.get(e.id)! }
+          : {}),
+        ...(insertionOrderByEntryId.has(e.id)
+          ? { outputOrder: "insertion" as const }
           : {}),
         book_source: bookSourceMap?.get(e.world_book_id),
       }));
@@ -297,6 +306,11 @@ export class WorldInfoInterceptorChain {
           }
           const placement = normalizePlacement(m.placement);
           if (placement) placementByEntryId.set(m.id, placement);
+          if (m.outputOrder === "insertion") {
+            insertionOrderByEntryId.set(m.id, handler.extensionId);
+          } else if (m.outputOrder === "selection") {
+            insertionOrderByEntryId.delete(m.id);
+          }
         }
         disableRecursion ||= disablesRecursion;
 
@@ -326,6 +340,7 @@ export class WorldInfoInterceptorChain {
       },
       selectionContentByEntryId,
       placementByEntryId,
+      insertionOrderByEntryId,
     };
   }
 

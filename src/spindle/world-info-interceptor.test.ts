@@ -67,6 +67,44 @@ const context = {
   },
 };
 
+describe("world info output ordering", () => {
+  test("keeps ordering prompt-local and attributes it to the registering extension", async () => {
+    const chain = new WorldInfoInterceptorChain();
+    const entries = [makeEntry("a"), makeEntry("b")];
+    chain.register({ extensionId: "first", priority: 0, handler: async () => ({
+      mutated: [{ id: "a", outputOrder: "insertion" }, { id: "missing", outputOrder: "insertion" }],
+    }) });
+    chain.register({ extensionId: "second", priority: 1, handler: async (ctx) => {
+      expect(ctx.entries[0]?.outputOrder).toBe("insertion");
+      return { mutated: [{ id: "b", outputOrder: "insertion" }] };
+    } });
+    const result = await chain.run(entries, context);
+    expect([...result.insertionOrderByEntryId]).toEqual([["a", "first"], ["b", "second"]]);
+    expect(result.entries).toEqual(entries);
+    expect(result.entries[0]).toBe(entries[0]);
+    expect(entries[0]).not.toHaveProperty("outputOrder");
+  });
+
+  test("last valid request wins; selection resets; invalid and foreign-user requests do not apply", async () => {
+    const chain = new WorldInfoInterceptorChain();
+    chain.register({ extensionId: "first", priority: 0, handler: async () => ({
+      mutated: ["a", "b", "c"].map(id => ({ id, outputOrder: "insertion" as const })),
+    }) });
+    chain.register({ extensionId: "second", priority: 1, handler: async () => ({ mutated: [
+      { id: "a", outputOrder: "selection" },
+      { id: "b", outputOrder: "insertion" },
+      { id: "c", outputOrder: "unknown" as never },
+    ] }) });
+    chain.register({ extensionId: "foreign", userId: "other", priority: 2, handler: async () => ({
+      mutated: [{ id: "c", outputOrder: "selection" }],
+    }) });
+    const result = await chain.run([makeEntry("a"), makeEntry("b"), makeEntry("c")], context, "user");
+    expect([...result.insertionOrderByEntryId]).toEqual([["b", "second"], ["c", "first"]]);
+    expect((await chain.run([], context, "user")).insertionOrderByEntryId.size).toBe(0);
+    expect((await new WorldInfoInterceptorChain().run([], context)).insertionOrderByEntryId.size).toBe(0);
+  });
+});
+
 describe("WorldInfoInterceptorChain activation capture", () => {
   test("collects raw capture requests per extension without changing vote behavior", async () => {
     const chain = new WorldInfoInterceptorChain();

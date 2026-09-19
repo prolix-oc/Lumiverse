@@ -66,6 +66,7 @@ import {
   type FinalizedWorldInfoEntries,
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
+import { orderWorldInfoForOutput } from "./world-info-output-order";
 import {
   worldInfoInterceptorChain,
   type WorldInfoInterceptorPlacementDTO,
@@ -2407,13 +2408,18 @@ export async function assemblePrompt(
   const runtimePlacementIds = new Set(
     runtimeWorldInfoPlacements.map((entry) => entry.id),
   );
+  const outputWorldInfo = orderWorldInfoForOutput(
+    mergedWorldInfo.activatedEntries,
+    interception.insertionOrderByEntryId,
+    runtimePlacementIds,
+  );
   const wiCache =
-    runtimePlacementIds.size === 0
+    runtimePlacementIds.size === 0 && outputWorldInfo === mergedWorldInfo.activatedEntries
       ? mergedWorldInfo.cache
       : materializeWorldInfoCache(
-          mergedWorldInfo.activatedEntries.filter(
-            (entry) => !runtimePlacementIds.has(entry.id),
-          ),
+          runtimePlacementIds.size === 0
+            ? outputWorldInfo
+            : outputWorldInfo.filter((entry) => !runtimePlacementIds.has(entry.id)),
         );
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
   const activatedWorldInfo = mergedWorldInfo.activatedWorldInfo;
@@ -2959,7 +2965,7 @@ export async function assemblePrompt(
 
   phaseStartedAt = performance.now();
   await resolveWorldInfoOutlets(
-    mergedWorldInfo.activatedEntries,
+    outputWorldInfo,
     macroEnv,
     ctx.signal,
   );
