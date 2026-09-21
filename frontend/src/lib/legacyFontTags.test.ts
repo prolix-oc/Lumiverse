@@ -41,3 +41,21 @@ test('safely handles edge case color attributes', () => {
   expect(normalizeLegacyFontTags('<font color="rgb(255, 0, 0)">RGB</font>'))
     .toBe('<span style="color:rgb(255, 0, 0)">RGB</span>')
 })
+
+test.each([
+  ["case and unquoted color", "<FONT COLOR=red>Text</FONT>", "<span style=\"color:red\">Text</span>"],
+  ["quoted delimiter", "<font title=\"a>b\" color=\"red\">Text</font>", "<span>b\" color=\"red\">Text</span>"],
+  ["nested opening prefix", "<font x=<font color=\"red\">Text</font>", "<span style=\"color:red\">Text</span>"],
+  ["style escaping", "<font style=\"font-family: &quot;Example&quot;\">Text</font>", "<span style=\"font-family: &amp;quot;Example&amp;quot;\">Text</span>"],
+  ["closing tag whitespace", "<font color=red>Text</font \n>", "<span style=\"color:red\">Text</span>"],
+  ["unfinished opening", "<font color=\"red\"", "<font color=\"red\""],
+  ["longer tag name", "<font_extra color=red>Text</font_extra>", "<font_extra color=red>Text</font_extra>"],
+  ["unsupported color punctuation", "<font color=\"red;position:fixed\">Text</font>", "<span>Text</span>"],
+])('preserves legacy fonts behavior for %s', (_name, input, expected) => {
+  expect(normalizeLegacyFontTags(input)).toBe(expected)
+})
+
+test('leaves repeated unfinished font tags unchanged', () => {
+  const input = '<!--' + '<font '.repeat(256)
+  expect(normalizeLegacyFontTags(input)).toBe(input)
+})

@@ -5,6 +5,7 @@ import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
 import { ISLAND_BLANK_LINE_RE, processMarkdownInHtmlIsland } from './htmlIslandMarkdown'
 import { resolveGalleryImageId, resolveGalleryImageSourcesInHtml } from '@/lib/galleryImageReference'
+import { replaceHtmlImageSources } from '@/lib/htmlImageSources'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
@@ -145,16 +146,25 @@ function normalizeQuotesInHTML(html: string): string {
 const BLOCK_CLOSE_RE = /^<\/(p|div|li|blockquote|h[1-6]|pre|table|tr|td|th)\b/i
 const SKIP_OPEN_RE = /^<(pre|code)\b/i
 const SKIP_CLOSE_RE = /^<\/(pre|code)\b/i
+const FEET_INCHES_QUOTE_RE = /(?<=\d(?:'|&#(?:0*39|x0*27);|&apos;)\d+)/iy
 
 function isFeetInchesQuote(text: string, quoteIndex: number): boolean {
-  const beforeQuote = text.slice(0, quoteIndex)
-    .replace(/&#(?:0*39|x0*27);|&apos;/gi, "'")
-
-  return /\d'\d+$/.test(beforeQuote)
+  FEET_INCHES_QUOTE_RE.lastIndex = quoteIndex
+  return FEET_INCHES_QUOTE_RE.test(text)
 }
 
-function colorizeDialogue(html: string): string {
-  const parts = html.split(/(<[^>]*>)/)
+export function colorizeDialogue(html: string): string {
+  const parts: string[] = []
+  let position = 0
+  while (position < html.length) {
+    const start = html.indexOf('<', position)
+    if (start === -1) break
+    const end = html.indexOf('>', start + 1)
+    if (end === -1) break
+    parts.push(html.slice(position, start), html.slice(start, end + 1))
+    position = end + 1
+  }
+  parts.push(html.slice(position))
   let result = ''
   let inQuote = false
   let skipDepth = 0
@@ -217,8 +227,17 @@ function colorizeDialogue(html: string): string {
   return result
 }
 
-function addLazyLoadingToImages(html: string): string {
-  return html.replace(/<img\b(?![^>]*\bloading=)/gi, '<img loading="lazy"')
+export function addLazyLoadingToImages(html: string): string {
+  return html.replace(/<img\b(?:(?![^>]*\bloading=)[^>]*|(?=[^>]*<img\b)[^>]*)/gi, (tag) => {
+    if (!tag.includes('<', 1)) {
+      return '<img loading="lazy"' + tag.slice(4)
+    }
+    let lastLoading = -1
+    for (const attribute of tag.matchAll(/\bloading=/gi)) lastLoading = attribute.index
+    return tag.replace(/<img\b/gi, (match, offset: number) => (
+      offset < lastLoading ? match : '<img loading="lazy"'
+    ))
+  })
 }
 
 interface MarkdownFence {
@@ -1174,11 +1193,12 @@ function extractTrustedYouTubeEmbed(iframeHtml: string): TrustedYouTubeEmbed | n
   return { src, title }
 }
 
-function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
+export function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: TrustedYouTubeEmbed[] } {
   if (!/<iframe\b/i.test(raw)) return { content: raw, embeds: [] }
 
   const embeds: TrustedYouTubeEmbed[] = []
-  const content = raw.replace(/<iframe\b[\s\S]*?<\/iframe\s*>/gi, (match) => {
+  const content = raw.replace(/<iframe\b[\s\S]*?(<\/iframe\s*>|$)/gi, (match, close: string) => {
+    if (!close) return match
     const embed = extractTrustedYouTubeEmbed(match)
     if (!embed) return match
     const idx = embeds.length
@@ -1193,9 +1213,9 @@ function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: Tr
 // sanitize pipeline emit a structure where the in-progress block briefly takes
 // up real vertical space. Pre-closing any unbalanced tags keeps the rendered
 // tree stable and avoids a visible height spike followed by a snap back.
-const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*>/gi
+const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*(>|$)/gi
 
-function balanceStreamingDetails(raw: string): string {
+export function balanceStreamingDetails(raw: string): string {
   if (!raw.includes('<')) return raw
   const fences = getMarkdownFenceRanges(raw)
   let openDetails = 0
@@ -1204,6 +1224,7 @@ function balanceStreamingDetails(raw: string): string {
   STREAMING_DETAILS_TAG_RE.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = STREAMING_DETAILS_TAG_RE.exec(raw)) !== null) {
+    if (!match[2]) break
     const pos = match.index
     while (fenceIdx < fences.length && fences[fenceIdx][1] <= pos) fenceIdx++
     if (fenceIdx < fences.length && pos >= fences[fenceIdx][0] && pos < fences[fenceIdx][1]) continue
@@ -1593,12 +1614,6 @@ function TrustedYouTubeEmbed({ embed }: { embed: TrustedYouTubeEmbed }) {
 // Risu <img="AssetName"> tag pattern — resolved at display time using character's asset map
 const RISU_IMG_TAG_RE = /<img="([^"]+)">/gi
 
-// Standard <img src="AssetName"> where src is a relative asset reference (not a URL)
-const IMG_SRC_ASSET_RE = /<img\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>/gi
-
-// Markdown ![alt](src) where src is a relative asset reference (not a URL)
-const MARKDOWN_IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g
-
 /** Strip path prefix and file extension to get the asset stem. */
 function assetStem(name: string): string {
   const base = name.split('/').pop() || name
@@ -1630,13 +1645,12 @@ function resolveRisuAssetTags(text: string, assetMap: Record<string, string>): s
  *  Unresolved asset refs are converted to markdown images so they go through the same
  *  custom renderer (proseImageWrap, lightbox) as Risu <img="..."> tags.
  *  Already-resolved URLs (absolute paths, http, data:) are left as raw HTML. */
-function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
+export function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>): string {
   // Gallery sources retain their original HTML tag so display-regex styling
   // and wrapper behavior survive. Other legacy asset references continue to
   // use the standard Markdown image renderer below.
   text = resolveGalleryImageSourcesInHtml(text, assetMap)
-  IMG_SRC_ASSET_RE.lastIndex = 0
-  return text.replace(IMG_SRC_ASSET_RE, (match, before: string, src: string, after: string) => {
+  return replaceHtmlImageSources(text, 'asset', (match, _before, _quote, src) => {
     // Skip already-resolved URLs — these are valid img tags that should render as-is
     if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
     const imageId = resolveAssetId(src, assetMap)
@@ -1652,18 +1666,30 @@ function resolveImgSrcAssetTags(text: string, assetMap: Record<string, string>):
  *  Handles the common AI-generated pattern of referencing Risu assets by relative
  *  filename (including extensions like .webp/.png/.jpg). Already-resolved URLs are
  *  left as-is. Strips a trailing markdown title ("...") before lookup. */
-function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
-  if (!text.includes('![')) return text
-  MARKDOWN_IMG_RE.lastIndex = 0
-  return text.replace(MARKDOWN_IMG_RE, (match, alt: string, rawSrc: string) => {
-    // Strip trailing markdown title: ![alt](src "title") → src
-    const src = rawSrc.trim().replace(/\s+["'][^"']*["']\s*$/, '').trim()
-    if (!src) return match
-    if (/^(?:https?:\/\/|\/|data:)/i.test(src)) return match
-    const imageId = resolveAssetId(src, assetMap)
-    if (imageId) return `![${alt}](/api/v1/images/${imageId})`
-    return match
-  })
+export function resolveMarkdownImgTags(text: string, assetMap: Record<string, string>): string {
+  let copied = 0
+  let cursor = 0
+  const output: string[] = []
+  while ((cursor = text.indexOf('![', cursor)) !== -1) {
+    const labelEnd = text.indexOf(']', cursor + 2)
+    if (labelEnd === -1) break
+    if (text[labelEnd + 1] !== '(') { cursor = labelEnd + 1; continue }
+    const sourceEnd = text.indexOf(')', labelEnd + 2)
+    if (sourceEnd === -1) break
+    if (sourceEnd === labelEnd + 2) { cursor = labelEnd + 1; continue }
+    const rawSrc = text.slice(labelEnd + 2, sourceEnd)
+    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim()
+    if (src && !/^(?:https?:\/\/|\/|data:)/i.test(src)) {
+      const imageId = resolveAssetId(src, assetMap)
+      if (imageId) {
+        const alt = text.slice(cursor + 2, labelEnd)
+        output.push(text.slice(copied, cursor), `![${alt}](/api/v1/images/${imageId})`)
+        copied = sourceEnd + 1
+      }
+    }
+    cursor = sourceEnd + 1
+  }
+  return output.length ? output.join('') + text.slice(copied) : text
 }
 
 export default function MessageContent({
