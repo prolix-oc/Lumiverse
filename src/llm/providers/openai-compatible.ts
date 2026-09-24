@@ -239,6 +239,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     let nativeReason: string | undefined;
     let refusal = "";
     let finalUsage: StreamChunk["usage"];
+    let hasYieldedAnyContent = false;
 
     for await (const parsed of readProviderSse(res, this.displayName, request.signal)) {
       throwIfProviderError(parsed, this.displayName, STREAM_OPERATION);
@@ -273,14 +274,25 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
         provider_raw: { ...parsed.usage },
       } : undefined;
       if (usage) finalUsage = usage;
+      if (normalized.content || normalized.reasoning) hasYieldedAnyContent = true;
       if (normalized.content || normalized.reasoning || usage) yield {
         token: normalized.content, reasoning: normalized.reasoning, usage,
       };
     }
     if (request.signal?.aborted) return;
-    // Compatible endpoints may omit [DONE], but must still report a finish
-    // reason. Wait through the usage-only chunk before emitting completion.
-    if (!finishReason) throw incompleteStream(this.displayName);
+    // Compatible endpoints or proxies (e.g. CLIProxyAPI) may close a clean
+    // HTTP 200 stream on natural EOF without an explicit finish_reason chunk.
+    // Fall back to "tool_calls" if tool calls were accumulated, or "stop" if
+    // content/reasoning was received. Truly empty streams still throw incompleteStream.
+    if (!finishReason) {
+      if (toolCallBuffer.length > 0) {
+        finishReason = "tool_calls";
+      } else if (hasYieldedAnyContent) {
+        finishReason = "stop";
+      } else {
+        throw incompleteStream(this.displayName);
+      }
+    }
     const stopDetails = refusal
       ? { type: "refusal", explanation: refusal }
       : nativeReason ? { type: "finish_reason", category: nativeReason } : undefined;

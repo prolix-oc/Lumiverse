@@ -342,3 +342,58 @@ describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
     expect("reasoning_content" in body.messages[0]).toBe(false);
   });
 });
+
+describe("OpenAICompatibleProvider stream EOF fallback", () => {
+  test("defaults finish_reason to 'stop' when clean stream EOF omits finish_reason", async () => {
+    const provider = new TestOpenAICompatibleProvider();
+    const originalFetch = globalThis.fetch;
+    const stream = [
+      'data: {"choices":[{"delta":{"content":"Hello world"}}]}',
+      'data: [DONE]',
+    ].join("\n\n") + "\n\n";
+
+    globalThis.fetch = (async () => new Response(stream, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const chunks = [];
+      for await (const chunk of provider.generateStream("", "https://example.com", {
+        model: "test",
+        messages: [{ role: "user", content: "hi" }],
+      })) {
+        chunks.push(chunk);
+      }
+      expect(chunks.length).toBe(2);
+      expect(chunks[0].token).toBe("Hello world");
+      expect(chunks[1].finish_reason).toBe("stop");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("defaults finish_reason to 'tool_calls' when clean stream EOF omits finish_reason but contains tool calls", async () => {
+    const provider = new TestOpenAICompatibleProvider();
+    const originalFetch = globalThis.fetch;
+    const stream = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{\\"q\\":\\"test\\"}"}}]}}]}',
+      'data: [DONE]',
+    ].join("\n\n") + "\n\n";
+
+    globalThis.fetch = (async () => new Response(stream, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const chunks = [];
+      for await (const chunk of provider.generateStream("", "https://example.com", {
+        model: "test",
+        messages: [{ role: "user", content: "search test" }],
+      })) {
+        chunks.push(chunk);
+      }
+      const terminal = chunks[chunks.length - 1];
+      expect(terminal.finish_reason).toBe("tool_calls");
+      expect(terminal.tool_calls).toEqual([
+        { name: "search", args: { q: "test" }, call_id: "call_1" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
