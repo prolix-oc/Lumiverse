@@ -52,8 +52,8 @@ beforeEach(() => {
 })
 
 describe('dom decorator service mounts', () => {
-  test('publishes 58 canonical mount literals', () => {
-    expect(CANONICAL_MOUNT_PLACEMENTS).toHaveLength(58)
+  test('publishes 59 canonical mount literals', () => {
+    expect(CANONICAL_MOUNT_PLACEMENTS).toHaveLength(59)
   })
 
   for (const record of CANONICAL_MOUNT_PLACEMENTS) {
@@ -66,6 +66,7 @@ describe('dom decorator service mounts', () => {
         .replace('${characterId}', 'char-1')
         .replace('${character.id}', 'char-1')
         .replace('${presetId}', 'preset-1')
+        .replace('${block.id}', 'block-1')
         .replace('${personaId}', 'persona-1')
         .replace('${bookId}', 'book-1')
         .replace('${entry.id}', 'entry-1')

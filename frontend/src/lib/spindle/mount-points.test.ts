@@ -59,6 +59,7 @@ const AUTHORITATIVE_HOST_MOUNT_POINTS = [
   'lorebook_workspace',
   'lorebook_half_workspace',
   'loom_builder_toolbar',
+  'loom_block_editor_actions',
   'loom_builder_inspector',
   'regex_entry_row',
   'settings_tab',
@@ -83,9 +84,9 @@ describe('host mount points', () => {
     expect(HOST_MOUNT_POINTS).toEqual(AUTHORITATIVE_HOST_MOUNT_POINTS)
   })
 
-  test('asserts exactly 58 canonical mount literals', () => {
-    expect(HOST_MOUNT_POINTS).toHaveLength(58)
-    expect(new Set(HOST_MOUNT_POINTS).size).toBe(58)
+  test('asserts exactly 59 canonical mount literals', () => {
+    expect(HOST_MOUNT_POINTS).toHaveLength(59)
+    expect(new Set(HOST_MOUNT_POINTS).size).toBe(59)
     expect(LEGACY_HOST_MOUNT_POINTS.every((point) => !(HOST_MOUNT_POINTS as readonly string[]).includes(point))).toBe(true)
   })
 
@@ -99,7 +100,7 @@ describe('host mount points', () => {
     for (const point of LEGACY_HOST_MOUNT_POINTS) {
       expect(isKnownMountPoint(point)).toBe(true)
     }
-    expect(HOST_MOUNT_POINTS).toHaveLength(58)
+    expect(HOST_MOUNT_POINTS).toHaveLength(59)
   })
 
   test('rejects an unknown point', () => {

@@ -80,11 +80,11 @@ function findPlacement(literal: string, hostName: string): PhysicalMountPlacemen
 }
 
 describe('dom decorator service placements', () => {
-  test('asserts exactly 64 physical mount placements', () => {
-    expect(CANONICAL_MOUNT_PLACEMENTS).toHaveLength(58)
-    expect(PHYSICAL_MOUNT_PLACEMENTS).toHaveLength(64)
+  test('asserts exactly 65 physical mount placements', () => {
+    expect(CANONICAL_MOUNT_PLACEMENTS).toHaveLength(59)
+    expect(PHYSICAL_MOUNT_PLACEMENTS).toHaveLength(65)
     const ids = PHYSICAL_MOUNT_PLACEMENTS.map((row) => row.placementId)
-    expect(new Set(ids).size).toBe(64)
+    expect(new Set(ids).size).toBe(65)
     expect(PHYSICAL_MOUNT_PLACEMENTS.filter((row) => row.hostName === 'BubbleMessageDefault')).toHaveLength(5)
     expect(PHYSICAL_MOUNT_PLACEMENTS.filter((row) => row.hostName === 'MinimalMessageDefault')).toHaveLength(5)
     expect(PHYSICAL_MOUNT_PLACEMENTS.filter((row) => row.literal === 'settings_section')).toHaveLength(2)
@@ -148,6 +148,12 @@ describe('dom decorator service placements', () => {
     const row = findPlacement('message_swipe_indicators', 'MinimalMessageDefault')
     expect(row?.scopeTemplate).toBe('message:${message.id}:minimal:swipe-indicators')
     assertPlacement(row, 'message:msg-1:minimal:swipe-indicators')
+  })
+
+  test('asserts LoomBuilder physical placement for loom_block_editor_actions', () => {
+    const row = findPlacement('loom_block_editor_actions', 'LoomBuilder')
+    expect(row?.scopeTemplate).toBe('loom-block:${block.id}:editor-actions')
+    assertPlacement(row, 'loom-block:block-1:editor-actions')
   })
 
   test('asserts SettingsModal physical placement for settings_section', () => {

@@ -1,6 +1,6 @@
 import type { SpindleMountPoint } from 'lumiverse-spindle-types'
 
-/** Canonical 58-literal catalog in spec order. Legacy aliases are not counted here. */
+/** Canonical 59-literal catalog in spec order. Legacy aliases are not counted here. */
 export const HOST_MOUNT_POINTS = [
   'chat_header_left',
   'chat_header_center',
@@ -49,6 +49,7 @@ export const HOST_MOUNT_POINTS = [
   'lorebook_workspace',
   'lorebook_half_workspace',
   'loom_builder_toolbar',
+  'loom_block_editor_actions',
   'loom_builder_inspector',
   'regex_entry_row',
   'settings_tab',
@@ -62,7 +63,7 @@ export const HOST_MOUNT_POINTS = [
   'prompt_variables_toolbar',
 ] as const
 
-/** Pre-58 host literals kept as compatibility aliases. Not counted in the 58. */
+/** Pre-59 host literals kept as compatibility aliases. Not counted in the 59. */
 export const LEGACY_HOST_MOUNT_POINTS = [
   'sidebar',
   'chat_column_top',
@@ -126,6 +127,7 @@ const knownMountPoints: Readonly<Record<HostMountPoint, true>> = {
   lorebook_workspace: true,
   lorebook_half_workspace: true,
   loom_builder_toolbar: true,
+  loom_block_editor_actions: true,
   loom_builder_inspector: true,
   regex_entry_row: true,
   settings_tab: true,
