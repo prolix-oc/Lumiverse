@@ -15,6 +15,8 @@ bun add -d lumiverse-spindle-types
 !!! note
     Previous versions required copying a bundled `.d.ts` file from the Lumiverse server into your project. This is no longer necessary — install the package from NPM instead.
 
+For [Decision Models](../backend-api/decisions.md), use a package release that exports `DecisionRequest`, `DecisionResult`, and the `decisions` API members. Older releases do not type those members even when the Lumiverse runtime supports them.
+
 ## tsconfig.json
 
 ```json

@@ -308,6 +308,9 @@ describe("detectDangerousBackendCapabilities", () => {
 });
 
 describe("PRIVILEGED_PERMISSIONS", () => {
+  test("requires an explicit grant for decisions", () => {
+    expect(PRIVILEGED_PERMISSIONS.has("decisions")).toBe(true);
+  });
   test("requires explicit approval for app manipulation", () => {
     expect(PRIVILEGED_PERMISSIONS.has("app_manipulation")).toBe(true);
   });

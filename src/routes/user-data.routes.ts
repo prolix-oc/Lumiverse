@@ -13,6 +13,7 @@ import {
   stashPrepareEntry,
 } from "../services/user-data/secret-ticket.service";
 import { listSecretKeys, getSecret as readSecret } from "../services/secrets.service";
+import { isDecisionConnectionSecretKey } from "../services/decision-connections.service";
 import {
   persistUploadedArchive,
   startImport,
@@ -140,6 +141,8 @@ app.post("/export/prepare", async (c) => {
       candidates = [];
     }
     for (const key of candidates) {
+      // Decision connections are metadata-only in every backup mode.
+      if (isDecisionConnectionSecretKey(key)) continue;
       try {
         const value = await readSecret(userId, key);
         if (value !== null) {

@@ -1,8 +1,9 @@
 # REST API Reference
 
-Lumiverse exposes two useful HTTP surfaces for developers:
+Lumiverse exposes these HTTP surfaces for developers:
 
 - the app's core `/api/v1/settings` endpoints for persisted user preferences
+- the `/api/v1/decisions` and `/api/v1/decision-connections` endpoints for decision models
 - the `/api/v1/spindle/*` endpoints for managing installed extensions
 
 ## Settings API
@@ -40,6 +41,45 @@ curl -X PUT http://localhost:7860/api/v1/settings \
     "landingPageChatsDisplayed": 24
   }'
 ```
+
+## Decision Models API
+
+All decision endpoints require authentication. The server resolves the user from the authenticated session or bearer token. Requests cannot select another user by supplying a user ID. Decision connections are separate from chat generation connections, and their API keys are never returned by these endpoints.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/decisions/evaluate` | Evaluate a normalized `DecisionRequest`; omit `connectionId` to use the user's default |
+| `GET` | `/api/v1/decision-connections/presets` | List decision providers, gateway presets, and supported protocols |
+| `POST` | `/api/v1/decision-connections/models/preview` | List usable decision model IDs for a preset or custom protocol |
+| `GET` | `/api/v1/decision-connections` | List the user's redacted decision connections as `{ data: [...] }` |
+| `GET` | `/api/v1/decision-connections/:id` | Get one owned, redacted connection |
+| `POST` | `/api/v1/decision-connections` | Create a connection |
+| `PUT` | `/api/v1/decision-connections/:id` | Edit an owned connection |
+| `POST` | `/api/v1/decision-connections/:id/duplicate` | Duplicate an owned connection |
+| `POST` | `/api/v1/decision-connections/:id/default` | Make an owned connection the user's default |
+| `POST` | `/api/v1/decision-connections/:id/test` | Send a small Noul request; return `{ success, message }` |
+| `DELETE` | `/api/v1/decision-connections/:id` | Delete an owned connection |
+
+An evaluation request has `state` and a named `questions` map. Each question has structured `instructions` and a `choice`, `score`, or `noul` criterion. The response contains answers keyed by question ID, the model ID, and optional token usage. See the [decision model reference](backend-api/decisions.md) for complete request and result shapes.
+
+```bash
+curl -X POST http://localhost:7860/api/v1/decisions/evaluate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": { "message": "Payment failed during checkout" },
+    "questions": {
+      "urgent": {
+        "type": "noul",
+        "instructions": "Does this require immediate attention?"
+      }
+    }
+  }'
+```
+
+For connection creation, supply `name` and `gateway`; add `api_key` before testing or evaluating. Presets supply the endpoint, model ID, and protocol. You can override the preset URL or model ID. A **Custom** connection also requires `protocol`, `api_url`, and `model`. Cloudflare connections require `account_id`. Editing with `api_key` omitted keeps the stored key. Connection responses expose `has_api_key`, never the key itself. Backup and import contain connection metadata but no credentials, so imported connections need a new key.
+
+The model preview endpoint accepts `gateway` and optional `provider`, `protocol`, `api_url`, `account_id`, and `api_key`. Pass `connection_id` to preview an existing owned connection; the server may use that connection's stored key if its gateway and endpoint are unchanged. It returns `{ models: string[], model_labels: Record<string, string> }`.
 
 ## Spindle Extension Endpoints
 

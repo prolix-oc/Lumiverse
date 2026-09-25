@@ -3,6 +3,7 @@
  * Receives "init" from the host, dynamically imports the extension,
  * and exposes the `spindle` global API.
  */
+import type { DecisionRequest, DecisionResult } from "../decisions/types";
 
 import type {
   SpindleManifest,
@@ -340,6 +341,7 @@ type RuntimeWorkerToHost =
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "image_gen_generate_native"; requestId: string; input: any }
+  | { type: "decisions_evaluate"; requestId: string; input: DecisionRequest }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
       type: "user_storage_write_binary";
@@ -711,6 +713,7 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books" | "runtimeState"> & {
+  decisions: { evaluate(input: DecisionRequest): Promise<DecisionResult> };
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
     write(chatId: string, command: import('./runtime-state').RuntimeStateCommand, userId?: string, mutationId?: string): Promise<unknown>;
@@ -1512,6 +1515,11 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  decisions: {
+    async evaluate(input) {
+      return request({ type: "decisions_evaluate", requestId: crypto.randomUUID(), input }) as Promise<DecisionResult>;
+    },
+  },
   runtimeState: {
     read(chatId, characterId, userId) { return request({ type: 'runtime_state_read', requestId: crypto.randomUUID(), chatId, characterId, userId }); },
     write(chatId, command, userId, mutationId) {

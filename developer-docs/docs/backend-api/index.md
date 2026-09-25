@@ -22,6 +22,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Message Content Processor](message-content-processor.md) | `chat_mutation` | Transform message content before it is written to the database |
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
+| [Decision Models](decisions.md) | `decisions` | Evaluate structured Choice, Score, and Noul questions through a decision connection |
 | [Image Generation](image-generation.md) | `image_gen` | Generate images via image gen connection profiles |
 | [Images](images.md) | `images` | Read, upload, filter, and delete stored image/video assets |
 | [Media](media.md) | `media` | Convert audio/video, transcode with custom parameters, mux tracks, and compose still-image videos |

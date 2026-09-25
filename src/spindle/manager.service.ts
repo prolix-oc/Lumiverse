@@ -47,7 +47,7 @@ export interface ExtensionUpdateCandidate {
 }
 
 function isManagedPermission(permission: string): permission is SpindlePermission {
-  return isValidPermission(permission) || permission === "mcp_servers" || permission === "mcp_servers.create";
+  return isValidPermission(permission) || permission === "decisions" || permission === "mcp_servers" || permission === "mcp_servers.create";
 }
 
 type BackendSafetyCheck = {
@@ -839,6 +839,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "app_manipulation",
   "cors_proxy",
   "generation",
+  "decisions",
   "interceptor",
   "context_handler",
   "macro_interceptor",

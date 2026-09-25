@@ -43,6 +43,7 @@ Frontend UI can follow two supported rendering paths:
 | [UI Placement](ui-placement.md) | Varies | Drawer tabs, float widgets, dock panels, modals, context menus, input bar actions |
 | [Shared Components](shared-components.md) | Free | Mount Lumiverse's first-party React components — model picker, form atoms, searchable selects, pagination, and the native Loom block editor — into extension-owned DOM |
 | [Backend Communication](backend-communication.md) | Free | Send/receive messages to/from backend worker |
+| [Decision Models](decisions.md) | `decisions` | Evaluate structured questions with the user's decision connection |
 | [Frontend Process Lifecycle](processes.md) | Free | Register backend-spawned frontend process handlers |
 | [Message Tags](message-tags.md) | Free | Intercept custom XML tags in chat messages |
 | [Display Resolver](display-resolver.md) | Free | Resolve message display (macros, format, regex) in the browser for chats your extension owns |

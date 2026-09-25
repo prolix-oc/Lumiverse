@@ -19,6 +19,7 @@ import {
   type EncryptedSecretEntry,
 } from "./secret-ticket.service";
 import { putSecret } from "../secrets.service";
+import { isDecisionConnectionSecretKey } from "../decision-connections.service";
 import {
   closeSync,
   constants as fsConstants,
@@ -2037,6 +2038,7 @@ async function applyTable(
   };
 
   let lineCount = 0;
+  let importedDecisionDefaultId: string | null = null;
   for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
 
@@ -2057,6 +2059,10 @@ async function applyTable(
 
     // Scrub has_api_key on connection tables — secrets aren't in the archive.
     if (columnSet.has("has_api_key")) filtered.has_api_key = 0;
+    if (table === "decision_connections") {
+      if ((raw.is_default === 1 || raw.is_default === true) && typeof raw.id === "string") importedDecisionDefaultId = raw.id;
+      filtered.is_default = 0;
+    }
 
     batch.push(filtered);
     lineCount++;
@@ -2072,6 +2078,18 @@ async function applyTable(
     }
   }
   commitBatch();
+  if (table === "decision_connections") {
+    const hasDefault = db.query("SELECT 1 FROM decision_connections WHERE user_id = ? AND is_default = 1").get(ctx.userId);
+    if (!hasDefault) {
+      const candidate = importedDecisionDefaultId
+        ? db.query("SELECT id FROM decision_connections WHERE id = ? AND user_id = ?").get(importedDecisionDefaultId, ctx.userId) as { id: string } | null
+        : null;
+      db.query("UPDATE decision_connections SET is_default = 1 WHERE id = ? AND user_id = ?").run(
+        candidate?.id ?? (db.query("SELECT id FROM decision_connections WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1").get(ctx.userId) as { id: string } | null)?.id ?? "",
+        ctx.userId,
+      );
+    }
+  }
 
   ctx.job.summary[table] = { imported, skipped };
   emit(ctx.job, EventType.USER_IMPORT_PROGRESS, {
@@ -2421,6 +2439,11 @@ async function applySecrets(
       typeof entry.tag !== "string" ||
       typeof entry.ciphertext !== "string"
     ) {
+      skipped++;
+      continue;
+    }
+    // Never restore decision credentials, including from older archives.
+    if (isDecisionConnectionSecretKey(entry.key)) {
       skipped++;
       continue;
     }

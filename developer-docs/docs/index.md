@@ -20,6 +20,7 @@ Spindle is Lumiverse's extension framework. It lets you add custom functionality
 - **Event-driven** — subscribe to any Lumiverse lifecycle event
 - **Custom macros** — register `{{macros}}` for use in prompts and preset blocks
 - **LLM generation** — fire raw, quiet, or batch generations programmatically
+- **Decision models** — evaluate structured Choice, Score, and Noul questions through a separate connection and permission
 - **Prompt interceptors** — modify the assembled prompt before it reaches the LLM
 - **Scoped storage** — private file storage per extension, per user, or ephemeral with TTL
 - **Secure enclave** — AES-256-GCM encrypted secret storage for API keys and tokens
@@ -38,6 +39,7 @@ Spindle is Lumiverse's extension framework. It lets you add custom functionality
 - [Backend Capabilities](getting-started/capabilities.md) — understand scanner declarations and guarded dynamic-code runtime behavior
 - [Runtime Modes](getting-started/runtime.md) — understand `process`, `sandbox`, and `worker`
 - [Backend API](backend-api/index.md) — the `spindle` global reference
+- [Decision Models](backend-api/decisions.md) — request, result, connection, and permission reference
 - [Frontend API](frontend-api/index.md) — the `ctx` context reference
 - [Examples](examples/index.md) — complete working extensions
 - [REST API](rest-api.md) — manage extensions via HTTP

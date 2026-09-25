@@ -115,6 +115,11 @@ export const TABLE_REGISTRY: readonly TableSpec[] = [
     scrubColumns: { has_api_key: 0 },
   },
   {
+    table: "decision_connections",
+    ownership: "user",
+    scrubColumns: { has_api_key: 0 },
+  },
+  {
     table: "tts_connections",
     ownership: "user",
     scrubColumns: { has_api_key: 0 },
@@ -300,6 +305,7 @@ export const IMPORT_ORDER: readonly string[] = [
   // Phase 4: connections
   "connection_profiles",
   "image_gen_connections",
+  "decision_connections",
   "tts_connections",
   "stt_connections",
 

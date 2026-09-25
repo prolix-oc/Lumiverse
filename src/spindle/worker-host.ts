@@ -72,6 +72,8 @@ import { WorkerHostStateApi } from "./worker-host-state-api";
 import { WorkerHostContentApi } from "./worker-host-content-api";
 import { WorkerHostMemoryApi } from "./worker-host-memory-api";
 import { WorkerHostImageGenApi } from "./worker-host-image-gen-api";
+import { WorkerHostDecisionsApi } from "./worker-host-decisions-api";
+import type { DecisionRequest } from "../decisions/types";
 import { WorkerHostProcessApi } from "./worker-host-process-api";
 import { WorkerHostInteractionApi } from "./worker-host-interaction-api";
 import { WorkerHostPresentationApi } from "./worker-host-presentation-api";
@@ -122,7 +124,7 @@ import { join, resolve, sep } from "path";
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
 
 type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
-type RuntimeSpindlePermission = ManagedSpindlePermission | "mcp_servers" | "mcp_servers.create";
+type RuntimeSpindlePermission = ManagedSpindlePermission | "decisions" | "mcp_servers" | "mcp_servers.create";
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
 type ChatAppendGenerationOptions = {
@@ -324,6 +326,7 @@ type RuntimeWorkerToHost =
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
   | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "image_gen_generate_native"; requestId: string; input: any }
+  | { type: "decisions_evaluate"; requestId: string; input: DecisionRequest }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | { type: "user_get_role"; requestId: string; userId?: string }
   | {
@@ -921,6 +924,7 @@ export class WorkerHost {
   private readonly contentApi: WorkerHostContentApi;
   private readonly memoryApi: WorkerHostMemoryApi;
   private readonly imageGenApi: WorkerHostImageGenApi;
+  private readonly decisionsApi: WorkerHostDecisionsApi;
   private readonly processApi: WorkerHostProcessApi;
   private readonly interactionApi: WorkerHostInteractionApi;
   private readonly presentationApi: WorkerHostPresentationApi;
@@ -969,6 +973,12 @@ export class WorkerHost {
       extensionIdentifier: manifest.identifier,
       hasPermission: (permission) => this.hasPermission(permission),
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      post: (message) => this.postToWorker(message as RuntimeHostToWorker),
+    });
+    this.decisionsApi = new WorkerHostDecisionsApi({
+      hasPermission: (permission) => this.hasPermission(permission as RuntimeSpindlePermission),
+      resolveEffectiveUserId: () => this.resolveEffectiveUserId(),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       post: (message) => this.postToWorker(message as RuntimeHostToWorker),
     });
@@ -2500,6 +2510,9 @@ export class WorkerHost {
       // ─── Image Generation (gated: "image_gen") ─────────────────────────
       case "image_gen_generate":
         void this.imageGenApi.handleGenerate(msg.requestId, msg.input);
+        break;
+      case "decisions_evaluate":
+        void this.decisionsApi.handleEvaluate(msg.requestId, msg.input);
         break;
       case "image_gen_generate_native":
         void this.imageGenApi.handleGenerateNative(msg.requestId, msg.input);

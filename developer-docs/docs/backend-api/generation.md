@@ -1,5 +1,7 @@
 # Generation
 
+For structured Choice, Score, and Noul evaluations, use [Decision Models](decisions.md) with the separate `decisions` permission.
+
 !!! warning "Permission required: `generation`"
 
 Fire LLM generations programmatically.

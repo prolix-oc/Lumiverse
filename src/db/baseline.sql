@@ -249,6 +249,22 @@ CREATE TABLE databanks (
   updated_at  INTEGER NOT NULL
 );
 
+CREATE TABLE decision_connections (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'jev',
+  gateway TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  api_url TEXT NOT NULL,
+  model TEXT NOT NULL,
+  account_id TEXT NOT NULL DEFAULT '',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  has_api_key INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE desktop_notification_destinations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
@@ -1212,6 +1228,10 @@ CREATE INDEX idx_databank_docs_user ON databank_documents(user_id);
 CREATE INDEX idx_databanks_scope ON databanks(user_id, scope, scope_id);
 
 CREATE INDEX idx_databanks_user ON databanks(user_id);
+
+CREATE INDEX idx_decision_connections_user ON decision_connections(user_id);
+
+CREATE UNIQUE INDEX idx_decision_connections_default ON decision_connections(user_id) WHERE is_default = 1;
 
 CREATE UNIQUE INDEX idx_desktop_notification_token
   ON desktop_notification_destinations(token_hash);

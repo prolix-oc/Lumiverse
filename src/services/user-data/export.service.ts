@@ -45,6 +45,7 @@ import {
 } from "./manifest";
 import { getCompletionSound } from "../notification-sounds.service";
 import { getSecret as getSecretValue } from "../secrets.service";
+import { isDecisionConnectionSecretKey } from "../decision-connections.service";
 import { encryptSecret } from "./secret-ticket.service";
 
 // ---------------------------------------------------------------------------
@@ -541,6 +542,7 @@ async function runExport(
   const counts: Record<string, number> = {};
   const missingFiles: string[] = [];
   const secretsExported: string[] = [];
+  const exportableSecretKeys = opts.secrets?.secretKeys.filter((key) => !isDecisionConnectionSecretKey(key)) ?? [];
   let secretsSkipped = 0;
 
   // Pipe archiver's output into the HTTP response stream. forceZip64 keeps
@@ -599,7 +601,7 @@ async function runExport(
     counts: {},          // populated in trailer
     missingFiles: [],    // populated in trailer
     hasEncryptedSecrets: !!opts.secrets,
-    secretsCount: opts.secrets?.secretKeys.length ?? 0,
+    secretsCount: exportableSecretKeys.length,
   });
   archive.append(JSON.stringify(manifest, null, 2), {
     name: "manifest.json",
@@ -815,7 +817,7 @@ async function runExport(
   if (opts.secrets) {
     emitProgress(userId, { phase: "secrets_start" });
     const ctx = opts.secrets;
-    const wanted = new Set(ctx.secretKeys);
+    const wanted = new Set(exportableSecretKeys);
     const indexEntry = openNdjsonEntry(archive, "secrets/index.json");
     const blobEntry = openNdjsonEntry(archive, "secrets/encrypted.ndjson");
 
@@ -826,11 +828,11 @@ async function runExport(
     indexEntry.write({
       version: 1,
       archiveId,
-      keys: [...ctx.secretKeys].sort(),
+      keys: [...exportableSecretKeys].sort(),
     });
     indexEntry.close();
 
-    for (const key of ctx.secretKeys) {
+    for (const key of exportableSecretKeys) {
       if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
       if (!wanted.has(key)) continue;
       let plaintext: string | null = null;
