@@ -763,7 +763,10 @@ export function BlockEditor({
     <div className={clsx(s.layout, compact && s.layoutCompact)}>
       {compact && (
         <div className={s.toolbar} style={{ justifyContent: 'space-between' }}>
-          <Button size="icon-sm" variant="ghost" onClick={onBack} title={t('blockEditor.backToList')}><ArrowLeft size={18} /></Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Button size="icon-sm" variant="ghost" onClick={onBack} title={t('blockEditor.backToList')}><ArrowLeft size={18} /></Button>
+            <span data-spindle-mount="loom_block_editor_actions" data-spindle-scope={`loom-block:${block.id}:editor-actions`} style={{ display: 'contents' }} />
+          </div>
           <span style={{ fontSize: 'calc(13px * var(--lumiverse-font-scale, 1))', fontWeight: 600 }}>{t('blockEditor.title')}</span>
           <button className={clsx(s.btn, s.btnPrimary, s.btnSmall)} onClick={handleSave} type="button"><Check size={12} /> {t('blockEditor.save')}</button>
         </div>
@@ -771,6 +774,7 @@ export function BlockEditor({
       {!compact && (
         <div className={s.header}>
           <Button size="icon-sm" variant="ghost" onClick={onBack} title={t('blockEditor.backToList')}><ArrowLeft size={18} /></Button>
+          <span data-spindle-mount="loom_block_editor_actions" data-spindle-scope={`loom-block:${block.id}:editor-actions`} style={{ display: 'contents' }} />
           <h3 className={s.title}>{t('blockEditor.title')}</h3>
           <div style={{ flex: 1 }} />
           <button className={clsx(s.btn, s.btnPrimary)} onClick={handleSave} type="button"><Check size={14} /> {t('blockEditor.save')}</button>
