@@ -12,6 +12,7 @@ import type {
   WorldBookEntry,
 } from '@/types/api'
 import type { ActiveProfileSwitchReason, AppStore } from '@/types/store'
+import { decisionsApi, type DecisionRequest, type DecisionResult } from '@/api/decisions'
 
 export type { ActiveProfileSwitchReason }
 
@@ -34,6 +35,10 @@ export interface FrontendConnectionsAPI {
   setActive(id: string | null): void
   setActiveAcknowledged(id: string | null, reason?: ActiveProfileSwitchReason): Promise<void>
   update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
+}
+
+export interface FrontendDecisionsAPI {
+  evaluate(request: DecisionRequest): Promise<DecisionResult>
 }
 
 export interface RecentChatsQuery {
@@ -92,6 +97,7 @@ export const MAX_TOKEN_BATCH_TEXTS = 64
 
 export interface FrontendDomainAPI {
   connections: FrontendConnectionsAPI
+  decisions: FrontendDecisionsAPI
   chats: FrontendChatsAPI
   worldBooks: FrontendWorldBooksAPI
   messages: FrontendMessagesAPI
@@ -483,7 +489,15 @@ export function createFrontendDomainApi(
   }
   dependencies.onTeardown(dispose)
 
-  return { connections, chats, worldBooks, messages, tokens, dispose }
+  const decisions: FrontendDecisionsAPI = {
+    async evaluate(input) {
+      requirePermission('decisions', 'ctx.decisions.evaluate')
+      const result = await decisionsApi.evaluate(input)
+      requirePermission('decisions', 'ctx.decisions.evaluate')
+      return result
+    },
+  }
+  return { connections, decisions, chats, worldBooks, messages, tokens, dispose }
 }
 
 export function createUnavailableFrontendTokenApi(): FrontendTokensAPI {

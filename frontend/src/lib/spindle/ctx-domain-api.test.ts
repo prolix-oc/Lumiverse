@@ -198,6 +198,14 @@ function createHarness() {
 }
 
 describe('H10 domain API bridge', () => {
+  test('decision evaluation requires its separate privileged permission', async () => {
+    const harness = createHarness()
+    harness.dependencies.requirePermission = (permission) => {
+      if (permission === 'decisions') throw new Error('PERMISSION_DENIED:decisions')
+    }
+    const domain = createFrontendDomainApi(harness.dependencies)
+    await expect(domain.decisions.evaluate({ state: 'x', questions: { yes: { type: 'noul', instructions: 'yes?' } } })).rejects.toThrow('PERMISSION_DENIED:decisions')
+  })
   test('keeps free reads cloned, capped, and free of userId parameters', async () => {
     const harness = createHarness()
     const domain = createFrontendDomainApi(harness.dependencies)

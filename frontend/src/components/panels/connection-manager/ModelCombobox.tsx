@@ -17,6 +17,7 @@ interface ModelComboboxProps {
   disabled?: boolean
   placeholder?: string
   autoRefreshOnFocus?: boolean
+  showAllOnFocus?: boolean
   refreshKey?: string
   emptyMessage?: string
   loadingMessage?: string
@@ -34,6 +35,7 @@ export default function ModelCombobox({
   disabled,
   placeholder,
   autoRefreshOnFocus = false,
+  showAllOnFocus = false,
   refreshKey,
   emptyMessage: emptyMessageProp,
   loadingMessage: loadingMessageProp,
@@ -44,11 +46,13 @@ export default function ModelCombobox({
   const emptyMessage = emptyMessageProp ?? t('emptyDefault')
   const loadingMessage = loadingMessageProp ?? t('loading')
   const [open, setOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const autoRefreshedRef = useRef(false)
   const hasLabels = modelLabels && Object.keys(modelLabels).length > 0
 
   const filtered = models.filter((m) => {
+    if (showAll) return true
     const q = value.toLowerCase()
     if (m.toLowerCase().includes(q)) return true
     if (hasLabels && modelLabels[m]?.toLowerCase().includes(q)) return true
@@ -69,24 +73,27 @@ export default function ModelCombobox({
 
   const handleSelect = useCallback((model: string) => {
     onChange(model)
+    setShowAll(false)
     setOpen(false)
   }, [onChange])
 
   const handleFocus = useCallback(() => {
     if (disabled) return
     setOpen(true)
+    setShowAll(showAllOnFocus)
     if (autoRefreshOnFocus && onRefresh && !autoRefreshedRef.current && models.length === 0) {
       autoRefreshedRef.current = true
       onRefresh()
     }
-  }, [autoRefreshOnFocus, disabled, models.length, onRefresh])
+  }, [autoRefreshOnFocus, disabled, models.length, onRefresh, showAllOnFocus])
 
   const handleRefresh = useCallback(() => {
     if (!onRefresh) return
     autoRefreshedRef.current = true
     setOpen(true)
+    setShowAll(showAllOnFocus)
     onRefresh()
-  }, [onRefresh])
+  }, [onRefresh, showAllOnFocus])
 
   const shouldShowDropdown = open && (loading || models.length > 0 || (autoRefreshOnFocus && !!onRefresh))
 
@@ -105,7 +112,7 @@ export default function ModelCombobox({
       <div className={styles.inputRow}>
         <TextInput
           value={value}
-          onChange={onChange}
+          onChange={(next) => { setShowAll(false); onChange(next) }}
           placeholder={placeholder || 'gpt-4o'}
           onFocus={handleFocus}
           disabled={disabled}

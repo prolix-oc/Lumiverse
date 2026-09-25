@@ -5,6 +5,7 @@ import type {
 import type {
   FrontendChatsAPI,
   FrontendConnectionsAPI,
+  FrontendDecisionsAPI,
   FrontendDomainAPI,
   FrontendMessagesAPI,
   FrontendTokensAPI,
@@ -143,6 +144,7 @@ export interface FrontendContextAdditions {
   }
   state: StateSelectors
   connections: FrontendConnectionsAPI
+  decisions: FrontendDecisionsAPI
   chats: FrontendChatsAPI
   worldBooks: FrontendWorldBooksAPI
   messages: FrontendMessagesAPI
@@ -178,6 +180,7 @@ export function createFrontendExtensionContext<Base extends {
     },
     state: dependencies.state,
     connections: domain.connections,
+    decisions: domain.decisions,
     chats: {
       ...base.chats,
       ...domain.chats,
