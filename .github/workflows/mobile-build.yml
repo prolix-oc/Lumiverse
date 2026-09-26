@@ -1,0 +1,37 @@
+name: Build Android companion
+
+on:
+  push:
+    paths: ["mobile/**", ".github/workflows/mobile-build.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/mobile-build.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+          log-accepted-android-sdk-licenses: false
+      - uses: oven-sh/setup-bun@v2
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Test paging
+        run: bun test mobile/tests/page.test.ts
+      - name: Build and lint Android
+        working-directory: mobile/android
+        run: bash gradlew --no-daemon assembleDebug lintDebug testDebugUnitTest
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumiverse-android-debug
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

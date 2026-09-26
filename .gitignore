@@ -96,3 +96,7 @@ scripts/build-lancedb-android.sh
 desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+
+# Local mobile build tools and APKs
+.artifacts/
+!mobile/README.md
