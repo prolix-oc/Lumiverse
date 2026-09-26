@@ -31,8 +31,8 @@ test('loader lifecycle contract cases pass in an isolated module graph', async (
   }
   expect(timedOut).toBe(false)
   expect(exitCode).toBe(0)
-  expect(summary).toMatch(/\b23 pass\b/)
+  expect(summary).toMatch(/\b24 pass\b/)
   expect(summary).toMatch(/\b0 fail\b/)
   expect(summary).toMatch(/\b[1-9]\d* expect\(\) calls\b/)
-  expect(summary).toMatch(/Ran 23 tests across 1 file/)
+  expect(summary).toMatch(/Ran 24 tests across 1 file/)
 }, 15_000)

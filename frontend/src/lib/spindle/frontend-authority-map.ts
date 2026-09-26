@@ -209,6 +209,7 @@ export const FRONTEND_AUTHORITY_MAP: readonly AuthorityRow[] = createAuthorityMa
   ...SELECTOR_ROWS,
   ...settingsAuthorityRows(),
   ...DOMAIN_ROWS,
+  gated('app_manipulation', { surface: 'ctx_member', id: 'ctx.display.registerResolver.skipInlineCardWrapping', source: 'display.skipInlineCardWrapping', gatedBecause: 'Rule-B clause (c): opts owned chat bodies out of automatic host spacing wrappers' }),
   ...GEOMETRY_ROWS,
   ...HOST_ACTION_ROWS,
   ...HOST_SURFACE_ROWS,

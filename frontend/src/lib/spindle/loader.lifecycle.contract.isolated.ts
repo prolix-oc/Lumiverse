@@ -269,6 +269,7 @@ mock.module('./message-interceptors', () => ({
   subscribeTagInterceptorRegistry: () => () => {},
   unregisterTagInterceptorsByExtension() {},
 }))
+const wrappingRevocations: string[] = []
 mock.module('./display-resolver-registry', () => ({
   getDisplayOwnerIdentifier: () => null,
   getDisplayResolverForChat: () => null,
@@ -278,6 +279,7 @@ mock.module('./display-resolver-registry', () => ({
     return () => {}
   },
   unregisterDisplayResolver() {},
+  revokeInlineCardWrappingOptOut: (identifier: string) => { wrappingRevocations.push(identifier) },
 }))
 mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},
@@ -1492,4 +1494,34 @@ describe('retained non-UI context lifecycle', () => {
       loaderGlobals.__characterCalls = undefined
     }
   })
+})
+
+
+test('wrapper opt-out requires app manipulation and is revoked without removing the resolver', async () => {
+  const id = 'wrapper-opt-out'
+  const manifest = placementManifest(id)
+  const globals = globalThis as typeof globalThis & Record<string, any>
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__wrappingContext')
+  try {
+    mockedGrantedPermissions = []
+    await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__wrappingContext = ctx }')
+    const ctx = globals.__wrappingContext
+    const resolver = { ready: () => true, resolveBody: async () => null, resolveTemplates: async () => null, applyScripts: async () => null }
+    expect(() => ctx.display.registerResolver(resolver)).not.toThrow()
+    const count = displayRegistrations
+    expect(() => ctx.display.registerResolver({ ...resolver, skipInlineCardWrapping: true })).toThrow('PERMISSION_DENIED:app_manipulation')
+    expect(displayRegistrations).toBe(count)
+    const handlers = loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []
+    expect(handlers).toHaveLength(1)
+    for (const handler of handlers) handler({ extensionId: id, allGranted: ['app_manipulation'] })
+    expect(() => ctx.display.registerResolver({ ...resolver, skipInlineCardWrapping: true })).not.toThrow()
+    wrappingRevocations.length = 0
+    for (const handler of handlers) handler({ extensionId: id, allGranted: [] })
+    expect(wrappingRevocations).toEqual([manifest.identifier])
+    expect(() => ctx.display.registerResolver({ ...resolver, skipInlineCardWrapping: true })).toThrow('PERMISSION_DENIED:app_manipulation')
+    expect(() => ctx.display.registerResolver(resolver)).not.toThrow()
+  } finally {
+    await unloadFrontendExtension(id)
+    restoreGlobalProperty('__wrappingContext', descriptor)
+  }
 })

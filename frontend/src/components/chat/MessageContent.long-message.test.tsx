@@ -30,10 +30,12 @@ Object.assign(globalThis, {
   Element: domWindow.Element,
   HTMLElement: domWindow.HTMLElement,
   HTMLImageElement: domWindow.HTMLImageElement,
+  HTMLInputElement: domWindow.HTMLInputElement,
   Event: domWindow.Event,
   EventTarget: domWindow.EventTarget,
   CustomEvent: domWindow.CustomEvent,
   MouseEvent: domWindow.MouseEvent,
+  KeyboardEvent: domWindow.KeyboardEvent,
   MutationObserver: domWindow.MutationObserver,
   DOMParser: domWindow.DOMParser,
   getComputedStyle: domWindow.getComputedStyle.bind(domWindow),
@@ -617,5 +619,66 @@ describe('MessageContent island whitespace', () => {
     const island = host.querySelector('[data-lumiverse-html-island]')?.shadowRoot
     expect(island?.querySelector('.block')?.textContent).toBe(text)
     expect(island?.querySelector('.inline')?.textContent).toBe(text)
+  })
+})
+
+
+describe('owned display spacing', () => {
+  test('follows ownership, registration, revocation and streaming without changing default spacing', async () => {
+    const { revokeInlineCardWrappingOptOut } = await import('@/lib/spindle/display-resolver-registry')
+    const resolver = { skipInlineCardWrapping: true, ready: () => true,
+      resolveBody: async () => null, resolveTemplates: async () => null, applyScripts: async () => null }
+    const scene = (count: number) => `<div></div><input id="panel-toggle" type="checkbox"><label for="panel-toggle">Toggle</label><div class="panel"><img src="/panel.png">${'<span style="color:red">x</span>'.repeat(count)}</div>`
+    const render = async (content = scene(3), chatId = 'padding-chat', isStreaming = false) => {
+      await act(async () => { root?.render(<MessageContent content={content} chatId={chatId} isStreaming={isStreaming} isUser={false} userName="User" disableInterceptors />) })
+    }
+    const wrapped = () => host.querySelector('[data-lumiverse-inline-html-card]') !== null
+    useStore.setState({ activeChatId: 'padding-chat', activeChatDisplayOwner: 'padding-owner' })
+    try {
+      await render()
+      expect(wrapped()).toBe(true)
+      const image = host.querySelector('img')
+      let dispose: () => void = () => {}
+      await act(async () => { dispose = registerDisplayResolver('padding-owner', resolver) })
+      expect(wrapped()).toBe(false)
+      await act(async () => { host.querySelector<HTMLLabelElement>('label')!.click() })
+      expect(host.querySelector('#panel-toggle:checked ~ .panel')).not.toBeNull()
+      expect(host.querySelector('img')).toBe(image)
+      for (const count of [2, 3, 8, 1]) {
+        await render(scene(count), 'padding-chat', true)
+        expect(wrapped()).toBe(false)
+        expect(host.querySelector('#panel-toggle ~ .panel')).not.toBeNull()
+        expect(host.querySelector('img')).toBe(image)
+      }
+      await render()
+      await act(async () => { useStore.setState({ activeChatDisplayOwner: 'other-owner' }) })
+      expect(wrapped()).toBe(true)
+      await act(async () => { useStore.setState({ activeChatDisplayOwner: 'padding-owner' }) })
+      expect(wrapped()).toBe(false)
+      await render(scene(3), 'other-chat')
+      expect(wrapped()).toBe(true)
+      await render()
+      await act(async () => { revokeInlineCardWrappingOptOut('other-owner') })
+      expect(wrapped()).toBe(false)
+      await act(async () => { revokeInlineCardWrappingOptOut('padding-owner') })
+      expect(wrapped()).toBe(true)
+      await act(async () => { registerDisplayResolver('padding-owner', resolver); dispose() })
+      expect(wrapped()).toBe(false)
+      await act(async () => { unregisterDisplayResolver('padding-owner') })
+      expect(wrapped()).toBe(true)
+      await act(async () => { registerDisplayResolver('padding-owner', { ...resolver, skipInlineCardWrapping: false }) })
+      expect(wrapped()).toBe(true)
+      const single = '<div class="single" style="color:red"><i style="color:red"></i><b style="color:red"></b></div>'
+      await render(single)
+      const prose = host.querySelector('.single')!.parentElement!
+      expect(prose.hasAttribute('data-lumiverse-inline-html-card')).toBe(true)
+      await act(async () => { registerDisplayResolver('padding-owner', resolver) })
+      expect(host.querySelector('.single')!.parentElement).toBe(prose)
+      expect(prose.hasAttribute('data-lumiverse-inline-html-card')).toBe(false)
+      await render('<div><style>.island{color:red}</style><span class="island">Island</span></div>')
+      expect(host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.querySelector('.island')).not.toBeNull()
+    } finally {
+      await act(async () => { unregisterDisplayResolver('padding-owner'); useStore.setState({ activeChatId: null, activeChatDisplayOwner: null }) })
+    }
   })
 })
