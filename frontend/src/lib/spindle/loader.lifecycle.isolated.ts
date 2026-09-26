@@ -312,6 +312,7 @@ mock.module('./display-resolver-registry', () => ({
   isDisplayChatOwned: () => false,
   registerDisplayResolver: () => () => {},
   unregisterDisplayResolver() {},
+  revokeInlineCardWrappingOptOut() {},
 }))
 mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},

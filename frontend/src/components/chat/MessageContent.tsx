@@ -9,7 +9,7 @@ import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
 import { healFormattingArtifacts } from '@/lib/formatHealing'
-import { shouldSkipFormattingHealing, subscribeDisplayFormatting } from '@/lib/spindle/display-resolver-registry'
+import { shouldSkipFormattingHealing, shouldSkipInlineCardWrapping, subscribeDisplayFormatting } from '@/lib/spindle/display-resolver-registry'
 import { normalizeLegacyFontTags } from '@/lib/legacyFontTags'
 import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -1558,20 +1558,27 @@ function restoreInlineHtmlCardSpacing(root: HTMLElement, html: string): void {
  * src across innerHTML replacements, so images don't redo the cache lookup,
  * decode, paint cycle on every chat re-render.
  */
-export function ProseHtml({ html, className }: { html: string; className?: string }) {
+export function ProseHtml({ html, className, skipInlineCardWrapping = false }: { html: string; className?: string; skipInlineCardWrapping?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const lastHtmlRef = useRef<string | null>(null)
+  const lastWrappingRef = useRef<boolean | null>(null)
 
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    if (lastHtmlRef.current === html) return
+    if (lastHtmlRef.current === html && lastWrappingRef.current === skipInlineCardWrapping) return
 
     replaceHtmlPreservingImages(el, html)
-    restoreInlineHtmlCardSpacing(el, html)
+    if (skipInlineCardWrapping) {
+      el.classList.remove(styles.inlineHtmlCard)
+      el.removeAttribute(INLINE_HTML_CARD_ATTR)
+    } else {
+      restoreInlineHtmlCardSpacing(el, html)
+    }
     lastHtmlRef.current = html
+    lastWrappingRef.current = skipInlineCardWrapping
     notifyMessageContentLayout(el)
-  }, [html])
+  }, [html, skipInlineCardWrapping])
 
   return <div ref={ref} className={className} />
 }
@@ -1683,6 +1690,8 @@ export default function MessageContent({
   const { t } = useTranslation('chat')
   const getFormattingSnapshot = useCallback(() => shouldSkipFormattingHealing(chatId), [chatId])
   const skipFormattingHealing = useSyncExternalStore(subscribeDisplayFormatting, getFormattingSnapshot, getFormattingSnapshot)
+  const getWrappingSnapshot = useCallback(() => shouldSkipInlineCardWrapping(chatId), [chatId])
+  const skipInlineCardWrapping = useSyncExternalStore(subscribeDisplayFormatting, getWrappingSnapshot, getWrappingSnapshot)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const regexScripts = useStore((s) => s.regexScripts)
   const actionUsage = useStore((s) => {
@@ -2263,7 +2272,7 @@ export default function MessageContent({
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
-                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} skipInlineCardWrapping={skipInlineCardWrapping} />
             )
           }
         }
@@ -2286,7 +2295,7 @@ export default function MessageContent({
                 ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
-                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
+                : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} skipInlineCardWrapping={skipInlineCardWrapping} />
             )
           }
         }
@@ -2294,7 +2303,7 @@ export default function MessageContent({
     }
 
     return elements
-  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming, skipFormattingHealing])
+  }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming, skipFormattingHealing, skipInlineCardWrapping])
 
   useLayoutEffect(() => {
     measureLongMessageOverflow()

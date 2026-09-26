@@ -4,6 +4,7 @@ import { useStore } from '@/store'
 interface RegisteredDisplayResolver {
   identifier: string
   resolver: SpindleDisplayResolver
+  skipInlineCardWrapping: boolean
 }
 
 let active: RegisteredDisplayResolver | null = null
@@ -22,6 +23,18 @@ export function subscribeDisplayFormatting(listener: () => void): () => void {
 export function shouldSkipFormattingHealing(chatId?: string): boolean {
   const owner = getDisplayOwnerIdentifier(chatId ?? useStore.getState().activeChatId ?? '')
   return !!owner && active?.identifier === owner && active.resolver.skipFormattingHealing === true
+}
+
+export function shouldSkipInlineCardWrapping(chatId?: string): boolean {
+  const owner = getDisplayOwnerIdentifier(chatId ?? useStore.getState().activeChatId ?? '')
+  return !!owner && active?.identifier === owner && active.skipInlineCardWrapping
+}
+
+export function revokeInlineCardWrappingOptOut(identifier: string): void {
+  if (active?.identifier === identifier && active.skipInlineCardWrapping) {
+    active.skipInlineCardWrapping = false
+    notify()
+  }
 }
 
 export function getDisplayOwnerIdentifier(chatId: string): string | null {
@@ -46,7 +59,7 @@ export function registerDisplayResolver(
   identifier: string,
   resolver: SpindleDisplayResolver,
 ): () => void {
-  const entry: RegisteredDisplayResolver = { identifier, resolver }
+  const entry: RegisteredDisplayResolver = { identifier, resolver, skipInlineCardWrapping: resolver.skipInlineCardWrapping === true }
   active = entry
   notify()
   return () => {

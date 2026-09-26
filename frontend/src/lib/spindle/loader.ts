@@ -32,7 +32,7 @@ import type { SpindlePresetEditorUI } from './preset-editor-types'
 import { isKnownMountPoint, type WidenedMountPoint } from './mount-points'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
-import { registerDisplayResolver, unregisterDisplayResolver } from './display-resolver-registry'
+import { registerDisplayResolver, unregisterDisplayResolver, revokeInlineCardWrappingOptOut } from './display-resolver-registry'
 import { invalidateDisplayRegexCacheForVars, invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
 import {
@@ -826,6 +826,7 @@ async function doLoadFrontendExtension(
       clearComponentOverridesForOwner(extensionId, generation)
     }
     stateSelectors?.revokePermissions(revokedPermissions)
+    if (revokedPermissions.includes('app_manipulation')) revokeInlineCardWrappingOptOut(manifest.identifier)
     if (previous.includes('world_books') && !next.includes('world_books')) {
       destroyComponentsForExtensionPermission(extensionId, 'world_books', generation)
     }
@@ -2111,6 +2112,7 @@ async function doLoadFrontendExtension(
       display: {
         registerResolver(resolver) {
           assertFrontendActive()
+          if (resolver.skipInlineCardWrapping) assertCanonicalPermission('app_manipulation', 'ctx.display.registerResolver.skipInlineCardWrapping')
           return registerDisplayResolver(manifest.identifier, resolver)
         },
         invalidate(touchedVars: string[]) {

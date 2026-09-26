@@ -37,3 +37,9 @@ The attribute may appear anywhere on the opening tag, including across multiple 
 
 !!! warning "You own scoping and safety"
     Opting out disables both style isolation and the markdown-safety wrapper. Scope your selectors with a unique class prefix to avoid collisions with the chat UI, and ensure markdown will not misinterpret your content.
+
+## Extension-controlled spacing
+
+An extension can set `skipInlineCardWrapping: true` when registering its display resolver to disable automatic inline-card spacing wrappers in chats it owns. This requires `app_manipulation`. Other chats keep their default spacing; Shadow DOM island extraction and padding are unchanged.
+
+Register the resolver before displaying the chat when possible. Existing messages update when the resolver or chat owner changes. Disposing the resolver or revoking the permission restores default wrapping. After permission is granted again, register the resolver again to enable the opt-out.
