@@ -8,8 +8,17 @@ import {
   subscribeChatDockerActionOwners,
 } from '@/components/chat/chatDockerActionCatalog'
 import { COMMANDS } from '@/lib/commands'
-import { adaptExtensionTabs, DRAWER_TABS, extensionCommandsToCommands } from '@/lib/drawer-tab-registry'
+import { adaptExtensionTabs, DRAWER_TABS, extensionCommandsToCommands, type DrawerTabEntry } from '@/lib/drawer-tab-registry'
 import { getVisibleSettingsTabs } from '@/lib/settings-tab-registry'
+import {
+  buildExtensionActionCatalog,
+  extensionActionIdentity,
+  isExtensionActionOrderPermutation,
+  mergeExtensionActionOrder,
+  normalizeToolbarExtensionActions,
+  setToolbarExtensionActionVisible,
+  type ExtensionActionCatalog,
+} from '@/lib/extensionActionPreferences'
 import { resolveToolbarIntent, type ToolbarSurface, type ToolbarUiState } from '@/lib/quickToolbarToggle'
 import { moveWithinFiltered } from '@/lib/toolbarActionSearch'
 import { DEFAULT_QUICK_TOOLBAR_SETTINGS } from '@/lib/uiProductivityDefaults'
@@ -17,7 +26,7 @@ import { DEFAULT_QUICK_TOOLBAR_SETTINGS } from '@/lib/uiProductivityDefaults'
 import { router } from '@/router'
 import { useStore } from '@/store'
 import type { QuickToolbarSettings } from '@/types/store'
-import type { InputBarActionState } from '@/store/slices/spindle-placement'
+import type { DrawerTabState, InputBarActionState } from '@/store/slices/spindle-placement'
 import { nextToolbarIconOrder } from './toolbarPointerHold'
 import {
   filterEnabledFrontendContributions,
@@ -125,8 +134,154 @@ const PREVIOUS_SUITE_DEFAULT_IDS = [
 /** The pre-redesign default set. Treated as "untouched" so it upgrades cleanly. */
 const LEGACY_DEFAULT_IDS = ['characters', 'lorebook', 'connections']
 
-function arraysEqual(a: string[], b: string[]) {
+function arraysEqual(a: readonly string[], b: readonly string[]) {
   return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+/** Lists that mean "never customised", so a stored equal array is not a user choice. */
+const TOOLBAR_DEFAULT_SENTINELS = [LEGACY_DEFAULT_IDS, PREVIOUS_DESIGN_DEFAULT_IDS, PREVIOUS_SUITE_DEFAULT_IDS]
+
+function isToolbarDefaultsSentinel(ids: readonly string[]): boolean {
+  return ids.length === 0 || TOOLBAR_DEFAULT_SENTINELS.some((list) => arraysEqual(ids, list))
+}
+
+/** The store slices the extension catalog is derived from. */
+export interface ToolbarExtensionActionState {
+  inputBarActions: readonly InputBarActionState[]
+  drawerTabs: readonly DrawerTabState[]
+  /** Owner-enabled slice; eligibility is intersected after duplicate grouping. */
+  extensions: readonly { id?: unknown; identifier?: unknown; enabled?: unknown; has_frontend?: unknown }[] | null | undefined
+}
+
+/** Live registrations plus the runtime-handle keys used to render and persist them. */
+export interface LiveToolbarExtensionCatalog {
+  /**
+   * Every live registration (input and drawer, eligible or not). Duplicate
+   * grouping runs over this full set, so a tuple registered once on an eligible
+   * surface and once elsewhere stays ambiguous instead of picking a callback.
+   */
+  catalog: ExtensionActionCatalog
+  /** Runtime handle id to persisted key, restricted to eligible unique entries. */
+  inputActionKeys: Map<string, string>
+  drawerTabKeys: Map<string, string>
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled extension action kind: ${String(value)}`)
+}
+
+/** Every live registration, native placements and ineligible ones included. */
+function buildToolbarExtensionCatalogState(state: ToolbarExtensionActionState): {
+  catalog: ExtensionActionCatalog
+  catalogInputKeys: Map<string, string>
+  catalogDrawerKeys: Map<string, string>
+  eligibleInputRuntimeIds: Set<string>
+  eligibleDrawerRuntimeIds: Set<string>
+} {
+  const catalog = buildExtensionActionCatalog([
+    ...state.inputBarActions.map((action) => ({
+      kind: 'input' as const,
+      extensionId: action.extensionId,
+      contributionId: action.contributionId,
+      runtimeId: action.id,
+    })),
+    ...state.drawerTabs.map((tab) => ({
+      kind: 'drawer' as const,
+      extensionId: tab.extensionId,
+      contributionId: tab.contributionId,
+      runtimeId: tab.id,
+    })),
+  ])
+  const catalogInputKeys = new Map<string, string>()
+  const catalogDrawerKeys = new Map<string, string>()
+  for (const entry of catalog.entries) {
+    if (entry.ambiguous) continue
+    // Exhaustive so a new kind cannot silently fall into the drawer map.
+    switch (entry.kind) {
+      case 'input':
+        catalogInputKeys.set(entry.runtimeId, entry.key)
+        break
+      case 'drawer':
+        catalogDrawerKeys.set(entry.runtimeId, entry.key)
+        break
+      default:
+        assertNever(entry.kind)
+    }
+  }
+  // Owner-enabled survivors, resolved per kind through the same gate the
+  // rendered catalog uses. Duplicate grouping already ran over the RAW
+  // registrations above, so an ineligible duplicate still confers ambiguity.
+  const eligibleInputRuntimeIds = new Set(
+    filterEnabledFrontendContributions(state.inputBarActions, state.extensions)
+      .filter(isQuickToolbarInputAction)
+      .map((action) => action.id),
+  )
+  const eligibleDrawerRuntimeIds = new Set(
+    filterEnabledFrontendContributions(state.drawerTabs, state.extensions).map((tab) => tab.id),
+  )
+  return { catalog, catalogInputKeys, catalogDrawerKeys, eligibleInputRuntimeIds, eligibleDrawerRuntimeIds }
+}
+
+/**
+ * Keys the live extension placements with the shared utility. The catalog is
+ * built from every registration so duplicate grouping cannot be defeated by a
+ * placement filter; only an eligible, unique input action or drawer tab gets a
+ * stable id, so a tuple registered twice is withheld rather than resolved to an
+ * arbitrary callback. Eligibility is the current owner-enabled gate intersected
+ * with the placement check, not the older placement-only contract.
+ */
+export function buildToolbarExtensionCatalog(state: ToolbarExtensionActionState): LiveToolbarExtensionCatalog {
+  const {
+    catalog,
+    catalogInputKeys,
+    catalogDrawerKeys,
+    eligibleInputRuntimeIds,
+    eligibleDrawerRuntimeIds,
+  } = buildToolbarExtensionCatalogState(state)
+  const inputActionKeys = new Map<string, string>()
+  for (const [runtimeId, key] of catalogInputKeys) {
+    if (eligibleInputRuntimeIds.has(runtimeId)) inputActionKeys.set(runtimeId, key)
+  }
+  const drawerTabKeys = new Map<string, string>()
+  for (const [runtimeId, key] of catalogDrawerKeys) {
+    if (eligibleDrawerRuntimeIds.has(runtimeId)) drawerTabKeys.set(runtimeId, key)
+  }
+  return { catalog, inputActionKeys, drawerTabKeys }
+}
+
+/** Persisted toolbar arrays, canonical and complete, with the defaults sentinel materialized. */
+export interface ToolbarPreferenceProjection {
+  storedVisibleIds: string[]
+  /** Complete order: absent and hidden actions keep their complementary slots. */
+  storedOrder: string[]
+}
+
+/** Read-only projection of the persisted arrays; never writes and never drops unknown ids. */
+function projectToolbarPreferences(
+  settings: QuickToolbarSettings,
+  catalog: ExtensionActionCatalog,
+): ToolbarPreferenceProjection {
+  const normalized = normalizeToolbarExtensionActions(
+    { visibleIds: settings.visibleTabIds, iconOrder: settings.iconOrder },
+    catalog,
+  )
+  return {
+    storedVisibleIds: isToolbarDefaultsSentinel(settings.visibleTabIds) ? [...DESIGN_DEFAULT_IDS] : normalized.visibleIds,
+    storedOrder: isToolbarDefaultsSentinel(settings.iconOrder) ? [...DESIGN_DEFAULT_IDS] : normalized.iconOrder,
+  }
+}
+
+/** The enabled, currently displayable sequence that reorder operations permute. */
+function resolveAvailableToolbarIds(
+  projection: ToolbarPreferenceProjection,
+  isAvailable: (id: string) => boolean,
+): { visibleIds: string[]; orderedIds: string[] } {
+  const visibleIds = projection.storedVisibleIds.filter(isAvailable)
+  const orderedIds = [
+    ...projection.storedOrder.filter((id) => visibleIds.includes(id)),
+    ...visibleIds.filter((id) => !projection.storedOrder.includes(id)),
+  ]
+  return { visibleIds, orderedIds }
 }
 
 type QuickToolbarInputAction = Pick<
@@ -145,11 +300,67 @@ export function isQuickToolbarInputAction(action: Pick<QuickToolbarInputAction, 
     || isExtensionQuickToolbarAction(action)
 }
 
-/** Persist contributor ids for named suite actions; generated registration ids are not stable. */
+function isStableExtensionActionKey(id: string): boolean {
+  return id.startsWith('ext-action:') || id.startsWith('ext-runtime:')
+}
+
+/**
+ * True when the id belongs to an extension action whatever its key shape: the
+ * namespaced prefixes above plus the three bare Suite contribution ids, which are
+ * reserved to `lumiverse_suite` input actions and are therefore extension keys
+ * too. Recognising them keeps extension availability on the fresh eligible maps
+ * even though the rendered catalog still holds one from a stale render.
+ */
+function isExtensionActionKey(id: string): boolean {
+  return isStableExtensionActionKey(id) || EXTENSION_QUICK_TOOLBAR_ACTION_IDS.has(id)
+}
+
+/**
+ * True when `filteredIds` is a real filter snapshot of `availableIds`: unique,
+ * non-empty, and every member still present. A different length is expected (a
+ * search hides rows) and is exactly what must not be mistaken for staleness.
+ */
+function isFilteredSnapshotOf(filteredIds: readonly string[], availableIds: readonly string[]): boolean {
+  if (filteredIds.length === 0) return false
+  const filtered = new Set(filteredIds)
+  if (filtered.size !== filteredIds.length) return false
+  const available = new Set(availableIds)
+  for (const id of filtered) {
+    if (!available.has(id)) return false
+  }
+  return true
+}
+
+/**
+ * Catalog ids that can actually render a button right now. Every extension key is
+ * taken ONLY from the eligible, unique fresh maps (an ineligible, ambiguous or
+ * since-unregistered extension action is in the catalog purely for
+ * normalization/legacy resolution and must not become selectable), plus the
+ * native/command ids that currently have a catalog entry.
+ */
+function resolvedToolbarCatalogIds(
+  live: LiveToolbarExtensionCatalog,
+  catalogIds: ReadonlySet<string>,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const id of catalogIds) {
+    // Extension keys reach this set only through the eligible maps below, so any
+    // extension id here is stale (or withheld) and must not be selectable.
+    if (!isExtensionActionKey(id)) ids.add(id)
+  }
+  for (const key of live.inputActionKeys.values()) ids.add(key)
+  for (const key of live.drawerTabKeys.values()) ids.add(key)
+  return ids
+}
+
+/** Stable persisted key for one input action (bare Suite keys, namespaced otherwise). */
 export function quickToolbarInputActionId(action: QuickToolbarInputAction): string {
-  return isExtensionQuickToolbarAction(action)
-    ? action.contributionId!
-    : `input-action:${action.extensionId}:${action.id}`
+  return extensionActionIdentity({
+    kind: 'input',
+    extensionId: action.extensionId,
+    contributionId: action.contributionId,
+    runtimeId: action.id,
+  }).key
 }
 
 /** The suite owns the meaning of these two named editor actions, so it owns their glyph mapping too. */
@@ -239,14 +450,19 @@ export function useQuickToolbarActions() {
     }
   }, [closeDrawer, closeSettings, openDrawer, openSettings, setDrawerTab])
 
+  const liveExtension = useMemo(
+    () => buildToolbarExtensionCatalog({ inputBarActions, drawerTabs: extensionDrawerTabs, extensions }),
+    [extensionDrawerTabs, extensions, inputBarActions],
+  )
+
   const actionCatalog = useMemo(() => {
     const enabledDrawerTabs = filterEnabledFrontendContributions(extensionDrawerTabs, extensions)
     const enabledExtensionCommands = filterEnabledFrontendContributions(extensionCommands, extensions)
     const enabledInputBarActions = filterEnabledFrontendContributions(inputBarActions, extensions)
-    const drawerActions: ToolbarAction[] = [...DRAWER_TABS, ...adaptExtensionTabs(enabledDrawerTabs)].map((tab) => {
+    const toDrawerAction = (tab: DrawerTabEntry, id: string): ToolbarAction => {
       const surface: ToolbarSurface = { kind: 'drawer', tabId: tab.id }
       return {
-        id: tab.id,
+        id,
         label: tab.tabName,
         description: tab.tabDescription,
         keywords: tab.keywords,
@@ -254,7 +470,16 @@ export function useQuickToolbarActions() {
         surface,
         run: () => runSurface(surface),
       }
-    })
+    }
+    const drawerActions: ToolbarAction[] = [
+      ...DRAWER_TABS.map((tab) => toDrawerAction(tab, tab.id)),
+      // A tuple registered twice has no stable key and is withheld until exactly
+      // one registration remains; `surface.tabId` stays the runtime handle.
+      ...adaptExtensionTabs(enabledDrawerTabs).flatMap((tab) => {
+        const id = liveExtension.drawerTabKeys.get(tab.id)
+        return id ? [toDrawerAction(tab, id)] : []
+      }),
+    ]
     const settingsActions: ToolbarAction[] = getVisibleSettingsTabs(userRole).map((tab) => {
       const surface: ToolbarSurface = { kind: 'settings', view: tab.id }
       return {
@@ -291,12 +516,12 @@ export function useQuickToolbarActions() {
       // allowlist narrow so unrelated contributions never leak into the global
       // quick-action catalog, and never promote native `worldBookEditor`.
       .filter(isQuickToolbarInputAction)
-      .map((action) => {
-        return {
-          // Input-action registrations have process-local ids. The two workspace
-          // actions instead persist their contributor ids, so their quick-toolbar
-          // visibility/order survives extension reloads and can be defaulted.
-          id: quickToolbarInputActionId(action),
+      .flatMap((action) => {
+        // An ambiguous duplicate tuple is withheld; the runtime callback stays live.
+        const id = liveExtension.inputActionKeys.get(action.id)
+        if (!id) return []
+        return [{
+          id,
           label: quickToolbarInputActionLabel(action),
           // `subtitle` is the extension's own one-liner; the fallback still names the
           // extension, so two actions from different extensions never read alike.
@@ -308,10 +533,10 @@ export function useQuickToolbarActions() {
             { kind: 'command' },
             () => {
               if (!hasEnabledFrontendExtensionId(useStore.getState().extensions, action.extensionId)) return
-              action.clickHandlers.forEach((handler) => handler())
+              action.clickHandlers.forEach((handler) => handler(undefined))
             },
           ),
-        }
+        }]
       })
     const owners = chatDockerActionOwners
     const chatDockerActions: ToolbarAction[] = buildChatDockerActionCatalog({
@@ -374,6 +599,7 @@ export function useQuickToolbarActions() {
     extensions,
     inputBarActions,
     isGroupChat,
+    liveExtension,
     messageSelectMode,
     openModal,
     runSurface,
@@ -385,37 +611,33 @@ export function useQuickToolbarActions() {
     [actionCatalog],
   )
 
-  const visibleIds = useMemo(() => {
-    if (
-      settings.visibleTabIds.length === 0
-      || arraysEqual(settings.visibleTabIds, LEGACY_DEFAULT_IDS)
-      || arraysEqual(settings.visibleTabIds, PREVIOUS_DESIGN_DEFAULT_IDS)
-      || arraysEqual(settings.visibleTabIds, PREVIOUS_SUITE_DEFAULT_IDS)
-    ) {
-      return DESIGN_DEFAULT_IDS
-    }
-    return settings.visibleTabIds.filter((id) => actionById.has(id))
-  }, [actionById, settings.visibleTabIds])
+  /** Non-extension ids that can render right now, including data-driven hidden actions. */
+  const catalogIds = useMemo(
+    () => new Set(actionCatalog.map((action) => action.id)),
+    [actionCatalog],
+  )
 
-  const orderedIds = useMemo(() => {
-    const configuredOrder = (
-      settings.iconOrder.length === 0
-      || arraysEqual(settings.iconOrder, LEGACY_DEFAULT_IDS)
-      || arraysEqual(settings.iconOrder, PREVIOUS_DESIGN_DEFAULT_IDS)
-      || arraysEqual(settings.iconOrder, PREVIOUS_SUITE_DEFAULT_IDS)
-    )
-      ? DESIGN_DEFAULT_IDS
-      : settings.iconOrder
-    return [
-      ...configuredOrder.filter((id) => visibleIds.includes(id)),
-      ...visibleIds.filter((id) => !configuredOrder.includes(id)),
-    ]
-  }, [settings.iconOrder, visibleIds])
+  const projection = useMemo(
+    () => projectToolbarPreferences(settings, liveExtension.catalog),
+    [liveExtension.catalog, settings],
+  )
+
+  const availability = useMemo(() => {
+    const ids = resolvedToolbarCatalogIds(liveExtension, catalogIds)
+    return (id: string) => ids.has(id)
+  }, [catalogIds, liveExtension])
+
+  const { visibleIds, orderedIds } = useMemo(
+    // Availability already excludes extension keys that have no live eligible
+    // registration, so a key present here resolved and must not be filtered out.
+    () => resolveAvailableToolbarIds(projection, availability),
+    [availability, projection],
+  )
 
   const actions = useMemo(() => {
     const resolved = orderedIds
       .map((id) => actionById.get(id))
-      .filter((action): action is ToolbarAction => Boolean(action) && !action.hidden)
+      .filter((action): action is ToolbarAction => action !== undefined && !action.hidden)
     // A-S4: the catalog dedupes on `id`, and `'settings'` vs
     // `'settings:productivity'` are different keys — so both can be visible at
     // once, two buttons opening the same view, each closing the other's modal.
@@ -436,31 +658,69 @@ export function useQuickToolbarActions() {
     return [...orderedIds, ...rest]
   }, [actionCatalog, orderedIds])
 
-  const moveAction = useCallback((id: string, direction: -1 | 1) => {
-    const next = [...orderedIds]
-    const index = next.indexOf(id)
-    const target = index + direction
-    if (index < 0 || target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
-    updateSettings({ iconOrder: next })
-  }, [orderedIds, updateSettings])
+  /**
+   * Latest persisted arrays plus live registrations, read synchronously at
+   * invocation, so two edits in one tick cannot act on a stale snapshot.
+   */
+  const readLatestToolbar = useCallback(() => {
+    const storeState = useStore.getState()
+    const live = buildToolbarExtensionCatalog({
+      inputBarActions: storeState.inputBarActions,
+      drawerTabs: storeState.drawerTabs,
+      extensions: storeState.extensions,
+    })
+    return {
+      live,
+      catalog: live.catalog,
+      projection: projectToolbarPreferences(storeState.quickToolbarSettings, live.catalog),
+      availableIds: resolvedToolbarCatalogIds(live, catalogIds),
+    }
+  }, [catalogIds])
+
+  /** Commits the complete normalized pair once, outside any state updater. */
+  const commitToolbarPreferences = useCallback((next: ToolbarPreferenceProjection) => {
+    updateSettings({ visibleTabIds: next.storedVisibleIds, iconOrder: next.storedOrder })
+  }, [updateSettings])
 
   /**
-   * Writes a whole new order. The `visibleIds` filter is a guard against a
-   * caller handing over ids that are not enabled — it is a no-op for any
-   * permutation of `orderedIds`, because `orderedIds` is built exclusively from
-   * `visibleIds` above, but it SILENTLY DROPS anything else. Pass a permutation
-   * of `orderedIds`, nothing wider.
+   * The one write path: re-read the store, drop nothing, and derive the
+   * reorderable sequence from the fresh availability set.
+   */
+  const commitToolbarOrder = useCallback((
+    apply: (available: string[]) => string[] | null,
+  ) => {
+    const { projection: latest, availableIds } = readLatestToolbar()
+    const available = resolveAvailableToolbarIds(latest, (id) => availableIds.has(id)).orderedIds
+    const next = apply(available)
+    if (!next) return
+    commitToolbarPreferences({ ...latest, storedOrder: mergeExtensionActionOrder(latest.storedOrder, available, next) })
+  }, [commitToolbarPreferences, readLatestToolbar])
+
+  const moveAction = useCallback((id: string, direction: -1 | 1) => {
+    commitToolbarOrder((available) => {
+      const index = available.indexOf(id)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= available.length) return null
+      const next = [...available]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }, [commitToolbarOrder])
+
+  /**
+   * Writes a whole new order from a drag. `ids` must be a unique permutation of
+   * the latest reorderable set; a snapshot that predates a catalog or selection
+   * change is rejected as a no-op instead of replacing newer state.
    */
   const reorderActions = useCallback((ids: string[]) => {
-    updateSettings({ iconOrder: ids.filter((id) => visibleIds.includes(id)) })
-  }, [updateSettings, visibleIds])
+    commitToolbarOrder((available) => (
+      isExtensionActionOrderPermutation(ids, available) ? ids : null
+    ))
+  }, [commitToolbarOrder])
 
   const reorderActionPair = useCallback((activeId: string, overId: string) => {
-    const next = nextToolbarIconOrder(orderedIds, activeId, overId)
-    if (!next) return
-    reorderActions(next)
-  }, [orderedIds, reorderActions])
+    commitToolbarOrder((available) => nextToolbarIconOrder(available, activeId, overId))
+  }, [commitToolbarOrder])
 
   /**
    * The chevron write path for a list that is being filtered by a search box.
@@ -478,19 +738,46 @@ export function useQuickToolbarActions() {
    * therefore call this unconditionally instead of branching on the query.
    *
    * Writes nothing when the move is impossible (`id` disabled, `id` hidden, or
-   * `id` already at a visible end); pair it with `canMoveWithinFiltered` from the
-   * same module for the chevron's `disabled` prop and the two cannot disagree.
+   * `id` already at a visible end) or when `filteredIds` is a stale snapshot that
+   * references ids no longer available; pair it with `canMoveWithinFiltered` from
+   * the same module for the chevron's `disabled` prop and the two cannot disagree.
    */
   const moveActionWithin = useCallback((id: string, direction: -1 | 1, filteredIds: string[]) => {
-    const next = moveWithinFiltered(orderedIds, filteredIds, id, direction)
-    if (next === orderedIds) return
-    updateSettings({ iconOrder: next })
-  }, [orderedIds, updateSettings])
+    commitToolbarOrder((available) => {
+      // A stale snapshot (an id that no longer exists) is a no-op; a genuine
+      // search filter is a subset and must still perform the one visible step.
+      if (!isFilteredSnapshotOf(filteredIds, available)) return null
+      const next = moveWithinFiltered(available, filteredIds, id, direction)
+      if (next === available) return null
+      return next
+    })
+  }, [commitToolbarOrder])
 
+  /**
+   * Hides or shows one action against the latest arrays. Hiding keeps the
+   * complementary order slot, and both arrays are committed together so a
+   * canonical alias can never survive in just one of them.
+   */
   const toggleAction = useCallback((id: string) => {
-    const next = visibleIds.includes(id) ? visibleIds.filter((item) => item !== id) : [...visibleIds, id]
-    updateSettings({ visibleTabIds: next })
-  }, [updateSettings, visibleIds])
+    const { projection: latest, catalog } = readLatestToolbar()
+    const next = setToolbarExtensionActionVisible(
+      { visibleIds: latest.storedVisibleIds, iconOrder: latest.storedOrder },
+      catalog,
+      id,
+      !latest.storedVisibleIds.includes(id),
+    )
+    commitToolbarPreferences({ storedVisibleIds: next.visibleIds, storedOrder: next.iconOrder })
+  }, [commitToolbarPreferences, readLatestToolbar])
+
+  /**
+   * Shared overflow pin: move the target to the first available slot through the
+   * same complementary merge, so absent and hidden slots keep their places.
+   */
+  const pinAction = useCallback((id: string) => {
+    commitToolbarOrder((available) => (
+      available.includes(id) ? [id, ...available.filter((candidate) => candidate !== id)] : null
+    ))
+  }, [commitToolbarOrder])
 
   const resetCurrentVariant = useCallback(() => {
     const defaults = DEFAULT_QUICK_TOOLBAR_SETTINGS
@@ -540,6 +827,7 @@ export function useQuickToolbarActions() {
     reorderActions,
     reorderActionPair,
     toggleAction,
+    pinAction,
     resetCurrentVariant,
   }
 }

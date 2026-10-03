@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ComponentType } from 'react'
+import { useCallback, useMemo, useRef, useState, type ComponentType } from 'react'
 import clsx from 'clsx'
 import {
   Compass,
@@ -20,7 +20,15 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useStore } from '@/store'
+import type { DrawerTabState, InputBarActionState } from '@/store/slices/spindle-placement'
 import { useQuickToolbarActions, type ToolbarAction } from '@/components/quick-toolbar/useQuickToolbarActions'
+import {
+  applyComposerExtensionActionOrder,
+  buildExtensionActionCatalog,
+  normalizeComposerExtensionActions,
+  setComposerExtensionActionVisible,
+  type ExtensionActionCatalog,
+} from '@/lib/extensionActionPreferences'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import {
   closestCenter,
@@ -130,6 +138,66 @@ function isPersistedActionId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
+/**
+ * Restores the current baseline's native pruning after the shared normalizer.
+ * `normalizeComposerExtensionActions` deliberately preserves unknown and legacy
+ * strings and re-materializes a hidden-only id as a tail order slot, so a native
+ * core-owned alias (`chat.customize-composer`) would otherwise survive in both
+ * arrays. Only that one pinned native launcher is removed; every unknown, absent
+ * or extension-owned key — and all other order/hidden intent — passes through.
+ */
+function pruneCoreOwnedComposerAliases(state: ComposerActionBarState): ComposerActionBarState {
+  const order = state.order.filter((id) => !isCoreOwnedComposerActionId(id))
+  const hidden = state.hidden.filter((id) => !isCoreOwnedComposerActionId(id))
+  return { order, hidden }
+}
+
+function sameComposerActionBarState(a: ComposerActionBarState, b: ComposerActionBarState): boolean {
+  return a.order.length === b.order.length
+    && a.order.every((id, index) => id === b.order[index])
+    && a.hidden.length === b.hidden.length
+    && a.hidden.every((id, index) => id === b.hidden[index])
+}
+
+/**
+ * Live extension registrations, keyed exactly as the toolbar keys them (same full
+ * logical catalog, so both surfaces agree on identity and on duplicate
+ * withholding). The composer keys every live input action and drawer tab and
+ * applies no toolbar eligibility allowlist.
+ */
+function extensionActionCatalogFor(state: ComposerExtensionActionState): ExtensionActionCatalog {
+  return buildExtensionActionCatalog([
+    ...state.inputBarActions.map((action) => ({
+      kind: 'input' as const,
+      extensionId: action.extensionId,
+      contributionId: action.contributionId,
+      runtimeId: action.id,
+    })),
+    ...state.drawerTabs.map((tab) => ({
+      kind: 'drawer' as const,
+      extensionId: tab.extensionId,
+      contributionId: tab.contributionId,
+      runtimeId: tab.id,
+    })),
+  ])
+}
+
+/** The mandatory store slices extension identity is derived from. */
+export interface ComposerExtensionActionState {
+  inputBarActions: readonly InputBarActionState[]
+  drawerTabs: readonly DrawerTabState[]
+}
+
+/** Reads those slices synchronously, so a mutation never acts on a render-time catalog. */
+function readComposerExtensionActionState(): ComposerExtensionActionState {
+  const state = useStore.getState()
+  return { inputBarActions: state.inputBarActions, drawerTabs: state.drawerTabs }
+}
+
+function currentExtensionActionCatalog(): ExtensionActionCatalog {
+  return extensionActionCatalogFor(readComposerExtensionActionState())
+}
+
 /** Prefix QT catalog ids that would collide with a native composer action. */
 export function toComposerExtraId(qtId: string): string {
   return isComposerActionId(qtId) ? `${COMPOSER_QT_PREFIX}${qtId}` : qtId
@@ -179,7 +247,10 @@ export function buildComposerActionMap(
   return map
 }
 
-export function normalizeComposerActionBarState(raw: unknown): ComposerActionBarState {
+export function normalizeComposerActionBarState(
+  raw: unknown,
+  catalog: ExtensionActionCatalog = currentExtensionActionCatalog(),
+): ComposerActionBarState {
   const source = raw && typeof raw === 'object' ? raw as { order?: unknown; hidden?: unknown } : {}
   const sourceHasSelectMessages = Array.isArray(source.order)
     && source.order.some((id) => id === 'selectMessages')
@@ -198,22 +269,27 @@ export function normalizeComposerActionBarState(raw: unknown): ComposerActionBar
     order.push(id)
   }
   const hidden = Array.isArray(source.hidden)
-    ? source.hidden.filter((id): id is string => isPersistedActionId(id) && order.includes(id))
+    ? source.hidden.filter((id): id is string => isPersistedActionId(id))
     : []
   if (!sourceHasSelectMessages && order.includes('selectMessages') && !hidden.includes('selectMessages')) {
     hidden.push('selectMessages')
   }
-  return { order, hidden }
+  // Canonicalize both arrays together before any membership filter can drop a
+  // hidden alias that only exists in its legacy form; the shared normalizer also
+  // keeps a hidden-only id addressable with a tail order slot. Native core-owned
+  // aliases are pruned after that, so the pinned launcher cannot be re-admitted
+  // through a legacy `hidden` entry.
+  return pruneCoreOwnedComposerAliases(normalizeComposerExtensionActions({ order, hidden }, catalog))
 }
 
 export function loadComposerActionBar(): ComposerActionBarState {
-  if (typeof localStorage === 'undefined') return { ...DEFAULT_STATE, order: [...DEFAULT_STATE.order] }
+  if (typeof localStorage === 'undefined') return { order: [...DEFAULT_STATE.order], hidden: [...DEFAULT_STATE.hidden] }
   try {
     const raw = localStorage.getItem(COMPOSER_ACTION_BAR_STORAGE_KEY)
-    if (!raw) return { ...DEFAULT_STATE, order: [...DEFAULT_STATE.order] }
+    if (!raw) return { order: [...DEFAULT_STATE.order], hidden: [...DEFAULT_STATE.hidden] }
     return normalizeComposerActionBarState(JSON.parse(raw))
   } catch {
-    return { ...DEFAULT_STATE, order: [...DEFAULT_STATE.order] }
+    return { order: [...DEFAULT_STATE.order], hidden: [...DEFAULT_STATE.hidden] }
   }
 }
 
@@ -228,42 +304,72 @@ export function saveComposerActionBar(state: ComposerActionBarState) {
 
 export function useComposerActionBar() {
   const [state, setState] = useState<ComposerActionBarState>(loadComposerActionBar)
+  /** Live registrations; these slices change on extension registration churn. */
+  const inputBarActions = useStore((store) => store.inputBarActions)
+  const drawerTabs = useStore((store) => store.drawerTabs)
+  /**
+   * Committed-state reference, advanced synchronously by `persist` so the second
+   * of two handlers in the same tick cannot read a stale snapshot. It is
+   * initialized once and never reassigned during render, so a render can never
+   * overwrite a newer edit.
+   */
+  const committed = useRef<ComposerActionBarState>(state)
 
   const persist = useCallback((next: ComposerActionBarState) => {
     const normalized = normalizeComposerActionBarState(next)
+    if (sameComposerActionBarState(normalized, committed.current)) return
+    committed.current = normalized
     setState(normalized)
     saveComposerActionBar(normalized)
   }, [])
 
-  const hiddenSet = useMemo(() => new Set(state.hidden), [state.hidden])
+  /**
+   * Read-only render projection. A stored legacy id must be canonicalized when
+   * its extension registers after load, or the bar and the drag identity would
+   * disagree with the toolbar's stable key. The same native pruning is applied so
+   * the projection cannot show a core-owned alias the persisted pair has already
+   * dropped. Nothing here writes storage, and the committed ref is never touched,
+   * so an intermediate render cannot displace a newer edit.
+   */
+  const projected = useMemo(
+    () => pruneCoreOwnedComposerAliases(
+      normalizeComposerExtensionActions(state, extensionActionCatalogFor({ inputBarActions, drawerTabs })),
+    ),
+    [drawerTabs, inputBarActions, state],
+  )
+
+  const hiddenSet = useMemo(() => new Set(projected.hidden), [projected.hidden])
 
   const isVisible = useCallback(
-    (id: string) => state.order.includes(id) && !hiddenSet.has(id),
-    [hiddenSet, state.order],
+    (id: string) => projected.order.includes(id) && !hiddenSet.has(id),
+    [hiddenSet, projected.order],
   )
 
   const toggle = useCallback((id: string) => {
-    if (!state.order.includes(id)) {
-      persist({ order: [...state.order, id], hidden: state.hidden.filter((item) => item !== id) })
-      return
-    }
-    persist({
-      order: state.order,
-      hidden: hiddenSet.has(id) ? state.hidden.filter((item) => item !== id) : [...state.hidden, id],
-    })
-  }, [hiddenSet, persist, state.hidden, state.order])
+    const catalog = currentExtensionActionCatalog()
+    // Normalize the raw pair with the LIVE catalog before deciding visibility:
+    // a stored legacy alias must resolve to the same key the caller passes, or a
+    // Show would be computed as a Hide. Prune first so the latest pair matches
+    // the persisted normalization.
+    const current = pruneCoreOwnedComposerAliases(normalizeComposerExtensionActions(committed.current, catalog))
+    persist(setComposerExtensionActionVisible(current, catalog, id, !(current.order.includes(id) && !current.hidden.includes(id))))
+  }, [persist])
 
   const reorder = useCallback((order: string[]) => {
-    persist({ order, hidden: state.hidden })
-  }, [persist, state.hidden])
+    const catalog = currentExtensionActionCatalog()
+    const current = pruneCoreOwnedComposerAliases(normalizeComposerExtensionActions(committed.current, catalog))
+    // A snapshot that is no longer a permutation of the latest order is stale;
+    // it returns the current state unchanged rather than replacing newer edits.
+    persist(applyComposerExtensionActionOrder(current, catalog, order))
+  }, [persist])
 
   const reset = useCallback(() => {
     persist({ order: [...DEFAULT_STATE.order], hidden: [...DEFAULT_STATE.hidden] })
   }, [persist])
 
   return {
-    order: state.order,
-    hidden: state.hidden,
+    order: projected.order,
+    hidden: projected.hidden,
     isVisible,
     toggle,
     reorder,

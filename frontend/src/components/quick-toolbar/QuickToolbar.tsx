@@ -248,6 +248,7 @@ function QuickToolbarNative() {
     moveActionWithin,
     reorderActions,
     toggleAction,
+    pinAction,
     resetCurrentVariant,
   } = useQuickToolbarActions()
   const cardContext = useQuickToolbarContext()
@@ -986,7 +987,9 @@ function QuickToolbarNative() {
     : visibleActionIds
   const visibleAnchoredActions = actions.filter((action) => retainedVisibleActionIds.includes(action.id))
   const pinOverflowAction = (id: string) => {
-    updateSettings({ iconOrder: [id, ...orderedIds.filter((candidate) => candidate !== id)] })
+    // Shared merge: an available-only list must never replace the stored order,
+    // which still holds the absent and hidden complementary slots.
+    pinAction(id)
   }
 
   const renderV2Action = (action: ToolbarAction, measuring = false) => {

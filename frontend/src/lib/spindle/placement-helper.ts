@@ -447,6 +447,7 @@ export function createDrawerTabHandle(
     assertActive()
     getStore().registerDrawerTab({
     id: tabId,
+    contributionId: options.id,
     extensionId,
     title: options.title,
     shortName: options.shortName,

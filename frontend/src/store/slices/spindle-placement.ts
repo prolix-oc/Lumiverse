@@ -28,7 +28,12 @@ const PLACEMENT_LIMITS = {
 // ── State types ──
 
 export interface DrawerTabState {
+  /** Internal registration id. Use contributionId to identify the extension tab. */
   id: string
+
+  /** Stable extension-supplied tab id (`SpindleDrawerTabOptions.id`). */
+  contributionId?: string
+
   extensionId: string
   title: string
 

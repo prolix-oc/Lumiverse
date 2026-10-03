@@ -5,6 +5,7 @@ import { act } from 'react'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 import { QUICK_TOOLBAR_POINTER_HOLD_MS } from '@/components/quick-toolbar/quickToolbarDock'
+import type { DrawerTabState, InputBarActionState } from '@/store/slices/spindle-placement'
 import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -45,6 +46,9 @@ mock.module('@/store', () => {
     messageSelectMode: false,
     selectedMessageIds: [] as string[],
     enableToolbarIconReorder: true,
+    /** Live extension registrations the composer projection reads. */
+    inputBarActions: [] as InputBarActionState[],
+    drawerTabs: [] as DrawerTabState[],
     setMessageSelectMode(enabled: boolean) {
       this.messageSelectMode = enabled
       this.selectedMessageIds = []
@@ -60,38 +64,73 @@ let ComposerActionBarLive: typeof import('./InputAreaComposerBar').ComposerActio
 let useComposerActionBar: typeof import('./InputAreaCustomizeModal').useComposerActionBar
 let COMPOSER_ACTION_BAR_STORAGE_KEY: typeof import('./InputAreaCustomizeModal').COMPOSER_ACTION_BAR_STORAGE_KEY
 let saveComposerActionBar: typeof import('./InputAreaCustomizeModal').saveComposerActionBar
+let normalizeComposerActionBarState: typeof import('./InputAreaCustomizeModal').normalizeComposerActionBarState
+let COMPOSER_ACTION_IDS: typeof import('./InputAreaCustomizeModal').COMPOSER_ACTION_IDS
 
 const clicks: string[] = []
+
+const FOREIGN_CONTRIBUTION = 'widget'
+const FOREIGN_RUNTIME_ID = 'ext_owner:action:widget:9'
+const FOREIGN_KEY = 'ext-action:["input","ext_owner","widget"]'
+const LEGACY_FOREIGN_KEY = 'input-action:ext_owner:spindle:ext_owner:action:widget:7'
+
+function foreignInputAction(): InputBarActionState {
+  return {
+    id: FOREIGN_RUNTIME_ID,
+    contributionId: FOREIGN_CONTRIBUTION,
+    extensionId: 'ext_owner',
+    extensionName: 'Ext Owner',
+    label: 'Widget',
+    enabled: true,
+    clickHandlers: new Set(),
+  }
+}
 
 function Probe() {
   const bar = useComposerActionBar()
   return (
-    <ComposerActionBarLive
-      order={bar.order}
-      isVisible={bar.isVisible}
-      reorder={bar.reorder}
-      enableReorder
-      renderUnit={(id) => {
-        if (id === 'home') {
-          return (
-            <>
-              <button type="button" data-testid="home-btn" onClick={() => clicks.push('home')}>Home</button>
-              <span data-testid="home-divider" />
-            </>
-          )
-        }
-        if (id === 'regen') {
-          return <button type="button" data-testid="regen-btn" onClick={() => clicks.push('regen')}>Regen</button>
-        }
-        if (id === 'continue') {
-          return <button type="button" data-testid="continue-btn" onClick={() => clicks.push('continue')}>Continue</button>
-        }
-        return <button type="button" data-testid={`${id}-btn`}>{id}</button>
-      }}
-    >
-      <span data-spindle-mount="chat_actions" data-testid="spindle-slot" />
-      <button type="button" aria-label="Customize composer" data-testid="customize-gear">gear</button>
-    </ComposerActionBarLive>
+    <>
+      <output data-testid="composer-order">{bar.order.join('|')}</output>
+      <output data-testid="composer-hidden">{bar.hidden.join('|')}</output>
+      <button data-testid="toggle-foreign" type="button" onClick={() => bar.toggle(FOREIGN_KEY)}>toggle foreign</button>
+      <button
+        data-testid="two-edits"
+        type="button"
+        onClick={() => {
+          bar.toggle(FOREIGN_KEY)
+          bar.toggle('regen')
+        }}
+      >
+        two edits
+      </button>
+      <button data-testid="stale-reorder" type="button" onClick={() => bar.reorder(['ghost:id', 'home'])}>stale reorder</button>
+      <ComposerActionBarLive
+        order={bar.order}
+        isVisible={bar.isVisible}
+        reorder={bar.reorder}
+        enableReorder
+        renderUnit={(id) => {
+          if (id === 'home') {
+            return (
+              <>
+                <button type="button" data-testid="home-btn" onClick={() => clicks.push('home')}>Home</button>
+                <span data-testid="home-divider" />
+              </>
+            )
+          }
+          if (id === 'regen') {
+            return <button type="button" data-testid="regen-btn" onClick={() => clicks.push('regen')}>Regen</button>
+          }
+          if (id === 'continue') {
+            return <button type="button" data-testid="continue-btn" onClick={() => clicks.push('continue')}>Continue</button>
+          }
+          return <button type="button" data-testid={`${id}-btn`}>{id}</button>
+        }}
+      >
+        <span data-spindle-mount="chat_actions" data-testid="spindle-slot" />
+        <button type="button" aria-label="Customize composer" data-testid="customize-gear">gear</button>
+      </ComposerActionBarLive>
+    </>
   )
 }
 
@@ -102,6 +141,8 @@ beforeAll(async () => {
     useComposerActionBar,
     COMPOSER_ACTION_BAR_STORAGE_KEY,
     saveComposerActionBar,
+    normalizeComposerActionBarState,
+    COMPOSER_ACTION_IDS,
   } = await import('./InputAreaCustomizeModal'))
 })
 
