@@ -736,7 +736,7 @@ export async function saveImageFromDataUrl(
 
   const mimeType = match[1];
   const base64 = match[2];
-  const ext = mimeType === "image/png" ? ".png" : mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/webp" ? ".webp" : ".bin";
+  const ext = Object.entries(MIME_BY_EXT).find(([, mime]) => mime === mimeType)?.[0] ?? ".bin";
   const buffer = Buffer.from(base64, "base64");
   const filename = originalFilename || `image-gen-${crypto.randomUUID()}${ext}`;
   return uploadImageDeferred(userId, new File([buffer], filename, { type: mimeType }), options);

@@ -2,6 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { patchWorkflow, type ComfyUIFieldMapping } from "./comfyui-workflow-patch";
 import { detectInjectionPoints } from "./comfyui-workflow-parser";
 
+test("per-node controls preserve independent sampler stages and authoritative prompt injection", () => {
+  const workflow = {
+    "1": { class_type: "CLIPTextEncode", inputs: { text: "placeholder" } },
+    "2": { class_type: "KSampler", inputs: { steps: 20, seed: 1 } },
+    "3": { class_type: "KSampler", inputs: { steps: 8, seed: 2 } },
+  };
+  const mappings: ComfyUIFieldMapping[] = [
+    { nodeId: "1", fieldName: "text", mappedAs: "positive_prompt" },
+    { nodeId: "2", fieldName: "steps", mappedAs: "steps" },
+    { nodeId: "3", fieldName: "steps", mappedAs: "steps" },
+  ];
+  const patched = patchWorkflow(workflow, mappings, { positive_prompt: "native prompt", steps: 30, node_fields: { "1:text": "ignored", "2:steps": 24, "3:steps": 8, "3:seed": 999 } });
+  expect(patched["1"].inputs.text).toBe("native prompt");
+  expect(patched["2"].inputs.steps).toBe(24);
+  expect(patched["3"].inputs.steps).toBe(8);
+  expect(patched["3"].inputs.seed).toBe(2);
+  expect(workflow["2"].inputs.steps).toBe(20);
+});
+
 describe("patchWorkflow — LoRA semantics", () => {
   const baseWorkflow = {
     "3": {

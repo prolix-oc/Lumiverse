@@ -211,6 +211,9 @@ export interface ImageGenResult {
   imageId?: string;
   /** Public URL for the image (works without authentication) */
   imageUrl?: string;
+  mediaType?: "image" | "video";
+  mimeType?: string;
+  mediaUrl?: string;
   /** Message created (chat_attachment) or patched (attach_to_message) by this generation. */
   message?: Message;
   /** Job id streamed alongside progress events so the frontend can correlate. */
@@ -246,6 +249,11 @@ export type ImageGenCharacterLoraSelection =
   | { source: "explicit"; lora: LoraEntry; baseTags?: string };
 
 export interface GenerateImageOptions {
+  /** Request-local connection and persisted source; never activate settings. */
+  connectionId?: string;
+  sourceImageId?: string;
+  outputMediaType?: "image" | "video";
+  outputNodeId?: string;
   forceGeneration?: boolean;
   promptMode?: ImageGenPromptMode;
   prompt?: string;
@@ -317,9 +325,28 @@ Override any earlier environment-only instruction: include ${visibleSubjects} wh
 ${SUBJECT_AWARE_SCENE_SCHEMA}`;
 }
 
-// Tracks in-flight image generations keyed by `${userId}:${chatId}` so a new
-// request for the same chat can abort an existing one mid-flight.
-const activeImageGenerations = new Map<string, { controller: AbortController; startedAt: number }>();
+// Tracks generations per account, chat, and extension. A new request only
+// supersedes another request in the same namespace.
+const activeImageGenerations = new Map<string, { controller: AbortController; startedAt: number; jobId: string; ownerExtensionIdentifier?: string; userId: string }>();
+
+export function cancelExtensionImageGeneration(userId: string, extensionIdentifier: string, jobId: string): boolean {
+  for (const job of activeImageGenerations.values()) {
+    if (job.userId === userId && job.ownerExtensionIdentifier === extensionIdentifier && job.jobId === jobId) {
+      job.controller.abort(new Error("Generation cancelled"));
+      return true;
+    }
+  }
+  return false;
+}
+
+export function getMainImagePromptPresets(userId: string) {
+  const settings = getImageGenSettings(userId, false);
+  return {
+    activeId: settings.activePromptPresetId ?? null,
+    activeConnectionId: settings.activeImageGenConnectionId ?? null,
+    presets: (settings.promptPresets ?? []).filter((preset) => !preset.kind || preset.kind === "main"),
+  };
+}
 
 function sceneCacheSet(key: string, value: SceneData): void {
   // Delete first so re-insertion moves key to end (most-recently-used)
@@ -347,20 +374,26 @@ export async function generateSceneBackground(
   chatId: string,
   opts?: GenerateImageOptions
 ): Promise<ImageGenResult> {
-  let settings = getImageGenSettings(userId);
+  // An explicit connection must not reconcile or migrate ImgGen's active setting.
+  const reconcileConnection = !opts?.connectionId;
+  let settings = getImageGenSettings(userId, reconcileConnection);
 
   // Auto-migrate legacy settings to connection profiles
-  await maybeAutoMigrate(userId, settings);
-  settings = getImageGenSettings(userId);
+  if (reconcileConnection) await maybeAutoMigrate(userId, settings);
+  settings = getImageGenSettings(userId, reconcileConnection);
 
   // Resolve connection profile
-  const connectionId = settings.activeImageGenConnectionId;
+  const connectionId = opts?.connectionId || settings.activeImageGenConnectionId;
   if (!connectionId) {
     throw new Error("No image generation connection selected. Create one in Settings → Image Gen Connections.");
   }
 
   const connection = imageGenConnSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Image generation connection not found");
+  if (!chatsSvc.getChat(userId, chatId)) throw new Error("Chat not found");
+  if (opts?.outputMediaType === "video" && connection.provider !== "comfyui") {
+    throw new Error("Video output selection currently requires a ComfyUI connection");
+  }
 
   const provider = getImageProvider(connection.provider);
   if (!provider) throw new Error(`Unknown image generation provider: ${connection.provider}`);
@@ -374,21 +407,20 @@ export async function generateSceneBackground(
   // can abort it during *any* phase (scene analysis as well as image gen).
   const controller = new AbortController();
 
-  const registryKey = `${userId}:${chatId}`;
+  const registryKey = `${userId}:${chatId}${opts?.ownerExtensionIdentifier ? `:${opts.ownerExtensionIdentifier}` : ""}`;
   const existing = activeImageGenerations.get(registryKey);
   if (existing) {
     existing.controller.abort(new Error("Image generation superseded by a newer request"));
   }
-  activeImageGenerations.set(registryKey, { controller, startedAt: Date.now() });
-
   const jobId = opts?.clientJobId || crypto.randomUUID();
+  activeImageGenerations.set(registryKey, { controller, startedAt: Date.now(), jobId, userId, ownerExtensionIdentifier: opts?.ownerExtensionIdentifier });
 
   try {
     const cacheKey = `${userId}:${chatId}`;
     const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
     const promptMode = opts?.skipParse
       ? "custom"
-      : opts?.promptMode || settings.promptMode || "scene";
+      : opts?.promptMode || (opts?.promptPresetId ? promptInput.mode : undefined) || settings.promptMode || "scene";
     const outputTarget = opts?.outputTarget || settings.outputTarget || "background";
     const params = normalizeGenerationParameters(
       { ...connection.default_parameters, ...(opts?.parameters ?? {}) },
@@ -396,6 +428,8 @@ export async function generateSceneBackground(
     );
     normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
     resolveProviderRandomSeed(params, connection.provider);
+    if (opts?.outputMediaType) params.comfy_output_kind = opts.outputMediaType;
+    if (opts?.outputNodeId) params.comfy_output_node = opts.outputNodeId;
     const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
     const promptSignal = createPhaseTimeoutSignal(
       controller.signal,
@@ -511,6 +545,13 @@ export async function generateSceneBackground(
       connection.provider === "sdapi"
     ) {
       const sources = await resolveSourceImages(userId, chatId, params);
+      if (opts?.sourceImageId) {
+        const image = imagesSvc.getImage(userId, opts.sourceImageId);
+        const path = await imagesSvc.getImageFilePath(userId, opts.sourceImageId);
+        if (!image || !path) throw new Error("Source image not found");
+        if (!image.mime_type.startsWith("image/")) throw new Error("Source asset must be a still image");
+        sources.unshift({ data: Buffer.from(await Bun.file(path).arrayBuffer()).toString("base64"), mimeType: image.mime_type });
+      }
       if (sources.length > 0) params.resolvedSourceImages = sources;
     }
 
@@ -563,12 +604,15 @@ export async function generateSceneBackground(
     // Persist the generated image to the images table
     let imageId: string | undefined;
     let imageUrl: string | undefined;
+    const mimeType = response.imageDataUrl.match(/^data:([^;]+);/)?.[1];
+    const mediaType = mimeType?.startsWith("video/") ? "video" as const : "image" as const;
+    let mediaUrl: string | undefined;
     let message: Message | undefined;
     if (response.imageDataUrl) {
       const image = await imagesSvc.saveImageFromDataUrl(
         userId,
         response.imageDataUrl,
-        `image-gen-${connection.provider}-${Date.now()}.png`,
+        undefined,
         {
           owner_extension_identifier: opts?.ownerExtensionIdentifier,
           owner_chat_id: opts?.ownerChatId ?? chatId,
@@ -576,7 +620,8 @@ export async function generateSceneBackground(
       );
       imageId = image.id;
       imageUrl = `/api/v1/image-gen/results/${image.id}`;
-      const relayPreviewUrl = await buildRelayImagePreview(response.imageDataUrl);
+      mediaUrl = `/api/v1/images/${image.id}`;
+      const relayPreviewUrl = mediaType === "image" ? await buildRelayImagePreview(response.imageDataUrl) : undefined;
 
       const newAttachment = {
         type: "image" as const,
@@ -667,6 +712,9 @@ export async function generateSceneBackground(
       imageDataUrl: response.imageDataUrl,
       imageId,
       imageUrl,
+      mediaType,
+      mimeType,
+      mediaUrl,
       message,
       jobId,
     };
@@ -759,7 +807,7 @@ export async function previewImagePrompt(
     provider.capabilities.parameters,
   );
   const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
-  const promptMode = opts?.promptMode || settings.promptMode || "scene";
+  const promptMode = opts?.promptMode || (opts?.promptPresetId ? promptInput.mode : undefined) || settings.promptMode || "scene";
   const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
 
   const controller = new AbortController();
@@ -928,6 +976,9 @@ export async function applyActiveComfyUIWorkflowConfig(
     || (typeof params.workflowId === "string" && params.workflowId)
     || library.activeId;
   const explicitEntry = targetId ? library.entries.find((e) => e.id === targetId) : null;
+  if ((params.workflow_id || params.workflowId) && !explicitEntry) {
+    throw new Error("Selected ComfyUI workflow not found");
+  }
   const config = explicitEntry?.config ?? readComfyUIConfig(connection.metadata);
   if (!config) return;
 
@@ -984,6 +1035,17 @@ export async function applyActiveComfyUIWorkflowConfig(
     Object.assign(patchValues, extraFieldValues);
   }
   patchValues.seed = resolveComfySeedParam(patchValues.seed ?? params.seed);
+  if (patchValues.node_fields && typeof patchValues.node_fields === "object") {
+    patchValues.node_fields = { ...patchValues.node_fields };
+    for (const mapping of mappings) {
+      const key = `${mapping.nodeId}:${mapping.fieldName}`;
+      if (mapping.mappedAs === "seed" && Object.hasOwn(patchValues.node_fields, key)) {
+        const seed = resolveComfySeedParam(patchValues.node_fields[key]);
+        if (seed === undefined) delete patchValues.node_fields[key];
+        else patchValues.node_fields[key] = seed;
+      }
+    }
+  }
 
   // img2img: only engage when the workflow actually maps an init_image field
   // (i.e. it's an img2img graph). This keeps the denoise param from clobbering
@@ -1262,6 +1324,7 @@ async function resolvePromptInput(
 ): Promise<ImageGenPromptPreset> {
   const presets = settings.promptPresets || [];
   const preset = presets.find((p) => p.id === (opts?.promptPresetId || settings.activePromptPresetId));
+  if (opts?.promptPresetId && !preset) throw new Error("Selected image prompt preset not found");
   const requestedMode = opts?.skipParse
     ? "custom"
     : opts?.promptMode || preset?.mode || settings.promptMode || "custom";
@@ -1306,9 +1369,9 @@ async function resolvePromptInput(
     mode: requestedMode === "parsed_custom" ? "parsed_custom" : "custom",
     prompt,
     negativePrompt,
-    parserConnectionId: settings.promptParserConnectionId ?? preset?.parserConnectionId ?? null,
-    parserModel: settings.promptParserModel ?? preset?.parserModel ?? "",
-    parserParameters: settings.promptParserParameters ?? preset?.parserParameters ?? {},
+    parserConnectionId: opts?.promptPresetId && preset?.parserConnectionId !== undefined ? preset.parserConnectionId : settings.promptParserConnectionId ?? preset?.parserConnectionId ?? null,
+    parserModel: opts?.promptPresetId ? preset?.parserModel ?? settings.promptParserModel ?? "" : settings.promptParserModel ?? preset?.parserModel ?? "",
+    parserParameters: opts?.promptPresetId ? preset?.parserParameters ?? settings.promptParserParameters ?? {} : settings.promptParserParameters ?? preset?.parserParameters ?? {},
   };
 }
 
@@ -1496,9 +1559,9 @@ function parsePromptResponse(input: string, fallbackNegative?: string): { prompt
 
 async function resolvePromptParser(userId: string, settings: ImageGenSettings, input?: ImageGenPromptPreset) {
   const { getConnection } = await import("./connections.service");
-  const configuredId = input?.parserConnectionId || settings.promptParserConnectionId;
-  let model = input?.parserModel || settings.promptParserModel || "";
-  let parameters = input?.parserParameters || settings.promptParserParameters || {};
+  const configuredId = input?.parserConnectionId !== undefined ? input.parserConnectionId : settings.promptParserConnectionId;
+  let model = input?.parserModel ?? settings.promptParserModel ?? "";
+  let parameters = input?.parserParameters ?? settings.promptParserParameters ?? {};
 
   if (configuredId) {
     const connection = getConnection(userId, configuredId);
@@ -1878,7 +1941,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 // --- Settings ---
 
-export function getImageGenSettings(userId: string): ImageGenSettings {
+export function getImageGenSettings(userId: string, reconcileConnection = true): ImageGenSettings {
   const row = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY);
   const stored = row?.value || {};
   const settings = {
@@ -1891,6 +1954,7 @@ export function getImageGenSettings(userId: string): ImageGenSettings {
         ? stored.includePersona
         : Boolean(stored.includeCharacters),
   };
+  if (!reconcileConnection) return settings;
   const savedConnectionId = settings.activeImageGenConnectionId || null;
   const savedConnection = savedConnectionId
     ? imageGenConnSvc.getConnection(userId, savedConnectionId)

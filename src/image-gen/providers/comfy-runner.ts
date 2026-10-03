@@ -7,6 +7,8 @@ export interface ComfyRunnerOptions {
   // /ComfyBackendDirect proxy when the instance is auth-gated.
   cookie?: string
   wsTimeoutMs?: number
+  outputMediaType?: "image" | "video"
+  outputNodeId?: string
 }
 
 export type ComfyStreamEvent =
@@ -22,6 +24,43 @@ interface ComfyImageResult {
   filename: string
   subfolder: string
   type: string
+}
+
+/** Select a final file from native ComfyUI or VideoHelperSuite output nodes. */
+export function findComfyMediaResult(
+  outputs: Record<string, any> | null | undefined,
+  mediaType?: "image" | "video",
+  outputNodeId?: string,
+): ComfyImageResult | null {
+  if (!mediaType && !outputNodeId) return findFirstComfyImageResult(outputs)
+  const nodes = outputNodeId ? [outputs?.[outputNodeId]] : Object.values(outputs ?? {})
+  const candidates: ComfyImageResult[] = []
+  for (const node of nodes) {
+    for (const key of ["images", "gifs", "videos"]) {
+      for (const file of Array.isArray(node?.[key]) ? node[key] : []) {
+        if (typeof file?.filename !== "string") continue
+        const isVideo = /\.(mp4|webm|mov|m4v|mkv|avi)$/i.test(file.filename)
+        if (mediaType && (mediaType === "video") !== isVideo) continue
+        candidates.push({ filename: file.filename, subfolder: typeof file.subfolder === "string" ? file.subfolder : "", type: typeof file.type === "string" ? file.type : "output" })
+      }
+    }
+  }
+  return candidates.find((file) => file.type === "output") ?? candidates[0] ?? null
+}
+
+/** Only interrupt when ComfyUI reports our prompt as currently running. */
+async function cancelComfyPrompt(baseUrl: string, promptId: string, cookie?: string): Promise<void> {
+  const headers = buildHeaders(cookie)
+  const res = await fetch(`${baseUrl}/queue`, { headers, signal: AbortSignal.timeout(5000) })
+  if (!res.ok) return
+  const queue = await res.json() as { queue_running?: any[][] }
+  await fetch(`${baseUrl}/queue`, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ delete: [promptId] }), signal: AbortSignal.timeout(5000),
+  })
+  if (queue.queue_running?.some((item) => item[1] === promptId)) {
+    await fetch(`${baseUrl}/interrupt`, { method: "POST", headers, signal: AbortSignal.timeout(5000) })
+  }
 }
 
 function buildHeaders(cookie?: string, extra?: Record<string, string>): Record<string, string> {
@@ -157,13 +196,10 @@ export async function* executeComfyWorkflowStream(
   console.debug("[%s] Prompt queued (promptId=%s, clientId=%s)", label, promptId, clientId)
 
   const abortHandler = () => {
-    fetch(`${baseUrl}/interrupt`, {
-      method: "POST",
-      headers: buildHeaders(cookie),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => {})
+    void cancelComfyPrompt(baseUrl, promptId, cookie).catch(() => {})
   }
   signal?.addEventListener("abort", abortHandler, { once: true })
+  if (signal?.aborted) abortHandler()
 
   try {
     for await (const event of wsEventStream(ws, promptId, signal)) {
@@ -202,10 +238,10 @@ export async function* executeComfyWorkflowStream(
     throw new Error(`No outputs in ${label} history`)
   }
 
-  const imageResult = findFirstComfyImageResult(outputs)
+  const imageResult = findComfyMediaResult(outputs, opts.outputMediaType, opts.outputNodeId)
   if (!imageResult) {
     logOutputsShape(label, outputs, promptId)
-    throw new Error(`No image output found in ${label} results`)
+    throw new Error(`No ${opts.outputMediaType ?? "image"} output found in ${label} results${opts.outputNodeId ? ` at node ${opts.outputNodeId}` : ""}`)
   }
   console.debug("[%s] Found image result: filename=%s subfolder=%s type=%s", label, imageResult.filename, imageResult.subfolder, imageResult.type)
 
@@ -215,7 +251,9 @@ export async function* executeComfyWorkflowStream(
 
   const imageBuffer = await imageRes.arrayBuffer()
   const base64 = Buffer.from(imageBuffer).toString("base64")
-  const mimeType = imageRes.headers.get("content-type") || "image/png"
+  const extension = imageResult.filename.split(".").pop()?.toLowerCase() ?? ""
+  const fileMime: Record<string, string> = { mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4", mkv: "video/x-matroska", avi: "video/x-msvideo" }
+  const mimeType = fileMime[extension] || imageRes.headers.get("content-type") || "image/png"
   return { imageDataUrl: `data:${mimeType};base64,${base64}` }
 }
 

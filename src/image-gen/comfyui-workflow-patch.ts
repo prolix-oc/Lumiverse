@@ -53,6 +53,8 @@ export interface ComfyUIPatchValues {
   /** KSampler denoise for img2img (0–1, lower = closer to the source image). */
   denoise?: number;
   custom?: Record<string, unknown>;
+  /** Per-node primitive overrides for mapped workflow controls. */
+  node_fields?: Record<string, string | number | boolean>;
 }
 
 type ApiWorkflow = Record<string, { class_type: string; inputs: Record<string, any> }>;
@@ -113,6 +115,15 @@ function resolveMappedValue(
   values: ComfyUIPatchValues,
   loraEntriesByNodeId: Map<string, LoraEntry> | undefined,
 ): unknown {
+  // Keep prompt/source injection authoritative. Other mapped controls can have
+  // different values on each node (for example two video sampler stages).
+  const key = `${mapping.nodeId}:${mapping.fieldName}`;
+  if (!["positive_prompt", "negative_prompt", "init_image"].includes(mapping.mappedAs)
+    && values.node_fields && Object.hasOwn(values.node_fields, key)) {
+    const value = values.node_fields[key];
+    if (typeof value === "string" || typeof value === "boolean"
+      || (typeof value === "number" && Number.isFinite(value))) return value;
+  }
   switch (mapping.mappedAs) {
     case "positive_prompt":
       return values.positive_prompt;
