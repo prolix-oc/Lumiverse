@@ -77,4 +77,42 @@ describe("insertBlocksIntoTaggedHistory", () => {
       "post-history utility",
     ]);
   });
+
+  test("keeps prompt order for equal depths inside and before chat history", () => {
+    const messages: LlmMessage[] = [
+      makeMessage("system", "before"),
+      makeMessage("user", "u1", true),
+      makeMessage("assistant", "a1", true),
+      makeMessage("user", "u2", true),
+    ];
+
+    insertBlocksIntoTaggedHistory(messages, [
+      { role: "system", content: "depth-five-a", depth: 5 },
+      { role: "system", content: "depth-two-a", depth: 2 },
+      { role: "system", content: "depth-five-b", depth: 5 },
+      { role: "system", content: "depth-two-b", depth: 2 },
+    ]);
+
+    expect(messages.map((msg) => msg.content)).toEqual([
+      "before",
+      "depth-five-a",
+      "depth-five-b",
+      "u1",
+      "depth-two-a",
+      "depth-two-b",
+      "a1",
+      "u2",
+    ]);
+  });
+
+  test("keeps prompt order when there is no chat history to anchor to", () => {
+    const messages: LlmMessage[] = [makeMessage("system", "only system")];
+
+    insertBlocksIntoTaggedHistory(messages, [
+      { role: "system", content: "first", depth: 2 },
+      { role: "system", content: "second", depth: 0 },
+    ]);
+
+    expect(messages.map((msg) => msg.content)).toEqual(["only system", "first", "second"]);
+  });
 });

@@ -367,11 +367,16 @@ export function insertBlocksIntoTaggedHistory(
   messages: LlmMessage[],
   blocks: Array<Pick<LlmMessage, "role" | "content"> & { depth: number }>,
 ): void {
-  // Insert in reverse so blocks that resolve to the same chat-history boundary
-  // keep their original prompt_order sequence after repeated splices.
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const block = blocks[i];
-    const insertAt = resolveChatHistoryInsertionIndex(messages, block.depth);
+  // Resolve every boundary before splicing, then insert from the last boundary
+  // back so earlier indices stay valid. Within one boundary the later block goes
+  // in first, so blocks sharing a boundary keep their prompt_order sequence.
+  const placements = blocks.map((block, order) => ({
+    block,
+    order,
+    insertAt: resolveChatHistoryInsertionIndex(messages, block.depth),
+  }));
+  placements.sort((a, b) => b.insertAt - a.insertAt || b.order - a.order);
+  for (const { block, insertAt } of placements) {
     messages.splice(insertAt, 0, {
       role: block.role,
       content: block.content,
