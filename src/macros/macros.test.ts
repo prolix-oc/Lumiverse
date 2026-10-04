@@ -2048,6 +2048,16 @@ describe("foreach macro", () => {
     expect(await ev("{{foreach::a, b , ,c}}[{{.item}}]{{/foreach}}")).toBe("[a][b][c]");
   });
 
+  test("the # flag keeps item whitespace and blank items", async () => {
+    expect(await ev("{{#foreach::a, b , ,c}}[{{.item}}]{{/foreach}}")).toBe("[a][ b ][ ][c]");
+    expect(await ev("{{#foreach::x§§ y ::v::§}}[{{.v}}]{{/foreach}}")).toBe("[x][][ y ]");
+    expect(await ev("{{#map::a, b::v}}<{{.v}}>{{/map}}")).toBe("<a>, < b>");
+  });
+
+  test("the # flag still loops nothing over an empty list", async () => {
+    expect(await ev("{{#foreach::}}body{{/foreach}}")).toBe("");
+  });
+
   test("exposes 0-based index and 1-based number", async () => {
     expect(await ev("{{foreach::x,y,z}}{{.item_index}}:{{.item_number}} {{/foreach}}")).toBe(
       "0:1 1:2 2:3 ",

@@ -70,16 +70,22 @@ interface IterArgs {
 /**
  * Parse the shared `::list::var::delimiter` signature. Returns null (with a
  * warning) when used without a body. Caps the item count like {{repeat}}.
+ * The `#` flag keeps each item's whitespace and blank items, so data whose
+ * items carry meaningful spacing loops over exactly what was split.
  */
 async function parseIterArgs(ctx: MacroExecContext): Promise<IterArgs | null> {
   if (!ctx.isScoped) {
     ctx.warn(`{{${ctx.name}}} needs a body: {{${ctx.name}::list}}...{{/${ctx.name}}}`);
     return null;
   }
-  const listStr = ctx.rawArgs[0] ? (await ctx.resolveNodes(ctx.rawArgs[0])).trim() : "";
+  const preserve = ctx.flags.preserveWhitespace;
+  const resolvedList = ctx.rawArgs[0] ? await ctx.resolveNodes(ctx.rawArgs[0]) : "";
+  const listStr = preserve ? resolvedList : resolvedList.trim();
   const varName = (ctx.rawArgs[1] ? (await ctx.resolveNodes(ctx.rawArgs[1])).trim() : "") || "item";
   const delimiter = ctx.rawArgs[2] ? await ctx.resolveNodes(ctx.rawArgs[2]) : ",";
-  let items = parseDelimitedList(listStr, delimiter);
+  let items = preserve
+    ? (listStr === "" ? [] : delimiter === "" ? [listStr] : listStr.split(delimiter))
+    : parseDelimitedList(listStr, delimiter);
   if (items.length > MAX_LIST_ITEMS) {
     ctx.warn(`{{${ctx.name}}} capped at ${MAX_LIST_ITEMS} items (got ${items.length})`);
     items = items.slice(0, MAX_LIST_ITEMS);

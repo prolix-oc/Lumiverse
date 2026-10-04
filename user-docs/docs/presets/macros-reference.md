@@ -91,7 +91,7 @@ Lumiverse parses SillyTavern-style macro prefixes. The currently user-relevant o
 | `?` | `{{?macro}}` | Parsed for delayed/compatibility-prefixed macros |
 | `~` | `{{~macro}}` | Parsed for reevaluate-style compatibility |
 | `>` | `{{>macro}}` | Parsed for filter-style compatibility |
-| `#` | `{{#trim}}...{{/trim}}` | Preserve whitespace for macros that support it (`trim` is the main built-in example) |
+| `#` | `{{#trim}}...{{/trim}}` | Preserve whitespace for macros that support it (`trim`, and the list loops `foreach`, `map`, `filter`, `some`, `every`) |
 
 Closing scoped macros use `/`, like `{{/if}}`, `{{/trim}}`, or `{{/numbered}}`.
 
@@ -186,7 +186,7 @@ Only include this in group chats.
 
 ### `{{foreach}}`
 
-Repeat a block of content once for each item in a list — the macro equivalent of a JavaScript `forEach`. The list is a single string that is split on a delimiter (`,` by default); each item is trimmed and blank items are dropped.
+Repeat a block of content once for each item in a list — the macro equivalent of a JavaScript `forEach`. The list is a single string that is split on a delimiter (`,` by default); each item is trimmed and blank items are dropped. Write `{{#foreach}}` to keep every item exactly as split, spacing and blank items included.
 
 ```
 {{foreach::apple, banana, cherry}}
