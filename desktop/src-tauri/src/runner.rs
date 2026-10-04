@@ -37,10 +37,15 @@ param(
   [Parameter(Mandatory=$true)][string]$InstallerPath,
   [Parameter(Mandatory=$true)][string]$FallbackExecutable,
   [Parameter(Mandatory=$true)][string]$LogPath,
-  [Parameter(Mandatory=$true)][string]$ReadyPath
+  [Parameter(Mandatory=$true)][string]$ReadyPath,
+  [Parameter(Mandatory=$true)][int]$ResumeServer,
+  [Parameter(Mandatory=$true)][int]$ReopenFrontend
 )
 
 $ErrorActionPreference = 'Stop'
+$resumeArguments = @('--resume-after-update')
+if ($ResumeServer -eq 1) { $resumeArguments += '--resume-server' }
+if ($ReopenFrontend -eq 1) { $resumeArguments += '--reopen-frontend' }
 
 function Write-UpdateLog([string]$Message) {
   $stamp = (Get-Date).ToString('o')
@@ -98,7 +103,7 @@ try {
   }
 
   Write-UpdateLog "Installer completed; relaunching: $launch"
-  Start-Process -FilePath $launch | Out-Null
+  Start-Process -FilePath $launch -ArgumentList $resumeArguments -WindowStyle Hidden | Out-Null
   Write-UpdateLog 'Desktop update handoff completed successfully.'
   exit 0
 } catch {
@@ -107,7 +112,7 @@ try {
   if (-not $parentStillRunning -and (Test-Path -LiteralPath $FallbackExecutable -PathType Leaf)) {
     try {
       Write-UpdateLog "Attempting fallback relaunch: $FallbackExecutable"
-      Start-Process -FilePath $FallbackExecutable | Out-Null
+      Start-Process -FilePath $FallbackExecutable -ArgumentList $resumeArguments -WindowStyle Hidden | Out-Null
     } catch {
       Write-UpdateLog "Fallback relaunch also failed: $($_.Exception.Message)"
     }
@@ -127,6 +132,44 @@ struct Running {
 #[derive(Default)]
 pub struct RunnerState {
     inner: Mutex<Option<Running>>,
+}
+
+/// Update launch intent is kept in memory and consumed once by the tray. It
+/// never changes normal auto-start preferences or survives a later app launch.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopUpdateResume {
+    resume_server: bool,
+    reopen_frontend: bool,
+}
+
+impl DesktopUpdateResume {
+    fn from_args(args: impl IntoIterator<Item = String>) -> Option<Self> {
+        let args: Vec<String> = args.into_iter().collect();
+        args.iter()
+            .any(|arg| arg == "--resume-after-update")
+            .then(|| Self {
+                resume_server: args.iter().any(|arg| arg == "--resume-server"),
+                reopen_frontend: args.iter().any(|arg| arg == "--reopen-frontend"),
+            })
+    }
+}
+
+pub struct DesktopUpdateResumeState(Mutex<Option<DesktopUpdateResume>>);
+
+impl Default for DesktopUpdateResumeState {
+    fn default() -> Self {
+        Self(Mutex::new(DesktopUpdateResume::from_args(
+            std::env::args().skip(1),
+        )))
+    }
+}
+
+#[tauri::command]
+pub fn take_desktop_update_resume(
+    state: State<'_, DesktopUpdateResumeState>,
+) -> Option<DesktopUpdateResume> {
+    state.0.lock().unwrap().take()
 }
 
 struct BoundedLog {
@@ -742,10 +785,12 @@ pub fn stage_desktop_update(
     app: AppHandle,
     artifact_path: String,
     repo_dir: String,
+    resume_server: bool,
+    reopen_frontend: bool,
 ) -> Result<String, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, artifact_path, repo_dir);
+        let _ = (app, artifact_path, repo_dir, resume_server, reopen_frontend);
         Err("Automatic desktop replacement is currently supported only on Windows".to_owned())
     }
 
@@ -800,6 +845,10 @@ pub fn stage_desktop_update(
             .arg(&log_path)
             .arg("-ReadyPath")
             .arg(&ready_path)
+            .arg("-ResumeServer")
+            .arg(if resume_server { "1" } else { "0" })
+            .arg("-ReopenFrontend")
+            .arg(if reopen_frontend { "1" } else { "0" })
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1124,6 +1173,50 @@ mod tests {
         .contains("NSIS .exe"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn desktop_update_resume_requires_an_update_launch_and_preserves_stopped_state() {
+        let parse = |args: &[&str]| {
+            DesktopUpdateResume::from_args(args.iter().map(|arg| (*arg).to_owned()))
+        };
+        assert_eq!(parse(&[]), None);
+        assert_eq!(parse(&["--resume-server", "--reopen-frontend"]), None);
+        assert_eq!(
+            parse(&["--resume-after-update"]),
+            Some(DesktopUpdateResume {
+                resume_server: false,
+                reopen_frontend: false
+            }),
+        );
+        assert_eq!(
+            parse(&["--resume-after-update", "--resume-server"]),
+            Some(DesktopUpdateResume {
+                resume_server: true,
+                reopen_frontend: false
+            }),
+        );
+        assert_eq!(
+            parse(&["--resume-after-update", "--reopen-frontend"]),
+            Some(DesktopUpdateResume {
+                resume_server: false,
+                reopen_frontend: true
+            }),
+        );
+        let resume = parse(&[
+            "--resume-after-update",
+            "--resume-server",
+            "--reopen-frontend",
+        ]);
+        assert_eq!(
+            serde_json::to_value(&resume).unwrap(),
+            serde_json::json!({
+                "resumeServer": true, "reopenFrontend": true,
+            })
+        );
+        let state = DesktopUpdateResumeState(Mutex::new(resume.clone()));
+        assert_eq!(state.0.lock().unwrap().take(), resume);
+        assert_eq!(state.0.lock().unwrap().take(), None);
     }
 
     #[test]

@@ -27,6 +27,7 @@ import {
   type UpdateState,
 } from "./runner-client";
 import { loadSettings, saveSetting, type TraySettings } from "./settings";
+import { restoreDesktopSession, type DesktopUpdateResume } from "./update-resume";
 import { type InstanceConnection, LOCAL_INSTANCE_CONNECTION } from "./instance-connection";
 import {
   pendingRemoteSnapshot,
@@ -330,12 +331,12 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
-async function startServer(): Promise<void> {
+async function startServer(reopenFrontend = true): Promise<void> {
   if (isRemoteMode()) throw new Error("Switch to the local instance before starting its server.");
   await ensureRunner();
   // The runner acknowledges this request while the server is still starting.
   // Defer opening the native WebView until its `running` state notification.
-  openIntegratedBrowserWhenReady = true;
+  openIntegratedBrowserWhenReady = reopenFrontend;
   serverState = "starting";
   await updateMenu();
   await client.request("start-server");
@@ -513,9 +514,15 @@ async function rebuildDesktop(): Promise<void> {
     }
 
     try {
+      // Capture at handoff time, since the user can start/stop the server or
+      // hide the browser during a long build. Do not restart external servers.
+      const status = await client.fullStatus();
+      const reopenFrontend = await invoke<boolean>("frontend_visible");
       await invoke("stage_desktop_update", {
         artifactPath: result.bundlePath,
         repoDir,
+        resumeServer: !isRemoteMode() && (status.state === "running" || status.state === "starting"),
+        reopenFrontend,
       });
     } catch (error) {
       await revealItemInDir(result.bundlePath).catch(() => {});
@@ -1000,6 +1007,7 @@ async function boot(): Promise<void> {
   await buildTray();
   await updateMenu();
   await invoke("desktop_startup_ready");
+  const updateResume = await invoke<DesktopUpdateResume | null>("take_desktop_update_resume");
 
   if (!repoDir && !isRemoteMode()) {
     await alert(
@@ -1012,11 +1020,21 @@ async function boot(): Promise<void> {
     void pollRemoteInstance().then(updateMenu).catch((error) => {
       console.warn("Unable to restore remote instance authorization", error);
     });
-  } else if (settings.autoStartServer && repoDir && bunPath) {
-    action(startServer)();
-  } else {
-    void detectExternalServer().then(updateMenu);
   }
+  action(async () => {
+    await restoreDesktopSession(updateResume, {
+      remote: isRemoteMode(),
+      canStartServer: Boolean(repoDir && bunPath),
+      autoStartServer: settings.autoStartServer,
+    }, {
+      startServer,
+      detectExternalServer,
+      showFrontend: async () => {
+        await invoke("show_frontend", { port, customUrl: remoteFrontendUrl() });
+      },
+    });
+    await updateMenu();
+  })();
 
   setInterval(() => void tick(), POLL_INTERVAL_MS);
 }

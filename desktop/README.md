@@ -4,6 +4,15 @@ An experimental Tauri-powered Lumiverse desktop app for macOS, Windows, and
 Linux. It opens Lumiverse in an integrated native WebView and keeps a tray
 icon available for server controls, status, and updates.
 
+On Windows, installing a rebuilt desktop app restores the session after its
+automatic restart. A local server that was running (or starting) starts again,
+even if **Auto-start Server** is disabled. A stopped server stays stopped for
+that restart. The integrated browser reopens only if it was visible at the
+installer handoff; a hidden browser stays hidden. These one-time choices also
+apply to a fallback relaunch if installation fails, and do not change saved
+auto-start preferences. Remote browsers reopen on the selected remote instance;
+externally managed local servers are not restarted by Desktop.
+
 The integrated browser is the primary experience: when Lumiverse Desktop starts
 its local server, it opens the native Lumiverse window. The tray menu can hide,
 reopen, or reload that window, and can still open the same address in your

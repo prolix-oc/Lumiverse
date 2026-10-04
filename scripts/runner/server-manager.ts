@@ -260,12 +260,9 @@ export async function startServer(isDev: boolean): Promise<void> {
     instance = { ...instance, proc: null, control: null, finalizeOutput: null };
   });
 
-  // Fallback: assume running after 3s if "ready" IPC not received
-  setTimeout(() => {
-    if (instance?.state === "starting") {
-      setState("running");
-    }
-  }, 3000);
+  // Readiness comes from the backend after Bun.serve has bound its socket.
+  // Importing modules, tokenizers, and extensions can take well over three
+  // seconds; elapsed time alone must not open the desktop browser early.
 }
 
 export async function stopServer(): Promise<void> {

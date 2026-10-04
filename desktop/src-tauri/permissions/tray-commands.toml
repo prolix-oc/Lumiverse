@@ -10,6 +10,7 @@ commands.allow = [
   "discover_repo",
   "resolve_bun",
   "desktop_shell_sha",
+  "take_desktop_update_resume",
   "desktop_startup_ready",
   "quit_app",
   "alert",

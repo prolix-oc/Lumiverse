@@ -222,6 +222,7 @@ pub fn run() {
             None,
         ))
         .manage(runner::RunnerState::default())
+        .manage(runner::DesktopUpdateResumeState::default())
         .manage(frontend::FrontendState::default())
         .manage(frontend::DesktopWidgetCatalogState::default())
         .manage(notifications::DesktopNotificationTransportState::default())
@@ -237,6 +238,7 @@ pub fn run() {
             runner::resolve_bun,
             runner::desktop_shell_sha,
             runner::stage_desktop_update,
+            runner::take_desktop_update_resume,
             frontend::desktop_startup_ready,
             frontend::close_current_sso_popup,
             runner::quit_app,
