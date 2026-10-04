@@ -2003,7 +2003,7 @@ export async function assemblePrompt(
     return {
       ...legacyResult,
       ...(preset
-        ? { resolvedPreset: { id: preset.id, name: preset.name } }
+        ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
         : {}),
     };
   }
@@ -4484,7 +4484,7 @@ export async function assemblePrompt(
     breakdown,
     parameters,
     ...(preset
-      ? { resolvedPreset: { id: preset.id, name: preset.name } }
+      ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
       : {}),
     trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
@@ -8140,7 +8140,7 @@ async function onelinerImpersonation(
     breakdown,
     parameters,
     ...(preset
-      ? { resolvedPreset: { id: preset.id, name: preset.name } }
+      ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
       : {}),
     trimIncompleteWords: preset?.prompts?.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,

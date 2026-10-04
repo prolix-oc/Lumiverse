@@ -51,6 +51,7 @@ import {
   type WorldInfoInterceptorResultDTO,
 } from "./world-info-interceptor";
 import { projectWorldInfoCaptureContext } from "./world-info-capture";
+import { projectPresetMetadataContext } from "./preset-metadata-context";
 import { toolRegistry } from "./tool-registry";
 import {
   setPromptRegexOwnedChats,
@@ -2923,6 +2924,7 @@ export class WorkerHost {
       userId: scopedUserId,
       priority: priority ?? 100,
       match,
+      presetMetadataNamespace: this.manifest.identifier,
       resolveTimeoutMs,
       required,
       handler: async (messages, context, signal) => {
@@ -2951,7 +2953,7 @@ export class WorkerHost {
 
         const interceptorContext =
           projectWorldInfoCaptureContext(
-            context,
+            projectPresetMetadataContext(context, this.manifest.identifier),
             this.extensionId,
           ) as unknown as Omit<InterceptorContextDTO, "signal">;
         this.activeInterceptorContexts.set(registrationId, interceptorContext);

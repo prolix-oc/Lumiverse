@@ -160,8 +160,21 @@ The `context` parameter is an object containing metadata about the current gener
 | `personaId` | `string` | The active persona ID |
 | `generationType` | `string` | One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`, `"quiet"` |
 | `activatedWorldInfo` | `array` | World info entries activated for this generation |
+| `presetId` | `string \| null` | The preset prompt assembly resolved for this generation; `null` without a preset or when the request skips assembly (explicit `messages`) |
+| `presetMetadata` | `unknown` | A copy of your extension's own namespace on that preset, `preset.metadata[<manifest identifier>]`; `undefined` when absent. Other extensions' and Loom's metadata are never included |
 
 The context is read-only for informational purposes. To influence the generation, return modified messages or parameters.
+
+### Running only for some presets
+
+Pass `match.presetField` in the registration options to run the interceptor only when your own preset metadata matches. `path` walks keys from your namespace (the same value as `presetMetadata`); `exists`, `oneOf`, and `notIn` test the value found there.
+
+```ts
+spindle.registerInterceptor(async (messages, context) => {
+  // Runs only for presets whose metadata has `<your identifier>.chatRanges`.
+  return messages
+}, 100, { match: { presetField: { path: ['chatRanges'], exists: true } } })
+```
 
 `"quiet"` can describe a host generation route, but calls made through
 `spindle.generate.quiet()` are direct provider calls and do **not** re-enter

@@ -515,7 +515,7 @@ export interface AssemblyResult {
   breakdown: AssemblyBreakdownEntry[];
   parameters: Record<string, any>;
   /** Preset selected by profile/request resolution for this assembly. */
-  resolvedPreset?: { id: string; name: string };
+  resolvedPreset?: { id: string; name: string; metadata?: Record<string, unknown> };
   /** Whether a directly word-terminated streaming response should lose its final word. */
   trimIncompleteWords?: boolean;
   /** The resolved assistant prefill text (from promptBias / assistantPrefill / assistantImpersonation).

@@ -1,6 +1,7 @@
 import type { InterceptorMatchDTO, LlmMessageDTO } from "lumiverse-spindle-types";
 import { DEFAULT_INTERCEPTOR_TIMEOUT_MS } from "../services/spindle-settings.service";
 import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
+import { readOwnPresetMetadata } from "./preset-metadata-context";
 import {
   collectSourceMessageMetadata,
   restoreSourceMessageMetadata,
@@ -29,6 +30,8 @@ export interface Interceptor {
   priority: number; // lower = runs first
   /** Optional host-side filter supplied when the interceptor was registered. */
   match?: InterceptorMatchDTO;
+  /** Manifest identifier whose preset metadata namespace `match.presetField` reads. */
+  presetMetadataNamespace?: string;
   /**
    * Called immediately before each invocation to determine the wall-clock
    * budget for this interceptor. Resolving per-run (instead of at
@@ -50,7 +53,7 @@ function getChatId(context: unknown): string | null {
   return typeof chatId === "string" && chatId ? chatId : null;
 }
 
-function matchesInterceptorContext(match: InterceptorMatchDTO | undefined, context: unknown): boolean {
+function matchesInterceptorContext(match: InterceptorMatchDTO | undefined, context: unknown, presetMetadataNamespace?: string): boolean {
   if (!match) return true;
   if (!context || typeof context !== "object") return false;
   const value = context as Record<string, unknown>;
@@ -64,7 +67,7 @@ function matchesInterceptorContext(match: InterceptorMatchDTO | undefined, conte
 
   const presetField = match.presetField;
   if (!presetField) return true;
-  let field: unknown = value.presetMetadata;
+  let field: unknown = readOwnPresetMetadata(value, presetMetadataNamespace);
   for (const key of presetField.path) {
     if (!field || typeof field !== "object" || Array.isArray(field)) {
       field = undefined;
@@ -113,7 +116,7 @@ class InterceptorPipeline {
       if (interceptor.userId && interceptor.userId !== userId) {
         continue;
       }
-      if (!matchesInterceptorContext(interceptor.match, context)) {
+      if (!matchesInterceptorContext(interceptor.match, context, interceptor.presetMetadataNamespace)) {
         continue;
       }
       if (signal?.aborted) {

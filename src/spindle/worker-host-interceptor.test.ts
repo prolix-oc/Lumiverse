@@ -2,13 +2,14 @@ import { afterEach, expect, test } from 'bun:test';
 import type { ExtensionInfo, SpindleManifest } from 'lumiverse-spindle-types';
 import { WorkerHost } from './worker-host';
 import { interceptorPipeline } from './interceptor-pipeline';
+import { INTERNAL_PRESET_METADATA_KEY } from './preset-metadata-context';
 
 const extensionId = 'interceptor-boundary-test';
 afterEach(() => interceptorPipeline.unregisterByExtension(extensionId));
 
-function fixture(required: boolean) {
+function fixture(required: boolean, identifier = extensionId) {
   const host = new WorkerHost(extensionId, {
-    identifier: extensionId, name: extensionId, interceptorTimeoutMs: 1000,
+    identifier, name: extensionId, interceptorTimeoutMs: 1000,
   } as SpindleManifest, {
     id: extensionId, identifier: extensionId, name: extensionId, version: '0.0.0',
     author: '', description: '', github: '', homepage: '', permissions: [],
@@ -28,6 +29,38 @@ function fixture(required: boolean) {
   internal.handleMessage({ type: 'register_interceptor', registrationId: 'registered', priority: 1, required });
   return { internal, posted };
 }
+
+test('the worker receives the preset id and only its own manifest-keyed preset metadata', async () => {
+  const { internal, posted } = fixture(false, 'preset_scope_test');
+  const shared = {
+    chatId: 'chat', presetId: 'preset-1',
+    [INTERNAL_PRESET_METADATA_KEY]: {
+      preset_scope_test: { chatRanges: [{ start: -4, end: 0 }] },
+      [extensionId]: { keyedBy: 'extension row id' },
+      other_extension: { secret: 'other' },
+    },
+  };
+  const pending = interceptorPipeline.run([], shared, 'user');
+  const request = posted.find(message => message.type === 'intercept_request');
+  expect(request.context.presetId).toBe('preset-1');
+  expect(request.context.presetMetadata).toEqual({ chatRanges: [{ start: -4, end: 0 }] });
+  expect(request.context).not.toHaveProperty(INTERNAL_PRESET_METADATA_KEY);
+  expect(JSON.stringify(request.context)).not.toContain('other');
+  request.context.presetMetadata.chatRanges[0].start = 99;
+  expect(shared[INTERNAL_PRESET_METADATA_KEY].preset_scope_test.chatRanges[0].start).toBe(-4);
+  internal.handleMessage({ type: 'intercept_result', requestId: request.requestId, registrationId: 'registered', messages: [] });
+  await pending;
+});
+
+test('the worker receives a null preset id and no metadata when no preset was resolved', async () => {
+  const { internal, posted } = fixture(false, 'preset_scope_test');
+  const pending = interceptorPipeline.run([], { chatId: 'chat', presetId: null }, 'user');
+  const request = posted.find(message => message.type === 'intercept_request');
+  expect(request.context.presetId).toBeNull();
+  expect(request.context.presetMetadata).toBeUndefined();
+  internal.handleMessage({ type: 'intercept_result', requestId: request.requestId, registrationId: 'registered', messages: [] });
+  await pending;
+});
 
 test('a required worker error rejects generation instead of returning the original prompt', async () => {
   const { internal, posted } = fixture(true);

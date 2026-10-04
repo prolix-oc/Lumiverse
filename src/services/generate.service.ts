@@ -492,6 +492,8 @@ interface SpindleContext {
   cancelGeneration?: boolean;
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   __spindleWorldInfoCaptures?: Record<string, ActivatedWorldInfoEntry[]>;
+  presetId?: string | null;
+  __spindlePresetMetadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -1107,7 +1109,9 @@ async function runPromptPipeline(opts: {
     | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
   let trimIncompleteWords = false;
-  let resolvedPreset: { id: string; name: string } | undefined;
+  let resolvedPreset:
+    | { id: string; name: string; metadata?: Record<string, unknown> }
+    | undefined;
 
   let deliberationHandledByMacro = false;
 
@@ -1211,6 +1215,13 @@ async function runPromptPipeline(opts: {
   delete spindleContext.__spindleWorldInfoCaptures;
   if (spindleWorldInfoCaptures) {
     spindleContext.__spindleWorldInfoCaptures = spindleWorldInfoCaptures;
+  }
+  // Pin the preset assembly resolved for this generation. The full metadata
+  // stays internal; worker hosts expose only each extension's own namespace.
+  spindleContext.presetId = resolvedPreset?.id ?? null;
+  delete spindleContext.__spindlePresetMetadata;
+  if (resolvedPreset?.metadata) {
+    spindleContext.__spindlePresetMetadata = resolvedPreset.metadata;
   }
 
   // Run Spindle interceptor pipeline on assembled messages

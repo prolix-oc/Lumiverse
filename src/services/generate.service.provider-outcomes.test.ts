@@ -5,6 +5,7 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { contextHandlerChain } from '../spindle/context-handler';
 import { interceptorPipeline } from '../spindle/interceptor-pipeline';
+import { INTERNAL_PRESET_METADATA_KEY } from '../spindle/preset-metadata-context';
 import * as chats from "./chats.service";
 import * as connections from "./connections.service";
 import * as secrets from "./secrets.service";
@@ -47,7 +48,7 @@ afterAll(() => {
   secretSpy.mockRestore(); eventSpy.mockRestore(); closeDatabase();
 });
 
-async function run(provider: string, body: object[], options: { responses?: boolean; nonStreaming?: boolean; presetName?: string; chunkDelayMs?: number } = {}) {
+async function run(provider: string, body: object[], options: { responses?: boolean; nonStreaming?: boolean; presetName?: string; presetMetadata?: Record<string, unknown>; chunkDelayMs?: number } = {}) {
   const connection = await connections.createConnection(userId, {
     name: "Mock", provider, model: "test-model", api_url: "https://example.test",
   });
@@ -56,6 +57,7 @@ async function run(provider: string, body: object[], options: { responses?: bool
         name: options.presetName,
         provider,
         prompt_order: [],
+        ...(options.presetMetadata ? { metadata: options.presetMetadata } : {}),
       })
     : null;
   const chat = chats.createChat(userId, {
@@ -295,6 +297,37 @@ test.each(["backend", "http"])("%s prompt previews select the active frontend wi
   ]);
 });
 
+test("live and dry-run interceptors receive the resolved preset id and its internal metadata", async () => {
+  const contexts: any[] = [];
+  const remove = interceptorPipeline.register({ extensionId: "preset-context-test", priority: 200, handler: async (messages, context: any) => {
+    contexts.push({ presetId: context.presetId, metadata: context[INTERNAL_PRESET_METADATA_KEY], shared: context.presetMetadata });
+    return { messages };
+  } });
+  try {
+    const presetMetadata = { lumirealm: { chatRanges: [{ start: -4, end: 0 }] }, other_ext: { secret: "other" } };
+    const { preset } = await run("openai", [{ choices: [{ delta: { content: "Hi." }, finish_reason: "stop" }] }], { presetName: "Ranges", presetMetadata });
+    await run("openai", [{ choices: [{ delta: { content: "Hi." }, finish_reason: "stop" }] }]);
+
+    const connection = await connections.createConnection(userId, { name: "Dry", provider: "openai", model: "test-model", api_url: "https://example.test" });
+    const chat = chats.createChat(userId, { character_id: null, name: "Dry", metadata: { temporary: true } });
+    chats.createMessage(chat.id, { is_user: true, name: "User", content: "Hello." }, userId);
+    // A block preset takes the Loom assembly path; the live preset above has no blocks.
+    const blockPreset = presets.createPreset(userId, { name: "Blocks", provider: "openai", metadata: presetMetadata, prompt_order: [{
+      id: "main", name: "Main", content: "Be brief.", role: "system", enabled: true, position: "pre_history",
+      depth: 0, marker: null, isLocked: false, color: null, injectionTrigger: [], group: null,
+    }] });
+    const input = { userId, chat_id: chat.id, connection_id: connection.id, preset_id: blockPreset.id };
+    expect((await dryRunGeneration(input)).breakdown.some((entry) => entry.name === "Main")).toBe(true);
+    await dryRunGeneration({ ...input, messages: [{ role: "user", content: "Explicit." }] });
+
+    expect(contexts).toEqual([
+      { presetId: preset!.id, metadata: presetMetadata, shared: undefined },
+      { presetId: null, metadata: undefined, shared: undefined },
+      { presetId: blockPreset.id, metadata: presetMetadata, shared: undefined },
+      { presetId: null, metadata: undefined, shared: undefined },
+    ]);
+  } finally { remove(); }
+});
 
 test("takeover and context replacement cannot retarget a generation already started", async () => {
   let removeReplacement: (() => void) | undefined;
