@@ -279,3 +279,24 @@ describe('H2 state selector registry', () => {
     expect(() => selectors.get('characters.favorites')).toThrow()
   })
 })
+
+describe('canonical authority resolver', () => {
+  test('lets extensions read and subscribe to free selectors', async () => {
+    const { canonicalFrontendAuthorityResolver } = await import('./frontend-authority-seam')
+    const selectors = createStateSelectors({
+      store: mockedUseStore,
+      assertActive: () => {},
+      grantedPermissions: () => [],
+      resolveAuthority: canonicalFrontendAuthorityResolver,
+      onTeardown: () => () => {},
+    })
+
+    expect(selectors.get<string | null>('loom.activePresetId')).toBe('loom-1')
+    const seen: unknown[] = []
+    const stop = selectors.subscribe('loom.activePresetId', (value) => seen.push(value))
+    update({ activeLoomPresetId: 'loom-2' })
+    stop()
+    expect(seen).toEqual(['loom-2'])
+    expect(() => selectors.get('characters.editingId')).toThrow('PERMISSION_DENIED:characters')
+  })
+})

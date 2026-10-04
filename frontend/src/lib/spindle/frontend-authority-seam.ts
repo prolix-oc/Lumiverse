@@ -24,7 +24,8 @@ export const canonicalFrontendAuthorityResolver: FrontendAuthorityResolver = (id
   const row = frontendAuthorityRowFor({ surface: 'state_selector', id })
     ?? frontendAuthorityRowFor({ surface: 'ctx_member', id })
     ?? frontendAuthorityRowFor({ surface: 'legacy_ctx_member', id })
-  return { permission: row?.permission ?? AUTHORITY_MAP_NOT_INTEGRATED }
+  // A free row carries `permission: null`, which must stay free rather than fall through to fail-closed.
+  return { permission: row ? row.permission : AUTHORITY_MAP_NOT_INTEGRATED }
 }
 
 let activeFrontendAuthorityResolver: FrontendAuthorityResolver = canonicalFrontendAuthorityResolver
