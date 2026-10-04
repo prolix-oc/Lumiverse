@@ -1716,6 +1716,11 @@ export async function startGeneration(
         // connection returns from rung 0 before this value is ever consulted.
         preferActiveConnection: options?.origin === "edit_and_send"
           && readEditAndSendAlwaysUseActiveConnection(input.userId),
+        // The chat's character drives the per-character connection binding
+        // ("bind to char") rung. The group-chat skip lives INSIDE the
+        // resolver (it owns `metadata`), so this stays a dumb pass-through
+        // and no call site can forget the guard.
+        characterId: chat?.character_id ?? undefined,
       },
     );
     input.connection_id = connection.id;
@@ -3025,6 +3030,9 @@ export async function dryRunGeneration(
     input.userId,
     dryRunChat?.metadata,
     input.connection_id,
+    // Same "bind to char" rung input as startGeneration; the group-chat skip
+    // lives inside the resolver alongside the metadata it checks.
+    { characterId: dryRunChat?.character_id ?? undefined },
   );
   input.connection_id = connection.id;
   if (!isNoPresetChat) {

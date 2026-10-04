@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound, X } from 'lucide-react'
+import { ArrowUp, Link2, List, ListChecks, LoaderCircle, Pencil, Pin, UserRound, X } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
@@ -23,6 +23,7 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
+import { useEffectiveChatConnection } from '@/hooks/useEffectiveChatConnection'
 import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
@@ -167,6 +168,12 @@ export default function ChatView() {
   const showNativeSelectMessages = isShowNativeSelectMessages(quickToolbarSettings)
   const showNativeScrollToTop = isShowNativeScrollToTop(quickToolbarSettings)
   const showNativeBrowseMessages = isShowNativeBrowseMessages(quickToolbarSettings)
+  // Bound-connection indicator: only present when the chat's connection is
+  // overridden by a chat pin or a character bind.
+  const {
+    overrideSource: connectionOverrideSource,
+    profile: effectiveConnectionProfile,
+  } = useEffectiveChatConnection()
   const dockQuickToolbar = suiteExtensionEnabled && quickToolbarPlacement === 'chat_top_dock'
   const keepFloatingDockHost = suiteExtensionEnabled && quickToolbarPlacement === 'floating' && keepDockEnabledWhenFloating(quickToolbarSettings)
   // Starts optimistic so the settings-derived answer still holds for server
@@ -1266,6 +1273,22 @@ export default function ChatView() {
             <div data-spindle-mount="chat_header_right" data-spindle-scope={`chat:${chatId}:header-right`} style={{ display: 'contents' }} />
             <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-spindle-scope={`chat:${chatId}:top-dock`} data-dock-request={chatTopDockRequest} data-native-action-side={nativeDockActionSide}>
               <div className={styles.nativeDockActions}>
+                {connectionOverrideSource !== null && effectiveConnectionProfile && (
+                  <button
+                    type="button"
+                    className={styles.connectionPill}
+                    onClick={() => useStore.getState().openDrawer('connections')}
+                    title={connectionOverrideSource === 'chat'
+                      ? t('chatView.boundConnectionChat', { name: effectiveConnectionProfile.name })
+                      : t('chatView.boundConnectionChar', { name: effectiveConnectionProfile.name })}
+                    aria-label={connectionOverrideSource === 'chat'
+                      ? t('chatView.boundConnectionChat', { name: effectiveConnectionProfile.name })
+                      : t('chatView.boundConnectionChar', { name: effectiveConnectionProfile.name })}
+                  >
+                    {connectionOverrideSource === 'chat' ? <Pin size={12} /> : <Link2 size={12} />}
+                    <span className={styles.connectionPillName}>{effectiveConnectionProfile.name}</span>
+                  </button>
+                )}
                 {showNativeSelectMessages && (
                   <button type="button" className={clsx(styles.toolbarBtn, messageSelectMode && styles.toolbarBtnActive)} onClick={toggleSelectMode} title={messageSelectMode ? t('chatView.exitSelectionMode') : t('chatView.selectMessages')} aria-label={messageSelectMode ? t('chatView.exitSelectionMode') : t('chatView.selectMessages')} aria-pressed={messageSelectMode}>
                     <ListChecks size={14} />

@@ -72,6 +72,7 @@ import type {
   RoomTurnSkippedPayload,
   RoomPresencePayload,
   SystemSmartAlertPayload,
+  CharacterConnectionBindChangedPayload,
 } from '@/types/ws-events'
 import type { ConnectionProfile, Message } from '@/types/api'
 import type { ChatHeadStatus } from '@/types/store'
@@ -1410,6 +1411,14 @@ export function useWebSocket() {
           recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
         }
         store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+
+        // Re-sync the active character's connection bind — a change made while
+        // we were disconnected would otherwise stay stale until the next
+        // character switch.
+        const activeCharacterId = store.getState().activeCharacterId
+        if (activeCharacterId) {
+          store.getState().hydrateActiveCharacterConnection(activeCharacterId, { force: true })
+        }
       }),
 
       // Re-sync settings when another tab (or the old page's keepalive flush)
@@ -1443,6 +1452,15 @@ export function useWebSocket() {
 
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
         store.getState().removeCharacter(payload.id)
+      }),
+
+      // Per-character connection binds: keep the active character's bind fresh
+      // when it is written from any surface (this tab, another tab, REST/WS).
+      wsClient.on(EventType.CHARACTER_CONNECTION_BIND_CHANGED, (payload: CharacterConnectionBindChangedPayload) => {
+        const state = store.getState()
+        if (payload.characterId === state.activeCharacterId) {
+          state.setActiveCharacterConnection(payload.connectionId)
+        }
       }),
 
       wsClient.on(EventType.PERSONA_CHANGED, (payload: { id: string; persona?: import('@/types/api').Persona; deleted?: boolean }) => {

@@ -31,7 +31,7 @@ const moduleSources: Record<string, string> = {
     )
   `,
   'react-i18next': `
-    export const useTranslation = () => ({ t: (key) => key })
+    export const useTranslation = () => ({ t: (key, opts) => opts?.name ? key + ':' + opts.name : key })
   `,
   'react-router': `
     export const useNavigate = () => () => undefined
@@ -160,6 +160,7 @@ function createState(
   persistedSide: PersistedSide,
   visibility: Visibility,
   quickToolbarOwnsOldest = false,
+  connectionState: { profiles?: unknown[]; activeProfileId?: string | null; activeChatMetadata?: Record<string, unknown> | null; activeCharacterConnectionId?: string | null } = {},
 ): Record<string, unknown> {
   const quickToolbarSettings: Record<string, unknown> = {
     quickToolbarPlacement: 'chat_top_dock',
@@ -205,6 +206,14 @@ function createState(
     bubbleDisableHover: false,
     bubbleHideAvatarBg: false,
     bubbleOpacity: 1,
+    // Effective-connection inputs (bound-connection pill). Defaults render no
+    // pill so the visibility matrix above is unaffected.
+    profiles: connectionState.profiles ?? [],
+    activeProfileId: connectionState.activeProfileId ?? null,
+    activeCharacterConnectionId: connectionState.activeCharacterConnectionId ?? null,
+    ...(connectionState.activeChatMetadata !== undefined
+      ? { activeChatMetadata: connectionState.activeChatMetadata }
+      : {}),
   }
 }
 
@@ -393,6 +402,101 @@ describe('ChatView native select-messages toolbar', () => {
     expect(source).toMatch(/\{customizeOpen && \(/)
     expect(source).not.toMatch(/\{hasLumiverseSuite && showComposerCustomizeGear && \(/)
     expect(source).not.toMatch(/\{hasLumiverseSuite && customizeOpen && \(/)
+  })
+})
+
+describe('ChatView bound connection pill', () => {
+  const allVisible = { select: true, oldest: true, browse: true }
+
+  function pillState(overrides: {
+    profiles?: unknown[]
+    activeProfileId?: string | null
+    activeChatMetadata?: Record<string, unknown> | null
+    activeCharacterConnectionId?: string | null
+  }) {
+    return createState(false, undefined, allVisible, false, overrides)
+  }
+
+  function connectionProfile(id: string, name: string) {
+    return { id, name }
+  }
+
+  function renderPill(state: Record<string, unknown>): {
+    document: Document
+    pill: HTMLElement | null
+    nativeGroup: Element
+  } {
+    const document = renderChatView(state)
+    const nativeGroup = document.querySelector('div[class*="nativeDockActions"]')!
+    const pill = nativeGroup.querySelector<HTMLElement>('[class*="connectionPill"]')
+    return { document, pill, nativeGroup }
+  }
+
+  test('chat pin renders a status pill inside the native dock actions', () => {
+    const { pill, nativeGroup } = renderPill(pillState({
+      profiles: [connectionProfile('pinned', 'Pinned Conn'), connectionProfile('active', 'Active Conn')],
+      activeProfileId: 'active',
+      activeChatMetadata: { connection_profile_id: 'pinned' },
+    }))
+    expect(pill).not.toBeNull()
+    expect(pill!.getAttribute('title')).toBe('chatView.boundConnectionChat:Pinned Conn')
+    expect(pill!.getAttribute('aria-label')).toBe('chatView.boundConnectionChat:Pinned Conn')
+    expect(pill!.textContent).toContain('Pinned Conn')
+    // Status chip, first in the native group, ahead of the native controls.
+    expect(nativeGroup.firstElementChild).toBe(pill)
+  })
+
+  test('character bind in a solo chat renders the char-source pill', () => {
+    const { pill } = renderPill(pillState({
+      profiles: [connectionProfile('bound', 'Char Conn'), connectionProfile('active', 'Active Conn')],
+      activeProfileId: 'active',
+      activeChatMetadata: null,
+      activeCharacterConnectionId: 'bound',
+    }))
+    expect(pill).not.toBeNull()
+    expect(pill!.getAttribute('title')).toBe('chatView.boundConnectionChar:Char Conn')
+    expect(pill!.textContent).toContain('Char Conn')
+  })
+
+  test('group chats, dangling binds, and unbound chats render no pill', () => {
+    const profiles = [connectionProfile('bound', 'Char Conn'), connectionProfile('active', 'Active Conn')]
+
+    const group = renderPill(pillState({
+      profiles,
+      activeProfileId: 'active',
+      activeChatMetadata: { group: true },
+      activeCharacterConnectionId: 'bound',
+    }))
+    expect(group.pill).toBeNull()
+
+    const dangling = renderPill(pillState({
+      profiles,
+      activeProfileId: 'active',
+      activeChatMetadata: { connection_profile_id: 'deleted-elsewhere' },
+    }))
+    expect(dangling.pill).toBeNull()
+
+    const unbound = renderPill(pillState({
+      profiles,
+      activeProfileId: 'active',
+    }))
+    expect(unbound.pill).toBeNull()
+  })
+
+  test('pill click opens the connections drawer and stays out of spindle mount attributes', async () => {
+    const source = await Bun.file(resolve(import.meta.dir, 'ChatView.tsx')).text()
+    expect(source).toContain("useStore.getState().openDrawer('connections')")
+    expect(source).toMatch(/connectionOverrideSource === 'chat' \? <Pin size=\{12\} \/> : <Link2 size=\{12\} \/>/)
+    // The pill rides the existing chat_top_dock mount: its own markup must not
+    // introduce a new data-spindle-mount. Scoped to the nativeDockActions
+    // subtree (rendered DOM, not file-wide source) so unrelated future mounts
+    // elsewhere in ChatView cannot break this tripwire.
+    const { nativeGroup } = renderPill(pillState({
+      profiles: [connectionProfile('pinned', 'Pinned Conn'), connectionProfile('active', 'Active Conn')],
+      activeProfileId: 'active',
+      activeChatMetadata: { connection_profile_id: 'pinned' },
+    }))
+    expect(nativeGroup.querySelectorAll('[data-spindle-mount]').length).toBe(0)
   })
 })
 

@@ -27,6 +27,49 @@ mock.module("../crypto/init", () => ({
   getEncryptionKeyBytes: () => new Uint8Array(32).fill(7),
 }));
 
+// Static import (hoisted) captures the REAL resolver before the wrapper below
+// replaces the module for importers such as generate.service. The snapshot is
+// spread into a plain object eagerly: Bun's mock.module swaps the live module
+// entry in place, so a live namespace reference would recursively observe the
+// mock instead of the original.
+import * as connectionResolutionModule from "./generation/connection-resolution";
+type ResolveChatGenerationConnectionOptions =
+  connectionResolutionModule.ResolveChatGenerationConnectionOptions;
+const realConnectionResolution = { ...connectionResolutionModule };
+
+/**
+ * Staging (c2ae02a3) made `startGeneration` reassign its `input`
+ * (`input = { ...input, frontendSessionId }`), so the `input.connection_id`
+ * mutations cases 8 and 9 used to observe are no longer visible to the caller.
+ * The wrapper below records what the REAL resolver ladder settled on instead:
+ * it delegates to the actual implementation (nothing about connection or
+ * credential resolution is stubbed) and appends each result for assertions.
+ */
+const generationConnectionResolutions: Array<{
+  requestedConnectionId?: string;
+  options: ResolveChatGenerationConnectionOptions | undefined;
+  resolvedId: string;
+}> = [];
+
+mock.module("./generation/connection-resolution", () => ({
+  ...realConnectionResolution,
+  resolveChatGenerationConnection: (
+    userId: string,
+    metadata: Record<string, any> | null | undefined,
+    requestedConnectionId?: string,
+    options?: ResolveChatGenerationConnectionOptions,
+  ) => {
+    const resolved = realConnectionResolution.resolveChatGenerationConnection(
+      userId,
+      metadata,
+      requestedConnectionId,
+      options,
+    );
+    generationConnectionResolutions.push({ requestedConnectionId, options, resolvedId: resolved.id });
+    return resolved;
+  },
+}));
+
 const chatsSvc = await import("./chats.service");
 const connectionsSvc = await import("./connections.service");
 const secretsSvc = await import("./secrets.service");
@@ -146,6 +189,22 @@ function initTestDb(): void {
   db.run(`CREATE TABLE secrets (
     key TEXT NOT NULL, encrypted_value TEXT NOT NULL, iv TEXT NOT NULL, tag TEXT NOT NULL,
     user_id TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (key, user_id)
+  )`);
+  // migrations/022_tokenizers.sql — column shapes mirrored (minus FK clauses,
+  // like the rest of this hand-rolled schema) so staging's tokenizer subsystem
+  // reads on the generation path find real, empty tables instead of throwing.
+  db.run(`CREATE TABLE tokenizer_configs (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}',
+    is_built_in INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE tokenizer_model_patterns (
+    id TEXT PRIMARY KEY, tokenizer_id TEXT NOT NULL, pattern TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0, is_built_in INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE message_breakdowns (
+    message_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, data TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 1
   )`);
   db.query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)").run("char-evidence", USER, "Evidence");
 }
@@ -270,6 +329,8 @@ function track<T extends { mockRestore: () => void }>(spy: T): T {
   return spy;
 }
 
+let priorAssemblyWorkerEnv: string | undefined;
+
 /**
  * Minimum stubbing that lets `startGeneration` reach the connection
  * resolution + pool registration without performing prompt assembly or any
@@ -286,6 +347,13 @@ beforeEach(async () => {
   initTestDb();
   dispatcher.resetEditAndSendDispatcherForTests();
   await seedDivergenceFixture();
+  generationConnectionResolutions.length = 0;
+  // Staging moved prompt assembly behind a worker-pool client; the spawned
+  // worker initializes its OWN database and cannot see this file's hand-rolled
+  // `:memory:` schema, so it only fails noisily into the in-process fallback.
+  // Keep assembly in-process, where the `skip-assembly` stub above applies.
+  priorAssemblyWorkerEnv = process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = "false";
 });
 
 afterEach(() => {
@@ -294,6 +362,11 @@ afterEach(() => {
   generateSvc.stopGenerationSweep();
   dispatcher.resetEditAndSendDispatcherForTests();
   for (const spy of spies.splice(0)) spy.mockRestore();
+  if (priorAssemblyWorkerEnv === undefined) {
+    delete process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  } else {
+    process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = priorAssemblyWorkerEnv;
+  }
   closeDatabase();
 });
 
@@ -662,8 +735,10 @@ describe("Case 8 — the opt-in is inert on a chat that carries a live binding",
     // the unfixed and the fixed tree.
     await start(input, { origin: "edit_and_send" }).catch(() => { /* assembly is stubbed out */ });
 
+    // Staging (c2ae02a3) copies `input` for `frontendSessionId`, so the
+    // resolution is pinned at the resolver itself rather than on the input bag.
     expect({
-      resolvedConnectionId: (input as { connection_id?: string }).connection_id,
+      resolvedConnectionId: generationConnectionResolutions.at(-1)?.resolvedId,
       resolvedModel: pool.getPoolEntry(generationId)?.model,
     }).toEqual({
       resolvedConnectionId: PROFILE_A,
@@ -711,7 +786,9 @@ describe("Case 9 — the origin cannot be forged in band", () => {
 
     const started = await start(input).catch(() => null);
 
-    expect((input as { connection_id?: string }).connection_id).toBe(PROFILE_C);
+    // Staging (c2ae02a3) copies `input` for `frontendSessionId`, so the
+    // resolution is pinned at the resolver itself rather than on the input bag.
+    expect(generationConnectionResolutions.at(-1)?.resolvedId).toBe(PROFILE_C);
     if (started) {
       expect(pool.getPoolEntry(started.generationId)?.model).toBe(BINDING_MODEL_OVERRIDE);
     }

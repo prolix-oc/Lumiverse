@@ -60,6 +60,11 @@ export enum EventType {
   // Preset Profiles
   PRESET_PROFILE_CHANGED = "PRESET_PROFILE_CHANGED",
 
+  // Per-character connection bindings ("bind to char"). Emitted user-scoped
+  // whenever a binding is set or cleared. Payload:
+  // CharacterConnectionBindChangedPayload (`connectionId: null` = cleared).
+  CHARACTER_CONNECTION_BIND_CHANGED = "CHARACTER_CONNECTION_BIND_CHANGED",
+
   // Packs
   PACK_CHANGED = "PACK_CHANGED",
   PACK_DELETED = "PACK_DELETED",
@@ -241,6 +246,18 @@ export enum EventType {
 
 export type ProviderRegistryChangeAction = "add" | "remove" | "change";
 export type ProviderRegistryAction = ProviderRegistryChangeAction | "snapshot";
+
+/**
+ * Payload of {@link EventType.CHARACTER_CONNECTION_BIND_CHANGED}. Emitted on
+ * the user topic whenever a character's connection binding is set
+ * (`connectionId` = the bound profile id) or cleared (`connectionId: null`).
+ * Declared as an interface (like ProviderRegistryChangedPayload) so the
+ * frontend listener and the emitting service share one shape.
+ */
+export interface CharacterConnectionBindChangedPayload {
+  characterId: string;
+  connectionId: string | null;
+}
 
 /** Recipient-scoped provider registry event. `userId` is required on the wire. */
 export interface ProviderRegistryChangedPayload {

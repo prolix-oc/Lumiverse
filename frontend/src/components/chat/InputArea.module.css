@@ -282,6 +282,15 @@
   padding: 6px;
 }
 
+/* Connection picker hint shown when the chat's connection comes from a
+ * binding — explains that picking another row only moves the global one. */
+.popBindHint {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.55));
+  padding: 2px 6px;
+  line-height: 1.4;
+}
+
 .popRowBtn {
   border: 1px solid transparent;
   border-radius: 8px;

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, Pin, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
@@ -42,6 +42,7 @@ import {
 } from '@/lib/chatPersonaSelection'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
+import { useEffectiveChatConnection } from '@/hooks/useEffectiveChatConnection'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
 import AuthorsNotePanel from './AuthorsNotePanel'
@@ -395,7 +396,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeProfileId = useStore((s) => s.activeProfileId)
   const profiles = useStore((s) => s.profiles)
   const setActiveProfile = useStore((s) => s.setActiveProfile)
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null
   const voiceSettings = useStore((s) => s.voiceSettings)
   // Temporary chats are persona-less: messages send as plain "User" and no
   // persona_id is attached to message extras or generation requests.
@@ -1150,15 +1150,19 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     }
   }, [text, chatId, saveDraftInput])
 
-  const pinnedConnectionId = typeof activeChatMetadata?.connection_profile_id === 'string'
-    && profiles.some((profile) => profile.id === activeChatMetadata.connection_profile_id)
-    ? activeChatMetadata.connection_profile_id
-    : null
+  // The connection generation will actually use for this chat (chat pin >
+  // character bind > active profile) — the picker, its trigger and guided
+  // generation all render from this so UI and generation share one truth.
+  const {
+    effectiveConnectionId,
+    overrideSource: connectionOverrideSource,
+    profile: effectiveConnectionProfile,
+  } = useEffectiveChatConnection()
   const guidedGenerationContext = useMemo(() => ({
-    connectionProfileId: pinnedConnectionId || activeProfileId,
+    connectionProfileId: effectiveConnectionId,
     chatId,
     characterId: focusedPreviewCharacterId,
-  }), [activeProfileId, chatId, focusedPreviewCharacterId, pinnedConnectionId])
+  }), [effectiveConnectionId, chatId, focusedPreviewCharacterId])
   const activeGuides = guidedGenerations.filter((guide) => isGuideActive(guide, guidedGenerationContext))
   const activeGuideCount = activeGuides.length
   const manuallyActiveGuideCount = guidedGenerations.filter((guide) => guide.enabled).length
@@ -3368,11 +3372,26 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           connections: (
             <button
               type="button"
-              className={clsx(styles.actionBtn, openPopover === 'connections' && styles.actionBtnActive)}
+              className={clsx(
+                styles.actionBtn,
+                openPopover === 'connections' && styles.actionBtnActive,
+                connectionOverrideSource !== null && styles.actionBtnHasSelection,
+              )}
               onClick={() => setOpenPopover((p) => (p === 'connections' ? null : 'connections'))}
-              title={activeProfile ? t('input.switchConnectionActive', { name: activeProfile.name }) : t('input.switchConnection')}
+              title={effectiveConnectionProfile
+                ? connectionOverrideSource === 'chat'
+                  ? t('input.switchConnectionChatBound', { name: effectiveConnectionProfile.name })
+                  : connectionOverrideSource === 'character'
+                    ? t('input.switchConnectionCharBound', { name: effectiveConnectionProfile.name })
+                    : t('input.switchConnectionActive', { name: effectiveConnectionProfile.name })
+                : t('input.switchConnection')}
             >
               <Link2 size={14} />
+              {connectionOverrideSource !== null && (
+                <span className={styles.badge}>
+                  {connectionOverrideSource === 'chat' ? <Pin size={9} /> : <Link2 size={9} />}
+                </span>
+              )}
             </button>
           ),
           connectionsPicker: hasLumiverseSuite ? (() => {
@@ -3718,12 +3737,19 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
           {renderPopover === 'connections' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              {connectionOverrideSource !== null && effectiveConnectionProfile && (
+                <div className={styles.popBindHint}>
+                  {connectionOverrideSource === 'character'
+                    ? t('quickMenu.connectionBindHintCharacter', { name: effectiveConnectionProfile.name })
+                    : t('quickMenu.connectionBindHint', { name: effectiveConnectionProfile.name })}
+                </div>
+              )}
               {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
               {profiles.map((p) => (
                 <button
                   key={p.id}
                   type="button"
-                  className={clsx(styles.popRowBtn, activeProfileId === p.id && styles.popRowBtnActive)}
+                  className={clsx(styles.popRowBtn, effectiveConnectionId === p.id && styles.popRowBtnActive)}
                   onClick={() => {
                     void acknowledgeConnectionProfileSelection({
                       profileId: p.id,
@@ -3731,6 +3757,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                       closePopover: () => setOpenPopover(null),
                     })
                   }}
+                  title={effectiveConnectionId === p.id && connectionOverrideSource === 'chat'
+                    ? t('quickMenu.connectionBindChatTooltip')
+                    : effectiveConnectionId === p.id && connectionOverrideSource === 'character'
+                      ? t('quickMenu.connectionBindCharTooltip')
+                      : undefined}
                 >
                   <span className={styles.personaMain}>
                     <ProviderIcon kind="llm" provider={p.provider} size={22} />
@@ -3739,6 +3770,13 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                       <span className={styles.popMeta}>{p.provider}{p.model ? ` / ${p.model}` : ''}</span>
                     </span>
                   </span>
+                  {effectiveConnectionId === p.id && connectionOverrideSource !== null && (
+                    <span className={clsx(styles.popState, styles.popStateActive)}>
+                      {connectionOverrideSource === 'chat'
+                        ? t('quickMenu.connectionBindBadgeChat')
+                        : t('quickMenu.connectionBindBadgeChar')}
+                    </span>
+                  )}
                 </button>
               ))}
               <button type="button" className={styles.popLink} onClick={() => {

@@ -55,6 +55,8 @@
     "groupAlternateFields": "代替フィールドをグループ化",
     "switchConnection": "接続を切り替え",
     "switchConnectionActive": "接続: {{name}}",
+    "switchConnectionChatBound": "接続: {{name}} — チャットに固定",
+    "switchConnectionCharBound": "接続: {{name}} — キャラに結び付け",
     "attachFiles": "ファイルを添付",
     "attachFile": "ファイルの添付",
     "attachImageOrAudio": "画像、音声、または動画を添付",
@@ -109,6 +111,12 @@
     "manageChats": "チャットを管理",
     "manageConnections": "接続を管理",
     "noConnections": "利用可能な接続はありません。",
+    "connectionBindBadgeChat": "チャット",
+    "connectionBindBadgeChar": "キャラ",
+    "connectionBindChatTooltip": "このチャットに固定 — 生成には常にこの接続が使用されます。",
+    "connectionBindCharTooltip": "このキャラに結び付け — 生成には常にこの接続が使用されます。",
+    "connectionBindHint": "このチャットは{{name}}に固定されています。別の接続を選んでも変更されるのはグローバル設定だけです。",
+    "connectionBindHintCharacter": "このキャラは{{name}}に結び付けられています。別の接続を選んでも変更されるのはグローバル設定だけです。",
     "groupSettings": "グループ設定",
     "chatSettings": "チャット設定",
     "convertToGroupChat": "グループチャットに変換",
@@ -274,7 +282,9 @@
     "spindleProcessingContext": "生成コンテキストの準備",
     "spindleProcessingInterceptor": "プロンプトインターセプターを実行する",
     "spindleFailed": "{{phase}}中に{{name}}が失敗しました。",
-    "spindleActive": "{{name}}は{{phase}}です"
+    "spindleActive": "{{name}}は{{phase}}です",
+    "boundConnectionChat": "このチャットに固定された接続: {{name}}",
+    "boundConnectionChar": "このキャラに結び付けられた接続: {{name}}"
   },
   "council": {
     "label": "協議会",

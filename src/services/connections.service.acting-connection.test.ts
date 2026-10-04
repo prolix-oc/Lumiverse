@@ -27,6 +27,49 @@ mock.module("../crypto/init", () => ({
   getEncryptionKeyBytes: () => new Uint8Array(32).fill(7),
 }));
 
+// Static import (hoisted) captures the REAL resolver before the wrapper below
+// replaces the module for importers such as generate.service. The snapshot is
+// spread into a plain object eagerly: Bun's mock.module swaps the live module
+// entry in place, so a live namespace reference would recursively observe the
+// mock instead of the original.
+import * as connectionResolutionModule from "./generation/connection-resolution";
+import type { ResolveChatGenerationConnectionOptions } from "./generation/connection-resolution";
+const realConnectionResolution = { ...connectionResolutionModule };
+
+/**
+ * Staging (c2ae02a3) made `startGeneration`/`dryRunGeneration` reassign their
+ * `input` (`input = { ...input, frontendSessionId }`), so the
+ * `input.connection_id` mutations these wiring tests used to observe are no
+ * longer visible to the caller. The wrapper below records what the REAL
+ * resolver ladder settled on instead: it delegates to the actual
+ * implementation (nothing about connection or credential resolution is
+ * stubbed) and appends each call's options + result for assertions.
+ */
+const generationConnectionResolutions: Array<{
+  requestedConnectionId?: string;
+  options: ResolveChatGenerationConnectionOptions | undefined;
+  resolvedId: string;
+}> = [];
+
+mock.module("./generation/connection-resolution", () => ({
+  ...realConnectionResolution,
+  resolveChatGenerationConnection: (
+    userId: string,
+    metadata: Record<string, any> | null | undefined,
+    requestedConnectionId?: string,
+    options?: ResolveChatGenerationConnectionOptions,
+  ) => {
+    const resolved = realConnectionResolution.resolveChatGenerationConnection(
+      userId,
+      metadata,
+      requestedConnectionId,
+      options,
+    );
+    generationConnectionResolutions.push({ requestedConnectionId, options, resolvedId: resolved.id });
+    return resolved;
+  },
+}));
+
 const chatsSvc = await import("./chats.service");
 const connectionsSvc = await import("./connections.service");
 const secretsSvc = await import("./secrets.service");
@@ -113,6 +156,22 @@ function initTestDb(): void {
     key TEXT NOT NULL, encrypted_value TEXT NOT NULL, iv TEXT NOT NULL, tag TEXT NOT NULL,
     user_id TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (key, user_id)
   )`);
+  // migrations/022_tokenizers.sql — column shapes mirrored (minus FK clauses,
+  // like the rest of this hand-rolled schema) so staging's tokenizer subsystem
+  // reads on the generation path find real, empty tables instead of throwing.
+  db.run(`CREATE TABLE tokenizer_configs (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}',
+    is_built_in INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE tokenizer_model_patterns (
+    id TEXT PRIMARY KEY, tokenizer_id TEXT NOT NULL, pattern TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0, is_built_in INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE message_breakdowns (
+    message_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, data TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 1
+  )`);
   getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)").run("char-acting", USER, "Acting");
 }
 
@@ -123,11 +182,12 @@ function seedProfile(input: {
   model?: string;
   is_default?: boolean;
   has_api_key?: boolean;
+  metadata?: Record<string, unknown>;
 }): void {
   getDb().query(
     `INSERT INTO connection_profiles
        (id, name, provider, api_url, model, preset_id, is_default, metadata, created_at, updated_at, has_api_key, user_id)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, '{}', 1, 1, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1, 1, ?, ?)`,
   ).run(
     input.id,
     input.name ?? input.id,
@@ -135,6 +195,7 @@ function seedProfile(input: {
     "http://127.0.0.1:1234/v1",
     input.model ?? `${input.id}-model`,
     input.is_default ? 1 : 0,
+    JSON.stringify(input.metadata ?? {}),
     input.has_api_key ? 1 : 0,
     USER,
   );
@@ -225,9 +286,18 @@ function stubGenerationSurroundings(): void {
   }));
 }
 
+let priorAssemblyWorkerEnv: string | undefined;
+
 beforeEach(() => {
   initTestDb();
   dispatcher.resetEditAndSendDispatcherForTests();
+  generationConnectionResolutions.length = 0;
+  // Staging moved prompt assembly behind a worker-pool client; the spawned
+  // worker initializes its OWN database and cannot see this file's hand-rolled
+  // `:memory:` schema, so it only fails noisily into the in-process fallback.
+  // Keep assembly in-process, where the `skip-assembly` stub above applies.
+  priorAssemblyWorkerEnv = process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = "false";
 });
 
 afterEach(() => {
@@ -236,6 +306,11 @@ afterEach(() => {
   generateSvc.stopGenerationSweep();
   dispatcher.resetEditAndSendDispatcherForTests();
   for (const spy of spies.splice(0)) spy.mockRestore();
+  if (priorAssemblyWorkerEnv === undefined) {
+    delete process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  } else {
+    process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = priorAssemblyWorkerEnv;
+  }
   closeDatabase();
 });
 
@@ -461,6 +536,313 @@ describe("resolveChatGenerationConnection — the preferActiveConnection ladder"
   });
 });
 
+// ── resolveChatGenerationConnection — the character bind ("bind to char") rung ──
+
+const CHAR_ID = "char-acting";
+
+/** Seed a `characterConnection:{characterId}` settings row (the raw storage shape). */
+function seedCharacterBind(connectionId: string, characterId: string = CHAR_ID): void {
+  seedSetting(`characterConnection:${characterId}`, connectionId);
+}
+
+describe("resolveChatGenerationConnection — the character bind rung", () => {
+  test("a live character bind beats the requested id and the acting connection", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    // Requested id present: the bind still outranks it (rung 4 above rung 5).
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "bound", model: "model-bound" });
+    // No requested id: the bind outranks the active profile too.
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("a chat pin beats the character bind", () => {
+    seedLadder();
+    seedCharacterBind("active");
+    expect(outcomeOf(() => resolveChatConnection(
+      USER,
+      { connection_profile_id: "bound" },
+      undefined,
+      { characterId: CHAR_ID },
+    ))).toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("metadata.group === true skips the character bind entirely", () => {
+    // Group precedent: preset-profile character bindings are skipped in group
+    // chats because per-member bindings would be ambiguous.
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(USER, { group: true }, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, { group: true }, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+
+  test("a bind naming a deleted connection falls through to requested/active", () => {
+    seedLadder();
+    seedCharacterBind("conn-deleted-never-existed");
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default", { characterId: CHAR_ID })))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+
+  test("the chat-pin connection_model override is never applied to a character bind", () => {
+    // A character binding pins a CONNECTION, never a model: the override is
+    // keyed to the chat pin (`boundConnection`) and must not travel.
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(
+      USER,
+      { connection_model: BINDING_MODEL_OVERRIDE },
+      undefined,
+      { characterId: CHAR_ID },
+    ))).toEqual({ id: "bound", model: "model-bound" });
+  });
+
+  test("without opts.characterId the rung is inert (every pre-existing caller)", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, "default")))
+      .toEqual({ id: "default", model: "model-default" });
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, {})))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+});
+
+// ── resolveEditAndSendConnectionId — the character bind mirror rung ─────────
+
+describe("resolveEditAndSendConnectionId — the character bind rung", () => {
+  test("a live character bind beats the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID)).toBe("bound");
+  });
+
+  test("a chat pin beats the character bind", () => {
+    seedLadder();
+    seedCharacterBind("active");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(
+      USER,
+      { connection_profile_id: "bound" },
+      CHAR_ID,
+    )).toBe("bound");
+  });
+
+  test("a group chat skips the character bind and lands on the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, { group: true }, CHAR_ID))
+      .toBe("active");
+  });
+
+  test("a bind naming a deleted connection degrades to the acting chain", () => {
+    seedLadder();
+    seedCharacterBind("conn-deleted-never-existed");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID)).toBe("active");
+  });
+
+  test("no characterId (legacy/2-arg callers) leaves resolution unchanged", () => {
+    seedLadder();
+    seedCharacterBind("bound");
+    expect(connectionsSvc.resolveEditAndSendConnectionId(USER, {})).toBe("active");
+  });
+});
+
+// ── Character bind wiring — the real code paths forward chat.character_id ──
+
+/**
+ * The unit tests above exercise the RESOLVERS with an explicitly passed
+ * `characterId`. These tests pin the wiring one level up: the entry points
+ * (`startGeneration`, `dryRunGeneration`) actually forward the CHAT's
+ * `character_id` into the resolver, so a seeded character bind changes the
+ * connection a real generation runs on — not just what the resolver returns
+ * when handed the id by hand.
+ */
+describe("character bind wiring — startGeneration and dryRunGeneration forward chat.character_id", () => {
+  function seedBindFixture(chatId: string): void {
+    // Keyless `custom` profiles so the credential preflight is not what these
+    // tests exercise; the char-bind target must differ from the active
+    // profile for the assertion to be meaningful.
+    seedProfile({ id: "wiring-bound", model: "model-bound" });
+    seedProfile({ id: "wiring-active", model: "model-active" });
+    seedSetting("activeProfileId", "wiring-active");
+    seedCharacterBind("wiring-bound");
+    // No `connection_profile_id` pin in the metadata: the character bind must
+    // win on its own, purely via `chats.character_id` → resolver opts.
+    seedChat(chatId, { temporary: true, no_preset: true });
+    seedMessage(`${chatId}-user`, chatId, 0, true);
+  }
+
+  test("startGeneration resolves a character bind into the generation input", async () => {
+    seedBindFixture("wiring-start");
+    stubGenerationSurroundings();
+
+    const input = {
+      userId: USER,
+      chat_id: "wiring-start",
+      generationId: "gen-wiring-start",
+      generation_type: "normal" as const,
+    };
+    await generateSvc.startGeneration(input).catch(() => { /* assembly is stubbed out */ });
+
+    // Staging (c2ae02a3) copies `input` for `frontendSessionId`, so the wiring
+    // is pinned at the resolution call itself: exactly one resolution, the
+    // chat's character_id forwarded, and the bind winning it.
+    expect(generationConnectionResolutions).toHaveLength(1);
+    expect(generationConnectionResolutions[0]?.options?.characterId).toBe(CHAR_ID);
+    expect(generationConnectionResolutions[0]?.resolvedId).toBe("wiring-bound");
+    // The connection really reached pool registration, not just the resolver.
+    expect(pool.getPoolEntry("gen-wiring-start")?.model).toBe("model-bound");
+  });
+
+  test("dryRunGeneration resolves the same character bind into the dry-run input", async () => {
+    seedBindFixture("wiring-dry");
+    stubGenerationSurroundings();
+
+    const input = {
+      userId: USER,
+      chat_id: "wiring-dry",
+      generation_type: "normal" as const,
+    };
+    await generateSvc.dryRunGeneration(input).catch(() => {
+      /* prompt assembly beyond resolution is not what this test pins */
+    });
+
+    expect(generationConnectionResolutions).toHaveLength(1);
+    expect(generationConnectionResolutions[0]?.options?.characterId).toBe(CHAR_ID);
+    expect(generationConnectionResolutions[0]?.resolvedId).toBe("wiring-bound");
+  });
+});
+
+// ── Character bind + model roulette — commit stable, spin at generation ─────
+
+/**
+ * Roulette semantics under a character bind mirror the chat-pin precedent:
+ * `resolveEditAndSendConnectionId` validates with `getConnection` (NOT
+ * `resolveConnection`), so a bind pointing at a `model_roulette` profile
+ * commits the roulette's OWN stable id on `generation_outbox.connection_id` —
+ * never a spun member, which would pin one random draw for the life of the
+ * row. The spin happens later, in `resolveChatGenerationConnection`'s
+ * roulette-aware rungs (`resolveConnection`), so every dispatch/retry can
+ * re-draw instead.
+ */
+describe("character bind pointing at a model roulette profile", () => {
+  function seedRouletteLadder(): void {
+    seedProfile({ id: "roul-a", model: "model-a" });
+    seedProfile({ id: "roul-b", model: "model-b" });
+    seedProfile({
+      id: "roul",
+      provider: connectionsSvc.MODEL_ROULETTE_PROVIDER,
+      name: "Roulette",
+      metadata: { connection_roulette: { connection_ids: ["roul-a", "roul-b"] } },
+    });
+    seedProfile({ id: "roul-active", model: "model-active" });
+    seedSetting("activeProfileId", "roul-active");
+  }
+
+  test("resolveEditAndSendConnectionId commits the roulette's OWN stable id", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    const committed = connectionsSvc.resolveEditAndSendConnectionId(USER, {}, CHAR_ID);
+    expect(committed).toBe("roul");
+    expect(committed).not.toBe("roul-a");
+    expect(committed).not.toBe("roul-b");
+  });
+
+  test("resolveChatGenerationConnection spins the roulette to a live member", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    for (let i = 0; i < 12; i++) {
+      const outcome = outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID }));
+      expect("id" in outcome && ["roul-a", "roul-b"].includes(outcome.id)).toBe(true);
+    }
+  });
+
+  test("the roulette's own id never leaks out of the generation resolver", () => {
+    seedRouletteLadder();
+    seedCharacterBind("roul");
+    // Contrast with the commit resolver above: generation resolution is
+    // roulette-aware, so no outcome is ever the roulette profile itself.
+    const outcomes = Array.from({ length: 12 }, () =>
+      outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })));
+    expect(outcomes.every((outcome) => "id" in outcome && outcome.id !== "roul")).toBe(true);
+  });
+});
+
+// ── Character bind storage + deleteConnection cleanup ───────────────────────
+
+describe("character bind helpers and deleteConnection cleanup", () => {
+  test("setCharacterConnectionBind validates character and connection, and get/clear round-trip", async () => {
+    seedLadder();
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+
+    expect(() => connectionsSvc.setCharacterConnectionBind(USER, "char-missing", "bound"))
+      .toThrow("Character not found");
+    expect(() => connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "conn-missing"))
+      .toThrow("Connection not found");
+
+    expect(connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "bound")).toBe("bound");
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBe("bound");
+
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+    // Idempotent clear: still fine, still null.
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+    expect(connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID)).toBeNull();
+  });
+
+  test("set/clear emit the user-scoped CHARACTER_CONNECTION_BIND_CHANGED event", () => {
+    seedLadder();
+    const emitted: Array<{ type: unknown; payload: unknown; userId: unknown }> = [];
+    track(spyOn(eventBus, "emit").mockImplementation(((type: unknown, payload: unknown, userId: unknown) => {
+      emitted.push({ type, payload, userId });
+    }) as never));
+
+    connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "bound");
+    connectionsSvc.clearCharacterConnectionBind(USER, CHAR_ID);
+
+    const bindEvents = emitted.filter((e) => e.type === EventType.CHARACTER_CONNECTION_BIND_CHANGED);
+    expect(bindEvents).toEqual([
+      { type: EventType.CHARACTER_CONNECTION_BIND_CHANGED, payload: { characterId: CHAR_ID, connectionId: "bound" }, userId: USER },
+      { type: EventType.CHARACTER_CONNECTION_BIND_CHANGED, payload: { characterId: CHAR_ID, connectionId: null }, userId: USER },
+    ]);
+  });
+
+  test("deleteConnection removes dangling binds, leaves unrelated ones, and never crosses users", async () => {
+    seedLadder();
+    seedProfile({ id: "doomed" });
+    seedProfile({ id: "kept" });
+    getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
+      .run("char-other", USER, "Other");
+    getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
+      .run("char-foreign", "user:other", "Foreign");
+
+    // bound to the doomed connection, via the service (real storage shape)
+    connectionsSvc.setCharacterConnectionBind(USER, CHAR_ID, "doomed");
+    // bound to a surviving connection
+    connectionsSvc.setCharacterConnectionBind(USER, "char-other", "kept");
+    // ANOTHER user's bind that happens to name the same doomed id
+    getDb()
+      .query("INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, 1)")
+      .run(`characterConnection:char-foreign`, JSON.stringify("doomed"), "user:other");
+
+    expect(await connectionsSvc.deleteConnection(USER, "doomed")).toBe(true);
+
+    expect({
+      danglingRemoved: connectionsSvc.getCharacterConnectionBind(USER, CHAR_ID),
+      unrelatedKept: connectionsSvc.getCharacterConnectionBind(USER, "char-other"),
+      foreignUserUntouched: connectionsSvc.getCharacterConnectionBind("user:other", "char-foreign"),
+    }).toEqual({ danglingRemoved: null, unrelatedKept: "kept", foreignUserUntouched: "doomed" });
+
+    // A dangling bind (say from a restored backup) still degrades gracefully
+    // in resolution rather than bricking the chat.
+    expect(outcomeOf(() => resolveChatConnection(USER, {}, undefined, { characterId: CHAR_ID })))
+      .toEqual({ id: "active", model: "model-active" });
+  });
+});
+
 // ── readEditAndSendAlwaysUseActiveConnection — strict `=== true` ────────────
 
 describe("readEditAndSendAlwaysUseActiveConnection — no truthiness coercion", () => {
@@ -523,7 +905,7 @@ describe("startGeneration origin gating — zero extra queries on interactive pa
 
     // The setting is seeded `true`, yet the bound profile still wins — and the
     // spy proves the read never happened, rather than asserting it in prose.
-    expect((input as { connection_id?: string }).connection_id).toBe("gate-bound");
+    expect(generationConnectionResolutions.at(-1)?.resolvedId).toBe("gate-bound");
     expect(getSettingSpy.mock.calls.map((call) => call[1])).not.toContain("quickToolbarSettings");
   });
 
@@ -541,7 +923,7 @@ describe("startGeneration origin gating — zero extra queries on interactive pa
     await generateSvc.startGeneration(input, { origin: "edit_and_send" })
       .catch(() => { /* assembly is stubbed out */ });
 
-    expect((input as { connection_id?: string }).connection_id).toBe("gate-active");
+    expect(generationConnectionResolutions.at(-1)?.resolvedId).toBe("gate-active");
     expect(pool.getPoolEntry("gen-gate-dispatch")?.model).toBe("model-active");
     expect(getSettingSpy.mock.calls.map((call) => call[1])).toContain("quickToolbarSettings");
   });

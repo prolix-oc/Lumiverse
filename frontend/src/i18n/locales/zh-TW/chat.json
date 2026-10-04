@@ -55,6 +55,8 @@
     "groupAlternateFields": "群組備選字段",
     "switchConnection": "切換連接",
     "switchConnectionActive": "連接：{{name}}",
+    "switchConnectionChatBound": "連接：{{name}} — 已綁定到聊天",
+    "switchConnectionCharBound": "連接：{{name}} — 已綁定到角色",
     "attachFiles": "附加文件",
     "attachFile": "附加文件",
     "attachImageOrAudio": "附加圖片、音訊或影片",
@@ -109,6 +111,12 @@
     "manageChats": "管理聊天",
     "manageConnections": "管理連接",
     "noConnections": "暫無可用連接。",
+    "connectionBindBadgeChat": "聊天",
+    "connectionBindBadgeChar": "角色",
+    "connectionBindChatTooltip": "已綁定到此聊天 — 生成始終使用此連接。",
+    "connectionBindCharTooltip": "已綁定到此角色 — 生成始終使用此連接。",
+    "connectionBindHint": "此聊天已綁定到 {{name}}。選擇其他連接只會更改全域連接。",
+    "connectionBindHintCharacter": "此角色已綁定到 {{name}}。選擇其他連接只會更改全域連接。",
     "groupSettings": "群組設置",
     "chatSettings": "聊天設置",
     "convertToGroupChat": "轉為群聊",
@@ -274,7 +282,9 @@
     "spindleProcessingContext": "正在準備生成上下文",
     "spindleProcessingInterceptor": "正在運行提示詞攔截器",
     "spindleFailed": "{{name}} 在{{phase}}時失敗。",
-    "spindleActive": "{{name}} 正在{{phase}}"
+    "spindleActive": "{{name}} 正在{{phase}}",
+    "boundConnectionChat": "已綁定到此聊天的連接：{{name}}",
+    "boundConnectionChar": "已綁定到此角色的連接：{{name}}"
   },
   "council": {
     "label": "議會",

@@ -55,6 +55,8 @@
     "groupAlternateFields": "群组备选字段",
     "switchConnection": "切换连接",
     "switchConnectionActive": "连接：{{name}}",
+    "switchConnectionChatBound": "连接：{{name}} — 已绑定到聊天",
+    "switchConnectionCharBound": "连接：{{name}} — 已绑定到角色",
     "attachFiles": "附加文件",
     "attachFile": "附加文件",
     "attachImageOrAudio": "附加图片、音频或视频",
@@ -109,6 +111,12 @@
     "manageChats": "管理聊天",
     "manageConnections": "管理连接",
     "noConnections": "暂无可用连接。",
+    "connectionBindBadgeChat": "聊天",
+    "connectionBindBadgeChar": "角色",
+    "connectionBindChatTooltip": "已绑定到此聊天 — 生成始终使用此连接。",
+    "connectionBindCharTooltip": "已绑定到此角色 — 生成始终使用此连接。",
+    "connectionBindHint": "此聊天已绑定到 {{name}}。选择其他连接只会更改全局连接。",
+    "connectionBindHintCharacter": "此角色已绑定到 {{name}}。选择其他连接只会更改全局连接。",
     "groupSettings": "群组设置",
     "chatSettings": "聊天设置",
     "promptVariables": "提示词变量",
@@ -282,7 +290,9 @@
     "spindleProcessingContext": "正在准备生成上下文",
     "spindleProcessingInterceptor": "正在运行提示词拦截器",
     "spindleFailed": "{{name}} 在{{phase}}时失败。",
-    "spindleActive": "{{name}} 正在{{phase}}"
+    "spindleActive": "{{name}} 正在{{phase}}",
+    "boundConnectionChat": "已绑定到此聊天的连接：{{name}}",
+    "boundConnectionChar": "已绑定到此角色的连接：{{name}}"
   },
   "council": {
     "label": "议会",

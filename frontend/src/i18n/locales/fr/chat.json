@@ -55,6 +55,8 @@
     "groupAlternateFields": "Grouper les champs alternatifs",
     "switchConnection": "Changer de connexion",
     "switchConnectionActive": "Connexion : {{name}}",
+    "switchConnectionChatBound": "Connexion : {{name}} — épinglée à cette discussion",
+    "switchConnectionCharBound": "Connexion : {{name}} — liée à ce personnage",
     "attachFiles": "Joindre des fichiers",
     "attachFile": "Joindre un fichier",
     "attachImageOrAudio": "Joindre une image, un fichier audio ou une vidéo",
@@ -109,6 +111,12 @@
     "manageChats": "Gérer les discussions",
     "manageConnections": "Gérer les connexions",
     "noConnections": "Aucune connexion disponible.",
+    "connectionBindBadgeChat": "Discussion",
+    "connectionBindBadgeChar": "Perso.",
+    "connectionBindChatTooltip": "Épinglée à cette discussion — la génération utilise toujours cette connexion.",
+    "connectionBindCharTooltip": "Liée à ce personnage — la génération utilise toujours cette connexion.",
+    "connectionBindHint": "Cette discussion est liée à {{name}}. Choisir une autre connexion ne change que la connexion globale.",
+    "connectionBindHintCharacter": "Ce personnage est lié à {{name}}. Choisir une autre connexion ne change que la connexion globale.",
     "groupSettings": "Paramètres de groupe",
     "chatSettings": "Paramètres de discussion",
     "convertToGroupChat": "Convertir en discussion de groupe",
@@ -274,7 +282,9 @@
     "spindleProcessingContext": "préparation du contexte de génération",
     "spindleProcessingInterceptor": "l'exécution d'un intercepteur d'invite",
     "spindleFailed": "{{name}} a échoué alors que {{phase}}.",
-    "spindleActive": "{{name}} est {{phase}}"
+    "spindleActive": "{{name}} est {{phase}}",
+    "boundConnectionChat": "Connexion épinglée à cette discussion : {{name}}",
+    "boundConnectionChar": "Connexion liée à ce personnage : {{name}}"
   },
   "council": {
     "label": "Conseil",

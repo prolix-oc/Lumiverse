@@ -2,6 +2,8 @@ import type { StateCreator } from 'zustand'
 import type { ActiveProfileSwitchReason, AppStore, ConnectionsSlice } from '@/types/store'
 import type { ConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
+import { ApiError } from '@/api/client'
+import { characterConnectionBindsApi } from '@/api/character-connection-binds'
 import { areReasoningSettingsEqual, normalizeReasoningSettingsForProvider } from '@/lib/reasoning-binding'
 import { REASONING_DEFAULTS, clearDirtyKey, persistKey } from './settings'
 import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
@@ -16,9 +18,28 @@ export function shouldPersistActiveProfileId(reason: ActiveProfileSwitchReason):
   return PERSISTED_ACTIVE_PROFILE_REASONS.has(reason)
 }
 
+// Both setActiveChat and setActiveCharacter fire for a single chat open, so
+// the character-bind fetch is memoized by character id. The memo is module
+// state (like the chat slice's stream buffers) and must be cleared by the
+// user-scoped reset — see resetCharacterConnectionBindHydration.
+let hydratedCharacterBindFor: string | null = null
+
+// Monotonic sequence bumped by every activeCharacterConnectionId write made
+// through setActiveCharacterConnection (toggle UI, WS push). Hydration
+// captures the sequence when its GET leaves and discards a response that
+// resolves after a newer write, so a slow fetch can't clobber a fresher
+// local/server write for the same character.
+let characterBindWriteSeq = 0
+
+/** Reset the character-bind hydration memo (logout / user switch). */
+export function resetCharacterConnectionBindHydration(): void {
+  hydratedCharacterBindFor = null
+}
+
 export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsSlice> = (set, get) => ({
   profiles: [],
   activeProfileId: null,
+  activeCharacterConnectionId: null,
 
   setProfiles: (profiles) => {
     set((state) => ({
@@ -82,6 +103,45 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       settingsApi.put('promptBias', '').catch(() => {})
       clearDirtyKey('promptBias')
     }
+  },
+
+  setActiveCharacterConnection: (id) => {
+    characterBindWriteSeq += 1
+    set({ activeCharacterConnectionId: id })
+  },
+
+  hydrateActiveCharacterConnection: (characterId, opts) => {
+    if (!characterId) {
+      hydratedCharacterBindFor = null
+      set({ activeCharacterConnectionId: null })
+      return
+    }
+    if (!opts?.force && hydratedCharacterBindFor === characterId && get().activeCharacterId === characterId) return
+    const previous = hydratedCharacterBindFor
+    hydratedCharacterBindFor = characterId
+    // Switching characters: drop the previous character's bind immediately so
+    // a slow (or failed) fetch can't present it as the new character's.
+    if (previous !== characterId) set({ activeCharacterConnectionId: null })
+    const writeSeqAtFetch = characterBindWriteSeq
+    characterConnectionBindsApi.get(characterId)
+      .then((result) => {
+        if (get().activeCharacterId !== characterId) return
+        // A write landed while the GET was in flight — it is fresher than
+        // this response, so don't clobber it.
+        if (characterBindWriteSeq !== writeSeqAtFetch) return
+        set({ activeCharacterConnectionId: result.connection_id })
+      })
+      .catch((err) => {
+        if (get().activeCharacterId !== characterId) return
+        // 404 = unknown character, i.e. no binding. Other failures keep the
+        // current value but clear the memo so a later attempt retries.
+        if (err instanceof ApiError && err.status === 404) {
+          if (characterBindWriteSeq === writeSeqAtFetch) set({ activeCharacterConnectionId: null })
+          return
+        }
+        hydratedCharacterBindFor = null
+        console.error('[connections] Failed to hydrate character connection bind:', err)
+      })
   },
 
   addProfile: (profile) => {

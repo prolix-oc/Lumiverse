@@ -8,23 +8,40 @@ import * as secretsSvc from "../secrets.service";
 export interface ResolveChatGenerationConnectionOptions {
   preferActiveConnection?: boolean;
   authoritativeConnectionId?: string;
+  /**
+   * The chat's character id, driving the per-character connection binding
+   * ("bind to char") rung. Supplied by the generate.service call sites from
+   * the loaded chat; `null`/`undefined` (or a group-chat metadata flag) leaves
+   * the rung inert.
+   */
+  characterId?: string | null;
 }
 
 /**
- * Resolve the connection used by a chat generation. A chat-scoped binding is
- * authoritative over the caller's active/global connection. If the bound
- * profile was deleted, fall back to the requested/default profile so an old
- * metadata reference cannot make the chat unusable.
+ * Resolve the connection used by a chat generation. The ladder, most
+ * specific first:
  *
- * When no `connection_id` was supplied by the caller, the fallback is the
- * acting connection: validated active profile, default profile, then any
- * owned profile. A supplied-but-stale id still throws rather than silently
- * retargeting.
+ *   1. a committed Edit-and-Send connection (`authoritativeConnectionId`)
+ *   2. the `editAndSendAlwaysUseActiveConnection` opt-in → STRICT active
+ *      profile (`preferActiveConnection`, Edit-and-Send dispatch only)
+ *   3. a live chat-scoped `connection_profile_id` pin
+ *   4. a live per-character connection binding ("bind to char",
+ *      `opts.characterId`) — SKIPPED in group chats (`metadata.group === true`),
+ *      matching the preset-profile precedent: per-member bindings would be
+ *      ambiguous (which member wins?)
+ *   5. the requested connection id / active profile
+ *   6. the acting chain (active → default → any owned profile), only when no
+ *      id was supplied
  *
- * `preferActiveConnection` is used only by Edit-and-Send dispatches.
- * `authoritativeConnectionId` is the connection recorded when an
- * Edit-and-Send request was committed and therefore takes precedence over all
- * live settings.
+ * The character binding selects a CONNECTION only, never a model: the chat-pin
+ * `connection_model` override is applied exclusively when the CHAT pin (rung
+ * 3) won and never travels with a character binding, because a model name
+ * validated against one endpoint is routinely absent from another.
+ *
+ * If a bound profile (chat pin or character binding) was deleted, fall back to
+ * the requested/default profile so an old metadata/settings reference cannot
+ * make the chat unusable. A supplied-but-stale REQUESTED id still throws
+ * rather than silently retargeting.
  */
 export function resolveChatGenerationConnection(
   userId: string,
@@ -68,7 +85,23 @@ export function resolveChatGenerationConnection(
   const boundConnection = boundId
     ? connectionsSvc.resolveConnection(userId, boundId)
     : null;
+
+  // Character binding rung ("bind to char"): below the chat pin, above the
+  // requested/active connection, and skipped in group chats. Resolved with
+  // `resolveConnection` — roulette-aware, exactly like the pin rung — and a
+  // binding naming a deleted profile simply yields null here so resolution
+  // falls through to the requested/active connection without bricking the
+  // chat (`deleteConnection` prunes such bindings, but a race or a restored
+  // database can still surface one).
+  const characterBindId = !boundConnection && metadata?.group !== true && opts?.characterId
+    ? connectionsSvc.getCharacterConnectionBind(userId, opts.characterId)
+    : null;
+  const characterBoundConnection = characterBindId
+    ? connectionsSvc.resolveConnection(userId, characterBindId)
+    : null;
+
   const connection = boundConnection
+    ?? characterBoundConnection
     ?? connectionsSvc.resolveConnection(
       userId,
       requestedId ?? connectionsSvc.resolveActiveConnectionId(userId),
@@ -84,6 +117,8 @@ export function resolveChatGenerationConnection(
     throw new Error("No connection profile found. Configure a default connection or select one for this chat.");
   }
 
+  // The model override belongs to the CHAT pin only (`boundConnection`):
+  // never to a character binding, which pins a connection, not a model.
   const modelOverride = boundConnection && typeof metadata?.connection_model === "string"
     ? metadata.connection_model.trim()
     : "";

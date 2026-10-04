@@ -5,6 +5,8 @@ export enum EventType {
   CHARACTER_EDITED = 'CHARACTER_EDITED',
   CHARACTER_DELETED = 'CHARACTER_DELETED',
   CHARACTER_LIBRARY_CHANGED = 'CHARACTER_LIBRARY_CHANGED',
+  // Per-character connection bindings ("bind to char") — mirror src/ws/events.ts
+  CHARACTER_CONNECTION_BIND_CHANGED = 'CHARACTER_CONNECTION_BIND_CHANGED',
   PERSONA_CHANGED = 'PERSONA_CHANGED',
   MESSAGE_SENT = 'MESSAGE_SENT',
   MESSAGE_EDITED = 'MESSAGE_EDITED',
@@ -290,6 +292,15 @@ export interface ImageThumbnailQueuePayload {
 
 export type ProviderRegistryChangeAction = 'add' | 'remove' | 'change'
 export type ProviderRegistryAction = ProviderRegistryChangeAction | 'snapshot'
+
+/** Payload of {@link EventType.CHARACTER_CONNECTION_BIND_CHANGED} (user topic):
+ *  emitted when a character's connection binding is set (`connectionId` = the
+ *  bound profile id) or cleared (`connectionId: null`). Mirrors the backend's
+ *  CharacterConnectionBindChangedPayload in src/ws/events.ts. */
+export interface CharacterConnectionBindChangedPayload {
+  characterId: string
+  connectionId: string | null
+}
 
 export interface ProviderRegistryChangedPayload {
   userId: string

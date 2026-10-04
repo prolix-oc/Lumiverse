@@ -3734,6 +3734,9 @@ export function editAndSend(
     const committedConnectionId: string | undefined = resolveEditAndSendConnectionId(
       userId,
       chat.metadata,
+      // The chat's character feeds the "bind to char" rung; the group-chat
+      // skip is decided inside the resolver, which owns the metadata.
+      chat.character_id,
     );
     db.query(
       `INSERT INTO generation_outbox (

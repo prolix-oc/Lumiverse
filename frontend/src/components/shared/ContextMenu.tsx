@@ -17,6 +17,8 @@ export interface ContextMenuItem {
   disabled?: boolean
   danger?: boolean
   active?: boolean
+  /** Hover tooltip, typically explaining why a disabled item is disabled. */
+  title?: string
 }
 
 export interface ContextMenuSection {
@@ -198,6 +200,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
             className={clsx(styles.item, entry.danger && styles.itemDanger, entry.active && styles.itemActive)}
             onClick={entry.onClick}
             disabled={entry.disabled}
+            title={entry.title}
           >
             {entry.icon}
             <span>{entry.label}</span>

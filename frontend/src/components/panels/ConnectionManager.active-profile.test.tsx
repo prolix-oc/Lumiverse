@@ -26,6 +26,12 @@ const state = {
   profiles: [profile('alpha'), profile('beta')],
   providers: [{ id: 'openai', name: 'OpenAI', default_url: 'https://api.openai.com/v1' }],
   activeProfileId: 'alpha' as string | null,
+  activeCharacterConnectionId: null as string | null,
+  activeChatId: null as string | null,
+  activeChatName: null as string | null,
+  activeChatMetadata: null as Record<string, any> | null,
+  activeCharacterId: null as string | null,
+  characters: [] as Array<{ id: string; name: string }>,
   connectionsOrder: { llm: ['alpha', 'beta'], imageGen: [], stt: [], tts: [] },
   setProfiles(profiles: ConnectionProfile[]) {
     state.profiles = profiles
@@ -39,6 +45,12 @@ const state = {
   setActiveProfile(id: string | null) {
     state.activeProfileId = id
     setActiveCalls.push(id)
+  },
+  setActiveCharacterConnection(id: string | null) {
+    state.activeCharacterConnectionId = id
+  },
+  setActiveChatMetadata(metadata: Record<string, any> | null) {
+    state.activeChatMetadata = metadata
   },
   setProviders() {},
   applyProfileOrder() {},

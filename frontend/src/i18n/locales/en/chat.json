@@ -80,6 +80,8 @@
     "groupAlternateFields": "Group alternate fields",
     "switchConnection": "Switch connection",
     "switchConnectionActive": "Connection: {{name}}",
+    "switchConnectionChatBound": "Connection: {{name}} — pinned to this chat",
+    "switchConnectionCharBound": "Connection: {{name}} — bound to this character",
     "attachFiles": "Attach files",
     "attachFile": "Attach file",
     "attachImageOrAudio": "Attach image, audio, or video",
@@ -140,6 +142,12 @@
     "manageChats": "Manage Chats",
     "manageConnections": "Manage Connections",
     "noConnections": "No connections available.",
+    "connectionBindBadgeChat": "Chat",
+    "connectionBindBadgeChar": "Char",
+    "connectionBindChatTooltip": "Pinned to this chat — generation always uses this connection.",
+    "connectionBindCharTooltip": "Bound to this character — generation always uses this connection.",
+    "connectionBindHint": "This chat is bound to {{name}}. Choosing another connection only changes the global one.",
+    "connectionBindHintCharacter": "This character is bound to {{name}}. Choosing another connection only changes the global one.",
     "groupSettings": "Group Settings",
     "chatSettings": "Chat Settings",
     "promptVariables": "Prompt Variables",
@@ -328,7 +336,9 @@
     "spindleProcessingContext": "preparing generation context",
     "spindleProcessingInterceptor": "running a prompt interceptor",
     "spindleFailed": "{{name}} failed while {{phase}}.",
-    "spindleActive": "{{name}} is {{phase}}"
+    "spindleActive": "{{name}} is {{phase}}",
+    "boundConnectionChat": "Connection pinned to this chat: {{name}}",
+    "boundConnectionChar": "Connection bound to this character: {{name}}"
   },
   "council": {
     "label": "Council",

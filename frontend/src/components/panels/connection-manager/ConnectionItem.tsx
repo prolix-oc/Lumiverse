@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSortable } from '@dnd-kit/sortable'
 
-import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical, Shuffle, GripVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical, Shuffle, GripVertical, Pin, Link2 } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
 import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
@@ -68,10 +68,26 @@ interface ConnectionItemProps {
   onUpdate: (profile: ConnectionProfile) => void
   onDuplicate: () => void
   onDelete: () => void
+  /** Toggle "bind to chat"/"bind to char" for the active chat/character. */
+  onToggleChatBind: () => void
+  onToggleCharBind: () => void
+  /** Active chat display name; null when no chat is open. */
+  chatBindName: string | null
+  /** True when this profile is pinned to the active chat's metadata. */
+  chatBound: boolean
+  chatBindDisabled: boolean
+  /** Active character name; null when no character is active. */
+  charBindName: string | null
+  /** True when this profile is bound to the active character. */
+  charBound: boolean
+  charBindDisabled: boolean
 }
 
 export default function ConnectionItem({
   profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete,
+  onToggleChatBind, onToggleCharBind,
+  chatBindName, chatBound, chatBindDisabled,
+  charBindName, charBound, charBindDisabled,
 }: ConnectionItemProps) {
 
   const { t } = useTranslation('panels')
@@ -255,6 +271,19 @@ export default function ConnectionItem({
     ? formatNanoGptCachingSummary(profile.metadata?.nanogpt_caching)
     : null
   const cachingSummary = anthropicCachingSummary ?? nanogptCachingSummary
+  // When bound but the target's name is not (yet) known, fall back to the
+  // no-target label rather than rendering "Unbind … — " with a dangling
+  // separator.
+  const chatBindLabel = chatBound
+    ? (chatBindName ? t('connectionItem.unbindFromChat', { name: chatBindName }) : t('connectionItem.bindToChatNoTarget'))
+    : chatBindName
+      ? t('connectionItem.bindToChat', { name: chatBindName })
+      : t('connectionItem.bindToChatNoTarget')
+  const charBindLabel = charBound
+    ? (charBindName ? t('connectionItem.unbindFromChar', { name: charBindName }) : t('connectionItem.bindToCharNoTarget'))
+    : charBindName
+      ? t('connectionItem.bindToChar', { name: charBindName })
+      : t('connectionItem.bindToCharNoTarget')
   const nanoGptSubscriptionInactive = nanoGptUsage ? isNanoGptSubscriptionInactive(nanoGptUsage) : false
   const nanoGptUsageRows = nanoGptUsage
     ? [
@@ -342,6 +371,16 @@ export default function ConnectionItem({
                     {cachingSummary}
                   </span>
                 )}
+                {chatBound && (
+                  <span className={styles.itemReasoningMeta} title={t('connectionItem.boundToChatBadge')}>
+                    {t('connectionItem.boundToChatBadge')}
+                  </span>
+                )}
+                {charBound && (
+                  <span className={styles.itemReasoningMeta} title={t('connectionItem.boundToCharBadge')}>
+                    {t('connectionItem.boundToCharBadge')}
+                  </span>
+                )}
               </div>
               {isActive && <Check size={14} className={styles.activeCheck} />}
             </button>
@@ -373,6 +412,24 @@ export default function ConnectionItem({
                 items={[
                   { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
                   { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
+                  {
+                    key: 'bindChat',
+                    label: chatBindLabel,
+                    icon: <Pin size={14} />,
+                    onClick: () => { setMenuPos(null); onToggleChatBind() },
+                    disabled: chatBindDisabled,
+                    active: chatBound,
+                    title: chatBindDisabled ? t('connectionItem.bindNoChatHint') : undefined,
+                  },
+                  {
+                    key: 'bindChar',
+                    label: charBindLabel,
+                    icon: <Link2 size={14} />,
+                    onClick: () => { setMenuPos(null); onToggleCharBind() },
+                    disabled: charBindDisabled,
+                    active: charBound,
+                    title: charBindDisabled ? t('connectionItem.bindNoCharacterHint') : undefined,
+                  },
                   { key: 'div', type: 'divider' as const },
                   { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
                 ] satisfies ContextMenuEntry[]}

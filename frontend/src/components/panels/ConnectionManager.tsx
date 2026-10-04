@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next'
 import { closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { connectionsApi } from '@/api/connections'
+import { chatsApi } from '@/api/chats'
+import { characterConnectionBindsApi } from '@/api/character-connection-binds'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -35,6 +37,14 @@ export default function ConnectionManager() {
   const removeProfile = useStore((s) => s.removeProfile)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const setActiveProfile = useStore((s) => s.setActiveProfile)
+  const activeCharacterConnectionId = useStore((s) => s.activeCharacterConnectionId)
+  const setActiveCharacterConnection = useStore((s) => s.setActiveCharacterConnection)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatName = useStore((s) => s.activeChatName)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const characters = useStore((s) => s.characters)
   const providers = useStore((s) => s.providers)
   const setProviders = useStore((s) => s.setProviders)
   const applyProfileOrder = useStore((s) => s.applyProfileOrder)
@@ -184,6 +194,48 @@ export default function ConnectionManager() {
     setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), llm: newOrder })
   }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
+  const chatPinnedProfileId = typeof activeChatMetadata?.connection_profile_id === 'string'
+    ? activeChatMetadata.connection_profile_id
+    : null
+  const activeCharacterName = useMemo(
+    () => characters.find((c) => c.id === activeCharacterId)?.name ?? null,
+    [characters, activeCharacterId],
+  )
+
+  const handleToggleChatBind = useCallback(async (profile: ConnectionProfile) => {
+    if (!activeChatId) return
+    const bound = chatPinnedProfileId === profile.id
+    try {
+      const updated = await chatsApi.patchMetadata(activeChatId, {
+        connection_profile_id: bound ? null : profile.id,
+        // Always clear the pinned model alongside the pin: a stale
+        // connection_model from a previously pinned connection must never
+        // leak onto the new pin (the server applies it per pinned connection).
+        connection_model: null,
+      })
+      // The await can span a chat switch — chat A's response must never be
+      // written into chat B's active-metadata slot.
+      if (useStore.getState().activeChatId !== activeChatId) return
+      setActiveChatMetadata(updated.metadata ?? null)
+    } catch (err) {
+      console.error('[ConnectionManager] Failed to toggle chat connection bind:', err)
+    }
+  }, [activeChatId, chatPinnedProfileId, setActiveChatMetadata])
+
+  const handleToggleCharBind = useCallback(async (profile: ConnectionProfile) => {
+    if (!activeCharacterId) return
+    const bound = activeCharacterConnectionId === profile.id
+    try {
+      await characterConnectionBindsApi.put(activeCharacterId, bound ? null : profile.id)
+      // Same staleness guard as the chat bind: the character may have changed
+      // while the PUT was in flight.
+      if (useStore.getState().activeCharacterId !== activeCharacterId) return
+      setActiveCharacterConnection(bound ? null : profile.id)
+    } catch (err) {
+      console.error('[ConnectionManager] Failed to toggle character connection bind:', err)
+    }
+  }, [activeCharacterId, activeCharacterConnectionId, setActiveCharacterConnection])
+
   if (loading) {
     return <div className={styles.loading}>{t('connectionManager.loading')}</div>
   }
@@ -239,6 +291,14 @@ export default function ConnectionManager() {
                 onUpdate={handleUpdate}
                 onDuplicate={() => handleDuplicate(profile.id)}
                 onDelete={() => setDeleteTarget(profile)}
+                onToggleChatBind={() => handleToggleChatBind(profile)}
+                onToggleCharBind={() => handleToggleCharBind(profile)}
+                chatBindName={activeChatName}
+                chatBound={chatPinnedProfileId === profile.id}
+                chatBindDisabled={!activeChatId}
+                charBindName={activeCharacterName}
+                charBound={activeCharacterConnectionId === profile.id}
+                charBindDisabled={!activeCharacterId}
               />
             ))}
             {profiles.length === 0 && !creating && (

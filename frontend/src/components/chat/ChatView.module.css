@@ -618,6 +618,40 @@
   opacity: 0.45;
 }
 
+/* Bound-connection status chip in the native top dock: reads as a status
+ * indicator rather than a button-button, but opens the connections drawer
+ * (the one place bindings can be changed). */
+.connectionPill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  max-width: 160px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast, 120ms);
+  opacity: 0.75;
+}
+
+.connectionPill:hover {
+  opacity: 1;
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-fill-subtle);
+  border-color: var(--lumiverse-primary);
+}
+
+.connectionPillName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toolbarSpinner {
   animation: chatToolbarSpin 0.8s linear infinite;
 }

@@ -23,7 +23,14 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
 
   setCharactersLoaded: (loaded) => set({ charactersLoaded: loaded }),
 
-  setActiveCharacter: (id) => set({ activeCharacterId: id }),
+  setActiveCharacter: (id) => {
+    set({ activeCharacterId: id })
+    // Keep the character's connection bind in sync when the active character
+    // moves without a chat switch (e.g. "New Chat (Same Character)"). The
+    // fetch is memoized, so the usual setActiveChat → setActiveCharacter
+    // sequence only hydrates once.
+    ;(get() as any).hydrateActiveCharacterConnection?.(id)
+  },
 
   setSelectedCharacterId: (id) => set({ selectedCharacterId: id }),
 

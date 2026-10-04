@@ -5,6 +5,7 @@ import { getProvider } from "../llm/registry";
 import { env } from "../env";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
+import * as charactersSvc from "./characters.service";
 import type {
   ConnectionProfile, CreateConnectionProfileInput, UpdateConnectionProfileInput,
 } from "../types/connection-profile";
@@ -19,6 +20,16 @@ export const MODEL_ROULETTE_PROVIDER = "model_roulette";
 /** Legacy settings key retained solely for one-way encrypted migration. */
 export const LEGACY_POLLINATIONS_APP_KEY_SETTING = "pollinations_app_key";
 export const POLLINATIONS_APP_KEY_SECRET = "pollinations_app_key";
+
+/**
+ * Settings-table key for a per-character connection binding ("bind to char"),
+ * mirroring the `presetProfile:chat:{chatId}` / `presetProfile:character:{characterId}`
+ * scoped-binding key convention. The stored value is the bound connection
+ * profile id as a bare JSON string.
+ */
+function characterConnectionKey(characterId: string): string {
+  return `characterConnection:${characterId}`;
+}
 
 export interface ConnectionRouletteConfig {
   connection_ids: string[];
@@ -427,7 +438,9 @@ export function resolveActingConnectionId(userId: string): string | undefined {
  * Mirrors `generate.service.resolveChatGenerationConnection` rung for rung:
  *   1. the `editAndSendAlwaysUseActiveConnection` opt-in → STRICT active profile
  *   2. a live chat-scoped `connection_profile_id` pin
- *   3. the acting chain (active → `is_default` → any owned profile)
+ *   3. a live per-character connection binding ("bind to char"), skipped when
+ *      the chat metadata marks a group chat
+ *   4. the acting chain (active → `is_default` → any owned profile)
  *
  * Returns `undefined` when nothing resolves — including when the `settings` or
  * `connection_profiles` tables are absent, which is the case in several
@@ -440,6 +453,7 @@ export function resolveActingConnectionId(userId: string): string | undefined {
 export function resolveEditAndSendConnectionId(
   userId: string,
   chatMetadata: Record<string, any> | null | undefined,
+  characterId?: string | null,
 ): string | undefined {
   try {
     if (settingsSvc.readEditAndSendAlwaysUseActiveConnection(userId)) {
@@ -450,10 +464,103 @@ export function resolveEditAndSendConnectionId(
       ? chatMetadata.connection_profile_id.trim()
       : "";
     if (boundId && getConnection(userId, boundId)) return boundId;
+    // Character binding rung ("bind to char") — below the chat pin, above the
+    // acting chain, and skipped in group chats exactly like the preset-profile
+    // character rung (per-member bindings would be ambiguous: which member
+    // wins?). Validated with `getConnection`, not `resolveConnection`, to match
+    // the pin rung above: a roulette profile commits by its own stable id and
+    // the spin happens later in `resolveChatGenerationConnection`'s
+    // authoritative rung, so a retry tick can re-draw rather than being pinned
+    // to one random member for the life of the outbox row.
+    if (chatMetadata?.group !== true && characterId) {
+      const characterBoundId = getCharacterConnectionBind(userId, characterId);
+      if (characterBoundId && getConnection(userId, characterBoundId)) {
+        return characterBoundId;
+      }
+    }
     return resolveActingConnectionId(userId);
   } catch {
     return undefined;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-character connection bindings ("bind to char")
+// ---------------------------------------------------------------------------
+
+/**
+ * Raw read of a character's bound connection id ("bind to char").
+ *
+ * Deliberately performs NO existence validation on the stored id. The
+ * resolution consumers (`resolveChatGenerationConnection` here in
+ * generate-land and `resolveEditAndSendConnectionId` above) validate the id
+ * with `resolveConnection` / `getConnection` and degrade gracefully when the
+ * bound profile was deleted, so a stale reference can never brick a chat.
+ * `deleteConnection` prunes dangling bindings at the source, which keeps this
+ * read honest without a per-read join against `connection_profiles`.
+ *
+ * Returns `null` for an absent row, a non-string value, or a value that trims
+ * to the empty string.
+ */
+export function getCharacterConnectionBind(userId: string, characterId: string): string | null {
+  const value = settingsSvc.getSetting(userId, characterConnectionKey(characterId))?.value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+/**
+ * Bind a character to a connection profile ("bind to char"). Solo chats with
+ * that character resolve this binding BELOW a chat-scoped
+ * `connection_profile_id` pin and ABOVE the requested/active connection (see
+ * `resolveChatGenerationConnection`), so binding changes the default
+ * connection for a character's future chats without retargeting existing
+ * chats that pin their own. Group chats skip the binding entirely, matching
+ * the preset-profile precedent.
+ *
+ * The binding selects a CONNECTION only — never a model. The chat-pin
+ * `metadata.connection_model` override stays chat-pin-only and is never
+ * applied to a character binding, because a model name validated against one
+ * endpoint is routinely absent from another.
+ *
+ * Throws `"Character not found"` / `"Connection not found"` (the
+ * `preset-profiles.service` error convention) so route layers can map them to
+ * 404s. The write suppresses the SETTINGS_UPDATED broadcast — a binding is
+ * not an app setting, and that broadcast makes clients reload their globally
+ * selected connection, which can race the very UI that just set the binding —
+ * and instead emits the dedicated user-scoped
+ * CHARACTER_CONNECTION_BIND_CHANGED event.
+ */
+export function setCharacterConnectionBind(
+  userId: string,
+  characterId: string,
+  connectionId: string,
+): string {
+  if (!charactersSvc.getCharacter(userId, characterId)) {
+    throw new Error("Character not found");
+  }
+  const boundId = connectionId.trim();
+  if (!boundId || !getConnection(userId, boundId)) {
+    throw new Error("Connection not found");
+  }
+  settingsSvc.putSetting(userId, characterConnectionKey(characterId), boundId, {
+    suppressBroadcast: true,
+  });
+  eventBus.emit(EventType.CHARACTER_CONNECTION_BIND_CHANGED, { characterId, connectionId: boundId }, userId);
+  return boundId;
+}
+
+/**
+ * Clear a character's connection binding. Idempotent: clearing an unset
+ * binding still succeeds (and still emits) because the observable end state —
+ * "no binding" — is exactly what the caller asked for; a 404-on-unbound
+ * semantic would force clients into read-before-clear races. Emits
+ * CHARACTER_CONNECTION_BIND_CHANGED with `connectionId: null` so open clients
+ * drop any cached binding.
+ */
+export function clearCharacterConnectionBind(userId: string, characterId: string): void {
+  settingsSvc.deleteSetting(userId, characterConnectionKey(characterId));
+  eventBus.emit(EventType.CHARACTER_CONNECTION_BIND_CHANGED, { characterId, connectionId: null }, userId);
 }
 
 export async function createConnection(userId: string, input: CreateConnectionProfileInput): Promise<ConnectionProfile> {
@@ -578,6 +685,28 @@ export async function deleteConnection(userId: string, id: string): Promise<bool
     secretsSvc.deleteSecret(userId, connectionSecretKey(id));
     settingsSvc.deleteSetting(userId, `presetProfile:connection:${id}`);
     eventBus.emit(EventType.PRESET_PROFILE_CHANGED, { key: `presetProfile:connection:${id}`, binding: null }, userId);
+    // Prune per-character connection bindings ("bind to char") whose value
+    // names the deleted profile, so `getCharacterConnectionBind` can stay a
+    // raw read instead of joining `connection_profiles` on every resolution.
+    // User-scoped: another user's identically-id'd row is never touched. No
+    // CHARACTER_CONNECTION_BIND_CHANGED is emitted per pruned binding —
+    // clients tolerate stale binds: resolution degrades gracefully past a
+    // deleted connection and the next GET re-reads the pruned state.
+    const boundRows = getDb()
+      .query("SELECT key, value FROM settings WHERE user_id = ? AND key LIKE 'characterConnection:%'")
+      .all(userId) as Array<{ key: string; value: string }>;
+    for (const row of boundRows) {
+      let boundId: unknown = null;
+      try {
+        boundId = JSON.parse(row.value);
+      } catch {
+        // Malformed settings JSON cannot equal the deleted id; leave the row
+        // alone rather than letting cleanup widen into arbitrary deletion.
+      }
+      if (boundId === id) {
+        settingsSvc.deleteSetting(userId, row.key);
+      }
+    }
   }
   return deleted;
 }

@@ -216,6 +216,8 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
       ;(get() as any).clearActivatedWorldInfo?.()
       // Clear any pending message edit from the previous chat
       ;(get() as any).setEditingMessageId?.(null)
+      // Load the new active character's connection bind (memoized per character)
+      ;(get() as any).hydrateActiveCharacterConnection?.(characterId)
       settingsApi.put('activeChatId', chatId).catch(() => {})
     },
 

@@ -45,6 +45,47 @@ mock.module("../crypto/init", () => ({
   getEncryptionKeyBytes: () => new Uint8Array(32).fill(7),
 }));
 
+// Static import (hoisted) captures the REAL resolver before the wrapper below
+// replaces the module for importers such as generate.service. The snapshot is
+// spread into a plain object eagerly: Bun's mock.module swaps the live module
+// entry in place, so a live namespace reference would recursively observe the
+// mock instead of the original.
+import * as connectionResolutionModule from "./generation/connection-resolution";
+const realConnectionResolution = { ...connectionResolutionModule };
+
+/**
+ * Staging (c2ae02a3) made `startGeneration` reassign its `input`
+ * (`input = { ...input, frontendSessionId }`), so the `input.connection_id`
+ * mutations `observeRealDispatches` used to read are no longer visible to the
+ * caller. The wrapper below records what the REAL resolver ladder settled on
+ * instead: it delegates to the actual implementation (the connection identity
+ * under test is never stubbed) and appends each result for assertions.
+ */
+const generationConnectionResolutions: Array<{
+  requestedConnectionId?: string;
+  options: connectionResolutionModule.ResolveChatGenerationConnectionOptions | undefined;
+  resolvedId: string;
+}> = [];
+
+mock.module("./generation/connection-resolution", () => ({
+  ...realConnectionResolution,
+  resolveChatGenerationConnection: (
+    userId: string,
+    metadata: Record<string, any> | null | undefined,
+    requestedConnectionId?: string,
+    options?: connectionResolutionModule.ResolveChatGenerationConnectionOptions,
+  ) => {
+    const resolved = realConnectionResolution.resolveChatGenerationConnection(
+      userId,
+      metadata,
+      requestedConnectionId,
+      options,
+    );
+    generationConnectionResolutions.push({ requestedConnectionId, options, resolvedId: resolved.id });
+    return resolved;
+  },
+}));
+
 const chatsSvc = await import("./chats.service");
 const chatBackground = await import("./chat-background.service");
 const councilProfilesSvc = await import("./council/council-profiles.service");
@@ -124,6 +165,22 @@ function initTestDb(): void {
     key TEXT NOT NULL, encrypted_value TEXT NOT NULL, iv TEXT NOT NULL, tag TEXT NOT NULL,
     user_id TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (key, user_id)
   )`);
+  // migrations/022_tokenizers.sql — column shapes mirrored (minus FK clauses,
+  // like the rest of this hand-rolled schema) so staging's tokenizer subsystem
+  // reads on the generation path find real, empty tables instead of throwing.
+  db.run(`CREATE TABLE tokenizer_configs (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}',
+    is_built_in INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE tokenizer_model_patterns (
+    id TEXT PRIMARY KEY, tokenizer_id TEXT NOT NULL, pattern TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0, is_built_in INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 1
+  )`);
+  db.run(`CREATE TABLE message_breakdowns (
+    message_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, data TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 1
+  )`);
   getDb().query("INSERT INTO characters (id, user_id, name) VALUES (?, ?, ?)")
     .run("char-int", USER, "Integration");
 }
@@ -167,6 +224,8 @@ function track<T extends { mockRestore: () => void }>(spy: T): T {
   return spy;
 }
 
+let priorAssemblyWorkerEnv: string | undefined;
+
 interface DispatchObservation {
   /**
    * The second positional argument the dispatcher handed `startGeneration`,
@@ -200,7 +259,11 @@ function observeRealDispatches(): DispatchObservation[] {
       .catch(() => { /* the stubbed prompt assembly, not the resolution */ });
     observed.push({
       options,
-      connectionId: (input as { connection_id?: string }).connection_id,
+      // Staging (c2ae02a3) copies `input` for `frontendSessionId`, so the id
+      // the REAL ladder settled on is read from the recording wrapper around
+      // `resolveChatGenerationConnection` instead of the input bag. Read
+      // immediately after the awaited call so it pairs with THIS dispatch.
+      connectionId: generationConnectionResolutions.at(-1)?.resolvedId,
       model: pool.getPoolEntry(input.generationId)?.model,
     });
     // Between paths, clear the in-memory generation state so a later dispatch
@@ -230,6 +293,13 @@ function commitEditAndSend(chatId: string, branch: boolean): string {
 beforeEach(() => {
   initTestDb();
   dispatcher.resetEditAndSendDispatcherForTests();
+  generationConnectionResolutions.length = 0;
+  // Staging moved prompt assembly behind a worker-pool client; the spawned
+  // worker initializes its OWN database and cannot see this file's hand-rolled
+  // `:memory:` schema, so it only fails noisily into the in-process fallback.
+  // Keep assembly in-process, where the `skip-assembly` stub above applies.
+  priorAssemblyWorkerEnv = process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = "false";
   seedProfile(ACTIVE, "model-active");
   seedProfile(DEFAULT, "model-default", true);
   seedProfile(BOUND, "model-bound");
@@ -242,6 +312,11 @@ afterEach(() => {
   generateSvc.stopGenerationSweep();
   dispatcher.resetEditAndSendDispatcherForTests();
   for (const spy of spies.splice(0)) spy.mockRestore();
+  if (priorAssemblyWorkerEnv === undefined) {
+    delete process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+  } else {
+    process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER = priorAssemblyWorkerEnv;
+  }
   closeDatabase();
 });
 
@@ -638,4 +713,53 @@ describe("the Edit-and-Send flow starts on the acting connection", () => {
       expect(observed).toHaveLength(1);
     });
   }
+});
+
+// ── Character bind wiring — the commit forwards chat.character_id ───────────
+
+/**
+ * The character-bind resolver units are covered elsewhere with an explicitly
+ * passed `characterId`; these cases pin the WIRING: `chats.service.editAndSend`
+ * really forwards the chat's `character_id` into
+ * `resolveEditAndSendConnectionId`, so a seeded character bind lands in
+ * `generation_outbox.connection_id` and survives into the dispatched
+ * `startGeneration` — with no chat pin and no opt-in involved.
+ */
+describe("an Edit-and-Send commit with a character bind", () => {
+  test("commits the bind onto generation_outbox.connection_id and dispatches on it", async () => {
+    // No quickToolbarSettings row (opt-in off), no chat pin: only the bind.
+    seedSetting(`characterConnection:char-int`, BOUND);
+    const observed = observeRealDispatches();
+
+    seedChat("char-bind-commit");
+    seedUserMessage("char-bind-commit");
+    const requestId = commitEditAndSend("char-bind-commit", false);
+
+    // The commit itself recorded the bind, not the active profile.
+    expect(dispatcher.getGenerationOutboxByRequest(USER, "char-bind-commit", requestId)?.connection_id)
+      .toBe(BOUND);
+
+    // And the dispatch forwards it verbatim: the dispatcher's options bag
+    // carries the committed id, the real resolver ladder confirms it, and the
+    // pool registers the bound profile's model.
+    const row = await dispatcher.dispatchEditAndSendRequest(USER, "char-bind-commit", requestId);
+    expect(observed).toEqual([
+      {
+        options: { origin: "edit_and_send", connectionId: BOUND },
+        connectionId: BOUND,
+        model: "model-bound",
+      },
+    ]);
+    expect(row?.status).toBe("running");
+  });
+
+  test("a group chat skips the bind at commit and lands on the acting chain", () => {
+    seedSetting(`characterConnection:char-int`, BOUND);
+    seedChat("char-bind-group", { group: true });
+    seedUserMessage("char-bind-group");
+    const requestId = commitEditAndSend("char-bind-group", false);
+
+    expect(dispatcher.getGenerationOutboxByRequest(USER, "char-bind-group", requestId)?.connection_id)
+      .toBe(ACTIVE);
+  });
 });

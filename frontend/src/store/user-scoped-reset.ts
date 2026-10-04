@@ -1,6 +1,7 @@
 import type { AppStore } from '@/types/store'
 import { clearChatHeadsPersistence } from './slices/chat-heads'
 import { resetSettingsPersistence } from './slices/settings'
+import { resetCharacterConnectionBindHydration } from './slices/connections'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { clearLandingPageSnapshot } from '@/lib/landingPageSnapshot'
 type StoreApi = {
@@ -26,6 +27,7 @@ export function registerUserScopedResetStore(api: StoreApi, initial: AppStore): 
 
 export function resetUserScopedStoreState(): void {
   resetSettingsPersistence()
+  resetCharacterConnectionBindHydration()
   setPresetSaveCoordinatorScope(null)
   clearLandingPageSnapshot()
   if (!storeApi || !initialState) return

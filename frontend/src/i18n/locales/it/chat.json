@@ -55,6 +55,8 @@
     "groupAlternateFields": "Raggruppa campi alternativi",
     "switchConnection": "Cambia connessione",
     "switchConnectionActive": "Connessione: {{name}}",
+    "switchConnectionChatBound": "Connessione: {{name}} — fissata a questa chat",
+    "switchConnectionCharBound": "Connessione: {{name}} — collegata a questo personaggio",
     "attachFiles": "Allega file",
     "attachFile": "Allega file",
     "attachImageOrAudio": "Allega immagine, audio o video",
@@ -109,6 +111,12 @@
     "manageChats": "Gestisci conversazioni",
     "manageConnections": "Gestisci connessioni",
     "noConnections": "Nessuna connessione disponibile.",
+    "connectionBindBadgeChat": "Chat",
+    "connectionBindBadgeChar": "Pers.",
+    "connectionBindChatTooltip": "Fissata a questa chat — la generazione usa sempre questa connessione.",
+    "connectionBindCharTooltip": "Collegata a questo personaggio — la generazione usa sempre questa connessione.",
+    "connectionBindHint": "Questa chat è collegata a {{name}}. Scegliere un'altra connessione cambia solo quella globale.",
+    "connectionBindHintCharacter": "Questo personaggio è collegato a {{name}}. Scegliere un'altra connessione cambia solo quella globale.",
     "groupSettings": "Impostazioni gruppo",
     "chatSettings": "Impostazioni chat",
     "convertToGroupChat": "Converti in chat di gruppo",
@@ -274,7 +282,9 @@
     "spindleProcessingContext": "preparazione del contesto di generazione",
     "spindleProcessingInterceptor": "esecuzione di un interceptore prompt",
     "spindleFailed": "{{name}} fallito durante {{phase}}.",
-    "spindleActive": "{{name}} è {{phase}}"
+    "spindleActive": "{{name}} è {{phase}}",
+    "boundConnectionChat": "Connessione fissata a questa chat: {{name}}",
+    "boundConnectionChar": "Connessione collegata a questo personaggio: {{name}}"
   },
   "council": {
     "label": "Consiglio",

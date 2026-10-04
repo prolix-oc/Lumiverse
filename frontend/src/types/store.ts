@@ -978,8 +978,23 @@ export type ActiveProfileSwitchReason =
 export interface ConnectionsSlice {
   profiles: ConnectionProfile[]
   activeProfileId: string | null
+  /**
+   * Connection profile id bound to the active character via the Phase 1
+   * per-character binding backend (null = unbound). Hydrated whenever the
+   * active character changes and kept live via the
+   * CHARACTER_CONNECTION_BIND_CHANGED WS event. Group chats skip character
+   * binds server-side; the raw value is still tracked for the menu UI.
+   */
+  activeCharacterConnectionId: string | null
   setProfiles: (profiles: ConnectionProfile[]) => void
   setActiveProfile: (id: string | null, reason?: ActiveProfileSwitchReason) => void
+  setActiveCharacterConnection: (id: string | null) => void
+  /**
+   * Fetch the active character's connection bind into the store. Call with
+   * the new id whenever the active character changes (null clears). `force`
+   * bypasses the once-per-character memo (WS reconnect resync).
+   */
+  hydrateActiveCharacterConnection: (characterId: string | null, opts?: { force?: boolean }) => void
 
   addProfile: (profile: ConnectionProfile) => void
   updateProfile: (id: string, updates: Partial<ConnectionProfile>) => void
