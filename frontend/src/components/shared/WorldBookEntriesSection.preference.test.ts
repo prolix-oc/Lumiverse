@@ -25,6 +25,7 @@ mock.module('@/components/shared/Pagination', () => ({ default: noop }))
 mock.module('@/store', () => ({ useStore: () => ({}) }))
 mock.module('@/lib/clearableSearch', () => ({ clearSearchOnEscape: noop }))
 mock.module('@dnd-kit/core', () => ({
+  useDndContext: () => ({ active: null }),
   DndContext: noop, MouseSensor: noop, TouchSensor: noop, KeyboardSensor: noop, DragOverlay: noop,
   closestCenter: noop, useSensor: noop, useSensors: noop,
 }))

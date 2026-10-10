@@ -138,7 +138,7 @@ mock.module('@/lib/i18n/worldBookEntryLabels', () => ({
     entryTypeLabel: () => 'trigger',
     positionLabel: () => 'position',
     sortOptions: [{ value: 'custom', label: 'custom' }],
-    pageSizeOptions: [{ value: 50, label: '50' }],
+    pageSizeOptions: [{ value: 50, label: '50' }, { value: 'all', label: 'All entries' }],
     typeOptions: [],
     positionOptions: [],
   }),
@@ -174,6 +174,7 @@ mock.module('@/components/shared/Pagination', () => ({ default: ({ currentPage, 
 mock.module('@/store', () => ({ useStore: useStoreMock }))
 mock.module('@/lib/clearableSearch', () => ({ clearSearchOnEscape: noop }))
 mock.module('@dnd-kit/core', () => ({
+  useDndContext: () => ({ active: null }),
   DndContext: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DragOverlay: ({ children }: { children?: ReactNode }) => <>{children}</>,
   MouseSensor: class {}, TouchSensor: class {}, KeyboardSensor: class {},
@@ -293,6 +294,7 @@ afterEach(() => {
   updateDeferred = null
   listEntriesResult = { data: [], total: 0 }
   storeState.pendingWorldBookEditEntryId = null
+  storeState.worldBookEntryViewPrefs = {}
   mobileFixture = false
   document.body.replaceChildren()
 })
@@ -512,6 +514,59 @@ describe('WorldBookEntriesSection token-count invalidation', () => {
   })
 })
 
+
+describe('All entries browsing', () => {
+  for (const presentation of [undefined, 'workspace'] as const) for (const mobile of [false, true]) {
+    test('restores all, loads every server batch, and returns to pagination: ' + (presentation ?? 'sidebar') + '/' + mobile, async () => {
+      mobileFixture = mobile
+      storeState.worldBookEntryViewPrefs = { [book.id]: { sortBy: 'custom', sortDir: 'asc', pageSize: 'all' } }
+      const data = Array.from({ length: 1107 }, (_, i) => entry('entry-' + i, 'dragon content'))
+      const { root, host } = await render(data, presentation)
+      try {
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        expect(listEntryCalls.some(call => call.offset === 1000)).toBe(true)
+        expect(host.querySelector('[aria-label="Next entry page"]')).toBeNull()
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(1107)
+        expect(host.querySelector('[aria-label="Fixture editor draft"]')).toBeNull()
+        if (mobile) click(host, '[aria-label="Entry filters and options"]')
+        const size = host.querySelector<HTMLSelectElement>('select[aria-label="perPage"]')!
+        expect(size.value).toBe('all')
+        await act(async () => { size.value = '50'; size.dispatchEvent(new window.Event('change', { bubbles: true })) })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(50)
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+        await act(async () => { size.value = 'all'; size.dispatchEvent(new window.Event('change', { bubbles: true })) })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        const input = host.querySelector<HTMLInputElement>('input[type="search"]')!
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, 'dragon')
+          input.dispatchEvent(new window.Event('input', { bubbles: true }))
+        })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+      } finally { unmount(root) }
+    }, 30000)
+  }
+
+  test('All entries keeps folder and tag scopes and disables partial-scope reordering', async () => {
+    storeState.worldBookEntryViewPrefs = { [book.id]: { sortBy: 'custom', sortDir: 'asc', pageSize: 'all' } }
+    const data = Array.from({ length: 251 }, (_, i) => ({ ...entry('entry-' + i), folder: i < 201 ? 'Characters' : 'Locations', tags: i % 2 ? ['Villain'] : [] }))
+    const { root, host } = await render(data)
+    try {
+      clickByText(host, '‹ Folders'); clickByText(host, 'Characters'); await wait(10)
+      expect(host.querySelectorAll('[data-entry-id]').length).toBe(201)
+      expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+      const tags = host.querySelector<HTMLSelectElement>('[aria-label="Filter entry tags"]')!
+      await act(async () => { tags.value = 'Villain'; tags.dispatchEvent(new window.Event('change', { bubbles: true })) })
+      await wait(10)
+      expect(host.querySelectorAll('[data-entry-id]').length).toBe(100)
+      expect(organizationQueries.at(-1)).toMatchObject({ folder: 'Characters', tag: ['Villain'], limit: 1000, offset: 0 })
+      expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+    } finally { unmount(root) }
+  }, 30000)
+})
 
 describe('native organization server pagination', () => {
   test('folder counts span the book and folder contents are loaded one server page at a time', async () => {
