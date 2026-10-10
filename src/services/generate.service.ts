@@ -160,6 +160,7 @@ import {
   resolveProviderAndKey,
 } from "./generation/connection-resolution";
 import { injectConnectionMetadataFlags } from "./generation/connection-metadata";
+import { withConnectionFallback } from "./generation/connection-fallback";
 import {
   clearActiveChatGeneration,
   clearActiveChatGenerationById,
@@ -274,6 +275,13 @@ const readEditAndSendAlwaysUseActiveConnection = (userId: string): boolean =>
 
 /** Lifecycle context passed from startGeneration → runGeneration */
 interface GenerationLifecycle {
+  connectionId?: string;
+  usedConnectionFallback?: boolean;
+  fallbackInput?: {
+    parameters: GenerationParameters;
+    messages: LlmMessage[];
+    tools?: ToolDefinition[];
+  };
   frontendSessionId?: string;
   onProviderRequest?: ProviderRequestObserver;
   /** User-authored messages that immediately preceded this generation. */
@@ -1706,7 +1714,7 @@ export async function startGeneration(
     // Loaded before preset resolution: no-preset temp chats bypass the preset
     // requirement entirely (assertUsablePreset would otherwise reject them).
     const chat = chatsSvc.getChat(input.userId, input.chat_id);
-    const connection = resolveChatGenerationConnection(
+    let connection = resolveChatGenerationConnection(
       input.userId,
       chat?.metadata,
       input.connection_id,
@@ -1763,10 +1771,23 @@ export async function startGeneration(
         connection.preset_id,
       );
     }
-    const { provider, apiKey, apiUrl } = await resolveProviderAndKey(
-      input.userId,
-      connection.id,
-    );
+    let usedSetupFallback = false;
+    let resolvedProvider: Awaited<ReturnType<typeof resolveProviderAndKey>>;
+    try {
+      resolvedProvider = await resolveProviderAndKey(input.userId, connection.id);
+    } catch (err) {
+      checkAborted();
+      const fallback = connectionsSvc.getFallbackConnection(input.userId, connection);
+      if (!fallback) throw err;
+      resolvedProvider = await resolveProviderAndKey(input.userId, fallback.id);
+      connection = fallback;
+      input.connection_id = fallback.id;
+      usedSetupFallback = true;
+      if (!isNoPresetChat) {
+        presetsSvc.assertUsablePreset(input.userId, input.preset_id, connection.preset_id);
+      }
+    }
+    const { provider, apiKey, apiUrl } = resolvedProvider;
 
     // Resolve the assistant message being modified before choosing a character.
     // Group retries/continues are tied to the message's speaker, not the chat's
@@ -1875,6 +1896,8 @@ export async function startGeneration(
       }, { chatId: input.chat_id, generationId, connectionId: connection.id }, [apiKey]),
       characterName,
       connectionName: connection.name,
+      connectionId: connection.id,
+      usedConnectionFallback: usedSetupFallback,
       generationType: genType,
       personaId: resolvedPersona?.id,
       personaName: resolvedPersona?.name || "User",
@@ -2820,6 +2843,13 @@ export async function startGeneration(
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
 
+        if (!lifecycle.usedConnectionFallback && connectionsSvc.getFallbackConnection(input.userId, connection)) {
+          lifecycle.fallbackInput = {
+            parameters: { ...mergedParams },
+            messages: structuredClone(messages),
+            tools: inlineTools ? structuredClone(inlineTools) : undefined,
+          };
+        }
         injectConnectionMetadataFlags(connection, mergedParams, input.chat_id);
 
         const cached = applyPromptCaching(
@@ -2870,6 +2900,10 @@ export async function startGeneration(
         checkAborted();
         if (editAndSendContext) {
           assertEditAndSendContextTarget(input, editAndSendContext);
+        }
+
+        if (lifecycle.fallbackInput && mergedParams.seed !== undefined) {
+          lifecycle.fallbackInput.parameters.seed = mergedParams.seed;
         }
 
         await runGeneration(
@@ -3614,7 +3648,7 @@ async function runGeneration(
     // else keeps the legacy text continuation (and providers like Anthropic
     // would *break* on structured tool_use without their thinking blocks, so
     // they must stay on the legacy path until their carrier is wired).
-    const interleavedStructured =
+    let interleavedStructured =
       !!tools?.length && provider.capabilities.interleavedThinking === true;
     let inlineWebSearchUsed = false;
 
@@ -3636,8 +3670,7 @@ async function runGeneration(
       let pendingThoughtSignature: string | undefined;
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
-      // Each tool round gets one provider attempt; failures surface without retries.
-      const stream: AsyncGenerator<StreamChunk, void, unknown> = useStreaming
+      const createStream = (): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
         ? provider.generateStream(apiKey, apiUrl, {
             onProviderRequest: lifecycle.onProviderRequest,
             messages: prepareInlineWebSearchMessagesForProvider(generationMessages),
@@ -3670,6 +3703,59 @@ async function runGeneration(
               usage: result.usage,
             };
           })();
+
+      const stream = inlineRound === 0 && !lifecycle.usedConnectionFallback
+        ? withConnectionFallback(createStream(), async () => {
+            const source = lifecycle.connectionId
+              ? connectionsSvc.getConnection(userId, lifecycle.connectionId) : null;
+            const fallback = source ? connectionsSvc.getFallbackConnection(userId, source) : null;
+            if (!fallback) return null;
+            lifecycle.usedConnectionFallback = true;
+            const resolved = await resolveProviderAndKey(userId, fallback.id);
+            provider = resolved.provider;
+            apiKey = resolved.apiKey;
+            apiUrl = resolved.apiUrl;
+            model = fallback.model;
+            // Discard primary-provider routing and reasoning flags before applying
+            // the fallback profile's settings to the already assembled prompt.
+            parameters = { ...(lifecycle.fallbackInput?.parameters ?? parameters) };
+            delete parameters._streaming;
+            for (const key of ['use_responses_api', '_openrouter', 'session_id',
+              'reasoning_effort', 'thinking', 'reasoning', 'enable_thinking',
+              'thinking_budget', 'thinkingConfig', 'output_config',
+              '_replay_thought_signatures', 'prompt_caching', 'caching']) delete parameters[key];
+            applyEffectiveReasoningSettings(userId, fallback, provider.name, model, parameters);
+            injectConnectionMetadataFlags(fallback, parameters, chatId);
+            const cached = applyPromptCaching(
+              { provider: provider.name, model, metadata: fallback.metadata },
+              { params: parameters, messages: lifecycle.fallbackInput?.messages ?? generationMessages, tools: lifecycle.fallbackInput?.tools ?? tools },
+            );
+            parameters = cached.params;
+            generationMessages = cached.messages;
+            tools = cached.tools;
+            interleavedStructured = !!tools?.length && provider.capabilities.interleavedThinking === true;
+            lifecycle.connectionId = fallback.id;
+            lifecycle.connectionName = fallback.name;
+            lifecycle.model = model;
+            lifecycle.providerName = provider.name;
+            lifecycle.messages = generationMessages;
+            lifecycle.onProviderRequest = createRequestObserver(userId,
+              { kind: 'chat', name: 'Chat', operation: 'connection_fallback' },
+              { chatId, generationId, connectionId: fallback.id }, [apiKey]);
+            if (poolEntry) {
+              poolEntry.model = model;
+              poolEntry.connectionName = fallback.name;
+            }
+            eventBus.emit(EventType.GENERATION_IN_PROGRESS, {
+              generationId, chatId, model, connectionName: fallback.name,
+              targetMessageId: lifecycle.targetMessageId,
+              targetSwipeId: lifecycle.streamingSwipeId,
+              characterId: lifecycle.targetCharacterId,
+              characterName: lifecycle.characterName,
+            }, userId);
+            return createStream();
+          }, signal)
+        : createStream();
 
       const iter = stream[Symbol.asyncIterator]();
 

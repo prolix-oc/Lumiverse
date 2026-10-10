@@ -18,6 +18,8 @@ import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { useDragHandleBlur } from './useDragHandleBlur'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
+import FallbackConnectionPicker from './FallbackConnectionPicker'
+import { useStore } from '@/store'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -86,6 +88,8 @@ export default function ConnectionItem({
   const [nanoGptUsage, setNanoGptUsage] = useState<NanoGptSubscriptionUsage | null>(null)
   const [nanoGptUsageLoading, setNanoGptUsageLoading] = useState(false)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
+  const [fallbackOpen, setFallbackOpen] = useState(false)
+  const fallbackName = useStore((s) => s.profiles.find((p) => p.id === profile.metadata?.fallback_connection_id)?.name)
 
   const isOpenRouter = profile.provider === 'openrouter'
   const isNanoGpt = profile.provider === 'nanogpt'
@@ -318,6 +322,11 @@ export default function ConnectionItem({
                     {cachingSummary}
                   </span>
                 )}
+                {profile.metadata?.fallback_connection_id && (
+                  <span className={styles.itemMeta}>
+                    {t('connectionItem.fallbackSummary', { name: fallbackName ?? t('connectionItem.fallbackUnavailable') })}
+                  </span>
+                )}
               </div>
               {isActive && <Check size={14} className={styles.activeCheck} />}
             </button>
@@ -349,12 +358,16 @@ export default function ConnectionItem({
                 items={[
                   { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
                   { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
+                  { key: 'fallback', label: t('connectionItem.setFallback'), icon: <RefreshCw size={14} />, onClick: () => { setMenuPos(null); setFallbackOpen(true) }, disabled: isRoulette },
                   { key: 'div', type: 'divider' as const },
                   { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
                 ] satisfies ContextMenuEntry[]}
               />
             </div>
           </div>
+          {fallbackOpen && (
+            <FallbackConnectionPicker profile={profile} onUpdate={onUpdate} onClose={() => setFallbackOpen(false)} />
+          )}
           {isOpenRouter && !profile.has_api_key && !editing && (
             <button type="button" className={styles.oauthBanner} onClick={handleOAuthLogin} disabled={oauthLoading}>
               {oauthLoading ? <Spinner size={12} /> : <LogIn size={12} />}
