@@ -26,6 +26,12 @@
   transform: scale(1.15);
 }
 
+.swatch:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
 .swatchActive {
   border-color: var(--lumiverse-text);
   box-shadow: 0 0 0 2px var(--lumiverse-bg), 0 0 0 4px var(--lumiverse-text-dim);
@@ -91,8 +97,16 @@
 .hueSlider,
 .satSlider,
 .lumSlider {
+  min-width: 0;
   flex: 1;
   outline: none;
+}
+
+.hueSlider:disabled,
+.satSlider:disabled,
+.lumSlider:disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .hueSlider::-webkit-slider-runnable-track,

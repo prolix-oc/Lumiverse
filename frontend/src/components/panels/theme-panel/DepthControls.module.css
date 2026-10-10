@@ -19,8 +19,14 @@
 }
 
 .slider {
+  min-width: 0;
   flex: 1;
   outline: none;
+}
+
+.slider:disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .slider::-webkit-slider-runnable-track {
