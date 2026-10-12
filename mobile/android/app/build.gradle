@@ -1,0 +1,16 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'chat.lumiverse.mobile'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'chat.lumiverse.mobile'
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName '0.1.3'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    sourceSets { main { assets.srcDirs = ['../../shared'] } }
+}
+
+dependencies { testImplementation 'junit:junit:4.13.2' }
