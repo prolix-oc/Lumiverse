@@ -86,6 +86,16 @@ Switch between connections by setting a different one as **default**, or select 
 
 ---
 
+## Fallback Connections
+
+To use another connection when your primary fails, open the primary connection's **…** menu, choose **Set a fallback connection**, select an existing connection, and click **Save**. Choose **No fallback** to remove it. The configured backup appears beneath the connection's model.
+
+For chat generations, Lumiverse tries the backup once if the primary's credentials cannot be resolved or the provider fails before returning any output. The backup uses its own model, credentials, reasoning binding, and provider settings with the assembled prompt. Your active connection stays selected, so the next message tries the primary again.
+
+Stops, partial replies, reasoning output, and tool calls do not trigger fallback. If the backup also fails, its error is shown. Fallbacks do not chain, and Model Roulette and sidecar tasks are excluded.
+
+---
+
 ## Binding Reasoning Settings
 
 Reasoning-capable models (Claude with extended thinking, OpenAI o-series, DeepSeek R1, Gemini thinking models) often want different reasoning depth on different connections — heavy thinking for your hero model, light thinking for a sidecar.

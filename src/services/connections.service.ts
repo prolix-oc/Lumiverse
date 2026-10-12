@@ -458,6 +458,7 @@ export function resolveEditAndSendConnectionId(
 
 export async function createConnection(userId: string, input: CreateConnectionProfileInput): Promise<ConnectionProfile> {
   const id = crypto.randomUUID();
+  validateFallbackConnection(userId, id, input.metadata);
   const now = Math.floor(Date.now() / 1000);
 
   if (input.is_default) {
@@ -490,6 +491,8 @@ export async function createConnection(userId: string, input: CreateConnectionPr
 export async function updateConnection(userId: string, id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile | null> {
   const existing = getConnection(userId, id);
   if (!existing) return null;
+
+  if (input.metadata !== undefined) validateFallbackConnection(userId, id, input.metadata);
 
   if (input.is_default) {
     getDb().query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
@@ -526,6 +529,22 @@ export async function updateConnection(userId: string, id: string, input: Update
   const updated = getConnection(userId, id)!;
   eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id, profile: updated }, userId);
   return updated;
+}
+
+/** Fallbacks are direct, user-owned provider profiles. They are never followed recursively. */
+export function getFallbackConnection(userId: string, profile: ConnectionProfile): ConnectionProfile | null {
+  const id = profile.metadata?.fallback_connection_id;
+  if (typeof id !== 'string' || !id || id === profile.id) return null;
+  const fallback = getConnection(userId, id);
+  return fallback && fallback.provider !== MODEL_ROULETTE_PROVIDER ? fallback : null;
+}
+
+function validateFallbackConnection(userId: string, sourceId: string, metadata?: Record<string, any>): void {
+  const id = metadata?.fallback_connection_id;
+  if (id == null || id === '') return;
+  if (typeof id !== 'string' || id === sourceId) throw new Error('Invalid fallback connection');
+  const target = getConnection(userId, id);
+  if (!target || target.provider === MODEL_ROULETTE_PROVIDER) throw new Error('Fallback connection not found');
 }
 
 export async function duplicateConnection(userId: string, id: string): Promise<ConnectionProfile | null> {

@@ -292,3 +292,23 @@
 .creditsHidden {
   display: none;
 }
+
+.fallbackPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  color: var(--lumiverse-text);
+}
+
+.fallbackPicker label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fallbackPicker p {
+  margin: 0;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}

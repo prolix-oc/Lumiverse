@@ -45,6 +45,7 @@ beforeAll(async () => {
 afterEach(async () => {
   await Bun.sleep(5);
   fetchSpy?.mockRestore();
+  secretSpy.mockResolvedValue('test-key');
   settings.deleteSetting(userId, "reasoningSettings");
 });
 afterAll(() => {
@@ -107,6 +108,43 @@ async function run(provider: string, body: object[], options: { responses?: bool
   return { event, generationId: result.generationId, preset };
 }
 const chatThought = { choices: [{ delta: { reasoning_content: "A thought." } }] };
+
+for (const { streaming, setupFailure } of [
+  { streaming: true, setupFailure: false }, { streaming: false, setupFailure: false },
+  { streaming: true, setupFailure: true }, { streaming: false, setupFailure: true },
+]) {
+  test(`configured fallback completes one generation across providers (streaming: ${streaming}, missing key: ${setupFailure})`, async () => {
+    const fallback = await connections.createConnection(userId, {
+      name: 'Backup Gemini', provider: 'google', model: 'backup-model', api_url: 'https://backup.test',
+    });
+    const primary = await connections.createConnection(userId, {
+      name: 'Primary', provider: 'openai', model: 'primary-model', api_url: 'https://primary.test',
+      metadata: { fallback_connection_id: fallback.id, use_responses_api: true },
+    });
+    if (setupFailure) secretSpy.mockImplementation(async (_user: string, key: string) => key === connections.connectionSecretKey(primary.id) ? null : 'test-key');
+    const chat = chats.createChat(userId, { character_id: null, name: 'Fallback', metadata: { temporary: true, no_preset: true } });
+    chats.createMessage(chat.id, { is_user: true, name: 'User', content: 'Hello.' }, userId);
+    const body = { candidates: [{ content: { parts: [{ text: 'Backup answer.' }] }, finishReason: 'STOP' }] };
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (url: any) => {
+      if (String(url).includes('primary.test')) return Response.json({ error: { message: 'Unavailable' } }, { status: 503 });
+      return streaming ? new Response(`data: ${JSON.stringify(body)}\n\n`) : Response.json(body);
+    }) as typeof fetch);
+    const { generationId } = await startGeneration({ userId, chat_id: chat.id, connection_id: primary.id, parameters: { _streaming: streaming } });
+    const deadline = Date.now() + 3000;
+    while (!ended.some((e) => e.generationId === generationId) && Date.now() < deadline) await Bun.sleep(5);
+    const event = ended.find((e) => e.generationId === generationId);
+    expect(event?.error).toBeUndefined();
+    expect(event?.content).toBe('Backup answer.');
+    expect(pool.getPoolEntry(generationId)).toMatchObject({ status: 'completed', model: 'backup-model', connectionName: 'Backup Gemini' });
+    expect(chats.getMessage(userId, event.messageId)?.content).toBe('Backup answer.');
+    expect(fetchSpy.mock.calls).toHaveLength(setupFailure ? 1 : 2);
+    const fallbackRequest = fetchSpy.mock.calls.at(-1)!;
+    expect(String(fallbackRequest[0])).toContain('backup-model');
+    expect(String(fallbackRequest[0])).toContain('backup.test');
+    expect(JSON.parse(String(fallbackRequest[1]?.body)).use_responses_api).toBeUndefined();
+    expect(connections.getConnection(userId, primary.id)?.metadata.fallback_connection_id).toBe(fallback.id);
+  });
+}
 const responseThought = { type: "response.reasoning_summary_text.delta", delta: "A thought." };
 const googleThought = { candidates: [{ content: { parts: [{ thought: true, text: "A thought." }] } }] };
 

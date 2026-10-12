@@ -356,7 +356,15 @@
     "monthly": "Mensuel",
     "comfyWorkflow": "Flux de travail ComfyUI",
     "loadComfyWorkflowFailed": "Échec du chargement du flux de travail ComfyUI",
-    "dragToReorder": "Réorganiser par glisser-déposer"
+    "dragToReorder": "Réorganiser par glisser-déposer",
+    "setFallback": "Définir une connexion de secours",
+    "noFallback": "Aucune connexion de secours",
+    "fallbackUnavailable": "Connexion indisponible",
+    "fallbackHint": "Réessayer une fois avec cette connexion en cas d’erreur du fournisseur avant toute réponse. Les réponses partielles et les requêtes arrêtées ne sont pas relancées.",
+    "fallbackSaveFailed": "Impossible d’enregistrer la connexion de secours",
+    "saveFallback": "Enregistrer",
+    "cancelFallback": "Annuler",
+    "fallbackSummary": "Secours : {{name}}"
   },
   "connectionForm": {
     "pollinationsSaved": "Connecté avec Pollinations. Clé API enregistrée automatiquement.",
