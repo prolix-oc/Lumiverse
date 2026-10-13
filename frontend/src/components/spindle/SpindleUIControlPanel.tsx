@@ -73,7 +73,7 @@ export default function SpindleUIControlPanel() {
     ...enabledDockPanels.map((panel) => ({
       id: panel.id,
       label: panel.title,
-      kind: t('dockPanel', { edge: resolveDockPanelEdge(panel.edge, dockPanelDesktopSide, isMobile, panel.respectRequestedEdge) }),
+      kind: t('dockPanel', { edge: resolveDockPanelEdge(panel.edge, dockPanelDesktopSide, isMobile) }),
       surface: 'dock' as SurfaceKind,
     })),
     ...enabledAppMounts.map((mount) => ({

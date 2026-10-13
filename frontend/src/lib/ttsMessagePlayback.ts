@@ -18,7 +18,7 @@ import { useStore } from '@/store'
 import { ttsApi } from '@/api/tts'
 import { audioApi } from '@/api/audio'
 import { markFreshlyAttached } from '@/lib/ttsPersistence'
-import { sanitizeForTts, parseSegments, type TtsTextOptions } from '@/lib/speechDetection'
+import { sanitizeForTts, parseSegments, stripTtsAudioCues } from '@/lib/speechDetection'
 import { synthesizeTtsSegments, shouldUseStreamingEndpoint, type SynthesizedTtsSegment } from '@/lib/ttsSynthesis'
 import {
   resolveMessageVoices,
@@ -40,16 +40,13 @@ interface PlanItem {
   voice: VoiceRef
 }
 
-function voiceTextOptions(voice: VoiceRef | null, profiles: TtsConnectionProfile[]): TtsTextOptions {
+function voiceSupportsAudioCues(voice: VoiceRef | null, profiles: TtsConnectionProfile[]): boolean {
   const profile = profiles.find((candidate) => candidate.id === voice?.connectionId)
-  return {
-    fishModel: profile?.provider === 'fish_audio' ? profile.model.trim() || 's2.1-pro' : undefined,
-    preserveAudioCues: !!profile && (
-      profile.provider === 'google_tts'
-      || profile.provider === 'google_vertex_tts'
-      || (profile.provider === 'openrouter_tts' && /^google\/gemini-/i.test(profile.model))
-    ),
-  }
+  return !!profile && (
+    profile.provider === 'google_tts'
+    || profile.provider === 'google_vertex_tts'
+    || (profile.provider === 'openrouter_tts' && /^google\/gemini-/i.test(profile.model))
+  )
 }
 
 /**
@@ -73,19 +70,16 @@ export function planMessagePlayback(args: {
     ttsProfiles: state.ttsProfiles,
   })
 
-  const speechOptions = voiceTextOptions(voices.speech, state.ttsProfiles)
-  const narrationOptions = voiceTextOptions(voices.narration, state.ttsProfiles)
-  const fishModels = [speechOptions.fishModel, narrationOptions.fishModel]
-  const textOptions: TtsTextOptions = {
-    preserveAudioCues: speechOptions.preserveAudioCues || narrationOptions.preserveAudioCues,
-    fishModel: fishModels.includes('drama-3-preview') ? 'drama-3-preview' : fishModels.find((model) => model && model !== 's1') || fishModels.find(Boolean),
-  }
-  const cleaned = sanitizeForTts(args.messageContent, textOptions)
+  const speechSupportsCues = voiceSupportsAudioCues(voices.speech, state.ttsProfiles)
+  const narrationSupportsCues = voiceSupportsAudioCues(voices.narration, state.ttsProfiles)
+  const cleaned = sanitizeForTts(args.messageContent, {
+    preserveAudioCues: speechSupportsCues || narrationSupportsCues,
+  })
   if (!cleaned) return []
-  const segments = parseSegments(cleaned, voiceSettings.speechDetectionRules, textOptions)
+  const segments = parseSegments(cleaned, voiceSettings.speechDetectionRules)
 
   // Resolve voice per segment, drop skips, coalesce adjacent same-voice
-  // segments. The coalesce key includes connection, voice, and parameters — two narration
+  // segments. The coalesce key is connection|voice|speed — two narration
   // segments separated by a speech segment do NOT merge because the speech
   // resolves to a different voice and breaks the run.
   const resolved: PlanItem[] = []
@@ -93,8 +87,8 @@ export function planMessagePlayback(args: {
     if (seg.action === 'skip') continue
     const voice = seg.action === 'narration' ? voices.narration : voices.speech
     if (!voice) continue
-    const options = seg.action === 'narration' ? narrationOptions : speechOptions
-    const text = sanitizeForTts(seg.text, { ...options, stripFishDirections: !!textOptions.fishModel })
+    const supportsCues = seg.action === 'narration' ? narrationSupportsCues : speechSupportsCues
+    const text = supportsCues ? seg.text : stripTtsAudioCues(seg.text)
     if (!text) continue
     const last = resolved[resolved.length - 1]
     if (last && voiceCoalesceKey(last.voice) === voiceCoalesceKey(voice)) {
@@ -146,7 +140,7 @@ export function startMessageTtsPlayback(args: {
   unlockTTSAudio()
   setTTSVolume(voiceSettings.ttsVolume)
   // Speed is delivered to the provider per segment via the synth call below
-  // (voice overrides, Fish connection defaults, then global ttsSpeed). Force the
+  // (voice.parameters.speed, falling back to the global ttsSpeed). Force the
   // playback rate to 1.0 so we don't double-apply on top of provider-side
   // speed — and so any live-tune state the test slider left behind is wiped.
   setTTSSpeed(1.0)
@@ -198,7 +192,8 @@ export function startMessageTtsPlayback(args: {
       const item = plan[idx]
       try {
         const response = await ttsApi.synthesize(item.voice.connectionId, item.text, {
-          ...voiceSynthesisOptions(item.voice, voiceSettings.ttsSpeed),
+          voice: item.voice.voice || undefined,
+          speed: item.voice.parameters?.speed ?? voiceSettings.ttsSpeed,
         })
         if (!response.ok) {
           const body = await response.text().catch(() => '')
@@ -254,16 +249,6 @@ function readMessageSwipeId(messageId: string): number | undefined {
 
 function resolveTtsConnectionProfile(connectionId: string): TtsConnectionProfile | null {
   return useStore.getState().ttsProfiles.find((profile) => profile.id === connectionId) || null
-}
-
-function voiceSynthesisOptions(voice: VoiceRef, globalSpeed: number) {
-  const profile = resolveTtsConnectionProfile(voice.connectionId)
-  const configuredSpeed = profile?.provider === 'fish_audio' ? profile.default_parameters.speed : undefined
-  return {
-    voice: voice.voice || undefined,
-    parameters: voice.parameters,
-    speed: voice.parameters?.speed ?? (configuredSpeed != null ? Number(configuredSpeed) : globalSpeed),
-  }
 }
 
 async function saveSegmentsToMessage(args: {
@@ -343,7 +328,8 @@ function startStreamingPlayback(args: {
         try {
           const segments = await synthesizeTtsSegments(item.voice.connectionId, item.text, {
             profile: resolveTtsConnectionProfile(item.voice.connectionId),
-            ...voiceSynthesisOptions(item.voice, args.ttsSpeed),
+            voice: item.voice.voice || undefined,
+            speed: item.voice.parameters?.speed ?? args.ttsSpeed,
             onPlayableSegment: playSegment,
           })
           if (cancelled || getActiveMessageId() !== args.messageId) {
@@ -509,7 +495,8 @@ export async function synthesizeSaveAndAutoPlay(args: {
       try {
         persistBuffers[idx] = await synthesizeTtsSegments(item.voice.connectionId, item.text, {
           profile: resolveTtsConnectionProfile(item.voice.connectionId),
-          ...voiceSynthesisOptions(item.voice, voiceSettings.ttsSpeed),
+          voice: item.voice.voice || undefined,
+          speed: item.voice.parameters?.speed ?? voiceSettings.ttsSpeed,
           signal: args.signal,
         })
       } catch (err) {

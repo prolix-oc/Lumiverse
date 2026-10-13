@@ -2,7 +2,6 @@ import { get } from './client'
 import type {
   ConnectionProfile, ProviderInfo,
   SttConnectionProfile, SttProviderInfo,
-  DecisionConnectionProfile, DecisionProviderInfo,
   TtsConnectionProfile, TtsProviderInfo,
   ImageGenConnectionProfile, ImageGenProviderInfo,
   Pack, Persona, PaginatedResult, GroupedRecentChat,
@@ -22,7 +21,6 @@ export interface BootstrapPayload {
     connections: PaginatedResult<ConnectionProfile>
     providers: ProviderInfo[]
   }
-  decision?: { connections: PaginatedResult<DecisionConnectionProfile>; providers: DecisionProviderInfo[] }
   stt: {
     connections: PaginatedResult<SttConnectionProfile>
     providers: SttProviderInfo[]

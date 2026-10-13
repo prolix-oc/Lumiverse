@@ -243,9 +243,11 @@ pub fn emit_frontend_presence<R: tauri::Runtime>(
     app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
 ) {
-    let presence = frontend_presence_for_window(window);
-    crate::system_audio::frontend_visible(app, presence.visible && !presence.minimized);
-    let _ = app.emit_to(FRONTEND_LABEL, "desktop-presence-changed", presence);
+    let _ = app.emit_to(
+        FRONTEND_LABEL,
+        "desktop-presence-changed",
+        frontend_presence_for_window(window),
+    );
 }
 
 /// A small, local-only cache written by the trusted frontend after it has
@@ -833,7 +835,6 @@ pub fn show_frontend(
                 }
             }
             WindowEvent::Destroyed => {
-                crate::system_audio::frontend_gone(&close_app);
                 #[cfg(target_os = "linux")]
                 if let Err(error) =
                     crate::wayland_background_effect::clear_background_effects(&close_window)

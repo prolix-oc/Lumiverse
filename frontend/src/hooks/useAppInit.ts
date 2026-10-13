@@ -4,7 +4,6 @@ import { useStore } from '@/store'
 import { bootstrapApi, type BootstrapPayload, type LandingBootstrapPayload } from '@/api/bootstrap'
 import { connectionsApi } from '@/api/connections'
 import { sttConnectionsApi } from '@/api/stt-connections'
-import { decisionConnectionsApi } from '@/api/decision-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
@@ -102,7 +101,6 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
     errors = {
       'startupSettings': 'fallback',
       'llm.connections': 'fallback', 'llm.providers': 'fallback',
-      'decision.connections': 'fallback', 'decision.providers': 'fallback',
       'stt.connections': 'fallback', 'stt.providers': 'fallback',
       'tts.connections': 'fallback', 'tts.providers': 'fallback',
       'imageGen.connections': 'fallback', 'imageGen.providers': 'fallback',
@@ -202,9 +200,6 @@ export function applyBootstrap(
   if (!errors['llm.connections']) store.setProfiles(payload.llm.connections.data)
   if (!errors['llm.providers']) store.setProviders(payload.llm.providers)
 
-  if (payload.decision && !errors['decision.connections']) store.setDecisionProfiles(payload.decision.connections.data)
-  if (payload.decision && !errors['decision.providers']) store.setDecisionProviders(payload.decision.providers)
-
   if (!errors['stt.connections']) store.setSttProfiles(payload.stt.connections.data)
   if (!errors['stt.providers']) store.setSttProviders(payload.stt.providers)
 
@@ -276,14 +271,6 @@ async function runFallbacks(
       if (!isCurrent()) return
       if (profilesRes.status === 'fulfilled') store.setProfiles(profilesRes.value.data)
       if (providersRes.status === 'fulfilled') store.setProviders(providersRes.value.providers)
-    })
-  }
-
-  if (errors['decision.connections'] || errors['decision.providers']) {
-    Promise.allSettled([listAllConnections(decisionConnectionsApi), decisionConnectionsApi.providers()]).then(([profilesRes, providersRes]) => {
-      if (!isCurrent()) return
-      if (profilesRes.status === 'fulfilled') store.setDecisionProfiles(profilesRes.value.data)
-      if (providersRes.status === 'fulfilled') store.setDecisionProviders(providersRes.value.providers)
     })
   }
 

@@ -5,7 +5,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical, Shuffle, GripVertical } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
-import { buildNanoGptOAuthCallbackUrl, nanoGptApi, type NanoGptAccountUsage } from '@/api/nanogpt'
+import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
 import { startProviderOAuthPopup } from '@/lib/providerOAuthPopup'
 import {
   getReasoningBindingSummary,
@@ -83,9 +83,7 @@ export default function ConnectionItem({
   const [oauthLoading, setOauthLoading] = useState(false)
   const [credits, setCredits] = useState<OpenRouterCreditsInfo | null>(null)
   const [creditsLoading, setCreditsLoading] = useState(false)
-  const [nanoGptAccount, setNanoGptAccount] = useState<NanoGptAccountUsage | null>(null)
-  const [nanoGptError, setNanoGptError] = useState<string | null>(null)
-  const nanoGptUsage = nanoGptAccount?.subscription
+  const [nanoGptUsage, setNanoGptUsage] = useState<NanoGptSubscriptionUsage | null>(null)
   const [nanoGptUsageLoading, setNanoGptUsageLoading] = useState(false)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
 
@@ -128,27 +126,33 @@ export default function ConnectionItem({
       .finally(() => setCreditsLoading(false))
   }, [showCredits, profile.id])
 
+  const nanoGptFetchedRef = useRef(false)
   useEffect(() => {
-    if (!showNanoGptUsage) return
-    let cancelled = false
-    setNanoGptError(null)
+    if (!showNanoGptUsage) {
+      if (!nanoGptFetchedRef.current) setNanoGptUsage(null)
+      return
+    }
+    if (nanoGptUsage) return
+    nanoGptFetchedRef.current = true
     setNanoGptUsageLoading(true)
-    nanoGptApi.account(profile.id)
-      .then((account) => { if (!cancelled) setNanoGptAccount(account) })
-      .catch((err) => { if (!cancelled) setNanoGptError(err.body?.error || err.message || t('connectionItem.nanoGptUsageUnavailable')) })
-      .finally(() => { if (!cancelled) setNanoGptUsageLoading(false) })
-    return () => { cancelled = true }
-  }, [showNanoGptUsage, profile.id, profile.updated_at, t])
+    connectionsApi.nanogptUsage(profile.id)
+      .then(setNanoGptUsage)
+      .catch(() => setNanoGptUsage(null))
+      .finally(() => setNanoGptUsageLoading(false))
+  }, [showNanoGptUsage, profile.id, nanoGptUsage])
+
+  useEffect(() => {
+    if (!showNanoGptUsage) nanoGptFetchedRef.current = false
+  }, [showNanoGptUsage])
 
   const refreshNanoGptUsage = useCallback(() => {
     if (!showNanoGptUsage) return
-    setNanoGptError(null)
     setNanoGptUsageLoading(true)
-    nanoGptApi.account(profile.id)
-      .then(setNanoGptAccount)
-      .catch((err) => setNanoGptError(err.body?.error || err.message || t('connectionItem.nanoGptUsageUnavailable')))
+    connectionsApi.nanogptUsage(profile.id)
+      .then(setNanoGptUsage)
+      .catch(() => setNanoGptUsage(null))
       .finally(() => setNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id, t])
+  }, [showNanoGptUsage, profile.id])
 
   // Auto-dismiss test result after 5s
   useEffect(() => {
@@ -246,7 +250,7 @@ export default function ConnectionItem({
     creditsAnimatedRef.current = false
   }
 
-  const nanoGptShown = showNanoGptUsage && (nanoGptAccount || nanoGptError || nanoGptUsageLoading)
+  const nanoGptShown = showNanoGptUsage && nanoGptUsage && (nanoGptUsageRows.length > 0 || nanoGptSubscriptionInactive)
   const nanoGptAnimatedRef = useRef(false)
   if (nanoGptShown && !nanoGptAnimatedRef.current) {
     nanoGptAnimatedRef.current = true
@@ -394,31 +398,7 @@ export default function ConnectionItem({
             </div>
           )}
           {isNanoGpt && profile.has_api_key && (
-            <div className={clsx(!nanoGptShown && styles.creditsHidden)}>
-              <div className={clsx(styles.creditsBar, styles.nanoGptUsageBar)} title={t('connectionItem.nanoGptPaygoScope')}>
-                <div className={styles.creditCell}>
-                  <span className={styles.creditLabel}>{t('connectionItem.nanoGptPaygoBalance')}</span>
-                  <span className={styles.creditValue} title={nanoGptAccount?.errors.balance}>
-                    {nanoGptAccount?.balance?.usd_balance != null
-                      ? `$${nanoGptAccount.balance.usd_balance.toFixed(2)}`
-                      : nanoGptAccount?.balance?.nano_balance != null
-                        ? `${nanoGptAccount.balance.nano_balance.toFixed(4)} Nano`
-                        : unknownReset}
-                  </span>
-                </div>
-                <div className={styles.creditCell}>
-                  <span className={styles.creditLabel}>{t('connectionItem.today')}</span>
-                  <span className={styles.creditValue} title={nanoGptAccount?.errors.paygo}>{nanoGptAccount?.paygo ? `$${nanoGptAccount.paygo.usage_daily.toFixed(4)}` : unknownReset}</span>
-                </div>
-                <div className={styles.creditCell}>
-                  <span className={styles.creditLabel}>{t('connectionItem.thisMonth')}</span>
-                  <span className={styles.creditValue} title={nanoGptAccount?.errors.paygo}>{nanoGptAccount?.paygo ? `$${nanoGptAccount.paygo.usage_monthly.toFixed(4)}` : unknownReset}</span>
-                </div>
-                <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading} aria-label={t('connectionItem.refreshNanoGptUsage')}>
-                  {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
-                </button>
-              </div>
-              {nanoGptError && <div className={clsx(styles.testMessage, styles.testMessageFail)} role="alert">{nanoGptError}</div>}
+            <div className={clsx(!(showNanoGptUsage && nanoGptUsage && (nanoGptUsageRows.length > 0 || nanoGptSubscriptionInactive)) && styles.creditsHidden)}>
               {nanoGptUsageRows.length > 0
               ? nanoGptUsageRows.map(({ key, label, window: win }, idx) => (
                 <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
@@ -438,16 +418,24 @@ export default function ConnectionItem({
                     <span className={styles.creditLabel}>{nanoGptSubscriptionInactive ? t('connectionItem.status') : t('connectionItem.resetsIn')}</span>
                     <span className={styles.creditValue}>{nanoGptSubscriptionInactive ? t('connectionItem.inactive') : (formatTimeUntil(win.resetAt) || unknownReset)}</span>
                   </div>
+                  {idx === 0 && (
+                    <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                      {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
+                    </button>
+                  )}
                 </div>
               ))
-              : nanoGptSubscriptionInactive && profile.metadata?.use_subscription_api ? (
+              : (
                 <div key="nanoGpt-inactive" className={clsx(styles.creditsBar, styles.nanoGptUsageBar, !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
                     <span className={styles.creditLabel}>{t('connectionItem.status')}</span>
                     <span className={styles.creditValue}>{t('connectionItem.inactive')}</span>
                   </div>
+                  <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                    {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
+                  </button>
                 </div>
-              ) : null}
+              )}
             </div>
           )}
         </>

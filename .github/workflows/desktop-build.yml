@@ -7,18 +7,11 @@ on:
   push:
     branches-ignore: [main]
     paths:
-      - ".github/workflows/desktop-build.yml"
       - "desktop/package.json"
       - "desktop/src-tauri/Cargo.toml"
       - "desktop/src-tauri/Cargo.lock"
       - "desktop/src-tauri/tauri.conf.json"
       - "desktop/src-tauri/src/capture/**"
-      - "desktop/src-tauri/src/system_audio/**"
-      - "desktop/tests/system-audio-coreaudio.test.ts"
-      - "desktop/tests/fixtures/system-audio-coreaudio.m"
-      - "desktop/tests/system-audio-benchmark.rs"
-      - "desktop/src-tauri/capabilities/system-audio.json"
-      - "desktop/src-tauri/permissions/system-audio.toml"
       - "desktop/src-tauri/capabilities/desktop-capture.json"
       - "desktop/src-tauri/permissions/desktop-capture.toml"
       - "desktop/src-tauri/permissions.test.ts"
@@ -26,7 +19,6 @@ on:
       - "scripts/finalize-appimage.sh"
       - "scripts/smoke-test-appimage.sh"
       - "scripts/tauri-finalized.ts"
-      - "scripts/tauri-finalized.test.ts"
       - "scripts/verify-appimage-gstreamer.sh"
       - "scripts/runner.ts"
       - "scripts/runner/**"
@@ -111,7 +103,6 @@ jobs:
           src/services/runner-control-transport.test.ts
           scripts/runner/server-manager.test.ts
           scripts/windows-msvc.test.ts
-          scripts/tauri-finalized.test.ts
           desktop/src-tauri/permissions.test.ts
 
       - uses: dtolnay/rust-toolchain@stable
@@ -142,21 +133,6 @@ jobs:
         run: |
           bun run build
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml capture::
-          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
-
-      - name: Test Linux system audio boundaries
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        working-directory: desktop
-        run: |
-          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
-
-      - name: Test macOS system audio boundaries
-        if: runner.os == 'macOS'
-        working-directory: desktop
-        run: |
-          bun test tests/system-audio-coreaudio.test.ts ../scripts/tauri-finalized.test.ts
-          bun run build
-          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
 
       - name: Build desktop installers
         uses: tauri-apps/tauri-action@v1

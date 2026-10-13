@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useTranslation } from 'react-i18next'
 import { Crown, UserCheck, SkipForward, UserX, Ban, LogOut, Copy, Loader2, Globe } from 'lucide-react'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
@@ -45,22 +44,15 @@ const iconBtn: React.CSSProperties = {
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--lumiverse-text-secondary)', marginBottom: 4 }
 
 function FreeformCountdown({ deadline }: { deadline: number | null }) {
-  const { t } = useTranslation('panels')
   const [now, setNow] = useState(() => Date.now() / 1000)
   useEffect(() => {
     if (deadline == null) return
     const id = setInterval(() => setNow(Date.now() / 1000), 250)
     return () => clearInterval(id)
   }, [deadline])
-  if (deadline == null) return <span>{t('multiplayerPanel.freeformWindowClosed')}</span>
+  if (deadline == null) return <span>Window closed</span>
   const remaining = Math.max(0, Math.ceil(deadline - now))
-  return (
-    <span>
-      {remaining > 0
-        ? t('multiplayerPanel.freeformSecondsLeft', { count: remaining })
-        : t('multiplayerPanel.freeformGenerating')}
-    </span>
-  )
+  return <span>{remaining > 0 ? `${remaining}s left to add messages` : 'Generating…'}</span>
 }
 
 function Avatar({ p }: { p: RoomParticipant }) {
@@ -88,7 +80,6 @@ function Avatar({ p }: { p: RoomParticipant }) {
 }
 
 export default function MultiplayerPanel() {
-  const { t } = useTranslation('panels')
   const activeChatId = useStore((s) => s.activeChatId)
   const roomId = useStore((s) => s.mpRoomId)
   const mpChatId = useStore((s) => s.mpChatId)
@@ -159,11 +150,11 @@ export default function MultiplayerPanel() {
       }
       await multiplayerApi.startFreeform(roomId)
     } catch {
-      toast.error(t('multiplayerPanel.toastOpenWindowFailed'))
+      toast.error('Could not open the freeform window')
     } finally {
       setBusy(false)
     }
-  }, [roomId, windowEdit, mpSettings, t])
+  }, [roomId, windowEdit, mpSettings])
 
   // Register with the Identity Server + open the relay bridge + mint a shareable
   // code, so the room is immediately "listening" for remote invites. Best-effort:
@@ -203,14 +194,14 @@ export default function MultiplayerPanel() {
       // participant under their current persona name + avatar, and relay the
       // bot avatar for peers.
       wsClient.send({ type: 'room_join', roomId: view.roomId, displayName: snap?.name, persona: snap, characterAvatar })
-      toast.success(t('multiplayerPanel.toastRoomCreated'))
+      toast.success('Multiplayer room created')
       void startListening(view.roomId)
     } catch {
-      toast.error(t('multiplayerPanel.toastCreateFailed'))
+      toast.error('Could not create a multiplayer room')
     } finally {
       setBusy(false)
     }
-  }, [activeChatId, strategy, windowSec, maxPeers, setRoomState, setActiveChat, activeCharacterId, startListening, setCharacterAvatar, t])
+  }, [activeChatId, strategy, windowSec, maxPeers, setRoomState, setActiveChat, activeCharacterId, startListening, setCharacterAvatar])
 
   // After a refresh the store forgets the room but the backend still has it.
   // Re-adopt it (and re-subscribe the socket) so the host isn't offered a
@@ -256,7 +247,7 @@ export default function MultiplayerPanel() {
       try {
         grant = await multiplayerApi.joinByCode(input, snap?.name)
       } catch {
-        toast.error(t('multiplayerPanel.toastInvalidInvite'))
+        toast.error('Invalid or expired invite code')
         return
       }
       try {
@@ -266,12 +257,12 @@ export default function MultiplayerPanel() {
         relayClient.connect(grant, { displayName: snap?.name, persona: snap })
         setJoinId('')
       } catch {
-        toast.error(t('multiplayerPanel.toastRelayUnreachable'))
+        toast.error('Code accepted, but the relay server was unreachable.')
       }
     } finally {
       setBusy(false)
     }
-  }, [joinId, clearRoom, t])
+  }, [joinId, clearRoom])
 
   // Rejoin a remote room previously joined from history, using the durable
   // reconnect token the backend stored on this shadow chat — no new invite code.
@@ -283,11 +274,11 @@ export default function MultiplayerPanel() {
       const grant = await multiplayerApi.reconnect(activeChatId)
       relayClient.connect(grant, { displayName: snap?.name, persona: snap })
     } catch {
-      toast.error(t('multiplayerPanel.toastRejoinFailed'))
+      toast.error('Could not rejoin — the room may be closed, or you may need a fresh invite')
     } finally {
       setBusy(false)
     }
-  }, [activeChatId, t])
+  }, [activeChatId])
 
   const enableRemote = useCallback(async () => {
     if (!roomId) return
@@ -296,22 +287,22 @@ export default function MultiplayerPanel() {
       await multiplayerApi.enableRemote(roomId)
       const inv = await multiplayerApi.remoteInvite(roomId)
       setRemoteCode(inv.code)
-      toast.success(t('multiplayerPanel.toastRemoteEnabled'))
+      toast.success('Remote play enabled — share the code')
     } catch {
-      toast.error(t('multiplayerPanel.toastRemoteUnavailable'))
+      toast.error('Remote multiplayer is not configured or the server is unreachable')
     } finally {
       setBusy(false)
     }
-  }, [roomId, setRemoteCode, t])
+  }, [roomId, setRemoteCode])
 
-  const copyText = useCallback(async (text: string, labelText: string) => {
+  const copyText = useCallback(async (text: string, label: string) => {
     try {
       await copyTextToClipboard(text)
-      toast.success(t('multiplayerPanel.toastCopied', { label: labelText }))
+      toast.success(`${label} copied`)
     } catch {
-      toast.error(t('multiplayerPanel.toastCopyFailed'))
+      toast.error('Could not copy — select and copy manually')
     }
-  }, [t])
+  }, [])
 
   const leave = useCallback(() => {
     if (isHost && roomId) {
@@ -331,24 +322,24 @@ export default function MultiplayerPanel() {
       <div style={{ padding: 12 }}>
         {joinedRoom?.remote && (
           <div style={card}>
-            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>{t('multiplayerPanel.rejoinTitle')}</h3>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Rejoin room</h3>
             <p style={{ color: 'var(--lumiverse-text-secondary)', fontSize: 13, margin: '0 0 10px' }}>
-              {t('multiplayerPanel.rejoinHint')}
+              You joined this room before. Reconnect to pick up where you left off — no new code needed.
             </p>
             <button style={primaryBtn} onClick={rejoin} disabled={busy}>
-              {busy ? <Loader2 size={14} className="spin" /> : t('multiplayerPanel.rejoin')}
+              {busy ? <Loader2 size={14} className="spin" /> : 'Rejoin'}
             </button>
           </div>
         )}
         <div style={card}>
-          <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>{t('multiplayerPanel.hostTitle')}</h3>
+          <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>Host a room</h3>
           {!activeChatId ? (
             <p style={{ color: 'var(--lumiverse-text-secondary)', fontSize: 13 }}>
-              {t('multiplayerPanel.openChatFirst')}
+              Open a chat first — the room shares that chat with your friends.
             </p>
           ) : (
             <>
-              <div style={label}>{t('multiplayerPanel.turnStrategy')}</div>
+              <div style={label}>Turn strategy</div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 {(['round_robin', 'freeform'] as TurnStrategy[]).map((s) => (
                   <button
@@ -356,12 +347,12 @@ export default function MultiplayerPanel() {
                     style={strategy === s ? primaryBtn : btn}
                     onClick={() => setStrategy(s)}
                   >
-                    {s === 'round_robin' ? t('multiplayerPanel.roundRobin') : t('multiplayerPanel.freeform')}
+                    {s === 'round_robin' ? 'Round robin' : 'Freeform'}
                   </button>
                 ))}
               </div>
               <div style={{ marginBottom: 10 }}>
-                <div style={label}>{t('multiplayerPanel.maxParticipants')}</div>
+                <div style={label}>Max participants (1–8)</div>
                 <input
                   type="number"
                   min={1}
@@ -373,7 +364,7 @@ export default function MultiplayerPanel() {
               </div>
               {strategy === 'freeform' && (
                 <div style={{ marginBottom: 10 }}>
-                  <div style={label}>{t('multiplayerPanel.windowSeconds')}</div>
+                  <div style={label}>Window (seconds, 10–3600)</div>
                   <input
                     type="number"
                     min={10}
@@ -385,24 +376,24 @@ export default function MultiplayerPanel() {
                 </div>
               )}
               <button style={primaryBtn} onClick={hostCreate} disabled={busy}>
-                {busy ? <Loader2 size={14} className="spin" /> : t('multiplayerPanel.createRoom')}
+                {busy ? <Loader2 size={14} className="spin" /> : 'Create room'}
               </button>
             </>
           )}
         </div>
 
         <div style={card}>
-          <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>{t('multiplayerPanel.joinTitle')}</h3>
-          <div style={label}>{t('multiplayerPanel.joinHint')}</div>
+          <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>Join a room</h3>
+          <div style={label}>Invite code, or a room ID on the same server</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               value={joinId}
               onChange={(e) => setJoinId(e.target.value)}
-              placeholder={t('multiplayerPanel.joinPlaceholder')}
+              placeholder="paste invite code"
               style={{ ...btn, flex: 1, cursor: 'text' }}
             />
             <button style={primaryBtn} onClick={join} disabled={!joinId.trim() || busy}>
-              {busy ? <Loader2 size={14} className="spin" /> : t('multiplayerPanel.join')}
+              {busy ? <Loader2 size={14} className="spin" /> : 'Join'}
             </button>
           </div>
         </div>
@@ -416,25 +407,19 @@ export default function MultiplayerPanel() {
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ margin: 0, fontSize: 14 }}>
-            {isHost ? t('multiplayerPanel.hosting') : t('multiplayerPanel.inRoom')} ·{' '}
-            {turnStrategy === 'round_robin' ? t('multiplayerPanel.roundRobin') : t('multiplayerPanel.freeform')}
+            {isHost ? 'Hosting' : 'In room'} · {turnStrategy === 'round_robin' ? 'Round robin' : 'Freeform'}
           </h3>
           <button style={{ ...btn, color: 'var(--lumiverse-danger, #ef4444)' }} onClick={leave}>
             <LogOut size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-            {isHost ? t('multiplayerPanel.close') : t('multiplayerPanel.leave')}
+            {isHost ? 'Close' : 'Leave'}
           </button>
         </div>
         <div style={{ ...label, marginTop: 6 }}>
           {turnStrategy === 'round_robin' ? (
             currentTurnId === myParticipantId ? (
-              <strong style={{ color: 'var(--lumiverse-accent, #6366f1)' }}>{t('multiplayerPanel.yourTurn')}</strong>
+              <strong style={{ color: 'var(--lumiverse-accent, #6366f1)' }}>Your turn</strong>
             ) : (
-              <>
-                {t('multiplayerPanel.waitingFor', {
-                  name: participants.find((p) => p.id === currentTurnId)?.displayName || t('multiplayerPanel.hostFallbackName'),
-                  round: round + 1,
-                })}
-              </>
+              <>Waiting for {participants.find((p) => p.id === currentTurnId)?.displayName || 'host'} · round {round + 1}</>
             )
           ) : (
             <FreeformCountdown deadline={freeformDeadline} />
@@ -450,19 +435,19 @@ export default function MultiplayerPanel() {
                 max={3600}
                 value={windowEdit}
                 onChange={(e) => setWindowEdit(e.target.value)}
-                aria-label={t('multiplayerPanel.freeformWindowAria')}
+                aria-label="Freeform window seconds"
                 style={{ ...btn, width: 72, cursor: 'text' }}
               />
-              <span style={{ ...label, marginBottom: 0 }}>{t('multiplayerPanel.secondsShort')}</span>
+              <span style={{ ...label, marginBottom: 0 }}>sec</span>
               <button style={primaryBtn} onClick={openWindow} disabled={busy}>
-                {t('multiplayerPanel.openWindow')}
+                Open window
               </button>
             </div>
           ) : (
             // Window open → duration is locked; only ending is offered.
             <div style={{ marginTop: 8 }}>
               <button style={btn} onClick={() => multiplayerApi.endFreeform(roomId).catch(() => {})}>
-                {t('multiplayerPanel.endNow')}
+                End now
               </button>
             </div>
           )
@@ -471,12 +456,12 @@ export default function MultiplayerPanel() {
 
       {isHost && (
         <div style={card}>
-          <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>{t('multiplayerPanel.inviteTitle')}</h3>
-          <div style={label}>{t('multiplayerPanel.roomIdHint')}</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Invite</h3>
+          <div style={label}>Friends on this server can join with the Room ID:</div>
           <code style={{ display: 'block', fontSize: 12, wordBreak: 'break-all', marginBottom: 8 }}>{roomId}</code>
-          <button style={btn} onClick={() => copyText(roomId!, t('multiplayerPanel.roomIdLabel'))}>
+          <button style={btn} onClick={() => copyText(roomId!, 'Room ID')}>
             <Copy size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-            {t('multiplayerPanel.copyRoomId')}
+            Copy Room ID
           </button>
 
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--lumiverse-border)' }}>
@@ -484,30 +469,30 @@ export default function MultiplayerPanel() {
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
                   <Globe size={14} style={{ flexShrink: 0 }} />
-                  {t('multiplayerPanel.listeningTitle')}
+                  Listening for friends
                 </div>
                 <div style={{ ...label, marginBottom: 8, lineHeight: 1.4 }}>
-                  {t('multiplayerPanel.inviteCodeHint')}
+                  Share this one-time code with friends anywhere — it rolls to a new one each time someone joins:
                 </div>
                 <code style={{ display: 'block', fontSize: 16, fontWeight: 700, letterSpacing: 1, wordBreak: 'break-all', marginBottom: 8 }}>
                   {remoteCode}
                 </code>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button style={btn} onClick={() => copyText(remoteCode, t('multiplayerPanel.inviteCodeLabel'))}>
+                  <button style={btn} onClick={() => copyText(remoteCode, 'Invite code')}>
                     <Copy size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                    {t('multiplayerPanel.copyCode')}
+                    Copy code
                   </button>
                   <button style={btn} onClick={enableRemote} disabled={busy}>
-                    {t('multiplayerPanel.newCode')}
+                    New code
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <div style={{ ...label, lineHeight: 1.4 }}>{t('multiplayerPanel.enableRemoteHint')}</div>
+                <div style={{ ...label, lineHeight: 1.4 }}>Play with friends over the internet (via the Identity Server):</div>
                 <button style={btn} onClick={enableRemote} disabled={busy}>
                   <Globe size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                  {t('multiplayerPanel.enableRemote')}
+                  Enable remote play
                 </button>
               </>
             )}
@@ -516,43 +501,41 @@ export default function MultiplayerPanel() {
       )}
 
       <div style={card}>
-        <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>{t('multiplayerPanel.membersTitle', { count: participants.length })}</h3>
+        <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>Members ({participants.length})</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {participants.map((p) => (
             <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Avatar p={p} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {p.persona?.name || p.displayName || t('multiplayerPanel.guest')}
+                  {p.persona?.name || p.displayName || 'Guest'}
                   {p.role === 'host' && <Crown size={12} style={{ color: 'var(--lumiverse-accent, #6366f1)' }} />}
                   {p.isCurrentTurn && (
-                    <span style={{ fontSize: 10, color: 'var(--lumiverse-accent, #6366f1)', fontWeight: 700 }}>
-                      {t('multiplayerPanel.turnBadge')}
-                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--lumiverse-accent, #6366f1)', fontWeight: 700 }}>● TURN</span>
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--lumiverse-text-secondary)' }}>
-                  {p.typing ? t('multiplayerPanel.typing') : p.role === 'host' ? t('multiplayerPanel.roleHost') : t('multiplayerPanel.rolePeer')}
+                  {p.typing ? 'typing…' : p.role === 'host' ? 'host' : 'peer'}
                 </div>
               </div>
               {isHost && p.role !== 'host' && (
                 <div style={{ display: 'flex', gap: 4 }}>
                   {turnStrategy === 'round_robin' && (
                     <>
-                      <button style={iconBtn} title={t('multiplayerPanel.promoteTitle')} onClick={() => multiplayerApi.promote(roomId, p.id).catch(() => {})}>
+                      <button style={iconBtn} title="Promote to turn" onClick={() => multiplayerApi.promote(roomId, p.id).catch(() => {})}>
                         <UserCheck size={14} />
                       </button>
-                      <button style={iconBtn} title={t('multiplayerPanel.skipTitle')} onClick={() => multiplayerApi.skip(roomId, p.id).catch(() => {})}>
+                      <button style={iconBtn} title="Skip" onClick={() => multiplayerApi.skip(roomId, p.id).catch(() => {})}>
                         <SkipForward size={14} />
                       </button>
                     </>
                   )}
-                  <button style={iconBtn} title={t('multiplayerPanel.kickTitle')} onClick={() => multiplayerApi.kick(roomId, p.id).catch(() => {})}>
+                  <button style={iconBtn} title="Kick" onClick={() => multiplayerApi.kick(roomId, p.id).catch(() => {})}>
                     <UserX size={14} />
                   </button>
                   <button
                     style={{ ...iconBtn, color: 'var(--lumiverse-danger, #ef4444)' }}
-                    title={t('multiplayerPanel.banTitle')}
+                    title="Ban"
                     onClick={() => multiplayerApi.ban(roomId, p.id).catch(() => {})}
                   >
                     <Ban size={14} />

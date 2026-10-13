@@ -24,7 +24,6 @@ import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useIsMobile from '@/hooks/useIsMobile'
-import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import {
   clampCustomCSSDockSize,
   CUSTOM_CSS_DOCK_BREAKPOINT,
@@ -50,7 +49,6 @@ import {
 import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
-import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
 
@@ -127,8 +125,7 @@ function Application() {
   const wallpaper = useStore((s) => s.wallpaper)
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const sceneBackground = useStore((s) => s.sceneBackground)
-  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
-  const globalWallpaperHidden = !!resolveChatWallpaper(activeChatWallpaper, activeChatMetadata, isMobile)?.image_id || !!sceneBackground
+  const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
   const editingCharacterId = useStore((s) => s.editingCharacterId)
   const floatWidgets = useStore((s) => s.floatWidgets)
   const extensions = useStore((s) => s.extensions)
@@ -143,22 +140,6 @@ function Application() {
       closeCustomCSSDock()
     }
   }, [customCSSDockUnavailable, customCSSDockOpen, closeCustomCSSDock])
-
-  // The desktop client can hear the device's output; extensions reach it only through `ctx.systemAudio`, which is
-  // permission-gated, prompted and indicated. Browsers and floating widget windows register nothing.
-  useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window) || isDesktopFloatingWidgetWindow()) return
-    let uninstall: (() => void) | undefined
-    let disposed = false
-    void installTauriSystemAudioSource().then((stop) => {
-      if (disposed) stop()
-      else uninstall = stop
-    })
-    return () => {
-      disposed = true
-      uninstall?.()
-    }
-  }, [])
 
   // Native child windows send their resized bounds back here. Keeping the
   // primary placement registry current means a later extension setSize call
@@ -248,7 +229,7 @@ function Application() {
     for (const p of enabledDockPanels) {
       if (hiddenPlacements.includes(p.id)) continue
       const size = p.collapsed ? 36 : p.size
-      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile, p.respectRequestedEdge)
+      const edge = resolveDockPanelEdge(p.edge, dockPanelDesktopSide, isMobile)
       switch (edge) {
         case 'left': left = Math.max(left, size); break
         case 'right': right = Math.max(right, size); break
@@ -381,7 +362,7 @@ function Application() {
                   {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
                 </div>
               )}
-              <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />

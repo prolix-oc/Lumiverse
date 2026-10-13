@@ -476,38 +476,6 @@ export interface ImageGenProviderInfo {
   capabilities: ImageGenProviderCapabilities;
 }
 
-// ---- Decision Connection ----
-export type DecisionConnectionProfile = import('lumiverse-spindle-types').DecisionConnectionProfileDTO;
-
-export interface CreateDecisionConnectionInput {
-  name: string;
-  provider: string;
-  api_url?: string;
-  model?: string;
-  is_default?: boolean;
-  default_parameters?: Record<string, any>;
-  metadata?: Record<string, any>;
-  api_key?: string;
-}
-
-export type UpdateDecisionConnectionInput = Partial<CreateDecisionConnectionInput>;
-
-export interface DecisionConnectionTestResult {
-  success: boolean;
-  message: string;
-  provider: string;
-}
-
-export interface DecisionConnectionModelsResult {
-  models: DecisionModelInfo[];
-  provider: string;
-  error?: string;
-}
-
-export type DecisionProviderInfo = import('lumiverse-spindle-types').DecisionProviderDTO;
-export type DecisionProviderCapabilities = DecisionProviderInfo['capabilities'];
-export type DecisionModelInfo = import('lumiverse-spindle-types').DecisionModelDTO;
-
 // ---- STT Connection ----
 export interface SttConnectionProfile {
   id: string;
@@ -662,18 +630,17 @@ export interface QwenCustomVoiceDeleteResult {
  * (voiceSettings.narrationVoice).
  *
  * `voice` is the provider-side voice id (empty string falls back to the
- * connection's default voice). `parameters` holds synthesis overrides; speed overrides
+ * connection's default voice). `parameters.speed` is optional and overrides
  * the global speed for this voice when set.
  */
 export interface VoiceRef {
   connectionId: string
   voice: string
-  parameters?: Record<string, unknown> & { speed?: number }
+  parameters?: { speed?: number }
 }
 
 export interface TtsParameterSchema {
   type: 'number' | 'integer' | 'boolean' | 'string' | 'select';
-  label?: string;
   default?: any;
   min?: number;
   max?: number;
@@ -682,8 +649,6 @@ export interface TtsParameterSchema {
   required?: boolean;
   options?: Array<{ id: string; label: string }>;
   group?: string;
-  models?: string[];
-  formats?: string[];
 }
 
 export interface TtsProviderCapabilities {

@@ -143,7 +143,7 @@ export interface StartupSettings {
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
   spindleSettings?: Partial<SpindleSettings>
-  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>>
+  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
   activeProfileId?: string | null
   toastPosition?: ToastPosition
   defaultImpersonationMode?: ImpersonationPreference
@@ -490,7 +490,6 @@ export interface WallpaperRef {
 
 export interface WallpaperSettings {
   global: WallpaperRef | null
-  mobile?: WallpaperRef | null
   opacity: number
   fit: 'cover' | 'contain' | 'fill'
   blur: number
@@ -773,8 +772,6 @@ export interface SettingsSlice {
   bubbleOpacity: number
   inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
-  /** Account-synced composer action bar layout; null until first saved. */
-  composerActionBar: { order: string[]; hidden: string[] } | null
   defaultImpersonationMode: ImpersonationPreference
   chatWidthMode: 'full' | 'comfortable' | 'compact' | 'custom'
   centerChatWithSidebar: boolean
@@ -834,7 +831,7 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
-  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>
+  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings
   loreIndicatorSettings: LoreIndicatorSettings
@@ -1115,9 +1112,6 @@ export interface ImageGenSettings {
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
   includePersona: boolean
-  describeCharacterAvatar?: boolean
-  describePersonaAvatar?: boolean
-  activeCaptioningPresetId?: string | null
   promptMode?: 'scene' | 'custom' | 'parsed_custom'
   customPrompt?: string
   customNegativePrompt?: string
@@ -1246,16 +1240,6 @@ export interface PendingConfirmRequest {
   variant: 'info' | 'warning' | 'danger' | 'success'
   confirmLabel: string
   cancelLabel: string
-  /** Optional host-provided checkbox; extension confirmation protocol remains unchanged. */
-  checkboxLabel?: string
-}
-
-/** An extension analysing the device's audio right now. The host shows an indicator for each, with a Stop button. */
-export interface SystemAudioSessionInfo {
-  id: string
-  extensionId: string
-  extensionName: string
-  stop: () => void
 }
 
 export interface PendingContextMenuRequest {
@@ -1333,9 +1317,6 @@ export interface SpindleSlice {
   pendingConfirm: PendingConfirmRequest | null
   pendingInputPrompt: PendingInputPromptRequest | null
   pendingContextMenu: PendingContextMenuRequest | null
-  systemAudioSessions: SystemAudioSessionInfo[]
-  addSystemAudioSession: (session: SystemAudioSessionInfo) => void
-  removeSystemAudioSession: (id: string) => void
   setExtensionUpdates: (updates: import('./spindle-updates').ExtensionUpdateInfo[]) => void
   loadExtensions: () => Promise<void>
   installExtension: (githubUrl: string, branch?: string | null) => Promise<void>
@@ -1357,7 +1338,7 @@ export interface SpindleSlice {
   closeSpindleModal: (requestId: string, dismissedBy: 'user' | 'extension' | 'cleanup') => void
   dismissSpindleModal: (requestId: string) => void
   openSpindleConfirm: (request: PendingConfirmRequest) => void
-  closeSpindleConfirm: (requestId: string, confirmed: boolean, checkboxChecked?: boolean) => void
+  closeSpindleConfirm: (requestId: string, confirmed: boolean) => void
   openInputPrompt: (request: PendingInputPromptRequest) => void
   closeInputPrompt: (requestId: string, value: string | null) => void
   openContextMenu: (request: PendingContextMenuRequest) => void
@@ -1790,18 +1771,6 @@ export interface McpServersSlice {
 }
 
 // ---- TTS Connections Slice ----
-export interface DecisionConnectionsSlice {
-  decisionProfiles: import('@/types/api').DecisionConnectionProfile[]
-  decisionProviders: import('@/types/api').DecisionProviderInfo[]
-
-  setDecisionProfiles: (profiles: import('@/types/api').DecisionConnectionProfile[]) => void
-  addDecisionProfile: (profile: import('@/types/api').DecisionConnectionProfile) => void
-  updateDecisionProfile: (id: string, updates: Partial<import('@/types/api').DecisionConnectionProfile>) => void
-  removeDecisionProfile: (id: string) => void
-  applyDecisionProfileOrder: (orderedIds: string[]) => void
-  setDecisionProviders: (providers: import('@/types/api').DecisionProviderInfo[]) => void
-}
-
 export interface SttConnectionsSlice {
   sttProfiles: import('@/types/api').SttConnectionProfile[]
   sttProviders: import('@/types/api').SttProviderInfo[]
@@ -2135,7 +2104,6 @@ export type AppStore = ChatSlice &
   ExpressionSlice &
   ImageGenConnectionsSlice &
   SttConnectionsSlice &
-  DecisionConnectionsSlice &
   TtsConnectionsSlice &
   McpServersSlice &
   LoadoutsSlice &

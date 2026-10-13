@@ -70,7 +70,6 @@ nav = [
     { "Overview" = "connections/index.md" },
     { "Setting Up a Connection" = "connections/setting-up.md" },
     { "Supported Providers" = "connections/providers.md" },
-    { "Decision Models" = "connections/decisions.md" },
   ] },
   { "Presets" = [
     { "Overview" = "presets/index.md" },

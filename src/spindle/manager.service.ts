@@ -839,7 +839,6 @@ function insertExtensionFromManifest(manifest: SpindleManifest): void {
 export const PRIVILEGED_PERMISSIONS = new Set([
   "screen_capture",
   "screen_recording",
-  "system_audio",
   "app_manipulation",
   "cors_proxy",
   "generation",

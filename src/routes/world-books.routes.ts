@@ -586,9 +586,6 @@ app.post("/:id/diagnostics", async (c) => {
     worldInfoSettings,
     wiSources.bookSourceMap,
     wiSources.bookNameMap,
-    undefined,
-    undefined,
-    { hybridWeightMode: embeddings.hybrid_weight_mode },
   );
   const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
     vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),

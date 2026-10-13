@@ -2,9 +2,6 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
-import { Readable } from "node:stream";
-import { stripVTControlCharacters } from "node:util";
 
 const PROJECT_ROOT = join(import.meta.dir, "..");
 const DESKTOP_DIR = join(PROJECT_ROOT, "desktop");
@@ -82,54 +79,16 @@ export function tauriBuildEnvironment(
   };
 }
 
-const NOTARIZATION_CREDENTIALS = [
-  "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID",
-  "APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_PATH",
-] as const;
-
-export function tauriBuildLogLine(
-  line: string,
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): string {
-  // Ad hoc signing is intentional for these installers. Preserve diagnostics for any configured notarization.
-  if (platform !== "darwin" || env.APPLE_SIGNING_IDENTITY !== "-"
-    || NOTARIZATION_CREDENTIALS.some((key) => env[key])) return line;
-
-  const expected = "Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found";
-  return stripVTControlCharacters(line).trim() === expected
-    ? "        Info macOS installer uses ad hoc signing without notarization."
-    : line;
-}
-
-export async function forwardTauriBuildStderr(
-  stream: ReadableStream<Uint8Array>,
-  write: (line: string) => void,
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
-  const lines = createInterface({ input: Readable.fromWeb(stream), crlfDelay: Infinity });
-  for await (const line of lines) write(`${tauriBuildLogLine(line, platform, env)}\n`);
-}
-
-async function run(
-  command: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
-  formatMacOSBuildLogs = false,
-): Promise<void> {
+async function run(command: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const child = Bun.spawn({
     cmd: command,
     cwd,
     env,
     stdin: "inherit",
     stdout: "inherit",
-    stderr: formatMacOSBuildLogs ? "pipe" : "inherit",
+    stderr: "inherit",
   });
-  const logs = formatMacOSBuildLogs && child.stderr
-    ? forwardTauriBuildStderr(child.stderr, (line) => { process.stderr.write(line); }, process.platform, env)
-    : Promise.resolve();
-  const [exitCode] = await Promise.all([child.exited, logs]);
+  const exitCode = await child.exited;
   if (exitCode !== 0) {
     throw new Error(`${command[0]} exited with code ${exitCode}`);
   }
@@ -141,7 +100,6 @@ async function main(): Promise<void> {
     [process.execPath, "run", "tauri", ...args],
     DESKTOP_DIR,
     tauriBuildEnvironment(args),
-    process.platform === "darwin" && args[0] === "build",
   );
 
   if (process.platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {

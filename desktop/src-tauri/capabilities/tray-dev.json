@@ -47,7 +47,6 @@
       ]
     },
     "discord-rpc-commands",
-    "remote-instance-commands",
-    "desktop-system-audio-controls"
+    "remote-instance-commands"
   ]
 }

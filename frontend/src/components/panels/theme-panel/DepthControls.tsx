@@ -6,7 +6,6 @@ import type { DesktopBackground, RenderingMode } from '@/types/theme'
 import styles from './DepthControls.module.css'
 
 interface DepthControlsProps {
-  slidersLocked?: boolean
   radiusScale: number
   enableGlass: boolean
   fontScale: number
@@ -114,7 +113,6 @@ export function DeferredColorInput({ value, className, onCommit }: DeferredColor
 }
 
 export default function DepthControls({
-  slidersLocked = false,
   radiusScale,
   enableGlass,
   fontScale,
@@ -147,7 +145,6 @@ export default function DepthControls({
         <span className={styles.label}>{t('cornerRadius')}</span>
         <input
           type="range"
-          disabled={slidersLocked}
           min={0.5}
           max={2}
           step={0.1}
@@ -164,7 +161,6 @@ export default function DepthControls({
         <span className={styles.label}>{t('fontScale')}</span>
         <input
           type="range"
-          disabled={slidersLocked}
           min={0.85}
           max={2}
           step={0.05}
@@ -183,7 +179,6 @@ export default function DepthControls({
         <span className={styles.label}>{t('uiScale')}</span>
         <input
           type="range"
-          disabled={slidersLocked}
           min={MIN_UI_SCALE}
           max={MAX_UI_SCALE}
           step={0.05}

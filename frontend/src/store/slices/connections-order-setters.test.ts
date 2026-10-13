@@ -7,7 +7,6 @@ import type {
   ImageGenConnectionProfile,
   SttConnectionProfile,
   TtsConnectionProfile,
-  DecisionConnectionProfile,
 } from '@/types/api'
 import type { AppStore } from '@/types/store'
 import type { CompleteConnectionsOrder } from './connections-order-merge'
@@ -33,7 +32,6 @@ const { createGenerationSlice } = await import('./generation')
 const { createImageGenConnectionsSlice } = await import('./image-gen-connections')
 const { createSttConnectionsSlice } = await import('./stt-connections')
 const { createTtsConnectionsSlice } = await import('./tts-connections')
-const { createDecisionConnectionsSlice } = await import('./decision-connections')
 
 afterEach(() => { persistedSettings.length = 0 })
 
@@ -47,7 +45,6 @@ type ProfileSetterHarness = Pick<
   | 'activeImageGenConnectionId'
   | 'sttProfiles'
   | 'ttsProfiles'
-  | 'decisionProfiles'
   | 'setProfiles'
   | 'addProfile'
   | 'setImageGenProfiles'
@@ -56,8 +53,6 @@ type ProfileSetterHarness = Pick<
   | 'addSttProfile'
   | 'setTtsProfiles'
   | 'addTtsProfile'
-  | 'setDecisionProfiles'
-  | 'addDecisionProfile'
 >
 
 type StoreUpdate =
@@ -71,7 +66,6 @@ function persistedDragOrder(): CompleteConnectionsOrder {
     imageGen: ['image-third', 'image-first', 'removed-image'],
     stt: ['stt-third', 'stt-first', 'removed-stt'],
     tts: ['tts-third', 'tts-first', 'removed-tts'],
-    decision: [],
   }
 }
 
@@ -98,7 +92,6 @@ function createHarness(connectionsOrder: unknown): ProfileSetterHarness {
     createImageGenConnectionsSlice(set, get, api),
     createSttConnectionsSlice(set, get, api),
     createTtsConnectionsSlice(set, get, api),
-    createDecisionConnectionsSlice(set, get, api),
   )
 }
 
@@ -172,21 +165,6 @@ function profileIds(profiles: readonly { id: string }[]): string[] {
 }
 
 describe('profile replacement ordering', () => {
-  test('orders Decision refreshes and reconciles duplicate REST and WebSocket deliveries', () => {
-    const store = createHarness({ ...persistedDragOrder(), decision: ['third', 'first', 'removed'] })
-    const profile = (id: string): DecisionConnectionProfile => ({
-      id, name: id, provider: 'typesafe', api_url: '', model: 'jev-latest',
-      is_default: false, has_api_key: false, default_parameters: {}, metadata: {}, created_at: 0, updated_at: 0,
-    })
-    store.setDecisionProfiles([profile('first'), profile('new'), profile('third')])
-    expect(profileIds(store.decisionProfiles)).toEqual(['third', 'first', 'new'])
-    store.addDecisionProfile({ ...profile('copy'), name: 'WebSocket copy' })
-    store.addDecisionProfile({ ...profile('copy'), name: 'REST copy' })
-    expect(profileIds(store.decisionProfiles)).toEqual(['copy', 'third', 'first', 'new'])
-    expect(store.decisionProfiles[0]?.name).toBe('REST copy')
-    expect(store.connectionsOrder.decision).toEqual(['copy', 'third', 'first', 'removed'])
-    expect(persistedSettings).toEqual([['connectionsOrder', store.connectionsOrder]])
-  })
   test('keeps LLM manager refreshes in persisted drag order and appends new profiles in backend order', () => {
     const store = createHarness(persistedDragOrder())
     store.profiles = [llmProfile('llm-third'), llmProfile('llm-first')]
@@ -238,7 +216,6 @@ describe('profile replacement ordering', () => {
       imageGen: ['image-new', 'image-third', 'image-first', 'removed-image'],
       stt: ['stt-new', 'stt-third', 'stt-first', 'removed-stt'],
       tts: ['tts-new', 'tts-third', 'tts-first', 'removed-tts'],
-      decision: [],
     })
     expect(persistedSettings).toHaveLength(3)
     expect(persistedSettings.at(-1)).toEqual(['connectionsOrder', store.connectionsOrder])
@@ -355,7 +332,6 @@ describe('profile replacement ordering', () => {
       imageGen: null,
       stt: 'not-an-array',
       tts: ['tts-third', 'tts-third', '', false],
-      decision: [],
     })
 
     store.setProfiles([

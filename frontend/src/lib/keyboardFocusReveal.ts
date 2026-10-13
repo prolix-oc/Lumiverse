@@ -1,14 +1,16 @@
-import { findKeyboardScrollContainer, installTextareaKeyboardReveal } from './textareaKeyboardReveal'
-
 /** Reveal ordinary form controls without treating a tall editor's bottom as its caret. */
 export function revealKeyboardFocus(target: HTMLElement): void {
   // The composer positions itself above the keyboard; moving its ancestor
   // would move the entire input bar with it.
   if (target.closest('[data-component="InputArea"]')) return
-  if (target instanceof HTMLTextAreaElement || target.hasAttribute('data-keyboard-caret-managed')) return
 
-  const container = findKeyboardScrollContainer(target)
-  if (!container) return
+  let container = target.parentElement
+  while (container && container !== document.body && container !== document.documentElement) {
+    const { overflowY } = getComputedStyle(container)
+    if (overflowY === 'auto' || overflowY === 'scroll') break
+    container = container.parentElement
+  }
+  if (!container || container === document.body || container === document.documentElement) return
 
   const targetRect = target.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
@@ -32,23 +34,7 @@ export function revealKeyboardFocus(target: HTMLElement): void {
 /** Follow actual keyboard resizing, not a guessed animation duration. */
 export function installKeyboardFocusReveal(): () => void {
   let frame = 0
-  let caretTarget: HTMLTextAreaElement | null = null
-  let stopCaret: (() => void) | undefined
-  const syncCaretTarget = () => {
-    const target = document.activeElement
-    if (target === caretTarget) return
-    stopCaret?.()
-    stopCaret = undefined
-    caretTarget = null
-    if (target instanceof HTMLTextAreaElement &&
-        !target.closest('[data-component="InputArea"]') &&
-        !target.hasAttribute('data-keyboard-caret-managed')) {
-      caretTarget = target
-      stopCaret = installTextareaKeyboardReveal(target)
-    }
-  }
   const schedule = () => {
-    syncCaretTarget()
     if (frame) return
     frame = window.requestAnimationFrame(() => {
       frame = 0
@@ -61,16 +47,12 @@ export function installKeyboardFocusReveal(): () => void {
     })
   }
   document.addEventListener('focusin', schedule)
-  document.addEventListener('focusout', schedule)
   window.addEventListener('resize', schedule, { passive: true })
   window.visualViewport?.addEventListener('resize', schedule)
-  syncCaretTarget()
   return () => {
     document.removeEventListener('focusin', schedule)
-    document.removeEventListener('focusout', schedule)
     window.removeEventListener('resize', schedule)
     window.visualViewport?.removeEventListener('resize', schedule)
     window.cancelAnimationFrame(frame)
-    stopCaret?.()
   }
 }

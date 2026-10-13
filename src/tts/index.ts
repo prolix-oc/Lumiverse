@@ -8,7 +8,6 @@ import { CartesiaTtsProvider } from "./providers/cartesia";
 import { Qwen3TtsServerProvider } from "./providers/qwen3-tts-server";
 import { GoogleTtsProvider } from "./providers/google-tts";
 import { GoogleVertexTtsProvider } from "./providers/google-vertex-tts";
-import { FishAudioTtsProvider } from "./providers/fish-audio";
 
 registerTtsProvider(new CartesiaTtsProvider());
 registerTtsProvider(new OpenAITtsProvider());
@@ -19,4 +18,3 @@ registerTtsProvider(new OpenRouterTtsProvider());
 registerTtsProvider(new Qwen3TtsServerProvider());
 registerTtsProvider(new GoogleTtsProvider());
 registerTtsProvider(new GoogleVertexTtsProvider());
-registerTtsProvider(new FishAudioTtsProvider());

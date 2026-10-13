@@ -50,7 +50,6 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'bubbleUseFullAvatar',
   'bubbleOpacity',
   'saveDraftInput',
-  'composerActionBar',
   'defaultImpersonationMode',
   'chatWidthMode',
   'centerChatWithSidebar',
@@ -703,7 +702,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleOpacity: 1,
   inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
   saveDraftInput: false,
-  composerActionBar: null,
   defaultImpersonationMode: DEFAULT_IMPERSONATION_MODE,
   chatWidthMode: 'full',
   centerChatWithSidebar: false,
@@ -773,7 +771,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   toastPosition: 'bottom-right',
   wallpaper: {
     global: null,
-    mobile: null,
     opacity: 0.3,
     fit: 'cover',
     blur: 0,
@@ -1455,7 +1452,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           llm: get().profiles,
           imageGen: get().imageGenProfiles,
           stt: get().sttProfiles,
-          decision: get().decisionProfiles,
           tts: get().ttsProfiles,
         })
         if (args.llm) {
@@ -1469,10 +1465,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (args.stt) {
           if (!isCurrentLoad()) return
           get().applySttProfileOrder(args.stt)
-        }
-        if (args.decision) {
-          if (!isCurrentLoad()) return
-          get().applyDecisionProfileOrder(args.decision)
         }
         if (args.tts) {
           if (!isCurrentLoad()) return

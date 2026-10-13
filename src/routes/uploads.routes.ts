@@ -61,7 +61,7 @@ app.post("/", (c) => {
   });
 });
 
-app.get("/:id", (c) => {
+app.on("HEAD", "/:id", (c) => {
   const userId = c.get("userId");
   const rec = uploads.getUpload(c.req.param("id"));
   if (!rec || rec.ownerUserId !== userId) {

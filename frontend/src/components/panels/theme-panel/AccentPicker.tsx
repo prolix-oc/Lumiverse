@@ -4,7 +4,6 @@ import styles from './AccentPicker.module.css'
 import clsx from 'clsx'
 
 interface AccentPickerProps {
-  slidersLocked?: boolean
   hue: number
   saturation: number
   luminance: number
@@ -13,7 +12,7 @@ interface AccentPickerProps {
 
 const SWATCHES = [0, 30, 60, 120, 152, 200, 220, 263, 290, 340]
 
-export default function AccentPicker({ hue, saturation, luminance, onChange, slidersLocked = false }: AccentPickerProps) {
+export default function AccentPicker({ hue, saturation, luminance, onChange }: AccentPickerProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'themePanel.accent' })
   const [customOpen, setCustomOpen] = useState(false)
   const [localHue, setLocalHue] = useState(hue)
@@ -89,8 +88,6 @@ export default function AccentPicker({ hue, saturation, luminance, onChange, sli
           <button
             key={h}
             type="button"
-            disabled={slidersLocked}
-            aria-label={t('hue') + ': ' + h}
             className={clsx(styles.swatch, hue === h && !customOpen && styles.swatchActive)}
             style={{ background: `hsl(${h}, ${saturation}%, 65%)` }}
             onClick={() => {
@@ -114,7 +111,6 @@ export default function AccentPicker({ hue, saturation, luminance, onChange, sli
             <span className={styles.sliderLabel}>{t('hue')}</span>
             <input
               type="range"
-              disabled={slidersLocked}
               min={0}
               max={360}
               value={localHue}
@@ -127,7 +123,6 @@ export default function AccentPicker({ hue, saturation, luminance, onChange, sli
             <span className={styles.sliderLabel}>{t('saturation')}</span>
             <input
               type="range"
-              disabled={slidersLocked}
               min={10}
               max={100}
               value={localSat}
@@ -140,7 +135,6 @@ export default function AccentPicker({ hue, saturation, luminance, onChange, sli
             <span className={styles.sliderLabel}>{t('luminance')}</span>
             <input
               type="range"
-              disabled={slidersLocked}
               min={30}
               max={80}
               value={localLum}

@@ -23,7 +23,6 @@ export interface DeduplicationResult {
 }
 
 type SourceMap = Map<string, { source: "keyword" | "vector"; score?: number }>;
-type RetrievalComparator = (a: WorldBookEntry, b: WorldBookEntry) => number;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,7 +61,6 @@ export function deduplicateWorldInfoEntries(
   entries: WorldBookEntry[],
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): DeduplicationResult {
   if (entries.length <= 1) return { entries: [...entries], removed: [] };
 
@@ -87,13 +85,13 @@ export function deduplicateWorldInfoEntries(
     const removedInGroup = new Set<string>();
 
     // Tier 1: exact content match
-    runTierExact(group, removedInGroup, removed, sources, bookSourceMap, compareRetrieval);
+    runTierExact(group, removedInGroup, removed, sources, bookSourceMap);
 
     // Tier 2: normalized content match
-    runTierNearExact(group, removedInGroup, removed, sources, bookSourceMap, compareRetrieval);
+    runTierNearExact(group, removedInGroup, removed, sources, bookSourceMap);
 
     // Tier 3: fuzzy Jaccard similarity
-    runTierFuzzy(group, removedInGroup, removed, sources, bookSourceMap, compareRetrieval);
+    runTierFuzzy(group, removedInGroup, removed, sources, bookSourceMap);
 
     for (const e of group) {
       if (!removedInGroup.has(e.id)) survivorIds.add(e.id);
@@ -116,7 +114,6 @@ function runTierExact(
   removed: DedupRemovalRecord[],
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): void {
   const byContent = new Map<string, WorldBookEntry[]>();
   for (const e of group) {
@@ -130,7 +127,7 @@ function runTierExact(
 
   for (const [, dupes] of byContent) {
     if (dupes.length <= 1) continue;
-    resolveDuplicates(dupes, "exact", undefined, removedIds, removed, sources, bookSourceMap, compareRetrieval);
+    resolveDuplicates(dupes, "exact", undefined, removedIds, removed, sources, bookSourceMap);
   }
 }
 
@@ -144,7 +141,6 @@ function runTierNearExact(
   removed: DedupRemovalRecord[],
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): void {
   const byNormalized = new Map<string, WorldBookEntry[]>();
   for (const e of group) {
@@ -159,7 +155,7 @@ function runTierNearExact(
 
   for (const [, dupes] of byNormalized) {
     if (dupes.length <= 1) continue;
-    resolveDuplicates(dupes, "near-exact", undefined, removedIds, removed, sources, bookSourceMap, compareRetrieval);
+    resolveDuplicates(dupes, "near-exact", undefined, removedIds, removed, sources, bookSourceMap);
   }
 }
 
@@ -173,7 +169,6 @@ function runTierFuzzy(
   removed: DedupRemovalRecord[],
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): void {
   // Build token sets for eligible entries
   const eligible: Array<{ entry: WorldBookEntry; tokens: Set<string> }> = [];
@@ -197,7 +192,7 @@ function runTierFuzzy(
       // Skip if both are constants
       if (a.constant && b.constant) continue;
 
-      const cmp = compareEntryPrecedence(a, b, sources, bookSourceMap, compareRetrieval);
+      const cmp = compareEntryPrecedence(a, b, sources, bookSourceMap);
       const winner = cmp <= 0 ? a : b;
       const loser = cmp <= 0 ? b : a;
 
@@ -235,10 +230,9 @@ function resolveDuplicates(
   removed: DedupRemovalRecord[],
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): void {
   // Sort by precedence — best first
-  const sorted = [...dupes].sort((a, b) => compareEntryPrecedence(a, b, sources, bookSourceMap, compareRetrieval));
+  const sorted = [...dupes].sort((a, b) => compareEntryPrecedence(a, b, sources, bookSourceMap));
   const winner = sorted[0];
 
   for (let i = 1; i < sorted.length; i++) {
@@ -275,7 +269,6 @@ function compareEntryPrecedence(
   b: WorldBookEntry,
   sources: SourceMap,
   bookSourceMap?: Map<string, BookSource>,
-  compareRetrieval?: RetrievalComparator,
 ): number {
   // Constants always win over non-constants
   if (a.constant && !b.constant) return -1;
@@ -291,10 +284,7 @@ function compareEntryPrecedence(
     if (bSrc !== aSrc) return bSrc - aSrc;
   }
 
-  // The selected retrieval mode breaks ties after configured entry/book precedence.
-  if (compareRetrieval) return compareRetrieval(a, b);
-
-  // Keyword activation beats vector by default.
+  // Keyword activation beats vector
   const aSource = sources.get(a.id)?.source;
   const bSource = sources.get(b.id)?.source;
   if (aSource === "keyword" && bSource !== "keyword") return -1;
