@@ -75,6 +75,7 @@ import {
   activateWorldInfo,
   type WorldInfoSettings,
 } from "./world-info-activation.service";
+import { getEmbeddingConfig } from "./embeddings.service";
 import type {
   CachedCouncilResult,
   CouncilMember,
@@ -2292,19 +2293,27 @@ export async function startGeneration(
 
               // Run vector retrieval so council also sees vectorized world info entries.
               // Also cached for prompt assembly to reuse (avoids redundant embedding queries).
-              const vectorActivated = await collectVectorActivatedWorldInfo(
-                input.userId,
-                input.chat_id,
-                wiBookIds,
-                wiEntries,
-                councilCappedMessages,
-                abortController.signal,
-                councilWorldInfoSettings,
-              );
+              const [vectorActivated, embeddingConfig] = await Promise.all([
+                collectVectorActivatedWorldInfo(
+                  input.userId,
+                  input.chat_id,
+                  wiBookIds,
+                  wiEntries,
+                  councilCappedMessages,
+                  abortController.signal,
+                  councilWorldInfoSettings,
+                ),
+                getEmbeddingConfig(input.userId),
+              ]);
               councilWiActivated = mergeActivatedWorldInfoEntries(
                 councilWiActivated,
                 vectorActivated,
                 councilWorldInfoSettings,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
               ).activatedEntries;
 
               // Cache for assembly to reuse

@@ -79,6 +79,7 @@ use super::{Capabilities, CaptureRequest, Media};
 const EVENT_MESSAGE: u32 = WM_APP + 71;
 const CHOOSE_BUTTON: usize = 101;
 const DISCARD_BUTTON: usize = 102;
+#[cfg(test)]
 const SHARE_BUTTON: usize = 103;
 const PLAY_BUTTON: usize = 104;
 const RESTART_BUTTON: usize = 105;

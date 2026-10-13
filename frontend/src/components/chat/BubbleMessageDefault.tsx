@@ -16,6 +16,7 @@ import GreetingNav from './GreetingNav'
 import ReasoningBlock from './ReasoningBlock'
 import StreamingIndicator from './StreamingIndicator'
 import BubbleActions from './BubbleActions'
+import MessageSelectCheckbox from './MessageSelectCheckbox'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -407,6 +408,15 @@ export default function BubbleMessageDefault({
       <div className={styles.bubble}>
         <div className={styles.header}>
           <div className={styles.headerLeft}>
+            {isSelectMode && (
+              <MessageSelectCheckbox
+                index={message.index_in_chat}
+                name={displayName}
+                content={displayContent}
+                checked={isSelected}
+                onToggle={onToggleSelect}
+              />
+            )}
             <div
               className={styles.avatar}
               style={fullAvatarUrl ? { cursor: 'pointer' } : undefined}

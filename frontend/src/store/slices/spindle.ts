@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride, BulkUpdateStatus } from '@/types/store'
+import type { AppStore, SpindleSlice, PendingPermissionRequest, PendingTextEditorRequest, PendingContextMenuRequest, ExtensionThemeOverride, BulkUpdateStatus } from '@/types/store'
 import type { ExtensionInfo } from 'lumiverse-spindle-types'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
@@ -9,6 +9,7 @@ import { yieldToBrowser } from '@/lib/spindle/browser-scheduler'
 import { compareFrontendHydrationPriority } from '@/lib/spindle/frontend-startup-priority'
 import { shareExtensionLoad } from '@/lib/spindle/extension-load-flight'
 import { reconcileMessageTagRuntimeCapabilities } from '@/lib/spindle/message-tag-runtime-readiness'
+import { systemAudioConsent } from '@/lib/spindle/system-audio-consent'
 
 const MUTED_THEMES_KEY = 'lumiverse:mutedExtensionThemes'
 const FRONTEND_HYDRATION_CONCURRENCY = 4
@@ -78,13 +79,21 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   pendingConfirm: null,
   pendingInputPrompt: null,
   pendingContextMenu: null,
+  systemAudioSessions: [],
+
+  addSystemAudioSession: (session) => set((state) => ({ systemAudioSessions: [...state.systemAudioSessions, session] })),
+  removeSystemAudioSession: (id) => set((state) => ({ systemAudioSessions: state.systemAudioSessions.filter((s) => s.id !== id) })),
 
   loadExtensions: () => shareExtensionLoad(async () => {
+    const userId = (get() as AppStore).user?.id ?? null
     try {
       // Retry the one-shot list fetch so a transient cold-start failure does
       // not leave the store empty (and the extension unloaded until the user
       // happens to open the Extensions panel, which only re-runs when empty).
       const { extensions, isPrivileged } = await retrySpindleList()
+      for (const extension of extensions) {
+        if (!extension.granted_permissions.includes('system_audio')) systemAudioConsent.clear(userId, extension.id)
+      }
       reconcileMessageTagRuntimeCapabilities(extensions)
       set({ extensions, spindlePrivileged: isPrivileged })
 
@@ -190,7 +199,9 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   },
 
   removeExtension: async (id: string) => {
+    const userId = (get() as AppStore).user?.id ?? null
     await spindleApi.remove(id)
+    systemAudioConsent.clear(userId, id)
     spindleApi.clearManifestCache(id)
     await unloadFrontendExtension(id)
     get().clearExtensionChatStyleModes(id)
@@ -269,7 +280,9 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   },
 
   revokePermission: async (id: string, permission: string) => {
+    const userId = (get() as AppStore).user?.id ?? null
     const result = await spindleApi.setPermissions(id, { revoke: [permission] })
+    if (permission === 'system_audio') systemAudioConsent.clear(userId, id)
     set((state) => ({
       extensions: state.extensions.map((e) =>
         e.id === id ? { ...e, granted_permissions: result.granted as any } : e
@@ -368,7 +381,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     set({ pendingConfirm: request })
   },
 
-  closeSpindleConfirm: (requestId: string, confirmed: boolean) => {
+  closeSpindleConfirm: (requestId: string, confirmed: boolean, checkboxChecked = false) => {
     const current = get().pendingConfirm
     if (!current || current.requestId !== requestId) return
     set({ pendingConfirm: null })
@@ -379,7 +392,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     })
     window.dispatchEvent(
       new CustomEvent('spindle:confirm-resolved', {
-        detail: { requestId, confirmed },
+        detail: { requestId, confirmed, checkboxChecked: confirmed && !!current.checkboxLabel && checkboxChecked },
       })
     )
   },

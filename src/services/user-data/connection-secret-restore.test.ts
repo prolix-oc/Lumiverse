@@ -16,6 +16,7 @@ beforeEach(() => {
     "image_gen_connections",
     "tts_connections",
     "stt_connections",
+    "decision_connections",
   ]) {
     getDb().run(`CREATE TABLE ${table} (
       id TEXT NOT NULL,
@@ -47,6 +48,10 @@ describe("restored connection secrets", () => {
       id: "stt-id",
     });
     expect(connectionTargetForSecret("embedding_api_key_openrouter")).toBeNull();
+    expect(connectionTargetForSecret("decision_connection_decision-id_api_key")).toEqual({
+      table: "decision_connections",
+      id: "decision-id",
+    });
   });
 
   test("marks an imported OpenRouter connection as having its restored key", () => {
@@ -69,5 +74,13 @@ describe("restored connection secrets", () => {
     expect(getDb().query(
       "SELECT has_api_key FROM connection_profiles WHERE id = ? AND user_id = ?",
     ).get("shared-id", OTHER_USER_ID)).toEqual({ has_api_key: 0 });
+  });
+
+  test("restores Decision key status only for the importing user", () => {
+    getDb().query("INSERT INTO decision_connections (id, user_id) VALUES (?, ?), (?, ?)")
+      .run("shared-id", USER_ID, "shared-id", OTHER_USER_ID);
+    expect(markConnectionSecretRestored(USER_ID, "decision_connection_shared-id_api_key")).toBe(true);
+    expect(getDb().query("SELECT has_api_key FROM decision_connections WHERE user_id = ?").get(USER_ID)).toEqual({ has_api_key: 1 });
+    expect(getDb().query("SELECT has_api_key FROM decision_connections WHERE user_id = ?").get(OTHER_USER_ID)).toEqual({ has_api_key: 0 });
   });
 });

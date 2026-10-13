@@ -54,6 +54,27 @@ describe('Cortex chat notices', () => {
     expect(buildCortexNotice(ingestion(), null, t)?.detail).toBe('Running sidecar analysis')
   })
 
+  for (const [phase, detail] of [
+    ['consolidating', 'Consolidating scene memories'],
+    ['consolidating_arcs', 'Consolidating arc memories'],
+  ]) {
+    test(`shows ${phase} instead of completed chunk progress, including during concurrent ingestion`, () => {
+      for (const activeIngestion of [null, ingestion()]) {
+        const notice = buildCortexNotice(activeIngestion, {
+          chatId: 'chat-1',
+          status: 'processing',
+          current: 233,
+          total: 233,
+          percent: 100,
+          phase,
+        }, t)
+
+        expect(notice?.detail).toBe(detail)
+        expect(notice?.percent).toBeUndefined()
+      }
+    })
+  }
+
   test('gives terminal errors a stable occurrence key and bounded visibility', () => {
     const notice = buildCortexNotice(ingestion({
       status: 'error',

@@ -1,4 +1,5 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type CSSProperties, type PointerEvent, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
 import {
@@ -19,7 +20,7 @@ import MessageCard from './MessageCard'
 import GroupChatProgressBar from './GroupChatProgressBar'
 import GroupChatMemberBar from './GroupChatMemberBar'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
-import { shouldPinMessageListTail } from './messageListPinning'
+import { isMessageListScrollRangeClamp, shouldPinMessageListTail, type MessageListScrollPosition } from './messageListPinning'
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT, isCollapsibleToggleElement } from './collapsibleLayout'
 import { getLongMessageCollapseHeight, isLongMessageCollapseEligible, longMessageExpansionKey } from '@/lib/longMessageCollapse'
 import {
@@ -45,6 +46,9 @@ const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 // overscroll, mobile momentum settling, and soft-keyboard shrink/growth don't
 // immediately unpin the viewport from new output.
 const SCROLL_END_THRESHOLD = 80
+// scrollHeight/clientHeight round to integers while scrollTop remains
+// fractional under UI zoom. Allow a few rendered pixels when re-arming.
+const KEYBOARD_TAIL_EPSILON = 3
 const INITIAL_SCROLL_TO_END_MAX_MS = 5000
 // Keep the initial tail pinned briefly after it first reaches the end. Message
 // content can still gain height as regex output, HTML islands, fonts, images,
@@ -238,6 +242,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const { visibleMessages, hasMore, loadMore, loadingOlder, justPrependedRef } = useChunkedMessages(messages, chatId)
   const lastScrollHeightRef = useRef(0)
   const lastScrollTopRef = useRef(0)
+  const lastObservedScrollRef = useRef<MessageListScrollPosition | null>(null)
   const measuredRowHeightsRef = useRef<Map<string, number>>(new Map())
   // Tracks the most recently measured row height per message.id, irrespective
   // of which swipe variant produced it. When a new variant has no measureKey
@@ -282,7 +287,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const swipeVariantReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
   const findHighlightTimerRef = useRef<number | null>(null)
   const focusedFindRequestRef = useRef(0)
-  const keyboardRepinTimersRef = useRef<number[]>([])
   const keyboardRepinSuppressedUntilRef = useRef(0)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
@@ -331,30 +335,47 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     if (!el || !parent) return
     const root = document.documentElement
 
-    const updateSafeZone = () => {
+    const updateSafeZone = (beforePaint = false) => {
       const raw = getComputedStyle(parent).getPropertyValue('--lcs-input-safe-zone')
       const parsed = Number.parseInt(raw, 10)
-      setInputSafeZone(Number.isFinite(parsed) ? parsed : 100)
+      const nextSafeZone = Number.isFinite(parsed) ? parsed : 100
+      if (nextSafeZone === lastInputSafeZoneRef.current) return
+      const editingInList = el.contains(document.activeElement) && isEditableElement(document.activeElement)
+      // Capture the tail before React grows the virtual padding. A previous
+      // keyboard dismissal can leave the follow flag stale even though the
+      // browser has clamped the list to its actual end. Re-arm on every lift.
+      if (nextSafeZone > lastInputSafeZoneRef.current && root.hasAttribute('data-ios-pwa') &&
+          !editingInList && touchYRef.current == null &&
+          (el.scrollHeight - el.clientHeight - el.scrollTop) * getUiScale() <= KEYBOARD_TAIL_EPSILON) {
+        isPinnedRef.current = true
+        userUnpinnedRef.current = false
+        keyboardRepinSuppressedUntilRef.current = 0
+      }
+      // Motion measurements arrive inside rAF. Commit virtual padding and
+      // its tail correction before this paint, rather than a later React task.
+      if (beforePaint) flushSync(() => setInputSafeZone(nextSafeZone))
+      else setInputSafeZone(nextSafeZone)
     }
 
     updateSafeZone()
+    const syncSafeZone = () => updateSafeZone(true)
 
-    const mo = new MutationObserver(updateSafeZone)
+    const mo = new MutationObserver(syncSafeZone)
     mo.observe(parent, { attributes: true, attributeFilter: ['style'] })
-    const rootObserver = new MutationObserver(updateSafeZone)
+    const rootObserver = new MutationObserver(syncSafeZone)
     rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
 
     const vv = window.visualViewport
-    window.addEventListener('resize', updateSafeZone)
-    vv?.addEventListener('resize', updateSafeZone)
-    vv?.addEventListener('scroll', updateSafeZone)
+    window.addEventListener('resize', syncSafeZone)
+    vv?.addEventListener('resize', syncSafeZone)
+    vv?.addEventListener('scroll', syncSafeZone)
 
     return () => {
       mo.disconnect()
       rootObserver.disconnect()
-      window.removeEventListener('resize', updateSafeZone)
-      vv?.removeEventListener('resize', updateSafeZone)
-      vv?.removeEventListener('scroll', updateSafeZone)
+      window.removeEventListener('resize', syncSafeZone)
+      vv?.removeEventListener('resize', syncSafeZone)
+      vv?.removeEventListener('scroll', syncSafeZone)
     }
   }, [])
 
@@ -364,6 +385,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     cancelForcedScroll()
     topLoadArmedRef.current = true
     lastScrollTopRef.current = 0
+    lastObservedScrollRef.current = null
     measuredRowHeightsRef.current = new Map()
     lastMeasuredByMessageIdRef.current = new Map()
     averageMeasuredHeightRef.current = null
@@ -401,6 +423,11 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const markProgrammaticScroll = useCallback((el: HTMLElement) => {
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = el.scrollTop
+    lastObservedScrollRef.current = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }
   }, [])
 
   // Native smooth scrolling restarts whenever TanStack corrects an estimated
@@ -685,20 +712,12 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     }
   }, [chatId])
 
-  const clearKeyboardRepinTimers = useCallback(() => {
-    while (keyboardRepinTimersRef.current.length > 0) {
-      const timer = keyboardRepinTimersRef.current.shift()
-      if (timer != null) window.clearTimeout(timer)
-    }
-  }, [])
-
   const suppressKeyboardRepin = useCallback((durationMs = 900) => {
     keyboardRepinSuppressedUntilRef.current = Math.max(
       keyboardRepinSuppressedUntilRef.current,
       performance.now() + durationMs,
     )
-    clearKeyboardRepinTimers()
-  }, [clearKeyboardRepinTimers])
+  }, [])
 
   const markUserUnpinned = useCallback(() => {
     userUnpinnedRef.current = true
@@ -708,6 +727,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const markPinned = useCallback(() => {
     userUnpinnedRef.current = false
     isPinnedRef.current = true
+    keyboardRepinSuppressedUntilRef.current = 0
   }, [])
 
   useEffect(() => {
@@ -721,9 +741,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       if (initialScrollRafRef.current != null) {
         cancelAnimationFrame(initialScrollRafRef.current)
       }
-      clearKeyboardRepinTimers()
     }
-  }, [clearKeyboardRepinTimers])
+  }, [])
 
   // While the user is typing inside the list (message edit textarea, an
   // extension-mounted input), the browser owns caret reveal. Treat that focus
@@ -1365,8 +1384,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     }
   }, [canSettleInitialDisplay, chatId, interceptorRegistryVersion])
 
-  // Gate that keeps the keyboard/safe-zone repin from fighting the unified
-  // scroll guard while streaming is active.
+  // Streaming completion preserves a reading anchor when away from the tail.
   const isStreamingRef = useRef(isStreaming)
   const streamEndSettleUntilRef = useRef(0)
   const reflowAnchorRef = useRef<{ el: HTMLElement; top: number } | null>(null)
@@ -1436,7 +1454,9 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const pinToBottomIfNeeded = useCallback((el: HTMLElement) => {
     if (hasInListEditableFocus()) return
     if (rowVirtualizer.getTotalSize() <= el.clientHeight) return
-    if (rowVirtualizer.isAtEnd(SCROLL_END_THRESHOLD)) return
+    // WebKit can clamp the DOM position before the virtualizer receives its
+    // scroll event. Its cached offset may still claim we are at the end.
+    if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) return
     markPinned()
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
@@ -1448,6 +1468,26 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       lastScrollHeightRef.current = latest.scrollHeight
     })
   }, [hasInListEditableFocus, markPinned, rowVirtualizer])
+
+  // Newly mounted rows can replace their estimates during keyboard movement.
+  // TanStack defers iOS resize corrections while it sees scrolling, including
+  // our own keyboard follow. Observe the actual content size to keep a pinned
+  // tail visible in that same paint instead of correcting after motion stops.
+  useLayoutEffect(() => {
+    if (!document.documentElement.hasAttribute('data-ios-pwa')) return
+    const el = scrollRef.current
+    const content = el?.querySelector<HTMLElement>(`.${styles.virtualSpace}`)
+    if (!el || !content) return
+
+    const observer = new ResizeObserver(() => {
+      if (!isPinnedRef.current || userUnpinnedRef.current) return
+      if (hasInListEditableFocus() || touchYRef.current != null) return
+      if (performance.now() < keyboardRepinSuppressedUntilRef.current) return
+      pinToBottomIfNeeded(el)
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [hasInListEditableFocus, pinToBottomIfNeeded])
 
   if (isStreamingRef.current && !isStreaming) {
     const el = scrollRef.current
@@ -1609,13 +1649,21 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     else isPinnedRef.current = false
   }, [markPinned, BOTTOM_REPIN_EPSILON, EXPLICIT_BOTTOM_REPIN_EPSILON])
 
-  // User scroll intent owns pinning: any upward scroll disables auto-follow,
-  // and we only re-arm once the user actually returns to the bottom.
+  // Upward user scrolling disables follow. Layout-driven scroll clamping must
+  // preserve that intent when keyboard padding or the viewport shrinks.
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
 
     if (recoverTailVoid()) return
+
+    const position = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }
+    const rangeClamped = isMessageListScrollRangeClamp(lastObservedScrollRef.current, position)
+    lastObservedScrollRef.current = position
 
     const deltaTop = el.scrollTop - lastScrollTopRef.current
     lastScrollTopRef.current = el.scrollTop
@@ -1635,7 +1683,9 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       reflowAnchorRef.current = null
     }
 
-    if (deltaTop < 0) {
+    if (rangeClamped) {
+      if (!userUnpinnedRef.current) updatePinState(el.scrollTop, el.scrollHeight, el.clientHeight)
+    } else if (deltaTop < 0) {
       suppressKeyboardRepin(1200)
       cancelInitialScrollToEnd()
       markUserUnpinned()
@@ -1733,34 +1783,23 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, warmMobileRange])
 
   // iOS standalone PWAs keep the list height fixed while the keyboard grows
-  // only the bottom safe zone. Re-pin from actual safe-zone changes rather
-  // than raw visualViewport events, and cancel the settle nudges as soon as
-  // the user touches the list so the keyboard animation cannot reclaim it.
+  // only the bottom safe zone. Follow its measured animation frames before
+  // paint; delayed corrections would move the list again after the keyboard
+  // settles. User interaction and in-list editors retain scroll ownership.
   useLayoutEffect(() => {
     const previousSafeZone = lastInputSafeZoneRef.current
     lastInputSafeZoneRef.current = inputSafeZone
 
     if (previousSafeZone === inputSafeZone) return
     if (!document.documentElement.hasAttribute('data-ios-pwa')) return
-    if (isStreamingRef.current) return
     if (!isPinnedRef.current) return
     if (hasInListEditableFocus()) return
+    if (touchYRef.current != null) return
     if (performance.now() < keyboardRepinSuppressedUntilRef.current) return
 
-    const pinToBottom = () => {
-      if (!isPinnedRef.current) return
-      if (performance.now() < keyboardRepinSuppressedUntilRef.current) return
-      const latest = scrollRef.current
-      if (!latest) return
-      pinToBottomIfNeeded(latest)
-    }
-
-    requestAnimationFrame(pinToBottom)
-    clearKeyboardRepinTimers()
-    keyboardRepinTimersRef.current.push(window.setTimeout(pinToBottom, 180))
-    keyboardRepinTimersRef.current.push(window.setTimeout(pinToBottom, 420))
+    const el = scrollRef.current
+    if (el) pinToBottomIfNeeded(el)
   }, [
-    clearKeyboardRepinTimers,
     hasInListEditableFocus,
     inputSafeZone,
     pinToBottomIfNeeded,
@@ -1815,9 +1854,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
           measureMountedRows()
         }
 
-        // followOnAppend keeps a pinned viewport at the bottom when the last
-        // row grows, so we don't need to manually scroll here. recoverTailVoid
-        // is kept as a safety net for the rare case where measurements drift.
+        // End anchoring and the iOS content-size observer follow growing rows.
+        // recoverTailVoid remains a safety net for drifting measurements.
         if (recoverTailVoid()) return
         if (settleTimer) window.clearTimeout(settleTimer)
         settleTimer = window.setTimeout(() => {

@@ -23,6 +23,7 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
+import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
@@ -985,13 +986,14 @@ export default function ChatView() {
 
   // Global wallpaper is persistent in App so video playback survives route
   // changes. ChatView only renders overrides above it.
-  const effectiveWallpaper = activeChatWallpaper ?? (wallpaper.global ? null : characterBackground)
+  const globalWallpaper = resolveGlobalWallpaper(wallpaper, isMobile)
+  const effectiveWallpaper = resolveChatWallpaper(activeChatWallpaper, activeChatMetadata, isMobile) ?? (globalWallpaper ? null : characterBackground)
   const effectiveWallpaperKey = effectiveWallpaper ? `${effectiveWallpaper.type}:${effectiveWallpaper.image_id}` : 'none'
   const [displayedWallpaper, setDisplayedWallpaper] = useState<WallpaperRef | null>(effectiveWallpaper)
   const displayedWallpaperKeyRef = useRef(effectiveWallpaperKey)
   const pendingWallpaperReadyKeyRef = useRef<string | null>(null)
   const [wallpaperTransitioning, setWallpaperTransitioning] = useState(false)
-  const hasAnyBackground = !!(sceneBackground || displayedWallpaper?.image_id || wallpaper.global?.image_id)
+  const hasAnyBackground = !!(sceneBackground || displayedWallpaper?.image_id || globalWallpaper?.image_id)
   const clearWallpaperTransitionTimers = useCallback(() => {
     wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
     wallpaperTransitionTimeouts.current = []

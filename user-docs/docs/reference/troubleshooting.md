@@ -128,6 +128,7 @@ bun run reset-password
 
 ## Installation and Mobile Issues
 
+- **Linux desktop audio is silent:** see [Linux audio setup](../getting-started/desktop-tray.md#audio-is-silent-on-linux) for GStreamer plugin installation commands and checks.
 - **Termux runtime, setup, or build failures:** see [Termux Troubleshooting](termux-troubleshooting.md) for recovery, the Ubuntu fallback, and reinstalling with a backup.
 - **Remote access or installed PWA problems:** see [Remote Access with Tailscale](../getting-started/tailscale.md#troubleshooting).
 

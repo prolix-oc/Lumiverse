@@ -17,6 +17,9 @@ Lumiverse runs on your own machine. It needs **Bun** (a fast JavaScript runtime)
 !!! note "Operating Systems"
     Lumiverse works on **macOS**, **Linux**, **Windows**, and **Termux** (Android).
 
+!!! note "Linux desktop audio"
+    If you use Lumiverse Desktop on Linux, see [Linux audio setup](desktop-tray.md#audio-is-silent-on-linux) for the GStreamer plugin installation commands for Debian/Ubuntu, Fedora, and Arch Linux.
+
 ---
 
 ## Install & Run

@@ -1,0 +1,154 @@
+{
+  "connectionLost": {
+    "updatingTitle": "Lumiverse wird aktualisiert",
+    "lostTitle": "Serververbindung verloren",
+    "updatingMessage": "Eine neue Version ist verfügbar. Das Update wird angewendet \u2013 die Seite wird gleich neu geladen.",
+    "verifyingConnection": "Verbindung wird überprüft\u2026",
+    "resyncingSession": "Sitzung wird neu synchronisiert\u2026",
+    "unreachable": "Der Server ist nicht mehr erreichbar. Deine Sitzung wird automatisch wiederhergestellt, sobald er wieder verfügbar ist.",
+    "installingBundle": "Neuestes Bundle wird installiert\u2026",
+    "verifying": "Wird überprüft\u2026",
+    "reconnecting": "Verbindungsversuch läuft\u2026"
+  },
+  "confirmDelete": "Bist du sicher?",
+  "selectCategory": "Wähle eine Einstellungskategorie",
+  "promptVariables": {
+    "title": "Prompt-Variablen konfigurieren",
+    "subtitle": "Hier festgelegte Werte werden über {{token}} in Preset-Blöcke eingesetzt.",
+    "tokenExample": "{{var::name}}",
+    "empty": "Keine aktivierten Blöcke definieren Prompt-Variablen. Füge im Block-Editor welche hinzu, um sie hier zu konfigurieren.",
+    "untitledBlock": "Unbenannter Block",
+    "variableCount_one": "{{count}} Variable",
+    "variableCount_other": "{{count}} Variablen",
+    "placementSummary": "Platzierung: {{role}} \u00b7 {{position}}",
+    "placementSummaryWithDepth": "Platzierung: {{role}} \u00b7 {{position}} \u00b7 Tiefe {{depth}}",
+    "resetAll": "Alle zurücksetzen",
+    "saving": "Wird gespeichert\u2026",
+    "resetToDefault": "Auf Standard zurücksetzen"
+  },
+  "voicePicker": {
+    "useDefault": "Standard verwenden",
+    "ariaLabel": "Stimme",
+    "connection": "Verbindung",
+    "selectConnection": "Verbindung auswählen\u2026",
+    "searchConnections": "Verbindungen durchsuchen\u2026",
+    "noConnections": "Keine TTS-Verbindungen konfiguriert",
+    "voice": "Stimme",
+    "loadingVoices": "Stimmen werden geladen\u2026",
+    "selectVoice": "Stimme auswählen\u2026",
+    "searchVoices": "Stimmen durchsuchen\u2026",
+    "loading": "Wird geladen\u2026",
+    "noVoices": "Keine Stimmen verfügbar \u2013 Standard der Verbindung verwenden",
+    "connectionDefault": "Standard der Verbindung",
+    "connectionAria": "{{label}}-Verbindung",
+    "voiceAria": "{{label}}-Stimme"
+  },
+  "folderDropdown": {
+    "noFolder": "Kein Ordner",
+    "searchFolders": "Ordner durchsuchen...",
+    "none": "Keiner",
+    "folderNamePlaceholder": "Ordnername...",
+    "createNew": "Neuen Ordner erstellen...",
+    "renameFolder": "{{name}} umbenennen",
+    "deleteFolder": "{{name}} löschen",
+    "confirmRename": "Umbenennen bestätigen",
+    "cancelRename": "Umbenennen abbrechen"
+  },
+  "imageLightbox": {
+    "loadFailed": "Bild konnte nicht geladen werden",
+    "copyImage": "Bild kopieren",
+    "downloadImage": "Bild herunterladen",
+    "deleteImage": "Bild löschen",
+    "copied": "Bild in die Zwischenablage kopiert",
+    "copyFailed": "Bild konnte nicht in die Zwischenablage kopiert werden",
+    "downloadFailed": "Bild konnte nicht heruntergeladen werden",
+    "deleteFailed": "Bild konnte nicht gelöscht werden",
+    "deleteTitle": "Bild löschen?",
+    "deleteMessage": "Dies kann nicht rückgängig gemacht werden.",
+    "delete": "Löschen"
+  },
+  "inputPrompt": {
+    "submit": "Absenden"
+  },
+  "pagination": {
+    "perPage": "pro Seite",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "total": "{{count}} gesamt"
+  },
+  "toast": {
+    "dismiss": "Schließen"
+  },
+  "imageCrop": {
+    "zoom": "Zoom",
+    "cropping": "Wird zugeschnitten...",
+    "confirm": "Bestätigen"
+  },
+  "searchableSelect": {
+    "selectedCount": "{{count}} ausgewählt",
+    "placeholder": "Auswählen\u2026",
+    "searchPlaceholder": "Suchen\u2026",
+    "emptyMessage": "Keine Optionen verfügbar",
+    "noResultsMessage": "Keine Treffer",
+    "uncategorized": "Ohne Kategorie",
+    "clear": "Keine",
+    "clearSearch": "Suche löschen"
+  },
+  "expandedTextEditor": {
+    "collapseEditor": "Editor verkleinern",
+    "expandEditor": "Editor vergrößern",
+    "hideMacros": "Makros ausblenden",
+    "insertMacro": "Makro einfügen",
+    "previewMarkdown": "Markdown-Vorschau",
+    "editMarkdown": "Markdown bearbeiten",
+    "searchMacros": "Makros durchsuchen...",
+    "clearMacroSearch": "Makrosuche löschen",
+    "find": "Suchen",
+    "findAndReplace": "Suchen & Ersetzen",
+    "findPlaceholder": "In diesem Feld suchen\u2026",
+    "clearFind": "Suchtext löschen",
+    "previousMatch": "Vorheriger Treffer",
+    "nextMatch": "Nächster Treffer",
+    "closeFind": "Suchsteuerung schließen",
+    "replacePlaceholder": "Ersetzen durch\u2026",
+    "replaceWith": "Ersetzen durch",
+    "replace": "Ersetzen",
+    "replaceAll": "Alle ersetzen"
+  },
+  "spindle": {
+    "systemAudio": {
+      "consentTitle": "Systemaudio analysieren?",
+      "consentMessage": "Es erhält nur ein Spektrum und die Lautstärke, niemals das Audio selbst. Lumiverse zeichnet kein Audio auf und überträgt es nicht. Eine Höranzeige und eine Stopp-Schaltfläche bleiben sichtbar, solange die Analyse läuft. Wenn du die Zustimmung nicht speicherst, wirst du jedes Mal gefragt.",
+      "allow": "Zulassen",
+      "notNow": "Nicht jetzt",
+      "listening": "{{name}} analysiert Systemaudio",
+      "stop": "Stopp",
+      "minimise": "Minimieren",
+      "show": "Anzeigen: {{name}} analysiert Systemaudio",
+      "remember": "Meine Zustimmung für diese Erweiterung auf diesem Gerät merken",
+      "consentSetting": "Systemaudio-Zustimmung",
+      "askEachTime": "Bei jedem Start fragen.",
+      "remembered": "Die Zustimmung wird für dieses Konto auf diesem Gerät gespeichert.",
+      "paused": "Starts sind pausiert. Erlaube Anfragen wieder, wenn diese Erweiterung Audio nutzen soll.",
+      "allowAgain": "Anfragen wieder zulassen",
+      "revokeApproval": "Zustimmung widerrufen"
+    },
+    "floatWidget": "Schwebendes Widget",
+    "drawerTab": "Drawer-Tab",
+    "dockPanel": "Andocken ({{edge}})",
+    "appMount": "App-Einbindung",
+    "extensionUi": "Erweiterungs-UI ({{count}})",
+    "showAll": "Alle anzeigen",
+    "hideAll": "Alle ausblenden",
+    "show": "Anzeigen",
+    "hide": "Ausblenden",
+    "hideWidget": "Widget ausblenden",
+    "resetPosition": "Position zurücksetzen"
+  },
+  "modelCombobox": {
+    "refreshModels": "Modelle aktualisieren",
+    "noMatching": "Keine passenden Modelle",
+    "loading": "Modelle werden geladen...",
+    "emptyDefault": "Keine Modelle gefunden. Gib eines manuell ein."
+  }
+}

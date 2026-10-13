@@ -124,6 +124,11 @@ export const TABLE_REGISTRY: readonly TableSpec[] = [
     ownership: "user",
     scrubColumns: { has_api_key: 0 },
   },
+  {
+    table: "decision_connections",
+    ownership: "user",
+    scrubColumns: { has_api_key: 0 },
+  },
 
   // 4) Presets reference connection_profiles via metadata only
   { table: "presets", ownership: "user" },
@@ -302,6 +307,7 @@ export const IMPORT_ORDER: readonly string[] = [
   "image_gen_connections",
   "tts_connections",
   "stt_connections",
+  "decision_connections",
 
   // Phase 4: world books (referenced by personas)
   "world_books",
@@ -413,6 +419,7 @@ export const SECRET_SETTING_KEY_PATTERNS: readonly RegExp[] = [
   /^image_gen_connection_.+_api_key$/,
   /^tts_connection_.+_api_key$/,
   /^stt_connection_.+_api_key$/,
+  /^decision_connection_.+_api_key$/,
   /^embedding_api_key_/,
   /^pollinations_app_key$/,
   // Web-search provider credentials live in the encrypted `secrets` table.

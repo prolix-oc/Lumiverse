@@ -41,6 +41,32 @@ afterEach(() => {
   settingsApi.putMany = original.putMany
 })
 
+describe('mobile wallpaper persistence', () => {
+  test('saves, reloads and clears the mobile override independently of global display settings', async () => {
+    const rows = new Map<string, unknown>()
+    database(rows)
+    const first = store()
+    const global = { image_id: 'desktop', type: 'image' as const }
+    const mobile = { image_id: 'portrait-video', type: 'video' as const }
+    first.setWallpaper({ global, opacity: 0.7, fit: 'contain', blur: 2 })
+    first.setWallpaper({ mobile })
+    await flushSettingsNow()
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.wallpaper).toEqual({ global, mobile, opacity: 0.7, fit: 'contain', blur: 2 })
+    restored.setWallpaper({ mobile: null })
+    await flushSettingsNow()
+    expect(rows.get('wallpaper')).toEqual({ global, mobile: null, opacity: 0.7, fit: 'contain', blur: 2 })
+  })
+  test('loads legacy settings without requiring a mobile field', async () => {
+    const legacy = { global: { image_id: 'existing', type: 'image' as const }, opacity: 0.3, fit: 'cover' as const, blur: 0 }
+    database(new Map([['wallpaper', legacy]]))
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.wallpaper).toEqual({ ...legacy, mobile: null })
+  })
+})
+
 describe('portrait dock persistence', () => {
   test('promotes a quick-toolbar compatibility row when canonical storage is absent', async () => {
     const initial = store().quickToolbarSettings

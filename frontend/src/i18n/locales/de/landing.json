@@ -1,0 +1,91 @@
+{
+  "groupChat": "Gruppenchat",
+  "active": "Aktiv",
+  "galleryWidth": {
+    "compact": "Kompakte Galeriebreite verwenden",
+    "expanded": "Galerie auf volle Breite erweitern"
+  },
+  "account": "Konto",
+  "subtitle": {
+    "chooseGroupThreads": "Aus Gruppenverläufen auswählen",
+    "resumeGroupThread": "Letzten Gruppenverlauf fortsetzen",
+    "chooseConversations": "Aus letzten Unterhaltungen auswählen",
+    "resumeConversation": "Unterhaltung fortsetzen"
+  },
+  "empty": {
+    "title": "Keine letzten Chats",
+    "description": "Starten Sie eine Unterhaltung mit einem Charakter, um zu beginnen",
+    "noMatchesTitle": "Keine passenden Chats",
+    "noMatchesDescription": "Versuchen Sie einen anderen Charakter- oder Chatnamen"
+  },
+  "searchPlaceholder": "Letzte Chats durchsuchen",
+  "sort": {
+    "title": "Letzte Chats sortieren",
+    "name": "Name",
+    "recent": "Letzte Aktivität",
+    "created": "Erstellungsdatum",
+    "ascending": "Aufsteigend",
+    "descending": "Absteigend"
+  },
+  "addFavorite": "Zu Favoriten hinzufügen",
+  "removeFavorite": "Aus Favoriten entfernen",
+  "editCharacter": "Charakter bearbeiten",
+  "editFailed": "Charaktereditor konnte nicht geladen werden",
+  "duplicateCharacter": "Charakter duplizieren",
+  "duplicateSuccess": "{{name}} erstellt",
+  "duplicateFailed": "Charakter konnte nicht dupliziert werden",
+  "hideCharacter": "Charakter auf der Startseite ausblenden",
+  "hiddenCharacter": "{{name}} ist auf der Startseite ausgeblendet",
+  "hiddenChat": "Chat ist auf der Startseite ausgeblendet",
+  "hideChatFailed": "Der Chat konnte nicht auf der Startseite ausgeblendet werden",
+  "hiddenFromHome": {
+    "title": "Auf der Startseite ausgeblendet",
+    "description": "Stellen Sie Charaktere oder einzelne Chats wieder her, ohne Ihren Charakter-Browser zu ändern.",
+    "characters": "Charaktere ({{count}})",
+    "chats": "Chats ({{count}})",
+    "search": "Ausgeblendete Elemente durchsuchen",
+    "restore": "Wiederherstellen",
+    "restoreAll": "Alle wiederherstellen",
+    "noCharacters": "Auf der Startseite sind keine Charaktere ausgeblendet.",
+    "noChats": "Auf der Startseite sind keine Chats ausgeblendet.",
+    "characterHint": "Auf der Startseite ausgeblendet",
+    "missingCharacter": "Nicht verfügbarer Charakter",
+    "unnamedChat": "Unbenannter Chat",
+    "loadFailed": "Ausgeblendete Chats konnten nicht geladen werden",
+    "restoreFailed": "Der ausgeblendete Chat konnte nicht wiederhergestellt werden"
+  },
+  "branchLatest": "Von der letzten Nachricht verzweigen",
+  "branchEmptyChat": "Dieser Chat enthält keine Nachrichten, von denen verzweigt werden könnte",
+  "branchFailed": "Chat konnte nicht verzweigt werden",
+  "tagline": "Setze deine Geschichte fort",
+  "tempChat": "Temporärer Chat",
+  "tempChatWithProfile": "Temporärer Chat \u00b7 {{name}}",
+  "tempChatTitle": "Einen Wegwerf-Chat starten \u2014 wird beim Zurückkehren zur Startseite gelöscht",
+  "tempChatTitleWithProfile": "{{name}} in einem Wegwerf-Chat ausprobieren \u2014 wird beim Zurückkehren zur Startseite gelöscht",
+  "tempChatMenu": {
+    "withPreset": "Mit aktuellem Preset",
+    "withPresetHint": "Verwendet Ihr aktives Preset",
+    "noPreset": "Kein Preset",
+    "noPresetHint": "Reiner Modelltest \u2014 keine Preset-Blöcke oder -Parameter"
+  },
+  "logOutTitle": "Auf diesem Gerät abmelden",
+  "loadFailed": "Chats konnten nicht geladen werden",
+  "tryAgain": "Erneut versuchen",
+  "loadingMore": "Weitere Chats werden geladen...",
+  "footer": "Wähle einen Charakter, um deine Reise fortzusetzen",
+  "deleteChat": "Chat löschen",
+  "deleteChatTitle": "Chat löschen",
+  "deleteChatConfirm": "Dadurch wird Ihr {{label}} dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
+  "deleteLabelGroup": "Gruppenchat „{{name}}“",
+  "deleteLabelChat": "Chat mit {{name}}",
+  "deleteAllChats": "Alle Chats löschen",
+  "deleteAllChatsTitle": "Alle Chats löschen",
+  "deleteAllChatsConfirm": "Dadurch werden alle {{count}} Chats mit {{name}} dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
+  "removeFromRecent": "Aus letzten Chats entfernen",
+  "untitled": "Ohne Titel",
+  "logOut": {
+    "title": "Abmelden",
+    "message": "Sie werden auf diesem Gerät abgemeldet. Andere Geräte bleiben angemeldet.",
+    "confirm": "Abmelden"
+  }
+}

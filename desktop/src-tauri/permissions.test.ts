@@ -196,6 +196,61 @@ describe("capability origins", () => {
   });
 });
 
+describe("system audio boundary", () => {
+  const grantsOf = (permission: string) =>
+    capabilities().filter((capability) =>
+      ((capability.json.permissions as Array<string | { identifier?: string }>) ?? []).some(
+        (entry) => entry === permission || (typeof entry === "object" && entry.identifier === permission),
+      ),
+    );
+
+  test("the on/off switch is callable only from the bundled or development tray host", () => {
+    const grants = grantsOf("desktop-system-audio-controls");
+    expect(grants.map((grant) => grant.file).toSorted()).toEqual(["system-audio.json", "tray-dev.json"]);
+    for (const grant of grants) {
+      expect(grant.json.windows).toEqual(["main"]);
+      if (grant.file === "tray-dev.json") {
+        expect(grant.json.local).toBe(false);
+        expect((grant.json.remote as { urls: string[] }).urls.toSorted()).toEqual([
+          "http://127.0.0.1:1430",
+          "http://localhost:1430",
+        ]);
+      } else {
+        expect(grant.json.remote).toBeUndefined();
+        expect(grant.json.local).not.toBe(false);
+      }
+    }
+    expect(readSource("system_audio/mod.rs")).toContain("crate::capture::trusted_host(&window)");
+  });
+
+  test("a session can be started only by the primary frontend window", () => {
+    const grants = grantsOf("desktop-system-audio-session");
+    expect(grants.map((grant) => grant.file)).toEqual(["frontend-titlebar.json"]);
+    expect(grants[0].json.windows).toEqual(["frontend"]);
+    const source = readSource("system_audio/mod.rs");
+    expect(source).toContain("window.label() == FRONTEND");
+    // Floating widgets host extension pages: they must never receive this grant.
+    for (const capability of capabilities()) {
+      if (((capability.json.windows as string[]) ?? []).some((window) => window.startsWith("widget"))) {
+        expect(JSON.stringify(capability.json.permissions)).not.toContain("system-audio");
+      }
+    }
+  });
+
+  test("only analysis frames can leave the capture thread", () => {
+    const analyzer = readSource("system_audio/analyzer.rs");
+    const source = readSource("system_audio/mod.rs").split("#[cfg(test)]")[0];
+    // The wire message is a fixed-size header plus one value per band, nothing else.
+    expect(analyzer).toContain("pub const MESSAGE_FLOATS: usize = 3 + BANDS;");
+    expect(analyzer).toContain("pub fn encode(&self, kind: f32)");
+    // Every message sent to the page is an encoded Frame, including loss of a pending session.
+    const sends = source.split("InvokeResponseBody::Raw(").slice(1);
+    expect(sends.length).toBe(2);
+    for (const rest of sends) expect(rest.slice(0, 48)).toContain(".encode(");
+    expect(source).not.toContain("emit_to(label, STATE_EVENT, frame");
+  });
+});
+
 describe("native capture boundary", () => {
   test("macOS explicitly links the configured compiler's availability runtime", () => {
     const build = readFileSync(join(HERE, "build.rs"), "utf8");

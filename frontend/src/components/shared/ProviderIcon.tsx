@@ -1,9 +1,9 @@
 import clsx from 'clsx'
-import { Database, Link2, Mic, Volume2, Image as ImageIcon, type LucideIcon } from 'lucide-react'
+import { GitFork, Database, Link2, Mic, Volume2, Image as ImageIcon, type LucideIcon } from 'lucide-react'
 import { providerColor } from './providerVisuals'
 import styles from './ProviderIcon.module.css'
 
-export type ProviderIconKind = 'llm' | 'embedding' | 'imageGen' | 'tts' | 'stt'
+export type ProviderIconKind = 'llm' | 'embedding' | 'imageGen' | 'tts' | 'stt' | 'decision'
 
 const KIND_ICON: Record<ProviderIconKind, LucideIcon> = {
   llm: Link2,
@@ -11,6 +11,7 @@ const KIND_ICON: Record<ProviderIconKind, LucideIcon> = {
   imageGen: ImageIcon,
   tts: Volume2,
   stt: Mic,
+  decision: GitFork,
 }
 
 interface ProviderIconProps {

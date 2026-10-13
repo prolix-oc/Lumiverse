@@ -37,7 +37,7 @@ describe('MessageEditArea scrolling contract', () => {
 
   test('auto-sizing cannot override native scrolling inline', () => {
     const autoResizeStart = component.indexOf('function autoResize(')
-    const autoResizeEnd = component.indexOf('\nfunction getEditorOcclusion', autoResizeStart)
+    const autoResizeEnd = component.indexOf('\nfunction MessageEditAreaNative', autoResizeStart)
     const autoResize = component.slice(autoResizeStart, autoResizeEnd)
 
     expect(autoResizeStart).toBeGreaterThan(-1)

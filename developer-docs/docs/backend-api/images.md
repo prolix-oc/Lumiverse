@@ -34,6 +34,9 @@ const image = await spindle.images.get('image-id', {
   specificity: 'sm',
 })
 
+// Read the original bytes for export.
+const originalBytes = await spindle.images.readBinary('image-id')
+
 // Upload raw bytes; the current extension is recorded automatically.
 const uploaded = await spindle.images.upload({
   data: pngBytes,
@@ -89,6 +92,7 @@ const deletedCount = await spindle.images.deleteMany(imageIds)
 |---|---|---|
 | `list(options?)` | `Promise<{ data: ImageDTO[], total: number }>` | List stored assets. Options: `{ limit?, offset?, specificity?, onlyOwned?, characterId?, chatId? }`. Defaults: limit 50, max 200. |
 | `get(imageId, options?)` | `Promise<ImageDTO \| null>` | Get a single asset DTO. Options: `{ specificity?, onlyOwned?, characterId?, chatId? }`. Returns `null` when the asset is missing or excluded by the ownership filters. |
+| `readBinary(imageId, userId?)` | `Promise<Uint8Array>` | Read the original stored asset bytes, up to 100 MiB. Requires `images` and access as the effective user. Rejects for missing, inaccessible, or oversized assets. Operator-scoped extensions must supply `userId`. |
 | `upload(input)` | `Promise<ImageDTO>` | Upload raw image or video bytes. The host automatically tags the stored asset with the current extension identifier. |
 | `uploadMany(items, options?)` | `Promise<Array<{ id?: string; error?: string }>>` | Batch upload multiple assets in a single IPC call. Per-item failures captured as `{error}` rather than throwing. Options: `{ userId?, concurrency? }` (concurrency capped at 32, default 16). |
 | `uploadFromDataUrl(dataUrl, options?)` | `Promise<ImageDTO>` | Upload a base64 image data URL. The host automatically tags the stored asset with the current extension identifier. |
@@ -170,6 +174,7 @@ Same ownership and `specificity` fields as `ImageListOptionsDTO`, minus paginati
 ## Notes
 
 - `spindle.images.get()` returns metadata plus a URL, not the binary asset bytes themselves.
+- Use `spindle.images.readBinary()` to export the original file bytes.
 - Thumbnail generation is supported automatically. `has_thumbnail` tells you whether thumbnails are available or can be lazily generated. `uploadMany` defers thumbnail (and width/height) generation to a background job for throughput; the underlying row populates these fields asynchronously after the call returns. Assets uploaded with `skip_thumbnail_processing: true` keep `has_thumbnail: false` and `width`/`height` as `null`, and all thumbnail-sized URLs serve the original asset.
 - Video assets stored here can be used as `spindle.media` inputs via `source: { kind: "image", image_id }`. Despite the source name, that media source kind accepts still images and video assets from this store.
 - Generated images persisted through `spindle.imageGen.generate()` also participate in this ownership model when `owner_character_id` or `owner_chat_id` are supplied.

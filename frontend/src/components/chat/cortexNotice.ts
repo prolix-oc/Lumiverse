@@ -17,6 +17,7 @@ export interface CortexRebuildStatus {
   current?: number
   total?: number
   percent?: number
+  phase?: string
   error?: string
   source?: string
   startedAt?: number
@@ -56,6 +57,9 @@ function formatIngestionDetail(status: CortexIngestionStatus, t: Translator): st
 }
 
 function formatRebuildDetail(payload: CortexRebuildStatus, t: Translator): string {
+  if (payload.phase === 'consolidating') return t('chatView.cortexConsolidatingScenes')
+  if (payload.phase === 'consolidating_arcs') return t('chatView.cortexConsolidatingArcs')
+
   // Rebuild progress is emitted only by the Cortex-derived-state pipeline.
   // The same /warm request may also queue LTCM embeddings, but those are not
   // sidecar analysis and deliberately do not drive this notice.
@@ -99,6 +103,14 @@ export function buildCortexNotice(
 
   const rebuildProcessing = rebuildStatus?.status === 'processing'
   const ingestionProcessing = ingestionStatus?.status === 'processing'
+
+  if (rebuildProcessing && (rebuildStatus.phase === 'consolidating' || rebuildStatus.phase === 'consolidating_arcs')) {
+    return {
+      variant: 'processing',
+      title: t('chatView.memory'),
+      detail: formatRebuildDetail(rebuildStatus, t),
+    }
+  }
 
   if (rebuildProcessing && ingestionProcessing) {
     return {

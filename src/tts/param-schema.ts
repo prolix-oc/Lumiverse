@@ -4,6 +4,7 @@ export type TtsParamType = "number" | "integer" | "boolean" | "string" | "select
 
 export interface TtsParameterSchema {
   type: TtsParamType;
+  label?: string;
   default?: any;
   min?: number;
   max?: number;
@@ -14,6 +15,9 @@ export interface TtsParameterSchema {
   options?: Array<{ id: string; label: string }>;
   /** UI grouping — parameters with the same group render together (e.g. "advanced") */
   group?: string;
+  /** Only show/send this setting for these model IDs or output formats. */
+  models?: string[];
+  formats?: string[];
 }
 
 export type TtsParameterSchemaMap = Record<string, TtsParameterSchema>;

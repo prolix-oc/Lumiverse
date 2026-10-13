@@ -1,7 +1,7 @@
 import { getDb } from "../../db/connection";
 
 interface ConnectionSecretTarget {
-  table: "connection_profiles" | "image_gen_connections" | "tts_connections" | "stt_connections";
+  table: "connection_profiles" | "image_gen_connections" | "tts_connections" | "stt_connections" | "decision_connections";
   id: string;
 }
 
@@ -13,6 +13,7 @@ const CONNECTION_SECRET_TARGETS: ReadonlyArray<{
   { pattern: /^image_gen_connection_(.+)_api_key$/, table: "image_gen_connections" },
   { pattern: /^tts_connection_(.+)_api_key$/, table: "tts_connections" },
   { pattern: /^stt_connection_(.+)_api_key$/, table: "stt_connections" },
+  { pattern: /^decision_connection_(.+)_api_key$/, table: "decision_connections" },
 ];
 
 export function connectionTargetForSecret(key: string): ConnectionSecretTarget | null {

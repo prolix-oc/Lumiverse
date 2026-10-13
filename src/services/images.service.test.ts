@@ -255,17 +255,19 @@ describe("images.service ownership filters", () => {
     expect(getImage("u1", "img-1")).not.toBeNull();
   });
 
-  test("deletes wallpaper-library images and clears global plus chat assignments", () => {
+  test("deletes wallpaper-library images and clears global, mobile and chat assignments", () => {
     seedImage("img-1", 100, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
     seedImage("img-2", 90, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
     seedSetting("wallpaper", {
       global: { image_id: "img-1", type: "image" },
+      mobile: { image_id: "img-1", type: "image" },
       opacity: 0.35,
       fit: "cover",
       blur: 2,
     });
     seedChat("chat-1", {
       wallpaper: { image_id: "img-1", type: "image" },
+      mobile_wallpaper: { image_id: "img-1", type: "image" },
       topic: "keep me",
     });
     seedChat("chat-2", {
@@ -279,18 +281,38 @@ describe("images.service ownership filters", () => {
     expect(getImage("u1", "img-1")).toBeNull();
     expect(settingsSvc.getSetting("u1", "wallpaper")?.value).toEqual({
       global: null,
+      mobile: null,
       opacity: 0.35,
       fit: "cover",
       blur: 2,
     });
     expect(chatsSvc.getChat("u1", "chat-1")?.metadata).toEqual({
       wallpaper: null,
+      mobile_wallpaper: null,
       topic: "keep me",
     });
     expect(chatsSvc.getChat("u1", "chat-2")?.metadata).toEqual({
       wallpaper: { image_id: "img-2", type: "image" },
       topic: "leave me alone",
     });
+  });
+
+  test("clears a mobile-only assignment without changing the global wallpaper or display settings", () => {
+    seedImage("mobile-video", 100, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
+    const settings = { global: { image_id: "desktop", type: "image" }, mobile: { image_id: "mobile-video", type: "video" }, opacity: 0.6, fit: "contain", blur: 3 };
+    seedSetting("wallpaper", settings);
+    expect(deleteWallpaperLibraryImage("u1", "mobile-video")).toBe(true);
+    expect(settingsSvc.getSetting("u1", "wallpaper")?.value).toEqual({ ...settings, mobile: null });
+  });
+
+  test("clears a chat mobile video while retaining its regular wallpaper and other metadata", () => {
+    seedImage("chat-mobile-video", 100, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
+    const metadata = { wallpaper: { image_id: "desktop", type: "image" }, mobile_wallpaper: { image_id: "chat-mobile-video", type: "video" }, topic: "keep" };
+    seedChat("mobile-chat", metadata);
+    seedChat("other-chat", { mobile_wallpaper: { image_id: "other", type: "image" } });
+    expect(deleteWallpaperLibraryImage("u1", "chat-mobile-video")).toBe(true);
+    expect(chatsSvc.getChat("u1", "mobile-chat")?.metadata).toEqual({ ...metadata, mobile_wallpaper: null });
+    expect(chatsSvc.getChat("u1", "other-chat")?.metadata).toEqual({ mobile_wallpaper: { image_id: "other", type: "image" } });
   });
 
   test("does not delete non-wallpaper images through the wallpaper delete path", () => {

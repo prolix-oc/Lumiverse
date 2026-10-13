@@ -1,5 +1,20 @@
 import { BASE_URL } from './client'
 
+export interface TtsSynthesizeOptions {
+  voice?: string
+  model?: string
+  speed?: number
+  parameters?: Record<string, unknown>
+  outputFormat?: string
+  signal?: AbortSignal
+}
+
+function requestParameters(options?: TtsSynthesizeOptions): Record<string, unknown> | undefined {
+  const parameters = { ...options?.parameters }
+  if (options?.speed != null) parameters.speed = options.speed
+  return Object.keys(parameters).length ? parameters : undefined
+}
+
 export const ttsApi = {
   /**
    * Synthesize speech. Returns raw Response for ArrayBuffer/stream consumption.
@@ -8,7 +23,7 @@ export const ttsApi = {
   async synthesize(
     connectionId: string,
     text: string,
-    options?: { voice?: string; model?: string; speed?: number; outputFormat?: string; signal?: AbortSignal }
+    options?: TtsSynthesizeOptions
   ): Promise<Response> {
     return fetch(`${BASE_URL}/tts/synthesize`, {
       method: 'POST',
@@ -20,7 +35,7 @@ export const ttsApi = {
         text,
         voice: options?.voice,
         model: options?.model,
-        parameters: options?.speed != null ? { speed: options.speed } : undefined,
+        parameters: requestParameters(options),
         outputFormat: options?.outputFormat,
       }),
     })
@@ -32,7 +47,7 @@ export const ttsApi = {
   async synthesizeStream(
     connectionId: string,
     text: string,
-    options?: { voice?: string; model?: string; speed?: number; outputFormat?: string; signal?: AbortSignal }
+    options?: TtsSynthesizeOptions
   ): Promise<Response> {
     return fetch(`${BASE_URL}/tts/synthesize/stream`, {
       method: 'POST',
@@ -47,7 +62,7 @@ export const ttsApi = {
         text,
         voice: options?.voice,
         model: options?.model,
-        parameters: options?.speed != null ? { speed: options.speed } : undefined,
+        parameters: requestParameters(options),
         outputFormat: options?.outputFormat,
       }),
     })

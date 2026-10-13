@@ -100,6 +100,23 @@
     "searchMacros": "Rechercher des macros..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analyser l’audio du système ?",
+      "consentMessage": "Elle recevra uniquement un spectre et un niveau sonore, jamais l’audio lui-même. Lumiverse n’enregistre ni ne transmet l’audio. Un indicateur d’écoute et un bouton Arrêter restent visibles pendant l’analyse. Sans mémorisation de votre accord, une confirmation sera demandée à chaque démarrage.",
+      "allow": "Autoriser",
+      "notNow": "Pas maintenant",
+      "listening": "{{name}} analyse l’audio du système",
+      "stop": "Arrêter",
+      "minimise": "Réduire",
+      "show": "Afficher : {{name}} analyse l’audio du système",
+      "remember": "Mémoriser mon accord pour cette extension sur cet appareil",
+      "consentSetting": "Consentement pour l’audio du système",
+      "askEachTime": "Demander à chaque démarrage.",
+      "remembered": "Votre accord est mémorisé pour ce compte sur cet appareil.",
+      "paused": "Les démarrages sont suspendus. Autorisez à nouveau les demandes lorsque vous souhaitez que cette extension utilise l’audio.",
+      "allowAgain": "Autoriser à nouveau les demandes",
+      "revokeApproval": "Révoquer l’accord"
+    },
     "floatWidget": "Widget flottant",
     "drawerTab": "Onglet Tiroir",
     "dockPanel": "Quai ({{edge}})",

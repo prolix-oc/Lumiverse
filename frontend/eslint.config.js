@@ -6,7 +6,9 @@ export default [
   {
     ignores: [
       'dist/**',
+      '.tmp/**',
       '.dist-build*/**',
+      '.dist-backup*/**',
       'node_modules/**',
       'src/sw.ts',
       'scripts/**',

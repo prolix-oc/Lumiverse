@@ -5,6 +5,8 @@
  */
 
 import type {
+  SpindleDecisionsAPI,
+  DecisionResult,
   SpindleManifest,
   WorkerToHost,
   HostToWorker,
@@ -105,6 +107,15 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import {
+  SPINDLE_FILE_CHUNK_BYTES as FILE_CHUNK_BYTES,
+  SPINDLE_FILE_MAX_COUNT as FILE_MAX_COUNT,
+  type FileOperationOptions,
+  type FileTransferWorkerMessage,
+} from "lumiverse-spindle-types";
+import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } from "./generation-contract";
+import type { ImageReadBinaryMessage } from "./image-binary-contract";
+import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
 import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
@@ -303,6 +314,9 @@ type ChatAppendMessageOptions =
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | ActivationPatternsMessage
+  | ImageReadBinaryMessage
+  | GetBreakdownWorkerMessage
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -716,7 +730,17 @@ type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts"> & {
+  regex_scripts: SpindleAPI["regex_scripts"] & {
+    prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult>;
+  };
+  images: SpindleAPI["images"] & {
+    readBinary(imageId: string, userId?: string): Promise<Uint8Array>;
+  };
+  generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
+    getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
+  };
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
@@ -1141,6 +1165,27 @@ function request(msg: RuntimeWorkerToHost & { requestId: string }): Promise<unkn
   });
 }
 
+async function fileOperation<T>(msg: FileTransferWorkerMessage & { requestId: string }, options?: FileOperationOptions): Promise<T> {
+  if (msg.type !== "files_read_chunk" && msg.type !== "files_download_url") assertMutationAllowed(`spindle.${msg.type}()`);
+  if (msg.type === "files_write_chunk" && (!(msg.data instanceof Uint8Array) || msg.data.byteLength === 0 || msg.data.byteLength > FILE_CHUNK_BYTES)) {
+    throw new Error(`Chunk must contain 1 to ${FILE_CHUNK_BYTES} bytes`);
+  }
+  if (msg.type === "archives_create" && (!Array.isArray(msg.entries) || msg.entries.length > FILE_MAX_COUNT || msg.entries.reduce((bytes, entry) => bytes + Buffer.byteLength(entry.name), 0) > 1024 * 1024)) {
+    throw new Error("Archive entry metadata exceeds size limit");
+  }
+  options?.signal?.throwIfAborted();
+  const cancel = () => post({ type: "files_cancel", operationId: msg.requestId });
+  // request() posts synchronously; cancellation must be ordered after it.
+  const result = request(msg);
+  options?.signal?.addEventListener("abort", cancel, { once: true });
+  if (options?.signal?.aborted) cancel();
+  try { return await result as T; }
+  finally {
+    options?.signal?.removeEventListener("abort", cancel);
+    pendingResponses.delete(msg.requestId);
+  }
+}
+
 function normalizeOwnedRpcPoolEndpoint(endpoint: string): string {
   return normalizeOwnedSharedRpcEndpoint(manifest.identifier, endpoint);
 }
@@ -1509,6 +1554,65 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  decisions: {
+    async listProviders(options) {
+      return await request({ type: "decisions_providers", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listProviders"]>>;
+    },
+    async listConnections(options) {
+      return await request({ type: "decisions_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listConnections"]>>;
+    },
+    async getConnection(connectionId, options) {
+      return await request({ type: "decisions_connection_get", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getConnection"]>>;
+    },
+    async getModels(connectionId, options) {
+      return await request({ type: "decisions_models", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getModels"]>>;
+    },
+    async evaluate(input, options) {
+      assertMutationAllowed("spindle.decisions.evaluate()");
+      options?.signal?.throwIfAborted();
+      const requestId = crypto.randomUUID();
+      const cancel = () => post({ type: "decisions_cancel", requestId });
+      const result = request({ type: "decisions_evaluate", requestId, input });
+      options?.signal?.addEventListener("abort", cancel, { once: true });
+      if (options?.signal?.aborted) cancel();
+      try { return await result as DecisionResult<typeof input.questions>; }
+      finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
+    },
+  },
+  files: {
+    fetch(url, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "files_fetch", requestId: crypto.randomUUID(), url, options: wireOptions }, options);
+    },
+    create(input) {
+      return fileOperation({ type: "files_create", requestId: crypto.randomUUID(), input });
+    },
+    writeChunk(fileId, offset, data, userId) {
+      return fileOperation({ type: "files_write_chunk", requestId: crypto.randomUUID(), fileId, offset, data, userId });
+    },
+    finish(fileId, userId) {
+      return fileOperation({ type: "files_finish", requestId: crypto.randomUUID(), fileId, userId });
+    },
+    readChunk(source, offset, userId) {
+      return fileOperation({ type: "files_read_chunk", requestId: crypto.randomUUID(), source, offset, userId });
+    },
+    delete(fileId, userId) {
+      return fileOperation({ type: "files_delete", requestId: crypto.randomUUID(), fileId, userId });
+    },
+    getDownloadUrl(fileId, userId) {
+      return fileOperation({ type: "files_download_url", requestId: crypto.randomUUID(), fileId, userId });
+    },
+  },
+  archives: {
+    create(entries, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "archives_create", requestId: crypto.randomUUID(), entries, options: wireOptions }, options);
+    },
+    extract(source, options = {}) {
+      const { signal: _signal, ...wireOptions } = options;
+      return fileOperation({ type: "archives_extract", requestId: crypto.randomUUID(), source, options: wireOptions }, options);
+    },
+  },
   desktop: {
     capture: {
       async listDevices(options) {
@@ -1733,6 +1837,14 @@ const spindleApi: RuntimeSpindleAPI = {
     quietStream(input) {
       return requestGenerationStream({ ...input, type: "quiet" });
     },
+    async getBreakdown(messageId: string, userId?: string) {
+      return await request({
+        type: "generate_get_breakdown",
+        requestId: crypto.randomUUID(),
+        messageId,
+        userId,
+      }) as SavedBreakdownDTO | null;
+    },
     async dryRun(input, userId?: string) {
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -1741,7 +1853,7 @@ const spindleApi: RuntimeSpindleAPI = {
         input,
         userId,
       });
-      return result as import("lumiverse-spindle-types").DryRunResultDTO;
+      return result as DryRunResultDTO;
     },
 
     observe(chatId: string): import("lumiverse-spindle-types").GenerationObserver {
@@ -2537,6 +2649,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   images: {
+    async readBinary(imageId: string, userId?: string): Promise<Uint8Array> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "images_read_binary", requestId, imageId, userId }) as Uint8Array;
+    },
     async list(options?: ImageListOptionsDTO): Promise<{ data: ImageDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -3081,6 +3197,10 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   regex_scripts: {
+    async prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult> {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "regex_scripts_prepare_activation_patterns", requestId, options }) as ActivationPatternsResult;
+    },
     async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({

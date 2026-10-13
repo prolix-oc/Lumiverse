@@ -5,6 +5,8 @@
 Make HTTP requests through the Lumiverse server, bypassing browser CORS restrictions.
 The proxy permits HTTP(S) targets on loopback, APIPA, and RFC-private address ranges for extension-owned integrations.
 
+For large downloads or arbitrary archived content, use [`spindle.files.fetch()` and `spindle.archives`](file-transfers.md). They stage bytes on disk and provide bounded reads and streaming exports.
+
 ## Usage
 
 ```ts

@@ -8,6 +8,8 @@ If your next step is a [`spindle.media.*`](media.md) transform, you usually do *
 
 No permission is required. Each upload is scoped to the extension that created it and the user who was signed in.
 
+For ZIP/ZIP64 processing and exports, pass `{ uploadId }` directly to [`spindle.archives.extract()` or `spindle.archives.create()`](file-transfers.md). The host consumes the upload from disk and keeps it alive during the operation. `spindle.files.readChunk({ uploadId }, offset, userId?)` also provides a 1 MiB read limit.
+
 ## Flow
 
 1. The frontend uploads the file to `/api/v1/spindle-uploads` with the tus protocol, tagging it with your extension identifier.

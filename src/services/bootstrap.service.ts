@@ -1,5 +1,8 @@
 import * as chatsSvc from "./chats.service";
 import * as connectionsSvc from "./connections.service";
+import * as decisionConnectionsSvc from "./decision-connections.service";
+import { withReadableApiKeyStatuses } from "./connection-secret-status";
+import type { DecisionConnectionProfile } from "../types/decision-connection";
 import * as sttConnectionsSvc from "./stt-connections.service";
 import * as ttsConnectionsSvc from "./tts-connections.service";
 import * as imageGenConnectionsSvc from "./image-gen-connections.service";
@@ -49,6 +52,7 @@ export interface BootstrapPayload {
     connections: PaginatedResult<TtsConnectionProfile>;
     providers: ProviderSummaryEntry[];
   };
+  decision: { connections: PaginatedResult<DecisionConnectionProfile>; providers: ProviderSummaryEntry[] };
   stt: {
     connections: PaginatedResult<SttConnectionProfile>;
     providers: ProviderSummaryEntry[];
@@ -106,7 +110,7 @@ interface StartupSettings {
   wallpaper?: unknown;
   drawerSettings?: unknown;
   spindleSettings?: unknown;
-  connectionsOrder?: Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>>;
+  connectionsOrder?: Partial<Record<"llm" | "imageGen" | "stt" | "tts" | "decision", string[]>>;
   activeProfileId?: string | null;
   toastPosition?: "top-right" | "top-left" | "bottom-right" | "bottom-left" | "top" | "bottom";
   defaultImpersonationMode?: "prompts" | "preset" | "oneliner";
@@ -151,10 +155,10 @@ export const STARTUP_SETTINGS_KEYS = [
  */
 export function sanitizeConnectionsOrder(
   raw: unknown,
-): Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>> {
-  const sanitized: Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>> = {};
+): Partial<Record<"llm" | "imageGen" | "stt" | "tts" | "decision", string[]>> {
+  const sanitized: Partial<Record<"llm" | "imageGen" | "stt" | "tts" | "decision", string[]>> = {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return sanitized;
-  for (const key of ["llm", "imageGen", "stt", "tts"] as const) {
+  for (const key of ["llm", "imageGen", "stt", "tts", "decision"] as const) {
     const value = (raw as Record<string, unknown>)[key];
     if (Array.isArray(value) && value.every((id) => typeof id === "string")) {
       sanitized[key] = value;
@@ -441,6 +445,8 @@ export async function buildBootstrapPayload(
   const regexScripts = safeSync("regexScripts", () => collectAll((p) => regexSvc.listRegexScripts(userId, p), LIST_LIMIT_REGEX), emptyPage<RegexScript>(LIST_LIMIT_REGEX));
   const councilSettings = safeSync("council.settings", () => councilSvc.getCouncilSettings(userId), {} as CouncilSettings);
 
+  const decisionConnections = await safeAsync("decision.connections", () => withReadableApiKeyStatuses(userId, collectAll((p) => decisionConnectionsSvc.listConnections(userId, p)), decisionConnectionsSvc.decisionConnectionSecretKey), emptyPage<DecisionConnectionProfile>(LIST_LIMIT_CONNECTIONS));
+  const decisionProviders = safeSync("decision.providers", () => decisionConnectionsSvc.listProviders(), [] as ProviderSummaryEntry[]);
   const councilTools = await safeAsync("council.tools", () => councilSvc.getAvailableTools(userId), [] as RuntimeCouncilToolDefinition[]);
   const spindle = await safeAsync("spindle", () => listSpindle(userId, role), { extensions: [], isPrivileged: false, tools: [] });
   const recentChats = emptyPage<GroupedRecentChat>(LANDING_CHATS_DEFAULT_LIMIT);
@@ -448,6 +454,7 @@ export async function buildBootstrapPayload(
   const payload: BootstrapPayload = {
     startupSettings,
     llm: { connections: llmConnections, providers: llmProviders },
+    decision: { connections: decisionConnections, providers: decisionProviders },
     stt: { connections: sttConnections, providers: sttProviders },
     tts: { connections: ttsConnections, providers: ttsProviders },
     imageGen: { connections: imageGenConnections, providers: imageGenProviders },

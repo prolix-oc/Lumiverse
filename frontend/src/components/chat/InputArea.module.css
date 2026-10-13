@@ -31,16 +31,18 @@
     border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     border-radius var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
-    bottom var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
+    bottom var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
+    padding-bottom var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
 }
 
 :global(html[data-ios-pwa]) .container {
   /* .app has no bottom safe-area padding on iOS PWA, so this positions from
      the screen edge. Background fills to the bottom; extra padding-bottom
      keeps interactive content above the home indicator. When keyboard is
-     open, move up and drop the safe-area padding (keyboard covers it). */
-  bottom: var(--app-keyboard-inset-bottom, 0px);
-  padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+     open, move up and drop the safe-area padding (keyboard covers it).
+     Viewport insets are rendered pixels; divide once for the body zoom. */
+  bottom: calc(var(--app-keyboard-inset-bottom, 0px) / var(--lumiverse-ui-scale, 1));
+  padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
 }
 
 :global(html[data-pwa]:not([data-ios-pwa])) .container {
@@ -412,6 +414,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .container {
+    transition: none;
+  }
+
   .popoverSlot {
     transition: none;
   }
@@ -1216,8 +1222,8 @@
   }
 
   :global(html[data-ios-pwa]) .container {
-    bottom: var(--app-keyboard-inset-bottom, 0px);
-    padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+    bottom: calc(var(--app-keyboard-inset-bottom, 0px) / var(--lumiverse-ui-scale, 1));
+    padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
   }
 
   :global(html[data-pwa]:not([data-ios-pwa])) .container {

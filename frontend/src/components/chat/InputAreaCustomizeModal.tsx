@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ComponentType } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import clsx from 'clsx'
 import {
   Compass,
@@ -317,6 +317,9 @@ export function useComposerActionBar() {
    * overwrite a newer edit.
    */
   const committed = useRef<ComposerActionBarState>(state)
+  /** Account copy, so separate browser profiles (e.g. the desktop webview) share one layout. */
+  const synced = useStore((store) => store.composerActionBar)
+  const settingsLoaded = useStore((store) => store.fullSettingsLoaded)
 
   const persist = useCallback((next: ComposerActionBarState) => {
     const normalized = normalizeComposerActionBarState(next)
@@ -324,7 +327,24 @@ export function useComposerActionBar() {
     committed.current = normalized
     setState(normalized)
     saveComposerActionBar(normalized)
+    useStore.getState().setSetting?.('composerActionBar', normalized)
   }, [])
+
+  useEffect(() => {
+    if (!synced) return
+    const next = normalizeComposerActionBarState(synced)
+    if (sameComposerActionBarState(next, committed.current)) return
+    committed.current = next
+    setState(next)
+    saveComposerActionBar(next)
+  }, [synced])
+
+  // Seed the account once from a device that already customized its layout.
+  useEffect(() => {
+    if (!settingsLoaded || synced) return
+    if (sameComposerActionBarState(committed.current, normalizeComposerActionBarState(DEFAULT_STATE))) return
+    useStore.getState().setSetting?.('composerActionBar', committed.current)
+  }, [settingsLoaded, synced])
 
   /**
    * Read-only render projection. A stored legacy id must be canonicalized when

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { OpenRouterTtsProvider } from "./openrouter-tts";
+import { DEFAULT_GEMINI_TTS_SPEECH_STYLE } from "./google-tts-shared";
 import type { TtsRequest, TtsStreamChunk } from "../types";
 
 const originalFetch = globalThis.fetch;
@@ -14,6 +15,28 @@ afterEach(() => {
 });
 
 describe("OpenRouter TTS PCM output", () => {
+  test.each([
+    { model: "google/gemini-3.8-flash-tts", parameters: {}, expected: DEFAULT_GEMINI_TTS_SPEECH_STYLE },
+    { model: "google/gemini-3.8-flash-lite-tts", parameters: {}, expected: DEFAULT_GEMINI_TTS_SPEECH_STYLE },
+    { model: "google/gemini-3.8-flash-tts", parameters: { speech_style: "  soft, conversational  " }, expected: "soft, conversational" },
+    { model: "google/gemini-3.8-flash-tts", parameters: { speech_style: "", instructions: "ignored fallback" }, expected: undefined },
+    { model: "google/gemini-3.1-flash-tts-preview", parameters: {}, expected: undefined },
+    { model: "microsoft/mai-voice-2", parameters: { speech_style: "conversational" }, expected: undefined },
+    { model: "openai/gpt-4o-mini-tts", parameters: { instructions: "Speak softly" }, expected: "Speak softly" },
+  ])("uses model-appropriate instructions while preserving the transcript (%j)", async ({ model, parameters, expected }) => {
+    let body: Record<string, any> = {};
+    (globalThis as any).fetch = async (_input: any, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(pcm, { headers: { "Content-Type": "audio/pcm;rate=24000" } });
+    };
+    const text = "Before <giggle> after.";
+    await provider.synthesize("key", "", { ...geminiRequest, model, text, parameters });
+    expect(body.input).toBe(text);
+    expect(body.instructions).toBe(expected);
+    expect(body).not.toHaveProperty("speech_metadata");
+    if (expected === undefined) expect(body).not.toHaveProperty("instructions");
+  });
+
   test.each([
     "google/gemini-2.5-flash-tts",
     "google/gemini-3.8-flash-tts",

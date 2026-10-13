@@ -18,6 +18,8 @@ export interface TraySettings {
   autoStartServer: boolean;
   /** Show the active roleplay in the user's Discord status via Rich Presence. */
   discordRpcEnabled: boolean;
+  /** Let extensions the user has granted `system_audio` analyse what this computer plays (levels and spectrum only). */
+  systemAudioEnabled: boolean;
   /** Last frontend window position/size; null = center 1200x800. */
   frontendBounds: {
     x: number;
@@ -34,6 +36,7 @@ const DEFAULTS: TraySettings = {
   bunPath: null,
   autoStartServer: true,
   discordRpcEnabled: false,
+  systemAudioEnabled: false,
   frontendBounds: null,
   instanceConnection: LOCAL_INSTANCE_CONNECTION,
 };

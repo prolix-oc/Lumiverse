@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "desktop-system-audio-session"
+description = "Allows only the primary frontend to read whether system audio analysis is available and to start or stop its one analysis session. Only spectrum and level frames come back: no samples, device identifiers, or paths cross IPC."
+commands.allow = ["desktop_system_audio_status", "desktop_system_audio_start", "desktop_system_audio_stop"]
+
+[[permission]]
+identifier = "desktop-system-audio-controls"
+description = "Allows only the bundled tray host to switch system audio analysis on or off and to read its state."
+commands.allow = ["desktop_system_audio_status", "desktop_system_audio_set_enabled"]

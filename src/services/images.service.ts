@@ -1573,8 +1573,16 @@ function clearWallpaperAssignments(userId: string, imageId: string): void {
   const wallpaperSetting = settingsSvc.getSetting(userId, "wallpaper");
   if (wallpaperSetting?.value && typeof wallpaperSetting.value === "object" && !Array.isArray(wallpaperSetting.value)) {
     const current = wallpaperSetting.value as Record<string, unknown>;
-    if (isWallpaperRef(current.global, imageId)) {
-      settingsSvc.putSetting(userId, "wallpaper", { ...current, global: null });
+    const updated = { ...current };
+    let changed = false;
+    for (const scope of ["global", "mobile"]) {
+      if (isWallpaperRef(current[scope], imageId)) {
+        updated[scope] = null;
+        changed = true;
+      }
+    }
+    if (changed) {
+      settingsSvc.putSetting(userId, "wallpaper", updated);
     }
   }
 
@@ -1584,8 +1592,12 @@ function clearWallpaperAssignments(userId: string, imageId: string): void {
 
   for (const row of candidateRows) {
     const chat = chatsSvc.getChat(userId, row.id);
-    if (!chat || !isWallpaperRef(chat.metadata?.wallpaper, imageId)) continue;
-    chatsSvc.mergeChatMetadata(userId, row.id, { wallpaper: null });
+    if (!chat) continue;
+    const cleared: Record<string, null> = {};
+    for (const key of ["wallpaper", "mobile_wallpaper"]) {
+      if (isWallpaperRef(chat.metadata?.[key], imageId)) cleared[key] = null;
+    }
+    if (Object.keys(cleared).length) chatsSvc.mergeChatMetadata(userId, row.id, cleared);
   }
 }
 

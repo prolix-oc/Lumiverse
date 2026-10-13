@@ -9,6 +9,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   google_vertex: '#34a853',
   bedrock: '#ff9900',
   openrouter: '#6366f1',
+  typesafe: '#22c55e',
   infermatic: '#8b5cf6',
   nanogpt: '#10b981',
   pollinations_text: '#f89c73',
@@ -24,6 +25,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   qwen3_tts_server: '#f97316',
   google_tts: '#4285f4',
   google_vertex_tts: '#34a853',
+  fish_audio: '#ff5c5c',
   // fallback
   custom: 'var(--lumiverse-text-dim)',
 }

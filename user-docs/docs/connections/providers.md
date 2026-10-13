@@ -27,7 +27,7 @@ Lumiverse supports 21 AI providers out of the box. Each provider has its own mod
 | **Fireworks** | Yes | Fast inference for open models |
 | **ElectronHub** | Yes | Model aggregator |
 | **SiliconFlow** | Yes | Chinese and international models |
-| **NanoGPT** | Yes | Pay-per-token aggregator (shows subscription usage in the connection card) |
+| **NanoGPT** | Yes | Pay-per-token aggregator with PAYG provider routing, balance, and subscription usage |
 | **Infermatic** | Yes | TotalGPT — uncensored open-weights hosting (`https://api.totalgpt.ai/v1`) |
 | **Chutes** | Yes | Model hosting platform |
 | **Z.AI** | Yes | Standard and Coding Plan endpoints |
@@ -161,7 +161,11 @@ Only managed API (MaaS) models can be called directly by this connection. A self
 
 ## NanoGPT Usage
 
-NanoGPT connections show a **subscription usage** card directly on the connection profile, similar to the credits readout on OpenRouter. Use it to watch your remaining quota without leaving Lumiverse.
+The active NanoGPT connection shows your **PAYG account balance**, today's spend, this month's spend, and any available subscription quotas. Spend is net of refunds for **this connection's API key** and follows **UTC** dates. Other API keys' usage is not included. Unavailable account data appears as Unknown; refresh the card to retry. [NanoGPT Usage API](https://docs.nano-gpt.com/api-reference/endpoint/usage)
+
+Edit the connection and select a model to discover its available upstream providers and prices. Routing preferences are saved per model on that connection. **Preferred providers** specifies a soft order; **Allowed providers** restricts requests to that list; **Excluded providers** blocks selected providers. You can also choose a price, speed, throughput, or latency routing goal and control fallback. Displayed rates use USD per million tokens and already include provider-selection markup. [Provider selection](https://docs.nano-gpt.com/api-reference/miscellaneous/provider-selection)
+
+Explicit provider selection can bypass subscription coverage and use your PAYG balance. **Always use pay-as-you-go** also forces balance billing when no provider is selected. Your NanoGPT API key must permit paid usage. **Use Subscription API** keeps these PAYG settings inactive until you turn it off. [Billing override](https://docs.nano-gpt.com/api-reference/miscellaneous/billing-override)
 
 ---
 

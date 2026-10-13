@@ -2176,7 +2176,7 @@ export async function processChunk(
         generateRawFn,
         sidecarConnectionId,
         config.sidecarTimeoutMs,
-        buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
       )
       .catch((err) => {
@@ -2204,6 +2204,7 @@ export type RebuildPhase =
   | "awaiting_provider"
   | "ingesting"
   | "consolidating"
+  | "consolidating_arcs"
   | "idle_between_batches";
 
 interface RebuildState {
@@ -2599,9 +2600,17 @@ export async function rebuildCortex(
         generateRawFn,
         sidecarConnectionId,
         config.sidecarTimeoutMs,
-        buildSidecarSamplingParameters(config.sidecar, { includeMaxTokens: false }),
+        buildSidecarSamplingParameters(config.sidecar),
         config.nonProseScaffoldTags,
-        { signal },
+        {
+          signal,
+          onProgress: (kind) => {
+            const phase = kind === "arc" ? "consolidating_arcs" : "consolidating";
+            if (state.phase === phase) return;
+            state.phase = phase;
+            emit();
+          },
+        },
       );
       if (created > 0) {
         console.info(`[memory-cortex] Rebuild created ${created} scene consolidation(s) for chat ${chatId}`);
@@ -2885,8 +2894,9 @@ export function getRelationsIncludingInactive(chatId: string) {
  * silently fell back to the legacy hardcoded {temperature: 0.1} and ignored
  * the user's configuration entirely.
  *
- * `includeMaxTokens` is opt-out for consolidation, which manages max_tokens
- * per-call from config.maxTokensPerSummary.
+ * `includeMaxTokens` is opt-out for utility calls with their own fixed budget.
+ * Consolidation receives the total budget and requests its shorter summary
+ * separately, leaving room for reasoning within the response limit.
  */
 function buildSidecarSamplingParameters(
   sidecar: MemoryCortexConfig["sidecar"],

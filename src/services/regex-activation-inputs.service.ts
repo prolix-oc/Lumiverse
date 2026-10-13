@@ -1,4 +1,4 @@
-import { createActivationInputSnapshot } from "../utils/regex-activation-inputs";
+import { createActivationInputSnapshot, resolveActivationFindPattern } from "../utils/regex-activation-inputs";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import { isTemporaryChatMetadata } from "../types/chat";
 import * as chatsSvc from "./chats.service";
@@ -13,6 +13,31 @@ export interface ActivationPreviewContext {
   character_id?: string;
   persona_id?: string;
   connection_id?: string;
+}
+
+export interface ActivationPatternsInput extends ActivationPreviewContext {
+  preset_id: string;
+  patterns: string[];
+}
+
+export function prepareActivationPatterns(userId: string, input: ActivationPatternsInput) {
+  if (!input || typeof input.preset_id !== "string" || !input.preset_id || input.preset_id.length > 200
+    || !Array.isArray(input.patterns) || input.patterns.length === 0 || input.patterns.length > 100
+    || input.patterns.some((pattern: unknown) => typeof pattern !== "string" || pattern.length > 10_000)
+    || input.patterns.reduce((sum: number, pattern: string) => sum + pattern.length, 0) > 100_000) {
+    throw new Error("A preset ID and between 1 and 100 bounded patterns are required");
+  }
+  const inputs = loadActivationInputSnapshot(userId, input.preset_id, {
+    chat_id: input.chat_id, character_id: input.character_id,
+    persona_id: input.persona_id, connection_id: input.connection_id,
+  }, input.patterns);
+  return { patterns: input.patterns.map((pattern: string) => {
+    try {
+      return { source: pattern, resolved: resolveActivationFindPattern(pattern, inputs) };
+    } catch (error) {
+      return { source: pattern, error: error instanceof Error ? error.message : String(error) };
+    }
+  }) };
 }
 
 /** Owned, persisted inputs only. No prompt rendering, macro evaluation, or settings writes. */

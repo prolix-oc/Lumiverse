@@ -32,6 +32,7 @@ afterEach(() => {
   const db = getDb();
   db.run("DELETE FROM extension_grants");
   db.run("DELETE FROM extensions");
+  db.run("DELETE FROM decision_connections");
 });
 
 function manifest(identifier: string): SpindleManifest {
@@ -213,5 +214,51 @@ describe("worker-host provider register permission enforcement", () => {
         id: "voice",
       }),
     ).toBeDefined();
+  });
+});
+
+describe("worker-host Decision permission enforcement", () => {
+  test("a user worker resolves its owner even when another userId is supplied", async () => {
+    seedExtension("ext.owner", "user", "alice", [{ permission: "decisions", scope: "user:alice" }]);
+    getDb().run("INSERT INTO decision_connections (id, user_id, name, provider, created_at, updated_at) VALUES ('owner-profile', 'alice', 'Owner', 'typesafe', 0, 0), ('other-profile', 'op-1', 'Other', 'typesafe', 0, 0)");
+    const host = new WorkerHost("decision-owner", manifest("ext.owner"), extensionInfo("ext.owner", "user", "alice"));
+    const posted = attachRuntime(host) as Array<{ requestId?: string; result?: { id: string } | null }>;
+    handle(host, { type: "decisions_connection_get", requestId: "owner", connectionId: "owner-profile", userId: "op-1" });
+    handle(host, { type: "decisions_connection_get", requestId: "other", connectionId: "other-profile", userId: "op-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posted.find((m) => m.requestId === "owner")?.result?.id).toBe("owner-profile");
+    expect(posted.find((m) => m.requestId === "other")?.result).toBeNull();
+  });
+  test("honors live grants, revocations and delegated permission scopes", async () => {
+    seedExtension("ext.decisions", "user", "alice", [{ permission: "decisions", scope: "user:alice" }]);
+    const host = new WorkerHost("decision-host", manifest("ext.decisions"), extensionInfo("ext.decisions", "user", "alice"));
+    const posted = attachRuntime(host) as Array<{ requestId?: string; result?: unknown; error?: string }>;
+    const scopes = (host as unknown as { sharedRpcPermissionScopes: Map<string, Set<string>> }).sharedRpcPermissionScopes;
+    scopes.set("limited", new Set());
+    scopes.set("delegated", new Set(["decisions"]));
+    handle(host, { type: "decisions_providers", requestId: "allowed" });
+    handle(host, { type: "decisions_providers", requestId: "limited", rpcPermissionScopeId: "limited" });
+    handle(host, { type: "decisions_providers", requestId: "expired", rpcPermissionScopeId: "missing" });
+    handle(host, { type: "decisions_providers", requestId: "delegated", rpcPermissionScopeId: "delegated" });
+    await Promise.resolve();
+    expect(posted.find((m) => m.requestId === "allowed")?.result).toHaveLength(2);
+    expect(posted.find((m) => m.requestId === "limited")?.error).toContain("decisions");
+    expect(posted.find((m) => m.requestId === "expired")?.error).toContain("decisions");
+    expect(posted.find((m) => m.requestId === "delegated")?.result).toHaveLength(2);
+    getDb().run("DELETE FROM extension_grants");
+    handle(host, { type: "decisions_providers", requestId: "revoked", rpcPermissionScopeId: "delegated" });
+    await Promise.resolve();
+    expect(posted.find((m) => m.requestId === "revoked")?.error).toContain("decisions");
+  });
+
+  test("operator workers require an explicit account", async () => {
+    seedExtension("ext.op.decisions", "operator", "op-1", [{ permission: "decisions", scope: "operator:op-1" }]);
+    const host = new WorkerHost("decision-op", manifest("ext.op.decisions"), extensionInfo("ext.op.decisions", "operator", "op-1"));
+    const posted = attachRuntime(host) as Array<{ requestId?: string; result?: unknown; error?: string }>;
+    handle(host, { type: "decisions_providers", requestId: "missing-user" });
+    handle(host, { type: "decisions_providers", requestId: "with-user", userId: "alice" });
+    await Promise.resolve();
+    expect(posted.find((m) => m.requestId === "missing-user")?.error).toContain("userId is required");
+    expect(posted.find((m) => m.requestId === "with-user")?.result).toHaveLength(2);
   });
 });

@@ -32,6 +32,9 @@ import * as personasSvc from "../services/personas.service";
 import * as globalAddonsSvc from "../services/global-addons.service";
 import * as settingsSvc from "../services/settings.service";
 import * as imagesSvc from "../services/images.service";
+import { IMAGE_READ_MAX_BYTES } from "./image-binary-contract";
+import { prepareActivationPatterns } from "../services/regex-activation-inputs.service";
+import type { ActivationPatternsOptions } from "./activation-patterns-contract";
 import * as mediaSvc from "../services/media.service";
 import * as audioSvc from "../services/audio.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
@@ -405,6 +408,28 @@ export class WorkerHostContentApi {
   }
 
   // ─── Images CRUD (gated: "images") ─────────────────────────────────
+
+  async handleImagesReadBinary(requestId: string, imageId: string, userId?: string): Promise<void> {
+    try {
+      if (!this.hasPermission("images")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} images - Images permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (typeof imageId !== "string" || !imageId) throw new Error("imageId is required");
+      const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
+      if (!path) throw new Error("Image not found");
+      const file = Bun.file(path);
+      const sizeLimitError = `Image exceeds the ${IMAGE_READ_MAX_BYTES / (1024 * 1024)} MiB binary read limit`;
+      if (file.size > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
+      const data = new Uint8Array(await file.slice(0, IMAGE_READ_MAX_BYTES + 1).arrayBuffer());
+      if (data.byteLength > IMAGE_READ_MAX_BYTES) throw new Error(sizeLimitError);
+      this.postToWorker({ type: "response", requestId, result: data });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
 
   private toImageDTO(img: any): ImageDTO {
     return {
@@ -2496,6 +2521,25 @@ export class WorkerHostContentApi {
 
       const s = regexScriptsSvc.getRegexScript(resolvedUserId, scriptId);
       this.postToWorker({ type: "response", requestId, result: s ? this.toRegexScriptDTO(s) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleRegexScriptsPrepareActivationPatterns(requestId: string, options: ActivationPatternsOptions): void {
+    try {
+      if (!this.hasPermission("regex_scripts")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts - Regex scripts permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(options?.userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const result = prepareActivationPatterns(resolvedUserId, {
+        preset_id: options?.presetId, patterns: options?.patterns,
+        chat_id: options?.chatId, character_id: options?.characterId,
+        persona_id: options?.personaId, connection_id: options?.connectionId,
+      });
+      this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

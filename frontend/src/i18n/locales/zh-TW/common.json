@@ -48,7 +48,8 @@
     "helper": "選擇應用中菜單、按鈕和標籤的顯示語言。",
     "zh-TW": "繁體中文",
     "ja": "日本語",
-    "fr": "Français"
+    "fr": "Français",
+    "de": "德語"
   },
   "time": {
     "justNow": "剛剛",

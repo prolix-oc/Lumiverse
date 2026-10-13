@@ -116,6 +116,7 @@ export function TextArea({ value, onChange, placeholder, rows = 4, className, ..
 interface SelectOption {
   value: string
   label: string
+  disabled?: boolean
 }
 
 interface SelectProps {
@@ -136,7 +137,7 @@ export function Select({ value, onChange, options, className, ...props }: Select
         {...props}
       >
         {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
+          <option key={opt.value} value={opt.value} disabled={opt.disabled}>
             {opt.label}
           </option>
         ))}

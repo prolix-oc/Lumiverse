@@ -116,6 +116,23 @@
     "replaceAll": "Replace All"
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analyse system audio?",
+      "consentMessage": "It will receive a spectrum and loudness only, never the audio itself. Lumiverse does not record or transmit audio. A listening indicator and Stop button stay visible while analysis runs. Unless you remember approval, you will be asked each time.",
+      "allow": "Allow",
+      "notNow": "Not now",
+      "listening": "{{name}} is analysing system audio",
+      "stop": "Stop",
+      "minimise": "Minimise",
+      "show": "Show: {{name}} is analysing system audio",
+      "remember": "Remember my approval for this extension on this device",
+      "consentSetting": "System audio consent",
+      "askEachTime": "Ask on every start.",
+      "remembered": "Approval is remembered for this account on this device.",
+      "paused": "Starts are paused. Allow requests again when you want this extension to use audio.",
+      "allowAgain": "Allow requests again",
+      "revokeApproval": "Revoke approval"
+    },
     "floatWidget": "Float Widget",
     "drawerTab": "Drawer Tab",
     "dockPanel": "Dock ({{edge}})",

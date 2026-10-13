@@ -603,6 +603,7 @@ export class WorkerHostMemoryApi {
         });
         const samplingParameters: Record<string, unknown> = {
           temperature: cortexConfig.sidecar.temperature,
+          max_tokens: cortexConfig.sidecar.maxTokens,
         };
         if (cortexConfig.sidecar.topP > 0 && cortexConfig.sidecar.topP < 1) {
           samplingParameters.top_p = cortexConfig.sidecar.topP;

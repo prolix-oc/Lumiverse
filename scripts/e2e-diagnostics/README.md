@@ -29,6 +29,20 @@ bun run diagnose
 
 - `node check-world-book-workspace.mjs`
   Bundles the real native book modal, entry list and editor with controlled API/store boundaries. Covers same-instance maximize/restore, independent collapsed navigation, cross-folder/session tabs, keyboard tab switching, two-editor split/swap/close, mobile open-entry switching and Books views, keyboard-height layout, 0/1/44/50/137-entry books, exact tag filtering and vector failure indicators. Also checks activation method/status/chance transitions, vector recursion restrictions, keyboard focus, equal timing columns, Group Name/Weight proportions, equal UID/Automation dimensions, a read-only UID, compact organization rows and horizontal containment (including long untranslated labels). Checks desktop Books/Entries pointer and keyboard resizing, scaled collapse thresholds, focus restoration, pointer cancellation, Escape without closing the modal, before-paint mobile book-header hiding/restoration, and shared organization/detail backgrounds under light and dark theme variables. Runs desktop/mobile at UI scales 1 and 1.25 in Chromium, Firefox and WebKit without login or personal data. Also renders the actual inline compact entry list in the real sidebar scroll-panel styles at widths 320/440/560px and scales 1/1.25: expanded Injection/Activation field heights, wheel scrolling over the form, activation selection and disclosure draft retention. Set `SIDEBAR_ONLY=1` to run those 18 cases alone. Set `WORKSPACE_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. This checks core behavior; it does not emulate an installed Suite extension or a physical mobile keyboard.
+- `node check-world-book-reorder.mjs`
+  Exercises All entries on a controlled 251-entry book in the real workspace and sidebar. Checks keyboard and pointer ordering across the former 200-entry boundary, complete revision-guarded payloads, handle focus, editor mount guards, switching back to pagination, saved preferences after remount and search disabling reorder. Also checks preview geometry inside a transformed sidebar, pointer tracking after deep scrolling, a single visible drag preview, source restoration after drop/cancel and row-render counts at pickup and movement. Runs desktop/iPhone-sized layouts at scales 1 and 1.25 in Chromium, Firefox and WebKit. Set `REORDER_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. No login or personal data.
+  For a focused performance comparison, run from the repository root in PowerShell:
+
+  ```powershell
+  $env:REORDER_BROWSERS = 'chromium'
+  $env:REORDER_BENCHMARK = '1'
+  $env:REORDER_WITHOUT_MEMO = '1'
+  node scripts/e2e-diagnostics/check-world-book-reorder.mjs
+  $env:REORDER_WITHOUT_MEMO = '0'
+  node scripts/e2e-diagnostics/check-world-book-reorder.mjs
+  ```
+
+  The first run disables row memoization in memory without editing source. Token-cell renders measure row-content work: the 251-entry fixture measured 1,009 at pickup and 1,545 during pointer movement without memoization, versus 2 and 2 with it. Counts can vary with browser scheduling.
 - `node check-world-book-search.mjs`
   Exercises ranked search in the real native workspace and sidebar with controlled entries. Checks folder card layout, touch targets, visible keyboard focus and folder activation, plus an exact title beyond the first server page, relevance before result pagination, highlights, typo matching, Escape/focus, returning from the editor, empty results and clearing back to ordinary navigation. Runs desktop/mobile widths at UI scales 1 and 1.25 in Chromium, Firefox and WebKit. Set `SEARCH_BROWSERS=chromium` for one engine; `PLAYWRIGHT_MODULE` can point to an existing Playwright installation. No login or personal data.
 - `node check-entry-organization.mjs`

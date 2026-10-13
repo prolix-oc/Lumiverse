@@ -55,7 +55,7 @@ An embedding model creates search vectors. A **sidecar LLM** extracts or summari
 
 In **Settings → Memory Cortex**, choose a sidecar **Connection** and **Model**, then check extraction mode, salience mode, and **AI summaries**. The picker includes built-in LLM connections and providers from enabled [Spindle extensions](../extensions/index.md#extension-provided-ai-providers).
 
-The sidecar can assist with entities/facts, relationships, importance, color attribution, and consolidation. **Chunks per request** batches analysis; **Parallel requests** controls rebuild concurrency; **Requests per minute** throttles starts (0 disables throttling). **Max output tokens** must accommodate the batch's structured response. This makes additional model requests, including on rebuild; it is not necessarily one call per chunk.
+The sidecar can assist with entities/facts, relationships, importance, color attribution, and consolidation. **Chunks per request** batches analysis; **Parallel requests** controls rebuild concurrency; **Requests per minute** throttles starts (0 disables throttling). **Max output tokens** must accommodate the batch's structured response and, for thinking models, reasoning tokens. Increase this limit or lower reasoning effort if a response ends with `finish_reason: "length"`. Consolidation uses this generation budget while requesting the shorter configured summary length. This makes additional model requests, including on rebuild; it is not necessarily one call per chunk.
 
 ### Failure Handling and Fallback Connections
 

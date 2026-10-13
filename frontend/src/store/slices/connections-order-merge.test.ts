@@ -10,6 +10,7 @@ describe('normalizeConnectionsOrder', () => {
       imageGen: [],
       stt: [],
       tts: [],
+      decision: [],
     })
   })
 
@@ -19,12 +20,14 @@ describe('normalizeConnectionsOrder', () => {
       imageGen: null,
       stt: ['voice', 42],
       tts: 'not-an-array',
+      decision: [],
     } as any)
     expect(out).toEqual({
       llm: ['a', 'b'],
       imageGen: [],
       stt: ['voice'],
       tts: [],
+      decision: [],
     })
   })
 })

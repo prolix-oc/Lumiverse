@@ -124,6 +124,8 @@ let applyUpdateItem: MenuItem;
 let rebuildDesktopItem: MenuItem;
 let autoStartItem: CheckMenuItem;
 let discordRpcItem: CheckMenuItem;
+let systemAudioItem: CheckMenuItem;
+let trayIcon: TrayIcon;
 let loginItem: CheckMenuItem;
 let openIntegratedBrowserItem: MenuItem;
 let openDefaultBrowserItem: MenuItem;
@@ -774,6 +776,52 @@ async function authorizeDiscordPresence(origin: string): Promise<void> {
   await invoke("remote_instance_connect", { origin });
 }
 
+// ─── System audio for extensions ────────────────────────────────────────────
+
+interface SystemAudioStatus {
+  supported: boolean;
+  enabled: boolean;
+  active: boolean;
+}
+
+/** The tray is the native owner of this feature: the switch and the "in use" signal both live here. */
+async function renderSystemAudio(status: SystemAudioStatus): Promise<void> {
+  await systemAudioItem.setChecked(status.enabled);
+  await systemAudioItem.setEnabled(status.supported);
+  await systemAudioItem.setText(
+    !status.supported
+      ? "Extension System Audio (not on this OS yet)"
+      : status.active
+        ? "Extension Is Analysing System Audio"
+        : "Let Extensions Analyse System Audio",
+  );
+  await trayIcon.setTooltip(status.active ? "Lumiverse: an extension is analysing system audio" : "Lumiverse");
+}
+
+async function toggleSystemAudio(): Promise<void> {
+  const enable = !settings.systemAudioEnabled;
+  if (enable) {
+    const allowed = await invoke<boolean>("confirm", {
+      title: "Let extensions analyse system audio?",
+      message:
+        "Extensions you have granted the system audio permission will be able to see levels and a frequency " +
+        "spectrum of what this computer is playing, for visualisers and reactive effects. They never receive " +
+        "the audio itself.\n\n" +
+        "Lumiverse still asks you each time an extension starts, and this menu shows when one is listening. " +
+        "Uncheck this item at any time to stop everything.",
+      okLabel: "Allow",
+      cancelLabel: "Cancel",
+    });
+    if (!allowed) {
+      await systemAudioItem.setChecked(false);
+      return;
+    }
+  }
+  await invoke("desktop_system_audio_set_enabled", { enabled: enable });
+  settings.systemAudioEnabled = enable;
+  await saveSetting("systemAudioEnabled", enable);
+}
+
 async function toggleDiscordRpc(): Promise<void> {
   const enabled = !settings.discordRpcEnabled;
   settings.discordRpcEnabled = enabled;
@@ -936,6 +984,11 @@ async function buildTray(): Promise<void> {
     checked: settings.discordRpcEnabled,
     action: action(toggleDiscordRpc),
   });
+  systemAudioItem = await CheckMenuItem.new({
+    text: "Let Extensions Analyse System Audio",
+    checked: false,
+    action: action(toggleSystemAudio),
+  });
   loginItem = await CheckMenuItem.new({
     text: "Launch at Login",
     checked: await autostartEnabled().catch(() => false),
@@ -1005,6 +1058,7 @@ async function buildTray(): Promise<void> {
       await separator(),
       autoStartItem,
       discordRpcItem,
+      systemAudioItem,
       loginItem,
       setFolderItem,
       await separator(),
@@ -1012,7 +1066,7 @@ async function buildTray(): Promise<void> {
     ],
   });
 
-  await TrayIcon.new({
+  trayIcon = await TrayIcon.new({
     id: "lumiverse-tray",
     icon: await loadTrayImage(),
     iconAsTemplate: isMac,
@@ -1052,6 +1106,10 @@ async function tick(): Promise<void> {
 async function boot(): Promise<void> {
   settings = await loadSettings();
   instanceConnection = settings.instanceConnection;
+
+  await listen<SystemAudioStatus>("desktop-system-audio-state", ({ payload }) => {
+    void renderSystemAudio(payload).catch((error) => console.warn("Unable to show system audio state", error));
+  });
 
   await listen<{ origin: string }>("discord-presence-changed", ({ payload }) => {
     if (payload?.origin === presenceOrigin()) void refreshDiscordPresence();
@@ -1154,6 +1212,15 @@ async function boot(): Promise<void> {
 
   await buildTray();
   await updateMenu();
+  // Restore the owner's saved choice, then show what is really true (an unsupported OS stays off).
+  if (settings.systemAudioEnabled) {
+    await invoke("desktop_system_audio_set_enabled", { enabled: true }).catch(async (error) => {
+      console.warn("Unable to resume system audio for extensions", error);
+      settings.systemAudioEnabled = false;
+      await saveSetting("systemAudioEnabled", false);
+    });
+  }
+  await renderSystemAudio(await invoke<SystemAudioStatus>("desktop_system_audio_status"));
   if (settings.discordRpcEnabled) {
     await invoke("discord_rpc_set_enabled", { enabled: true }).catch((error) => {
       console.warn("Unable to resume Discord Rich Presence", error);

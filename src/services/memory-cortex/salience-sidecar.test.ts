@@ -7,6 +7,12 @@ import {
 } from "./salience-sidecar";
 
 describe("getToolChoiceParams", () => {
+  test("uses auto for DeepSeek sidecars regardless of provider casing or whitespace", () => {
+    for (const provider of ["deepseek", "DeepSeek", " DEEPSEEK "]) {
+      expect(getToolChoiceParams(provider)).toEqual({ tool_choice: "auto" });
+    }
+  });
+
   test("uses auto for Nano-GPT sidecars", () => {
     expect(getToolChoiceParams("nanogpt")).toEqual({ tool_choice: "auto" });
     expect(getToolChoiceParams("NanoGPT")).toEqual({ tool_choice: "auto" });

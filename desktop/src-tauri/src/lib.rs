@@ -4,11 +4,13 @@ mod frontend;
 mod notifications;
 mod remote_instance;
 mod runner;
+mod system_audio;
 #[cfg(any(target_os = "linux", test))]
 mod webview_media;
 #[cfg(target_os = "linux")]
 mod wayland_background_effect;
 
+use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(any(target_os = "linux", test))]
@@ -232,6 +234,13 @@ pub fn run() {
         .manage(remote_instance::RemoteInstanceState::default())
         .manage(discord_rpc::DiscordRpcState::default())
         .manage(capture::DesktopCaptureState::default())
+        .manage(system_audio::SystemAudioState::default())
+        .on_page_load(|webview, payload| {
+            // A reloaded or navigated frontend can no longer receive frames from a session its old page started.
+            if webview.label() == "frontend" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                system_audio::frontend_gone(webview.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             runner::runner_start,
             runner::runner_send,
@@ -280,6 +289,10 @@ pub fn run() {
             capture::desktop_capture_connect,
             capture::desktop_capture_disconnect,
             capture::desktop_capture_status,
+            system_audio::desktop_system_audio_status,
+            system_audio::desktop_system_audio_set_enabled,
+            system_audio::desktop_system_audio_start,
+            system_audio::desktop_system_audio_stop,
         ]);
 
     #[cfg(target_os = "macos")]

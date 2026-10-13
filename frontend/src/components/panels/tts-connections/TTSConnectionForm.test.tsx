@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom'
 import { act } from 'react'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import type { CreateTtsConnectionInput, TtsConnectionProfile, TtsProviderInfo } from '@/types/api'
+import { FishAudioTtsProvider } from '../../../../../src/tts/providers/fish-audio'
 
 const modelComboboxProps: Array<Record<string, any>> = []
 const voicePreviewInputs: Array<Record<string, any>> = []
@@ -211,6 +212,104 @@ test('renders standard API key and API url inputs for other providers', async ()
   expect(passwordInput).toBeTruthy()
 })
 
+const fishProvider: TtsProviderInfo = {
+  id: 'fish_audio', name: 'Fish Audio', capabilities: new FishAudioTtsProvider().capabilities,
+}
+
+async function renderFish(default_parameters: Record<string, any> = {}, model = 's2.1-pro') {
+  saved = []
+  await render(<Form providers={[fishProvider]} profile={ttsProfile({
+    provider: 'fish_audio', model, name: 'Fish voice', metadata: {}, default_parameters,
+  })} onSave={(input) => saved.push(input)} onCancel={() => {}} />)
+}
+
+function saveButton() {
+  return Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'ttsConnectionForm.save')!
+}
+
+async function expandFish(group: string) {
+  await act(async () => {
+    Array.from(container.querySelectorAll('button')).find((button) => button.textContent === `ttsConnectionForm.fishGroups.${group}`)!.click()
+  })
+}
+
+test('Fish settings preserve saved zero/false values and omit untouched defaults', async () => {
+  await renderFish({ temperature: 0, top_p: 0, normalize_loudness: false, normalize: false })
+  const loudness = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((field) => field.closest('label')?.textContent?.includes('Normalize loudness'))!
+  expect(loudness.checked).toBe(false)
+  await expandFish('generation')
+  const normalize = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((field) => field.closest('label')?.textContent?.includes('Normalize numbers and text'))!
+  expect(normalize.checked).toBe(false)
+  await act(async () => saveButton().click())
+  expect(saved[0].default_parameters).toEqual({ temperature: 0, top_p: 0, normalize_loudness: false, normalize: false })
+})
+
+test('Fish output controls switch bitrates and clear incompatible sample rates', async () => {
+  await renderFish({ sample_rate: '44100', mp3_bitrate: '192' })
+  await expandFish('audio')
+  const format = container.querySelector<HTMLSelectElement>('select[aria-label="Output format"]')!
+  expect(Array.from(format.options).find((option) => option.value === 'pcm')?.disabled).toBe(true)
+  await act(async () => {
+    format.value = 'opus'
+    format.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+  })
+  expect(container.querySelector('select[aria-label="MP3 bitrate"]')).toBeNull()
+  expect(container.querySelector('select[aria-label="Opus bitrate"]')).toBeTruthy()
+  const sampleRate = container.querySelector<HTMLSelectElement>('select[aria-label="Sample rate"]')!
+  expect(Array.from(sampleRate.options).map((option) => option.value)).toEqual(['', '48000'])
+  expect(sampleRate.value).toBe('')
+  await act(async () => saveButton().click())
+  expect(saved[0].default_parameters).toEqual({ format: 'opus', mp3_bitrate: '192' })
+})
+
+test('Fish model changes hide unsupported controls without losing saved settings', async () => {
+  await renderFish({ normalize_loudness: false })
+  const model = [...modelComboboxProps].reverse().find((props) => props.refreshKey?.endsWith(':models'))!
+  await act(async () => model.onChange('drama-3-preview'))
+  expect(container.querySelector('textarea[aria-label="Voice direction"]')).toBeTruthy()
+  expect(container.textContent).not.toContain('Normalize loudness')
+  await act(async () => model.onChange('s1'))
+  expect(container.querySelector('textarea[aria-label="Voice direction"]')).toBeNull()
+  await act(async () => saveButton().click())
+  expect(saved[0].default_parameters?.normalize_loudness).toBe(false)
+})
+
+test('Fish settings save edited directions, toggles, and numeric inputs', async () => {
+  await renderFish()
+  const direction = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Voice direction"]')!
+  const volume = container.querySelector<HTMLInputElement>('input[aria-label="Volume"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!.call(direction, 'quiet and hesitant')
+    direction.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(volume, '2.5')
+    volume.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  const loudness = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((field) => field.closest('label')?.textContent?.includes('Normalize loudness'))!
+  await act(async () => loudness.click())
+  await act(async () => saveButton().click())
+  expect(saved[0].default_parameters).toEqual({ voice_direction: 'quiet and hesitant', volume: 2.5, normalize_loudness: false })
+})
+
+test('Fish dictionary references require both fields and settings can reset', async () => {
+  await renderFish({ pronunciation_dictionary_id: 'cast_names', temperature: 0.8, unrelated: true })
+  expect(saveButton().disabled).toBe(true)
+  await expandFish('pronunciation')
+  expect(container.textContent).toContain('ttsConnectionForm.fishDictionaryIncomplete')
+  const version = container.querySelector<HTMLInputElement>('input[aria-label="Dictionary version"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(version, 'published-2')
+    version.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  expect(saveButton().disabled).toBe(false)
+  await act(async () => {
+    Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'ttsConnectionForm.fishReset')!.click()
+  })
+  await act(async () => saveButton().click())
+  expect(saved[0].default_parameters).toEqual({ unrelated: true })
+})
+
 test.each(['google_tts', 'google_vertex_tts'])('shows gender and tone for %s voices and saves the API voice ID', async (providerId) => {
   saved = []
   const googleProvider: TtsProviderInfo = {
@@ -242,6 +341,44 @@ test.each(['google_tts', 'google_vertex_tts'])('shows gender and tone for %s voi
   const saveBtn = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('save'))
   act(() => saveBtn!.click())
   expect(saved[0].voice).toBe('Algieba')
+})
+
+test.each([
+  { provider: 'google_tts', model: 'gemini-3.8-flash-tts', style: 'soft, conversational' },
+  { provider: 'google_tts', model: 'gemini-3.8-flash-tts', style: '' },
+  { provider: 'google_vertex_tts', model: 'gemini-3.8-flash-lite-tts', style: 'soft, conversational' },
+  { provider: 'google_vertex_tts', model: 'gemini-3.8-flash-lite-tts', style: '' },
+  { provider: 'openrouter_tts', model: 'google/gemini-3.8-flash-tts', style: 'soft, conversational' },
+  { provider: 'openrouter_tts', model: 'google/gemini-3.8-flash-tts', style: '' },
+])('saves edited or explicitly blank Gemini speech style (%j)', async ({ provider, model, style }) => {
+  saved = []
+  const defaultStyle = 'casual, relaxed conversation'
+  const styledProvider: TtsProviderInfo = {
+    ...providers[1], id: provider,
+    capabilities: { ...providers[1].capabilities, parameters: {
+      speech_style: { type: 'string', default: defaultStyle, description: 'Delivery style' },
+    } },
+  }
+  await render(<Form
+    providers={[...providers.filter((candidate) => candidate.id !== provider), styledProvider]}
+    profile={ttsProfile({ provider, model })}
+    onSave={(input) => saved.push(input)}
+    onCancel={() => {}}
+  />)
+  const field = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="ttsConnectionForm.geminiSpeechStyle"]')!
+  expect(field).toBeTruthy()
+  expect(field.value).toBe(defaultStyle)
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!.call(field, style)
+    field.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('save'))!.click())
+  expect(saved[0].default_parameters?.speech_style).toBe(style)
+})
+
+test('hides speech style for older Gemini models', async () => {
+  await render(<Form providers={providers} profile={ttsProfile()} onSave={() => {}} onCancel={() => {}} />)
+  expect(container.querySelector('textarea[aria-label="ttsConnectionForm.geminiSpeechStyle"]')).toBeNull()
 })
 
 test('allows disabling streaming for Google Vertex TTS', async () => {

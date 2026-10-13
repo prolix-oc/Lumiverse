@@ -1692,9 +1692,7 @@ function scoreVectorWorldInfoCandidate(
     isFtsOnly,
     commentMultiplier,
   );
-  const vectorSimilarity = distanceToSimilarity(
-    isFtsOnly ? 2 : candidate.distance,
-  );
+  const vectorSimilarity = isFtsOnly ? 0 : distanceToSimilarity(candidate.distance);
   const primaryExactScore = primaryMatches.exactScore;
   const primaryPartialScore = primaryMatches.partialScore;
   const secondaryExactScore = secondaryMatches.exactScore;
@@ -1838,11 +1836,15 @@ export function rankVectorWorldInfoCandidates(
   const preset = getWorldInfoVectorPreset(hybridWeightMode);
   const specificityState = buildPhraseSpecificityState(eligibleEntries);
   const queryState = buildVectorQueryLexicalState(queryText, specificityState);
-  const augmentedCandidates = augmentPooledCandidatesWithExactAnchors(
-    eligibleEntries,
-    pooledCandidates,
-    queryState,
-  );
+  // Vector First reserves the shortlist for actual semantic hits. Keyword-only
+  // rescues are handled by ordinary keyword activation and must not consume top K.
+  const augmentedCandidates = hybridWeightMode === "vector_first"
+    ? pooledCandidates.filter(({ candidate }) => Number.isFinite(candidate.distance))
+    : augmentPooledCandidatesWithExactAnchors(
+        eligibleEntries,
+        pooledCandidates,
+        queryState,
+      );
   queryState.mentionOwnership = buildMentionOwnershipState(
     queryText,
     eligibleEntries,
@@ -1870,6 +1872,8 @@ export function rankVectorWorldInfoCandidates(
   const hitsAfterThreshold = thresholdPassed.length;
   const thresholdRejected = hitsBeforeThreshold - hitsAfterThreshold;
   thresholdPassed.sort((a, b) => {
+    if (hybridWeightMode === "vector_first" && a.distance !== b.distance)
+      return a.distance - b.distance;
     if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
     if (a.distance !== b.distance) return a.distance - b.distance;
     if (b.entry.priority !== a.entry.priority)

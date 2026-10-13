@@ -20,6 +20,7 @@ import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
 import MessageAudioSlot from './MessageAudioSlot'
 import MessageActions from './MessageActions'
+import MessageSelectCheckbox from './MessageSelectCheckbox'
 import SwipeControls from './SwipeControls'
 import GreetingNav from './GreetingNav'
 import ReasoningBlock from './ReasoningBlock'
@@ -408,6 +409,15 @@ export default function MinimalMessageDefault({
       <div className={styles.bubble}>
         {/* Name + meta pill */}
         <div className={styles.header}>
+          {isSelectMode && (
+            <MessageSelectCheckbox
+              index={message.index_in_chat}
+              name={displayName}
+              content={displayContent}
+              checked={isSelected}
+              onToggle={onToggleSelect}
+            />
+          )}
           <span className={clsx(styles.name, isUser ? styles.nameUser : styles.nameChar)}>
             {displayName}
           </span>

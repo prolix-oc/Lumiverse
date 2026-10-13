@@ -1,5 +1,5 @@
 import { Brain, ChevronRight, Maximize2 } from 'lucide-react'
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
@@ -20,66 +20,21 @@ interface MessageEditAreaProps {
   onChangeReasoning?: (value: string) => void
 }
 
-const EDITOR_VISIBLE_TOP_GUTTER = 12
-const EDITOR_KEYBOARD_GUTTER = 72
-const EDITOR_REVEAL_THRESHOLD = 12
-const EDITOR_MIN_MOBILE_HEIGHT = 140
-
 function autoResize(el: HTMLTextAreaElement | null) {
   if (!el) return
   const computed = window.getComputedStyle(el)
-  let maxHeight = Number.parseFloat(computed.maxHeight)
-  if (navigator.maxTouchPoints > 0 && document.activeElement === el) {
-    const viewportBottom = window.visualViewport?.height ?? window.innerHeight
-    const top = el.getBoundingClientRect().top
-    const availableHeight = Math.max(EDITOR_MIN_MOBILE_HEIGHT, viewportBottom - top - EDITOR_KEYBOARD_GUTTER)
-    maxHeight = Number.isFinite(maxHeight) && maxHeight > 0
-      ? Math.min(maxHeight, availableHeight)
-      : availableHeight
-  }
+  const maxHeight = Number.parseFloat(computed.maxHeight)
+  const { scrollTop, scrollLeft } = el
   // Measure the content at its natural height. Scrolling is deliberately
   // owned by CSS so this helper cannot strand a resized or viewport-clamped
   // editor with an inline `overflow-y: hidden` declaration.
   el.style.height = 'auto'
   const nextHeight = el.scrollHeight
-  if (Number.isFinite(maxHeight) && maxHeight > 0) {
-    el.style.height = `${Math.min(nextHeight, maxHeight)}px`
-    return
-  }
-  el.style.height = `${nextHeight}px`
-}
-
-function getEditorOcclusion(target: HTMLTextAreaElement | null) {
-  if (!target || document.activeElement !== target || navigator.maxTouchPoints <= 0) return null
-  const container = target.closest<HTMLElement>('[data-chat-scroll="true"]')
-  if (!container) return null
-
-  const targetRect = target.getBoundingClientRect()
-  const containerRect = container.getBoundingClientRect()
-  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
-  const visibleTop = Math.max(containerRect.top, 0) + EDITOR_VISIBLE_TOP_GUTTER
-  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - EDITOR_KEYBOARD_GUTTER
-
-  let delta = 0
-  if (targetRect.bottom > visibleBottom) {
-    delta = targetRect.bottom - visibleBottom
-  } else if (targetRect.top < visibleTop) {
-    delta = targetRect.top - visibleTop
-  }
-
-  return { container, delta }
-}
-
-function syncEditorVisibility(target: HTMLTextAreaElement | null, correctedRef: MutableRefObject<boolean>) {
-  if (correctedRef.current) return
-  const occlusion = getEditorOcclusion(target)
-  if (!occlusion) return
-
-  const isOccluded = Math.abs(occlusion.delta) >= EDITOR_REVEAL_THRESHOLD
-  if (isOccluded) {
-    occlusion.container.scrollTop += occlusion.delta
-    correctedRef.current = true
-  }
+  el.style.height = `${Number.isFinite(maxHeight) && maxHeight > 0 ? Math.min(nextHeight, maxHeight) : nextHeight}px`
+  // The temporary natural height can clamp the native scroll position.
+  // Keep the user's place; keyboard revealing follows the selection separately.
+  el.scrollTop = scrollTop
+  el.scrollLeft = scrollLeft
 }
 
 function MessageEditAreaNative({
@@ -101,36 +56,12 @@ function MessageEditAreaNative({
   const reasoningRef = useRef<HTMLTextAreaElement>(null)
   const focusRequested = useStore((s) => s.messageEditDraft?.focusRequested === true)
   const consumeFocusRequest = useStore((s) => s.consumeMessageEditFocusRequest)
-  const contentRevealFrameRef = useRef(0)
-  const reasoningRevealFrameRef = useRef(0)
-  const focusCorrectionTimersRef = useRef<number[]>([])
-  const contentCorrectedForFocusRef = useRef(false)
-  const reasoningCorrectedForFocusRef = useRef(false)
   const reasoningSectionId = useId()
   const [reasoningExpanded, setReasoningExpanded] = useState(false)
   // Which field (if any) is currently open in the full-screen editor.
   const [expandedField, setExpandedField] = useState<'content' | 'reasoning' | null>(null)
   // Cursor position captured at expand time so the modal opens where the caret was.
   const expandCursorRef = useRef<number | null>(null)
-
-  const scheduleEditorVisibilitySync = useCallback((
-    targetRef: RefObject<HTMLTextAreaElement>,
-    correctedRef: MutableRefObject<boolean>,
-    frameRef: MutableRefObject<number>,
-  ) => {
-    cancelAnimationFrame(frameRef.current)
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = 0
-      syncEditorVisibility(targetRef.current, correctedRef)
-    })
-  }, [])
-
-  const clearFocusCorrectionTimers = useCallback(() => {
-    for (const timer of focusCorrectionTimersRef.current) {
-      window.clearTimeout(timer)
-    }
-    focusCorrectionTimersRef.current = []
-  }, [])
 
   // Fit to initial content on mount, and re-fit when the value changes externally.
   // useLayoutEffect prevents a paint frame at the wrong height.
@@ -151,44 +82,6 @@ function MessageEditAreaNative({
     consumeFocusRequest()
   }, [consumeFocusRequest, focusRequested])
 
-  useEffect(() => {
-    if (navigator.maxTouchPoints <= 0) return
-
-    const syncFocusedEditor = () => {
-      scheduleEditorVisibilitySync(contentRef, contentCorrectedForFocusRef, contentRevealFrameRef)
-      scheduleEditorVisibilitySync(reasoningRef, reasoningCorrectedForFocusRef, reasoningRevealFrameRef)
-    }
-
-    const viewport = window.visualViewport
-    viewport?.addEventListener('resize', syncFocusedEditor)
-    viewport?.addEventListener('scroll', syncFocusedEditor)
-
-    return () => {
-      viewport?.removeEventListener('resize', syncFocusedEditor)
-      viewport?.removeEventListener('scroll', syncFocusedEditor)
-    }
-  }, [scheduleEditorVisibilitySync])
-
-  useEffect(() => () => {
-    cancelAnimationFrame(contentRevealFrameRef.current)
-    cancelAnimationFrame(reasoningRevealFrameRef.current)
-    clearFocusCorrectionTimers()
-  }, [clearFocusCorrectionTimers])
-
-  const scheduleFocusCorrection = useCallback((
-    targetRef: RefObject<HTMLTextAreaElement>,
-    correctedRef: MutableRefObject<boolean>,
-    frameRef: MutableRefObject<number>,
-  ) => {
-    clearFocusCorrectionTimers()
-    correctedRef.current = false
-    scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef)
-    focusCorrectionTimersRef.current = [
-      window.setTimeout(() => scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef), 180),
-      window.setTimeout(() => scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef), 360),
-    ]
-  }, [clearFocusCorrectionTimers, scheduleEditorVisibilitySync])
-
   const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChangeContent(e.target.value)
   }, [onChangeContent])
@@ -206,14 +99,6 @@ function MessageEditAreaNative({
     expandCursorRef.current = reasoningRef.current?.selectionStart ?? null
     setExpandedField('reasoning')
   }, [])
-
-  const handleContentFocus = useCallback(() => {
-    scheduleFocusCorrection(contentRef, contentCorrectedForFocusRef, contentRevealFrameRef)
-  }, [scheduleFocusCorrection])
-
-  const handleReasoningFocus = useCallback(() => {
-    scheduleFocusCorrection(reasoningRef, reasoningCorrectedForFocusRef, reasoningRevealFrameRef)
-  }, [scheduleFocusCorrection])
 
   return (
     <div className={styles.editArea}>
@@ -245,7 +130,6 @@ function MessageEditAreaNative({
                   className={`${styles.editTextarea} ${styles.reasoningTextarea}`}
                   value={editReasoning}
                   onChange={handleReasoningChange}
-                  onFocus={handleReasoningFocus}
                   placeholder={t('messageEdit.reasoningPlaceholder')}
                 />
                 <button
@@ -276,7 +160,6 @@ function MessageEditAreaNative({
             className={styles.editTextarea}
             value={editContent}
             onChange={handleContentChange}
-            onFocus={handleContentFocus}
           />
           <button
             type="button"

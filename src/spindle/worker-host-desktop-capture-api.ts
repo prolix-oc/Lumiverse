@@ -121,7 +121,7 @@ export class WorkerHostDesktopCaptureApi {
     if ((input.provider && input.provider !== destination.provider) || input.model !== destination.model) {
       throw new DesktopCaptureError("CAPTURE_DESTINATION_CHANGED", 403);
     }
-    const protectedParameters = new Set(["model", "models", "provider", "route", "_openrouter", "api_url", "base_url", "url", "endpoint", "headers", "authorization", "connection_id", "messages", "input"]);
+    const protectedParameters = new Set(["model", "models", "provider", "route", "_openrouter", "_nanogpt", "api_url", "base_url", "url", "endpoint", "headers", "authorization", "connection_id", "messages", "input"]);
     if (input.parameters !== undefined && (!input.parameters || typeof input.parameters !== "object"
       || Array.isArray(input.parameters) || Object.keys(input.parameters).some((key) => protectedParameters.has(key)))) {
       throw new DesktopCaptureError("CAPTURE_UNSAFE_PARAMETERS", 403);

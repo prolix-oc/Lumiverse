@@ -316,6 +316,12 @@ describe("PRIVILEGED_PERMISSIONS", () => {
     expect(PRIVILEGED_PERMISSIONS.has("regex_scripts_unrestricted")).toBe(true);
   });
 
+  test("requires explicit approval for desktop capture and system audio analysis", () => {
+    expect(PRIVILEGED_PERMISSIONS.has("screen_capture")).toBe(true);
+    expect(PRIVILEGED_PERMISSIONS.has("screen_recording")).toBe(true);
+    expect(PRIVILEGED_PERMISSIONS.has("system_audio")).toBe(true);
+  });
+
   test("requires explicit approval for MCP access and server creation", () => {
     expect(PRIVILEGED_PERMISSIONS.has("mcp_servers")).toBe(true);
     expect(PRIVILEGED_PERMISSIONS.has("mcp_servers.create")).toBe(true);

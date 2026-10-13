@@ -43,6 +43,12 @@ the server down gracefully.
 - **Start Local Server at Launch** — start the local server automatically when the
   tray app opens (on by default).
 - **Launch at Login** — register the tray app as a login item.
+- **Let Extensions Analyse System Audio** — off by default (Windows, macOS 14.2+, and
+  Linux with `parec`). Lets extensions
+  you have granted the `system_audio` permission see levels and a frequency
+  spectrum of what the computer is playing, never the audio itself. The item
+  and the tray tooltip show when an extension is listening; unchecking it ends
+  every session. See [System audio](../developer-docs/docs/frontend-api/system-audio.md#native-adapters).
 - **Set Lumiverse Folder…** — point the app at a different checkout.
 - **Instance Connection…** — use the local server or connect to a remote
   Lumiverse origin.
@@ -320,6 +326,10 @@ Platform-specific build requirements:
   support does not depend on host plugins hidden by the AppImage launcher.
   The other packages are build dependencies; a machine running an unpackaged
   Linux binary also needs the matching AppIndicator runtime library.
+
+  Optional at runtime: extension system-audio analysis on Linux uses `parec`
+  (`pulseaudio-utils`, or `pipewire-pulse` on PipeWire systems). Without it the
+  feature reports "unsupported" and nothing else changes.
 
   GNOME Shell does not show StatusNotifier items by default, so install and
   enable an AppIndicator/KStatusNotifier extension (for example,

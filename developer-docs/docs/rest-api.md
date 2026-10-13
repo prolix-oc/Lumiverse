@@ -41,6 +41,31 @@ curl -X PUT http://localhost:7860/api/v1/settings \
   }'
 ```
 
+## Decision Connections
+
+All routes below are account-scoped and require authentication. Credentials are encrypted and omitted from profile responses. Profile lists use `limit` and `offset` pagination.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/decision-connections/providers` | Built-in providers and defaults |
+| `GET`, `POST` | `/api/v1/decision-connections` | List or create profiles |
+| `GET`, `PUT`, `DELETE` | `/api/v1/decision-connections/:id` | Read, update, or delete a profile |
+| `POST` | `/api/v1/decision-connections/:id/duplicate` | Duplicate a profile and its readable credential |
+| `PUT`, `DELETE` | `/api/v1/decision-connections/:id/api-key` | Set `{ api_key }` or clear the saved credential |
+| `GET` | `/api/v1/decision-connections/:id/models` | Discover models with the saved credential |
+| `POST` | `/api/v1/decision-connections/models/preview` | Discover with `{ provider, connection_id?, api_url?, api_key? }` |
+| `POST` | `/api/v1/decision-connections/:id/test` | Check authenticated catalog access without inference |
+| `POST` | `/api/v1/decision-connections/:id/sample` | Run a small decision using provider credits |
+| `POST` | `/api/v1/decisions/evaluate` | Evaluate `{ connection_id?, model?, state, questions }` |
+
+Create requires `name` and `provider` (`openrouter` or `typesafe`). Optional fields are `api_url`, `model`, `api_key`, `is_default`, `default_parameters`, and `metadata`. An empty `api_key` on update removes the key; omission preserves it unless the provider or normalized endpoint changes. Preview only reuses a saved key for the same provider and endpoint. Setting a default atomically replaces the previous default.
+
+Changing `provider` resets the previous URL, model, and routing defaults unless replacements are supplied in the same update.
+
+Evaluation resolves the authenticated account, ignoring any supplied `userId`. Omitting `connection_id` selects the account's default. Validation failures return `400`, missing profiles return `404`, provider failures return `502`, and evaluation timeouts return `504`. Catalog/test/sample endpoints report provider failures in their `error` or `{ success, message }` result. Profile mutations emit `DECISION_CONNECTION_CHANGED` to the account's sessions.
+
+See [Decision models](backend-api/decisions.md) for the question and answer contract.
+
 ## Spindle Extension Endpoints
 
 Extensions can also be managed via the HTTP API.

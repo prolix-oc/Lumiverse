@@ -100,6 +100,23 @@
     "searchMacros": "搜索宏…"
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "分析系統音訊？",
+      "consentMessage": "它只會收到頻譜和響度，不會收到音訊本身。Lumiverse 不會錄製或傳輸音訊。分析期間會一直顯示正在聆聽的指示器和停止按鈕。如果你沒有選擇記住同意，每次開始時都會再次詢問。",
+      "allow": "允許",
+      "notNow": "暫不",
+      "listening": "{{name}} 正在分析系統音訊",
+      "stop": "停止",
+      "minimise": "最小化",
+      "show": "顯示：{{name}} 正在分析系統音訊",
+      "remember": "在此裝置上記住我對此擴充功能的同意",
+      "consentSetting": "系統音訊同意",
+      "askEachTime": "每次開始時詢問。",
+      "remembered": "已為此裝置上的此帳戶記住同意。",
+      "paused": "已暫停開始請求。當你希望此擴充功能使用音訊時，請重新允許請求。",
+      "allowAgain": "重新允許請求",
+      "revokeApproval": "撤銷同意"
+    },
     "floatWidget": "浮動組件",
     "drawerTab": "抽屜標籤",
     "dockPanel": "停靠 ({{edge}})",

@@ -14,6 +14,7 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
+import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
 import {
   createProviderRegistryProjection,
@@ -614,6 +615,16 @@ export function useWebSocket() {
     wsClient.connect()
 
     const unsubs = [
+      wsClient.on(EventType.DECISION_CONNECTION_CHANGED, (payload: { id: string; deleted?: boolean; profile?: DecisionConnectionProfile }) => {
+        const store = useStore.getState()
+        if (payload.deleted) store.removeDecisionProfile(payload.id)
+        else if (payload.profile) {
+          if (payload.profile.is_default) {
+            for (const profile of store.decisionProfiles) if (profile.id !== payload.id && profile.is_default) store.updateDecisionProfile(profile.id, { is_default: false })
+          }
+          store.addDecisionProfile(payload.profile)
+        }
+      }),
       subscribeDesktopDiscordPresenceRefresh(wsClient),
       // Connection lifecycle — drives the full-screen "Server connection lost"
       // overlay. Each disconnect resets all three signals; reconnect flips them

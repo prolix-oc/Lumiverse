@@ -100,6 +100,23 @@
     "searchMacros": "搜索宏…"
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "分析系统音频？",
+      "consentMessage": "它只会收到频谱和响度，不会收到音频本身。Lumiverse 不会录制或传输音频。分析期间会一直显示正在聆听的指示器和停止按钮。如果你没有选择记住同意，每次开始时都会再次询问。",
+      "allow": "允许",
+      "notNow": "暂不",
+      "listening": "{{name}} 正在分析系统音频",
+      "stop": "停止",
+      "minimise": "最小化",
+      "show": "显示：{{name}} 正在分析系统音频",
+      "remember": "在此设备上记住我对此扩展的同意",
+      "consentSetting": "系统音频同意",
+      "askEachTime": "每次开始时询问。",
+      "remembered": "已为此设备上的此账户记住同意。",
+      "paused": "已暂停开始请求。当你希望此扩展使用音频时，请重新允许请求。",
+      "allowAgain": "重新允许请求",
+      "revokeApproval": "撤销同意"
+    },
     "floatWidget": "浮动组件",
     "drawerTab": "抽屉标签",
     "dockPanel": "停靠 ({{edge}})",

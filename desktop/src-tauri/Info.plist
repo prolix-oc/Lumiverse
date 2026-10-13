@@ -6,6 +6,8 @@
     <string>chat.lumiverse.tray</string>
     <key>CFBundleDisplayName</key>
     <string>Lumiverse Desktop</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Lumiverse listens to the sound your Mac is playing only to give extensions you have allowed levels and a spectrum for visualisers. It never records or stores audio.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Lumiverse uses the microphone when you dictate a chat message.</string>
 </dict>

@@ -360,7 +360,7 @@ describe('P12 chat dock preservation contracts', () => {
     const fillRule = css.slice(fillStart, css.indexOf('}', fillStart) + 1)
 
     expect(fillRule).toMatch(/position:\s*fixed !important;/)
-    expect(fillRule).toMatch(/top:\s*0 !important;/)
+    expect(fillRule).toMatch(/top:\s*var\(--app-window-controls-overlay-top, 0px\) !important;/)
     expect(fillRule).toMatch(/left:\s*0 !important;/)
     expect(fillRule).toMatch(/width:\s*100% !important;/)
     expect(fillRule).toMatch(/z-index:\s*9999 !important;/)

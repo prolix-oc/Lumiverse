@@ -1,5 +1,17 @@
 # File Uploads
 
+For large imports, use the [resumable upload endpoint](../backend-api/uploads.md), then pass its upload id to the backend [file and archive APIs](../backend-api/file-transfers.md).
+
+## `ctx.files.download(fileId)`
+
+Download a completed file staged by your backend with `spindle.files` or `spindle.archives`. Call this from a download button after receiving the ready file id. It starts a native browser/WebView attachment download with the current user's session cookie, keeping archive bytes out of frontend JavaScript memory.
+
+```ts
+downloadButton.addEventListener('click', () => ctx.files.download(readyFileId))
+```
+
+The backend must retain the staged file while it is offered for download. Ownership is verified by the host; files from other users or extensions are unavailable. The method starts a download and returns `void`; completion is handled by the browser/WebView.
+
 ## `ctx.uploads.pickFile(options?)`
 
 Open the browser's native file picker and return the selected file(s) as typed arrays. Useful for importing configuration files, images, or other user data into your extension.

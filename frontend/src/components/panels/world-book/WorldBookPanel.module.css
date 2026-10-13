@@ -4,7 +4,9 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  /* Only panelScroll owns scrolling. Native focus/typing must not pan this
+     frame, which WebKit can do with overflow:hidden at larger UI scales. */
+  overflow: clip;
 }
 
 .panelScroll {
@@ -33,9 +35,15 @@
   padding-bottom: calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
 }
 
-/* Chromium/Android PWAs use interactive-widget=resizes-content, so the layout
-   viewport already ends above the software keyboard. Do not reserve the same
-   keyboard height again inside the lorebook scroller. */
+/* The iOS PWA caret controller already reveals the selection against the
+   visual viewport. WebKit applies even footer-only scroll padding again on
+   native textarea input, shifting an already-visible field. Keep the scroll
+   range in panelBody and let the caret controller own scroll alignment. */
+:global(html[data-ios-pwa]) .panelScroll {
+  scroll-padding-block: 0;
+}
+
+/* Android PWAs resize their layout viewport, so only reserve the footer. */
 :global(html[data-pwa][data-resizes-content]) .panelScroll {
   scroll-padding-block: 12px calc(12px + var(--worldbook-footer-height, 0px));
 }

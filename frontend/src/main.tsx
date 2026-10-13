@@ -8,6 +8,8 @@ import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { usesNativeWidgetTouchScroll } from './lib/spindle/widget-touch-scroll'
 import { installKeyboardFocusReveal } from './lib/keyboardFocusReveal'
+import { installIOSKeyboardScrollGuard } from './lib/iosKeyboardScroll'
+import { installIOSEditableFocusScrollPrevention } from './lib/iosEditableFocus'
 import { rememberRegistration } from './lib/swUpdater'
 import { claimServiceWorkerReload } from './lib/swUpdatePolicy'
 import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
@@ -138,11 +140,9 @@ function syncViewportVars() {
   if (isPortrait) basePortrait = base
   else baseLandscape = base
 
-  // In standalone iOS PWAs we explicitly cancel WebKit's visual-viewport pan
-  // (see the scrollTo(0, 0) handler below), so offsetTop is no longer layout
-  // we want to preserve. Measure bottom occlusion from the viewport shrink
-  // alone there; subtracting offsetTop collapses the real keyboard/pill inset
-  // back toward zero and leaves the input/list fighting scroll bounce.
+  // Standalone iOS composers prevent native focus scrolling, and the guard
+  // below recovers real document scrolling. WebKit can still report transient
+  // or stale offsetTop values; do not subtract those from keyboard clearance.
   const keyboardInsetBottom = computeViewportKeyboardInset({
     fullHeight: base,
     viewportHeight: height,
@@ -232,18 +232,13 @@ function findScrollableAncestor(el: HTMLElement | null): { el: HTMLElement; hori
   return null
 }
 
-// ── iOS PWA: counteract visual viewport scroll ──
-// When the virtual keyboard opens in standalone mode, iOS scrolls the visual
-// viewport upward to reveal the focused input. This shifts the entire layout
-// (tabs, headers, etc. behind the Dynamic Island). We counteract fully —
-// scrollTo(0, 0) keeps the layout stable. Focused inputs in scroll containers
-// are revealed via container-level scroll instead (see focusin handler below).
-window.visualViewport?.addEventListener('scroll', () => {
-  if (Math.abs((window.visualViewport?.scale ?? 1) - 1) > 0.01) return
-  if ((window.navigator as any).standalone && navigator.maxTouchPoints > 0 && window.visualViewport?.offsetTop) {
-    window.scrollTo(0, 0)
-  }
-})
+// Composers and editors prevent native focus from panning the whole shell.
+// Fields retain native caret placement; their scroll containers own revealing.
+// Recover only real document scrolling, without resetting stale viewport offsets.
+if (isIOSStandalonePwa) {
+  installIOSEditableFocusScrollPrevention()
+  installIOSKeyboardScrollGuard()
+}
 
 // Flag standalone PWA mode for CSS targeting.
 // Check both matchMedia (Chromium/Android) and navigator.standalone (iOS Safari)

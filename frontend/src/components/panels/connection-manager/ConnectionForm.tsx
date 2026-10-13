@@ -4,7 +4,8 @@ import { FormField, TextInput, Select, Button } from '@/components/shared/FormCo
 import { Toggle } from '@/components/shared/Toggle'
 import { useTranslation } from 'react-i18next'
 import { connectionsApi } from '@/api/connections'
-import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
+import { buildNanoGptOAuthCallbackUrl, nanoGptApi, type NanoGptConnectionSettings } from '@/api/nanogpt'
+import { buildNanoGptSettingsMetadata } from '@/lib/nanogpt-routing'
 import { startProviderOAuthPopup } from '@/lib/providerOAuthPopup'
 import { useStore } from '@/store'
 import {
@@ -27,6 +28,7 @@ import {
 import ModelCombobox from './ModelCombobox'
 import MultiChipSelect from './MultiChipSelect'
 import OpenRouterSettings from './OpenRouterSettings'
+import NanoGptSettings from './NanoGptSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import type { OpenRouterConnectionSettings } from '@/api/openrouter'
 import type { ReasoningSettings } from '@/types/store'
@@ -103,6 +105,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
   const [useResponsesApi, setUseResponsesApi] = useState(profile?.metadata?.use_responses_api || false)
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
+  const [nanoGptSettings, setNanoGptSettings] = useState<NanoGptConnectionSettings>(profile?.metadata?.nanogpt || {})
   const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
   const [anthropicPromptCachingSettings, setAnthropicPromptCachingSettings] = useState<AnthropicPromptCachingSettings>(
     () => parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching)
@@ -426,6 +429,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       delete metadata.use_coding_plan_endpoint
       delete metadata.prompt_caching
       delete metadata.nanogpt_caching
+      delete metadata.nanogpt
       delete metadata.reasoningBindings
       delete metadata.vertex_region
       delete metadata.sa_file_name
@@ -452,8 +456,12 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
     }
     if (showSubscriptionApiToggle) {
       metadata.use_subscription_api = useSubscriptionApi
+      const settings = buildNanoGptSettingsMetadata(nanoGptSettings)
+      if (settings) metadata.nanogpt = settings
+      else delete metadata.nanogpt
     } else {
       delete metadata.use_subscription_api
+      delete metadata.nanogpt
     }
     if (showZaiCodingPlanToggle) {
       metadata.use_coding_plan_endpoint = useZaiCodingPlanEndpoint
@@ -517,7 +525,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
 
   const canSubmit = name.trim().length > 0 && (!isRoulette || validRouletteConnectionIds.length > 0)
 
@@ -690,6 +698,18 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
             hint={t('connectionForm.useSubscriptionApiHint')}
           />
         </FormField>
+      )}
+      {isNanoGpt && (
+        <NanoGptSettings
+          settings={nanoGptSettings}
+          onChange={setNanoGptSettings}
+          model={model}
+          connectionId={profile?.provider === 'nanogpt' ? profile.id : undefined}
+          apiKey={apiKey}
+          apiUrl={apiUrl}
+          hasApiKey={profile?.provider === 'nanogpt' && !!profile.has_api_key}
+          subscriptionOnly={useSubscriptionApi}
+        />
       )}
       {showNanoGptCachingToggle && (
         <>

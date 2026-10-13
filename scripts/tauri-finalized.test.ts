@@ -4,6 +4,8 @@ import {
   appImageBundleDirectory,
   requestedAppImage,
   tauriBuildEnvironment,
+  tauriBuildLogLine,
+  forwardTauriBuildStderr,
 } from "./tauri-finalized";
 
 describe("finalized Tauri build routing", () => {
@@ -31,9 +33,9 @@ describe("finalized Tauri build routing", () => {
 
   test("routes target-specific bundles to Tauri's target directory", () => {
     expect(appImageBundleDirectory(["build", "--target", "aarch64-unknown-linux-gnu"]))
-      .toEndWith("desktop/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage");
+      .toEndWith(join("desktop", "src-tauri", "target", "aarch64-unknown-linux-gnu", "release", "bundle", "appimage"));
     expect(appImageBundleDirectory(["build", "--target=x86_64-unknown-linux-gnu"]))
-      .toEndWith("desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage");
+      .toEndWith(join("desktop", "src-tauri", "target", "x86_64-unknown-linux-gnu", "release", "bundle", "appimage"));
   });
 
   test("uses FUSE-free, RELR-compatible linuxdeploy settings for Linux AppImages", () => {
@@ -84,5 +86,51 @@ describe("finalized Tauri build routing", () => {
     const env = { KEEP: "yes" };
     expect(tauriBuildEnvironment(["build"], "darwin", env)).toBe(env);
     expect(tauriBuildEnvironment(["build", "--bundles", "deb,rpm"], "linux", env)).toBe(env);
+  });
+});
+
+describe("macOS ad hoc build diagnostics", () => {
+  const warning = "        Warn skipping app notarization, no APPLE_ID & APPLE_PASSWORD & APPLE_TEAM_ID or APPLE_API_KEY & APPLE_API_ISSUER & APPLE_API_KEY_PATH environment variables found";
+  const notice = "        Info macOS installer uses ad hoc signing without notarization.";
+  const env = { APPLE_SIGNING_IDENTITY: "-" };
+
+  test("reports the expected missing-credentials message as an informational notice", () => {
+    expect(tauriBuildLogLine(warning, "darwin", env)).toBe(notice);
+    expect(tauriBuildLogLine(warning.replace("Warn", "\u001b[33mWarn\u001b[0m"), "darwin", env)).toBe(notice);
+  });
+
+  test("preserves other warnings, errors and notarization failures", () => {
+    for (const line of [
+      "warning: associated function `new` is never used",
+      "error: could not compile lumiverse-tray",
+      "        Warn skipping app notarization, Apple credentials were rejected",
+      "        Warn Failed to get icon name from Assets.car file",
+    ]) expect(tauriBuildLogLine(line, "darwin", env)).toBe(line);
+  });
+
+  test("preserves the warning outside explicit ad hoc macOS builds", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      expect(tauriBuildLogLine(warning, platform, env)).toBe(warning);
+    }
+    expect(tauriBuildLogLine(warning, "darwin", {})).toBe(warning);
+    expect(tauriBuildLogLine(warning, "darwin", { APPLE_SIGNING_IDENTITY: "Developer ID Application" })).toBe(warning);
+    for (const key of ["APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_PATH"]) {
+      expect(tauriBuildLogLine(warning, "darwin", { ...env, [key]: "configured" })).toBe(warning);
+    }
+  });
+
+  test("forwards fragmented UTF-8 and CRLF logs, including the final error without a newline", async () => {
+    const input = `${warning}\r\nwarning: preserve résumé diagnostic\r\nerror: build failed`;
+    const bytes = new TextEncoder().encode(input);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // One byte per chunk splits both lines and multibyte characters.
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      },
+    });
+    let output = "";
+    await forwardTauriBuildStderr(stream, (line) => { output += line; }, "darwin", env);
+    expect(output).toBe(`${notice}\nwarning: preserve résumé diagnostic\nerror: build failed\n`);
   });
 });

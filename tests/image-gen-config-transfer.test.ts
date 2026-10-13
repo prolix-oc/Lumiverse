@@ -41,6 +41,14 @@ const CHARACTER_PRESET = {
   kind: "character" as const,
 };
 
+const CAPTIONING_PRESET = {
+  id: "preset-caption-1",
+  name: "Avatar caption",
+  mode: "custom" as const,
+  prompt: "describe the face and hair",
+  kind: "captioning" as const,
+};
+
 async function seedExporter() {
   const conn = await imageGenConnSvc.createConnection(EXPORTER, {
     name: "My NovelAI",
@@ -64,6 +72,9 @@ async function seedExporter() {
     promptParserParameters: { temperature: 1 },
     includeCharacters: true,
     includePersona: false,
+    describeCharacterAvatar: true,
+    describePersonaAvatar: false,
+    activeCaptioningPresetId: null,
     customPrompt: "shared custom prompt",
     sceneChangeThreshold: 3,
     activePromptPresetId: MAIN_PRESET.id,
@@ -100,6 +111,8 @@ describe("image gen config import/export", () => {
     expect(settings.sceneChangeThreshold).toBe(3);
     expect(settings.includeCharacters).toBe(true);
     expect(settings.includePersona).toBe(false);
+    expect(settings.describeCharacterAvatar).toBe(true);
+    expect(settings.describePersonaAvatar).toBe(false);
     // Active preset reference travels because the preset itself is included.
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     expect("enabled" in settings).toBe(false);
@@ -147,6 +160,80 @@ describe("image gen config import/export", () => {
     expect(emptySelection.presets).toHaveLength(0);
   });
 
+  test("exports the captioning selection only alongside its captioning preset", () => {
+    settingsSvc.putSetting(EXPORTER, "imageGeneration", {
+      activeCaptioningPresetId: CAPTIONING_PRESET.id,
+      promptPresets: [MAIN_PRESET, CAPTIONING_PRESET],
+    });
+    expect(imageGenSvc.exportImageGenConfig(EXPORTER).settings?.activeCaptioningPresetId).toBe(CAPTIONING_PRESET.id);
+    for (const options of [{ includePresets: false }, { presetIds: [] }, { presetIds: [MAIN_PRESET.id] }]) {
+      expect(imageGenSvc.exportImageGenConfig(EXPORTER, options).settings?.activeCaptioningPresetId).toBeUndefined();
+    }
+    settingsSvc.putSetting(EXPORTER, "imageGeneration", {
+      activeCaptioningPresetId: MAIN_PRESET.id,
+      promptPresets: [MAIN_PRESET],
+    });
+    expect(imageGenSvc.exportImageGenConfig(EXPORTER).settings?.activeCaptioningPresetId).toBeUndefined();
+  });
+
+  test("imports a selected captioning preset and preserves local parser overrides on re-import", async () => {
+    settingsSvc.putSetting(EXPORTER, "imageGeneration", {
+      activeCaptioningPresetId: CAPTIONING_PRESET.id,
+      promptPresets: [{ ...CAPTIONING_PRESET, parserConnectionId: "exporter-parser", parserModel: "exporter-model" }],
+    });
+    const exported = imageGenSvc.exportImageGenConfig(EXPORTER, { includeConnections: false });
+    const first = await imageGenSvc.importImageGenConfig(IMPORTER, exported);
+    expect(first.errors).toEqual([]);
+    expect(first.settings.activeCaptioningPresetId).toBe(CAPTIONING_PRESET.id);
+    expect(first.settings.promptPresets?.[0].parserConnectionId).toBeUndefined();
+
+    settingsSvc.putSetting(IMPORTER, "imageGeneration", {
+      ...first.settings,
+      promptPresets: [{ ...CAPTIONING_PRESET, parserConnectionId: "local-parser", parserModel: "local-model", parserParameters: { temperature: 0.2 } }],
+    });
+    const second = await imageGenSvc.importImageGenConfig(IMPORTER, exported);
+    expect(second.errors).toEqual([]);
+    expect(second.settings.activeCaptioningPresetId).toBe(CAPTIONING_PRESET.id);
+    expect(second.settings.promptPresets?.[0]).toMatchObject({
+      parserConnectionId: "local-parser", parserModel: "local-model", parserParameters: { temperature: 0.2 },
+    });
+  });
+
+  test("skips invalid captioning references and keeps the receiver's selection", async () => {
+    settingsSvc.putSetting(IMPORTER, "imageGeneration", {
+      activeCaptioningPresetId: CAPTIONING_PRESET.id,
+      promptPresets: [CAPTIONING_PRESET, MAIN_PRESET],
+    });
+    for (const activeCaptioningPresetId of ["missing", MAIN_PRESET.id, "", 12]) {
+      const result = await imageGenSvc.importImageGenConfig(IMPORTER, {
+        version: 1, type: "lumiverse_image_gen_config", settings: { activeCaptioningPresetId },
+      });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain("activeCaptioningPresetId");
+      expect(result.imported.settings).toBe(false);
+      expect(result.settings.activeCaptioningPresetId).toBe(CAPTIONING_PRESET.id);
+    }
+  });
+
+  test("round-trips an explicit None captioning selection without clearing omitted selections", async () => {
+    settingsSvc.putSetting(IMPORTER, "imageGeneration", {
+      activeCaptioningPresetId: CAPTIONING_PRESET.id, promptPresets: [CAPTIONING_PRESET],
+    });
+    const omitted = await imageGenSvc.importImageGenConfig(IMPORTER, {
+      version: 1, type: "lumiverse_image_gen_config", settings: { describeCharacterAvatar: true },
+    });
+    expect(omitted.settings.activeCaptioningPresetId).toBe(CAPTIONING_PRESET.id);
+
+    settingsSvc.putSetting(EXPORTER, "imageGeneration", { activeCaptioningPresetId: null });
+    const exported = imageGenSvc.exportImageGenConfig(EXPORTER, { includePresets: false, includeConnections: false });
+    expect(exported.settings?.activeCaptioningPresetId).toBeNull();
+    const cleared = await imageGenSvc.importImageGenConfig(IMPORTER, exported);
+    expect(cleared.errors).toEqual([]);
+    expect(cleared.imported.settings).toBe(true);
+    expect(cleared.settings.activeCaptioningPresetId).toBeNull();
+    expect(cleared.settings.promptPresets).toHaveLength(1);
+  });
+
   test("import merges settings/presets and recreates connections without keys", async () => {
     await seedExporter();
     const exported = imageGenSvc.exportImageGenConfig(EXPORTER);
@@ -166,6 +253,8 @@ describe("image gen config import/export", () => {
     expect(settings.sceneChangeThreshold).toBe(3);
     expect(settings.includeCharacters).toBe(true);
     expect(settings.includePersona).toBe(false);
+    expect(settings.describeCharacterAvatar).toBe(true);
+    expect(settings.describePersonaAvatar).toBe(false);
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     // The receiver's enabled state and parser setup are never touched.
     expect(settings.enabled).toBe(false);

@@ -5,6 +5,8 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { Button } from '@/components/shared/FormComponents'
 import { activeTab } from '@/lib/active-tab'
+import { isMobileViewportOrDevice } from '@/lib/mobile'
+import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import styles from './ActiveTabGuard.module.css'
 
 function captureBackground() {
@@ -15,7 +17,7 @@ function captureBackground() {
   const backgrounds = character?.extensions?.greeting_backgrounds as Record<number, string> | undefined
   const imageId = backgrounds?.[greeting] || character?.image_id
   return {
-    wallpaper: state.activeChatWallpaper ?? state.wallpaper.global ?? (imageId ? { type: 'image' as const, image_id: imageId } : null),
+    wallpaper: resolveChatWallpaper(state.activeChatWallpaper, state.activeChatMetadata, isMobileViewportOrDevice()) ?? resolveGlobalWallpaper(state.wallpaper, isMobileViewportOrDevice()) ?? (imageId ? { type: 'image' as const, image_id: imageId } : null),
     settings: state.wallpaper,
     scene: state.sceneBackground,
     sceneOpacity: Math.max(0, Math.min(1, state.imageGeneration.backgroundOpacity ?? 0.35)),

@@ -40,17 +40,24 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
   }
 
   return (
-    <div className={styles.bar} data-component="MessageSelectBar">
+    <div
+      className={styles.bar}
+      data-component="MessageSelectBar"
+      role="group"
+      aria-label={t('messageSelect.toolbar')}
+    >
       <div className={styles.left}>
         <button
           type="button"
           className={styles.selectToggle}
           onClick={allSelected ? clearMessageSelection : selectAllMessages}
           title={allSelected ? t('messageSelect.deselectAll') : t('messageSelect.selectAll')}
+          aria-label={allSelected ? t('messageSelect.deselectAll') : t('messageSelect.selectAll')}
+          aria-pressed={allSelected}
         >
           {allSelected ? <CheckSquare size={14} /> : <Square size={14} />}
         </button>
-        <span className={styles.count}>
+        <span className={styles.count} role="status">
           {t('messageSelect.selectedCount', { selected: selectedCount, total: totalCount })}
         </span>
       </div>
@@ -72,6 +79,7 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
             className={clsx(styles.actionBtn, styles.hideBtn)}
             onClick={() => bulkHide(true)}
             disabled={selectedCount === 0}
+            aria-label={t('messageActions.hide')}
           >
             <EyeOff size={13} />
             <span className={styles.actionLabel}>{t('messageActions.hide')}</span>
@@ -83,6 +91,7 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
             className={clsx(styles.actionBtn, styles.unhideBtn)}
             onClick={() => bulkHide(false)}
             disabled={selectedCount === 0}
+            aria-label={t('messageActions.unhide')}
           >
             <Eye size={13} />
             <span className={styles.actionLabel}>{t('messageActions.unhide')}</span>
@@ -93,6 +102,7 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
           className={clsx(styles.actionBtn, styles.deleteBtn)}
           onClick={handleDelete}
           disabled={selectedCount === 0}
+          aria-label={tc('actions.delete')}
         >
           <Trash2 size={13} />
           <span className={styles.actionLabel}>{tc('actions.delete')}</span>
@@ -101,6 +111,7 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
           type="button"
           className={clsx(styles.actionBtn, styles.cancelBtn)}
           onClick={exitSelectMode}
+          aria-label={tc('actions.cancel')}
         >
           <X size={13} />
           <span className={styles.actionLabel}>{tc('actions.cancel')}</span>

@@ -516,6 +516,12 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         role="option"
         aria-selected={selected}
         aria-disabled={opt.disabled || undefined}
+        // Named explicitly rather than from content: the label lives inside
+        // styles.optionTextWrap (needed so a sublabel can stack under it), and
+        // a role="option" whose text is wrapped in an element computes an empty
+        // accessible name — the option then focuses silently and a screen
+        // reader cannot say which one it is.
+        aria-label={opt.sublabel ? `${opt.label}, ${opt.sublabel}` : opt.label}
       >
         <span className={styles.optionCheck} aria-hidden>{selected ? '✓' : ''}</span>
         {opt.leading && <span className={clsx(styles.optionLeading, leadingClassName)} aria-hidden>{opt.leading}</span>}

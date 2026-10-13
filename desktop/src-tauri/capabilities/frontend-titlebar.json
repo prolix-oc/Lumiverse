@@ -19,6 +19,7 @@
     "desktop-startup-appearance",
     "desktop-widget-catalog",
     "desktop-notification-registration",
+    "desktop-system-audio-session",
     "notification:allow-is-permission-granted",
     "core:event:allow-listen",
     "core:event:allow-unlisten",

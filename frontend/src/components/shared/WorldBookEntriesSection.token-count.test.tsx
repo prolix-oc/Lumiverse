@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom'
 import { act, createElement, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
 import type { WorldBook, WorldBookEntry } from '@/types/api'
+import { installKeyboardFocusReveal } from '@/lib/keyboardFocusReveal'
 
 const noop = () => null
 const invalidatedEntryIds: string[] = []
@@ -138,7 +139,7 @@ mock.module('@/lib/i18n/worldBookEntryLabels', () => ({
     entryTypeLabel: () => 'trigger',
     positionLabel: () => 'position',
     sortOptions: [{ value: 'custom', label: 'custom' }],
-    pageSizeOptions: [{ value: 50, label: '50' }],
+    pageSizeOptions: [{ value: 50, label: '50' }, { value: 'all', label: 'All entries' }],
     typeOptions: [],
     positionOptions: [],
   }),
@@ -153,9 +154,9 @@ let mobileFixture = false
 mock.module('@/hooks/useIsMobile', () => ({ default: () => mobileFixture }))
 mock.module('@/components/shared/WorldBookEntryEditor', () => ({
   default: ({ entry, onUpdate }: { entry: WorldBookEntry; onUpdate(entryId: string, updates: Record<string, unknown>): void }) => (
-    <><input aria-label="Fixture editor draft" defaultValue={entry.content} /><button type="button" data-testid={`edit-${entry.id}`} onClick={() => onUpdate(entry.id, { content: 'optimistic content' })}>
+    <div data-world-book-entry-editor="true"><input aria-label="Fixture editor draft" defaultValue={entry.content} /><textarea aria-label="Fixture editor content" defaultValue={entry.content} /><button type="button" data-testid={`edit-${entry.id}`} onClick={() => onUpdate(entry.id, { content: 'optimistic content' })}>
       edit
-    </button></>
+    </button></div>
   ),
 }))
 mock.module('@/components/panels/world-book/WorldBookTokenReportModal', () => ({ default: noop }))
@@ -174,6 +175,7 @@ mock.module('@/components/shared/Pagination', () => ({ default: ({ currentPage, 
 mock.module('@/store', () => ({ useStore: useStoreMock }))
 mock.module('@/lib/clearableSearch', () => ({ clearSearchOnEscape: noop }))
 mock.module('@dnd-kit/core', () => ({
+  useDndContext: () => ({ active: null }),
   DndContext: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DragOverlay: ({ children }: { children?: ReactNode }) => <>{children}</>,
   MouseSensor: class {}, TouchSensor: class {}, KeyboardSensor: class {},
@@ -203,6 +205,8 @@ const originalGlobals = new Map<string, unknown>([
   ['HTMLInputElement', globalObject.HTMLInputElement], ['HTMLTextAreaElement', globalObject.HTMLTextAreaElement],
   ['HTMLSelectElement', globalObject.HTMLSelectElement], ['SVGElement', globalObject.SVGElement],
   ['CSS', globalObject.CSS], ['IS_REACT_ACT_ENVIRONMENT', globalObject.IS_REACT_ACT_ENVIRONMENT],
+  ['NodeFilter', globalObject.NodeFilter], ['ResizeObserver', globalObject.ResizeObserver],
+  ['getComputedStyle', globalObject.getComputedStyle],
 ])
 Object.assign(globalObject, {
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -210,6 +214,9 @@ Object.assign(globalObject, {
   HTMLInputElement: dom.window.HTMLInputElement, HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
   HTMLSelectElement: dom.window.HTMLSelectElement, SVGElement: dom.window.SVGElement,
   CSS: { escape: (value: string) => value }, IS_REACT_ACT_ENVIRONMENT: true,
+  NodeFilter: dom.window.NodeFilter,
+  ResizeObserver: class { observe() {} disconnect() {} },
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
 })
 Object.defineProperty(dom.window.HTMLElement.prototype, 'scrollIntoView', {
   configurable: true,
@@ -293,6 +300,7 @@ afterEach(() => {
   updateDeferred = null
   listEntriesResult = { data: [], total: 0 }
   storeState.pendingWorldBookEditEntryId = null
+  storeState.worldBookEntryViewPrefs = {}
   mobileFixture = false
   document.body.replaceChildren()
 })
@@ -301,6 +309,128 @@ afterAll(() => {
   for (const [key, value] of originalGlobals) {
     if (value === undefined) delete globalObject[key]
     else globalObject[key] = value
+  }
+})
+
+describe('WorldBookEntriesSection mobile content focus', () => {
+  const devices = [
+    { name: 'iPhone PWA', touchPoints: 5, attributes: ['data-pwa', 'data-ios-pwa'], sharedCaret: true },
+    { name: 'iPad PWA', touchPoints: 5, attributes: ['data-pwa', 'data-ios-pwa'], sharedCaret: true },
+    { name: 'iPhone Safari', touchPoints: 5, attributes: [], sharedCaret: false },
+    { name: 'Android PWA', touchPoints: 5, attributes: ['data-pwa', 'data-resizes-content'], sharedCaret: false },
+    { name: 'Android browser', touchPoints: 5, attributes: ['data-resizes-content'], sharedCaret: false },
+    { name: 'desktop', touchPoints: 0, attributes: [], sharedCaret: false },
+  ]
+
+  for (const device of devices) for (const presentation of [undefined, 'workspace'] as const) {
+    test(`leaves content focus and typing to its caret owner: ${device.name}/${presentation ?? 'sidebar'}`, async () => {
+      const descriptors = ['requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'clearTimeout', 'visualViewport']
+        .map(key => [key, Object.getOwnPropertyDescriptor(window, key)] as const)
+      const touchDescriptor = Object.getOwnPropertyDescriptor(navigator, 'maxTouchPoints')
+      const rangeRect = dom.window.Range.prototype.getBoundingClientRect
+      const frames = new Map<number, FrameRequestCallback>()
+      const timers = new Map<number, () => void>()
+      const viewport = Object.assign(new dom.window.EventTarget(), { height: 800, offsetTop: 0 })
+      let nextId = 0
+      window.requestAnimationFrame = callback => { frames.set(++nextId, callback); return nextId }
+      window.cancelAnimationFrame = id => { frames.delete(id) }
+      Object.defineProperty(window, 'setTimeout', {
+        configurable: true,
+        value: (callback: () => void) => { timers.set(++nextId, callback); return nextId },
+      })
+      window.clearTimeout = id => { timers.delete(id) }
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
+      Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: device.touchPoints })
+      for (const attribute of device.attributes) document.documentElement.setAttribute(attribute, '')
+      mobileFixture = device.touchPoints > 0
+      const { root, host } = await render([entry('entry-1')], presentation)
+      let stopCaret: (() => void) | undefined
+      try {
+        click(host, `[data-entry-id="entry-1"] button[aria-label="${presentation ? 'Open entry editor' : 'expandEditor'}"]`)
+        const textarea = host.querySelector<HTMLTextAreaElement>('[aria-label="Fixture editor content"]')!
+        const scrollContainer = presentation
+          ? host.querySelector<HTMLElement>('[role="tabpanel"]')!
+          : host.querySelector<HTMLElement>('[data-entry-id]')!.parentElement!.parentElement!
+        scrollContainer.style.overflowY = 'auto'
+        const rect = (top: number, height: number) => new dom.window.DOMRect(0, top, 300, height) as DOMRect
+        scrollContainer.getBoundingClientRect = () => rect(0, viewport.height)
+        Object.defineProperty(scrollContainer, 'offsetHeight', { configurable: true, get: () => viewport.height })
+        let fieldTop = 100, fieldHeight = 400, caretOffset = 40
+        textarea.getBoundingClientRect = () => rect(fieldTop - scrollContainer.scrollTop, fieldHeight)
+        Object.defineProperties(textarea, {
+          offsetHeight: { get: () => fieldHeight }, offsetWidth: { value: 300 }, clientWidth: { value: 300 },
+          // Short content cannot scroll internally; a correction must move the ancestor.
+          scrollTop: { get: () => 0, set() {} },
+        })
+        // jsdom has no text layout. Model a caret independent of the field's bottom.
+        dom.window.Range.prototype.getBoundingClientRect = () => rect(fieldTop - scrollContainer.scrollTop + caretOffset, 20)
+        if (device.sharedCaret) stopCaret = installKeyboardFocusReveal()
+        const flushFrames = () => {
+          const pending = [...frames.values()]
+          frames.clear()
+          for (const callback of pending) callback(0)
+        }
+        act(() => textarea.focus())
+        flushFrames()
+        expect(scrollContainer.scrollTop).toBe(0)
+        // A tall field stays partly clipped as the keyboard opens; its caret is visible.
+        for (const height of [650, 500, 400]) {
+          viewport.height = height
+          viewport.dispatchEvent(new dom.window.Event('resize'))
+          viewport.dispatchEvent(new dom.window.Event('scroll'))
+          flushFrames()
+          expect(scrollContainer.scrollTop).toBe(0)
+        }
+        const pendingTimers = [...timers.values()]
+        timers.clear()
+        for (const callback of pendingTimers) { callback(); flushFrames() }
+        expect(scrollContainer.scrollTop).toBe(0)
+        expect(pendingTimers).toHaveLength(0)
+
+        // Typing near the top of a field whose bottom is behind the keyboard
+        // must not move the parent when the native caret is already visible.
+        fieldTop = 260; fieldHeight = 180; caretOffset = 20
+        textarea.value += '!'
+        textarea.setSelectionRange(3, 3)
+        textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+        flushFrames()
+        expect(scrollContainer.scrollTop).toBe(0)
+        expect(textarea.selectionStart).toBe(3)
+
+        if (device.sharedCaret) {
+          expect(host.querySelectorAll('[data-keyboard-caret-mirror]')).toHaveLength(1)
+          // Actual caret occlusion still receives the necessary minimal correction.
+          caretOffset = 160
+          textarea.value += '!'
+          textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+          flushFrames()
+          expect(scrollContainer.scrollTop).toBe(52)
+        }
+
+        // Ordinary fields still receive the existing footer/keyboard clearance.
+        scrollContainer.scrollTop = 0
+        const input = host.querySelector<HTMLInputElement>('[aria-label="Fixture editor draft"]')!
+        input.getBoundingClientRect = () => rect(450 - scrollContainer.scrollTop, 40)
+        act(() => input.focus())
+        flushFrames()
+        const inputTimers = [...timers.values()]
+        timers.clear()
+        for (const callback of inputTimers) { callback(); flushFrames() }
+        if (device.touchPoints > 0) expect(scrollContainer.scrollTop).toBeGreaterThan(0)
+        else expect(scrollContainer.scrollTop).toBe(0)
+      } finally {
+        stopCaret?.()
+        unmount(root)
+        dom.window.Range.prototype.getBoundingClientRect = rangeRect
+        for (const [key, descriptor] of descriptors) {
+          if (descriptor) Object.defineProperty(window, key, descriptor)
+          else Reflect.deleteProperty(window, key)
+        }
+        if (touchDescriptor) Object.defineProperty(navigator, 'maxTouchPoints', touchDescriptor)
+        else Reflect.deleteProperty(navigator, 'maxTouchPoints')
+        for (const attribute of device.attributes) document.documentElement.removeAttribute(attribute)
+      }
+    })
   }
 })
 
@@ -512,6 +642,59 @@ describe('WorldBookEntriesSection token-count invalidation', () => {
   })
 })
 
+
+describe('All entries browsing', () => {
+  for (const presentation of [undefined, 'workspace'] as const) for (const mobile of [false, true]) {
+    test('restores all, loads every server batch, and returns to pagination: ' + (presentation ?? 'sidebar') + '/' + mobile, async () => {
+      mobileFixture = mobile
+      storeState.worldBookEntryViewPrefs = { [book.id]: { sortBy: 'custom', sortDir: 'asc', pageSize: 'all' } }
+      const data = Array.from({ length: 1107 }, (_, i) => entry('entry-' + i, 'dragon content'))
+      const { root, host } = await render(data, presentation)
+      try {
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        expect(listEntryCalls.some(call => call.offset === 1000)).toBe(true)
+        expect(host.querySelector('[aria-label="Next entry page"]')).toBeNull()
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(1107)
+        expect(host.querySelector('[aria-label="Fixture editor draft"]')).toBeNull()
+        if (mobile) click(host, '[aria-label="Entry filters and options"]')
+        const size = host.querySelector<HTMLSelectElement>('select[aria-label="perPage"]')!
+        expect(size.value).toBe('all')
+        await act(async () => { size.value = '50'; size.dispatchEvent(new window.Event('change', { bubbles: true })) })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(50)
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+        await act(async () => { size.value = 'all'; size.dispatchEvent(new window.Event('change', { bubbles: true })) })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        const input = host.querySelector<HTMLInputElement>('input[type="search"]')!
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, 'dragon')
+          input.dispatchEvent(new window.Event('input', { bubbles: true }))
+        })
+        await wait(10)
+        expect(host.querySelectorAll('[data-entry-id]').length).toBe(1107)
+        expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+      } finally { unmount(root) }
+    }, 30000)
+  }
+
+  test('All entries keeps folder and tag scopes and disables partial-scope reordering', async () => {
+    storeState.worldBookEntryViewPrefs = { [book.id]: { sortBy: 'custom', sortDir: 'asc', pageSize: 'all' } }
+    const data = Array.from({ length: 251 }, (_, i) => ({ ...entry('entry-' + i), folder: i < 201 ? 'Characters' : 'Locations', tags: i % 2 ? ['Villain'] : [] }))
+    const { root, host } = await render(data)
+    try {
+      clickByText(host, '‹ Folders'); clickByText(host, 'Characters'); await wait(10)
+      expect(host.querySelectorAll('[data-entry-id]').length).toBe(201)
+      expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+      const tags = host.querySelector<HTMLSelectElement>('[aria-label="Filter entry tags"]')!
+      await act(async () => { tags.value = 'Villain'; tags.dispatchEvent(new window.Event('change', { bubbles: true })) })
+      await wait(10)
+      expect(host.querySelectorAll('[data-entry-id]').length).toBe(100)
+      expect(organizationQueries.at(-1)).toMatchObject({ folder: 'Characters', tag: ['Villain'], limit: 1000, offset: 0 })
+      expect(host.querySelectorAll('button[aria-label^="dragHandle:"]').length).toBe(0)
+    } finally { unmount(root) }
+  }, 30000)
+})
 
 describe('native organization server pagination', () => {
   test('folder counts span the book and folder contents are loaded one server page at a time', async () => {

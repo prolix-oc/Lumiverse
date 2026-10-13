@@ -1,5 +1,132 @@
 import type { ConnectionProfile } from "../types/connection-profile";
 import * as connSvc from "./connections.service";
+import * as secretsSvc from "./secrets.service";
+import { describeProviderError, fetchProviderJson } from "../utils/provider-errors";
+import type { NanoGptBalance, NanoGptModelProviders, NanoGptPaygoUsage } from "../types/nanogpt";
+
+const API_TIMEOUT_MS = 15_000;
+
+/** Discovery and balance are rooted at /api, even with a subscription API base. */
+export function resolveNanoGptApiEndpoint(apiUrl: string | null | undefined, path: string): URL {
+  const url = new URL(apiUrl?.trim() || "https://nano-gpt.com/api/v1");
+  if (!["https:", "http:"].includes(url.protocol)) throw new Error("Invalid NanoGPT API URL");
+  url.pathname = path;
+  url.search = "";
+  url.hash = "";
+  return url;
+}
+
+export class NanoGptConnectionError extends Error {
+  constructor(message: string, readonly status: 400 | 404) { super(message); }
+}
+
+async function resolveCredentials(userId: string, input: { connection_id?: string; api_url?: string; api_key?: string }) {
+  const profile = input.connection_id ? connSvc.getConnection(userId, input.connection_id) : null;
+  if (input.connection_id && !profile) throw new NanoGptConnectionError("Connection not found", 404);
+  if (profile && profile.provider !== "nanogpt") throw new NanoGptConnectionError("Connection is not a NanoGPT profile", 400);
+  const apiKey = (input.api_key?.trim() || (profile ? await secretsSvc.getSecret(userId, connSvc.connectionSecretKey(profile.id)) : "") || "")
+    .trim().replace(/^Bearer\s+/i, "");
+  if (!apiKey) throw new NanoGptConnectionError("A NanoGPT API key is required", 400);
+  return { apiKey, apiUrl: input.api_url ?? profile?.api_url };
+}
+
+export async function discoverModelProviders(userId: string, input: {
+  connection_id?: string; api_url?: string; api_key?: string; model: string;
+}): Promise<NanoGptModelProviders> {
+  const { apiKey, apiUrl } = await resolveCredentials(userId, input);
+  const url = resolveNanoGptApiEndpoint(apiUrl, `/api/models/${encodeURIComponent(input.model.trim())}/providers`);
+  const raw = await fetchProviderJson<NanoGptModelProviders>("NanoGPT", "provider discovery", url, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+  if (typeof raw?.supportsProviderSelection !== "boolean" || !Array.isArray(raw.providers)) {
+    throw new Error("NanoGPT returned an invalid provider list");
+  }
+  return {
+    canonicalId: raw.canonicalId || input.model.trim(),
+    displayName: raw.displayName || input.model.trim(),
+    supportsProviderSelection: raw.supportsProviderSelection,
+    defaultPrice: raw.defaultPrice,
+    providers: raw.providers.filter((p) => p && typeof p.provider === "string" && p.provider.trim()).map((p) => ({
+      provider: p.provider,
+      displayName: p.displayName,
+      available: p.available === true,
+      pricing: p.pricing,
+      effectivePricing: p.effectivePricing,
+      quantization: p.quantization,
+    })),
+  };
+}
+
+function finiteNumber(value: unknown): number | null {
+  if ((typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && !value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export async function fetchPaygoBalance(apiKey: string, apiUrl?: string | null): Promise<NanoGptBalance> {
+  const raw = await fetchProviderJson<any>("NanoGPT", "balance", resolveNanoGptApiEndpoint(apiUrl, "/api/check-balance"), {
+    method: "POST",
+    headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+  const balance = { usd_balance: finiteNumber(raw?.usd_balance), nano_balance: finiteNumber(raw?.nano_balance) };
+  if (balance.usd_balance === null && balance.nano_balance === null) throw new Error("NanoGPT returned an invalid balance");
+  return balance;
+}
+
+export async function fetchPaygoUsage(apiKey: string, apiUrl?: string | null, now = new Date()): Promise<NanoGptPaygoUsage> {
+  const today = now.toISOString().slice(0, 10);
+  const from = `${today.slice(0, 7)}-01`;
+  const url = resolveNanoGptApiEndpoint(apiUrl, "/api/v1/usage");
+  url.search = new URLSearchParams({ from, to: today, group_by: "day", scope: "current_key" }).toString();
+  const raw = await fetchProviderJson<any>("NanoGPT", "usage", url, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+  if (!raw?.totals || !Array.isArray(raw.byDay) || finiteNumber(raw.totals.netCostUsd) === null) {
+    throw new Error("NanoGPT returned invalid usage totals");
+  }
+  const todayRow = raw.byDay.find((row: any) => row?.date === today);
+  if (todayRow && finiteNumber(todayRow.netCostUsd) === null) throw new Error("NanoGPT returned invalid daily usage");
+  return {
+    from, to: today,
+    asOf: typeof raw.asOf === "string" ? raw.asOf : null,
+    usage_daily: todayRow ? finiteNumber(todayRow.netCostUsd)! : 0,
+    usage_monthly: finiteNumber(raw.totals.netCostUsd)!,
+    requests: finiteNumber(raw.totals.requests) ?? 0,
+    inputTokens: finiteNumber(raw.totals.inputTokens) ?? 0,
+    outputTokens: finiteNumber(raw.totals.outputTokens) ?? 0,
+  };
+}
+
+export interface NanoGptAccountUsage {
+  subscription: connSvc.NanoGptSubscriptionUsage | null;
+  balance: NanoGptBalance | null;
+  paygo: NanoGptPaygoUsage | null;
+  errors: Partial<Record<"subscription" | "balance" | "paygo", string>>;
+}
+
+export async function fetchAccountUsage(userId: string, connectionId: string): Promise<NanoGptAccountUsage> {
+  const { apiKey, apiUrl } = await resolveCredentials(userId, { connection_id: connectionId });
+  const results = await Promise.allSettled([
+    connSvc.fetchNanoGptSubscriptionUsage(userId, connectionId),
+    fetchPaygoBalance(apiKey, apiUrl),
+    fetchPaygoUsage(apiKey, apiUrl),
+  ]);
+  const account: NanoGptAccountUsage = { subscription: null, balance: null, paygo: null, errors: {} };
+  const keys = ["subscription", "balance", "paygo"] as const;
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled" && result.value) {
+      Object.assign(account, { [keys[index]]: result.value });
+    } else {
+      account.errors[keys[index]] = result.status === "rejected"
+        ? describeProviderError(result.reason, "NanoGPT usage unavailable")
+        : "NanoGPT subscription usage unavailable";
+    }
+  });
+  return account;
+}
 
 // ── PKCE OAuth ───────────────────────────────────────────────────────────────
 

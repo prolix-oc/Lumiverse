@@ -79,6 +79,8 @@ import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
+import { createComposerTouchFocusHandlers } from '@/lib/iosKeyboardScroll'
+import { observeComposerMotion } from '@/lib/composerMotion'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import { applyChatAppearance } from '@/lib/chatAppearance'
 import {
@@ -1007,6 +1009,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
+  const composerTouchFocus = useMemo(createComposerTouchFocusHandlers, [])
   const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
   const [sttLoadingProgress, setSttLoadingProgress] = useState<number | null>(null)
   const sttSessionConfigRef = useRef<{ provider: string; language: string; connectionId: string | null } | null>(null)
@@ -1091,7 +1094,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const pendingSelection = pendingSelectionRef.current
     if (!pendingSelection) return
     pendingSelectionRef.current = null
-    ta.focus()
+    ta.focus({ preventScroll: true })
     ta.setSelectionRange(pendingSelection.start, pendingSelection.end, pendingSelection.direction)
     syncTextareaMirrorScroll()
   }, [text, resizeTextarea, syncTextareaMirrorScroll])
@@ -1456,7 +1459,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const syncHiddenEditSafeZone = () => {
       const rootStyle = getComputedStyle(root)
       const keyboardInset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
-      const zones = composeChatSafeZones(16, 0, keyboardInset)
+      const zones = composeChatSafeZones(16, 0, renderedPxToLayoutPx(keyboardInset))
       parent.style.setProperty('--lcs-composer-safe-zone', `${Math.round(zones.composerSafeZone)}px`)
       parent.style.setProperty('--lcs-input-safe-zone', `${Math.round(zones.inputSafeZone)}px`)
     }
@@ -1496,7 +1499,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const parent = el.parentElement
     if (!parent) return
     const root = document.documentElement
-    const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
 
     const measureLoreHeight = () => {
@@ -1513,26 +1515,23 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       const loreHeight = measureLoreHeight()
       const h = el.offsetHeight
       const composerHeight = Math.max(0, h - loreHeight) + 8
-      // On iOS PWA, read --app-keyboard-inset-bottom directly instead of
-      // getComputedStyle(el).bottom. The CSS `bottom` property transitions,
-      // so the computed value may be mid-animation when the ResizeObserver
-      // fires (triggered by the instant padding-bottom change). The CSS
-      // variable is set synchronously by JS and always reflects the final value.
-      let bottomOffset: number
-      if (isIOSPwa) {
-        const rootStyle = getComputedStyle(root)
-        bottomOffset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
-      } else {
-        bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
-      }
+      // Use the animated position, so list padding and composer move together.
+      // Zero is valid for edge-to-edge PWA composers.
+      const measuredBottom = parseFloat(getComputedStyle(el).bottom)
+      const bottomOffset = Number.isFinite(measuredBottom) ? measuredBottom : 12
       const zones = composeChatSafeZones(composerHeight, loreHeight, bottomOffset)
-      parent.style.setProperty('--lcs-composer-safe-zone', `${zones.composerSafeZone}px`)
-      parent.style.setProperty('--lcs-input-safe-zone', `${zones.inputSafeZone}px`)
+      const publish = (name: string, value: number) => {
+        const next = `${Math.round(value)}px`
+        if (parent.style.getPropertyValue(name) !== next) parent.style.setProperty(name, next)
+      }
+      publish('--lcs-composer-safe-zone', zones.composerSafeZone)
+      publish('--lcs-input-safe-zone', zones.inputSafeZone)
     }
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
     if (loreMount) ro.observe(loreMount)
+    const stopObservingMotion = observeComposerMotion(el, update)
     update()
 
     // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
@@ -1545,7 +1544,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       cancelAnimationFrame(vpFrame)
       vpFrame = requestAnimationFrame(update)
     }
-    const rootObserver = new MutationObserver(onViewportResize)
+    // Root writes already contain main.tsx's latest inset. Measure before
+    // paint, including when reduced motion makes the bottom change instant.
+    const rootObserver = new MutationObserver(update)
     rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
     window.addEventListener('resize', onViewportResize)
     window.visualViewport?.addEventListener('resize', onViewportResize)
@@ -1553,6 +1554,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     return () => {
       ro.disconnect()
+      stopObservingMotion()
       cancelAnimationFrame(vpFrame)
       rootObserver.disconnect()
       window.removeEventListener('resize', onViewportResize)
@@ -1889,7 +1891,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
     }
     requestAnimationFrame(() => {
-      if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
+      if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus({ preventScroll: true }) }
     })
     return 'sent'
   }, [text, chatId, saveDraftInput, resizeTextarea, finalizeRegexSelections])
@@ -1930,7 +1932,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
+        textareaRef.current.focus({ preventScroll: true })
       }
     })
 
@@ -2009,7 +2011,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     requestAnimationFrame(() => {
       if (textareaRef.current) {
         resizeTextarea(textareaRef.current)
-        textareaRef.current.focus()
+        textareaRef.current.focus({ preventScroll: true })
       }
     })
 
@@ -2175,7 +2177,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         setText((current) => applyRegexActionDraft(current, { content: action.content, mode: 'append' }))
         requestAnimationFrame(() => {
           resizeTextarea(textareaRef.current)
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
         })
         toast.info(action.subtitle || t('toast.regexActionDraftQueued'), {
           title: action.title || t('toast.regexActionSelected'),
@@ -2210,7 +2212,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             title: action.title || t('toast.regexActionSelected'),
             duration: 2500,
           })
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
           return
         }
         if (action.type === 'effects') {
@@ -2228,7 +2230,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             setText((current) => applyRegexActionDraft(current, draft))
             requestAnimationFrame(() => {
               resizeTextarea(textareaRef.current)
-              textareaRef.current?.focus()
+              textareaRef.current?.focus({ preventScroll: true })
             })
           }
           toast.info(action.subtitle || t('toast.regexActionEffectsApplied'), {
@@ -2272,7 +2274,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             title: action.title || t('toast.regexActionSelected'),
             duration: 2500,
           })
-          textareaRef.current?.focus()
+          textareaRef.current?.focus({ preventScroll: true })
           return
         }
         await handleSend(action.content, action)
@@ -4497,6 +4499,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
+              {...composerTouchFocus}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               placeholder={t('input.placeholder')}

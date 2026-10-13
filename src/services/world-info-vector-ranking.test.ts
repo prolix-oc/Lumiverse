@@ -131,6 +131,99 @@ describe("buildWorldInfoLexicalQueryBatches", () => {
   });
 });
 
+describe("Vector First selection", () => {
+  function fixture() {
+    const keyword = makeEntry({
+      key: ["Silvergate"], comment: "Silvergate",
+      content: "Ancient architects built the northern town centuries ago.",
+    });
+    const semantic = makeEntry({
+      comment: "Guard patrols",
+      content: "Watch officers keep the central square safe throughout the night.",
+    });
+    return {
+      keyword, semantic,
+      input: {
+        eligibleEntries: [keyword, semantic],
+        pooledCandidates: [candidate(semantic, 0.3, 0, 0)],
+        queryText: "Silvergate guards patrol the plaza.",
+        hybridWeightMode: "vector_first" as const,
+        similarityThreshold: 0, rerankCutoff: 0, topK: 1,
+      },
+    };
+  }
+
+  test("keyword-only rescue cannot consume the vector shortlist with both cutoffs at zero", () => {
+    const { keyword, semantic, input } = fixture();
+    const result = rankVectorWorldInfoCandidates(input);
+    expect(result.shortlistedEntries.map((item) => item.entry.id)).toEqual([semantic.id]);
+    expect(result.candidateTrace.some((item) => item.entry.id === keyword.id)).toBe(false);
+    expect(result.hitsBeforeThreshold).toBe(1);
+    expect(result.thresholdRejected).toBe(0);
+    expect(result.rerankRejected).toBe(0);
+  });
+
+  test("semantic distance takes precedence over keyword boosts among actual vector hits", () => {
+    const { keyword, semantic, input } = fixture();
+    const result = rankVectorWorldInfoCandidates({
+      ...input,
+      pooledCandidates: [candidate(keyword, 0.5, 30, 1), candidate(semantic, 0.3, 0, 0)],
+      topK: 2,
+    });
+    expect(result.shortlistedEntries.map((item) => item.entry.id)).toEqual([semantic.id, keyword.id]);
+    // The secondary lexical score is still available for diagnostics and cutoff filtering.
+    expect(result.shortlistedEntries[1].finalScore).toBeGreaterThan(result.shortlistedEntries[0].finalScore);
+  });
+
+  test("keyword evidence breaks equal-distance ties", () => {
+    const { keyword, semantic, input } = fixture();
+    const result = rankVectorWorldInfoCandidates({
+      ...input,
+      pooledCandidates: [candidate(semantic, 0.3, 0, 0), candidate(keyword, 0.3, 30, 1)],
+    });
+    expect(result.shortlistedEntries[0].entry.id).toBe(keyword.id);
+  });
+
+  test("empty vector recall and non-finite distances do not create semantic activations", () => {
+    const { keyword, input } = fixture();
+    for (const pooledCandidates of [[], [candidate(keyword, Infinity, 30, 1)]]) {
+      const result = rankVectorWorldInfoCandidates({ ...input, pooledCandidates });
+      expect(result.shortlistedEntries).toHaveLength(0);
+      expect(result.hitsBeforeThreshold).toBe(0);
+    }
+  });
+
+  test("positive cutoffs still filter candidates in Vector First", () => {
+    const { semantic, input } = fixture();
+    const thresholded = rankVectorWorldInfoCandidates({ ...input, similarityThreshold: 0.2 });
+    expect(thresholded.shortlistedEntries).toHaveLength(0);
+    expect(thresholded.thresholdRejected).toBe(1);
+    expect(thresholded.candidateTrace[0]).toMatchObject({
+      entry: { id: semantic.id }, retrievalStage: "rejected_by_similarity_threshold",
+    });
+    const reranked = rankVectorWorldInfoCandidates({ ...input, rerankCutoff: 1 });
+    expect(reranked.shortlistedEntries).toHaveLength(0);
+    expect(reranked.rerankRejected).toBe(1);
+  });
+
+  test("Balanced and Keyword First retain exact-key rescue and lexical ranking", () => {
+    const { keyword, semantic, input } = fixture();
+    for (const hybridWeightMode of ["balanced", "keyword_first"] as const) {
+      const rescued = rankVectorWorldInfoCandidates({
+        ...input, hybridWeightMode, pooledCandidates: [],
+      });
+      expect(rescued.shortlistedEntries[0].entry.id).toBe(keyword.id);
+      expect(rescued.shortlistedEntries[0].distance).toBe(Infinity);
+      expect(rescued.shortlistedEntries[0].scoreBreakdown.vectorSimilarity).toBe(0);
+      const ranked = rankVectorWorldInfoCandidates({
+        ...input, hybridWeightMode,
+        pooledCandidates: [candidate(keyword, 0.5, 30, 1), candidate(semantic, 0.3, 0, 0)],
+      });
+      expect(ranked.shortlistedEntries[0].entry.id).toBe(keyword.id);
+    }
+  });
+});
+
 describe("per-mention canonical ownership", () => {
   test("gates only mention bonuses while preserving independent relevance", () => {
     const arden = makeEntry({ comment: "Arden Vale", content: "Arden chairs the expedition." });

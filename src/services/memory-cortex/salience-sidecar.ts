@@ -414,11 +414,12 @@ const TOOL_ANALYZE_PASSAGE_BATCH: ToolDefinition = {
 };
 
 /**
- * Build the tool-forcing parameters for each provider.
+ * Build the tool-choice parameters for each provider.
  * Anthropic: tool_choice { type: "any" } — must use at least one tool
  * OpenAI/compat: tool_choice "required" — must use tools
  * Google: toolConfig { functionCallingConfig: { mode: "ANY" } }
  * Nano-GPT: tool_choice "auto" — some routed models reject "required"
+ * DeepSeek: tool_choice "auto" — thinking mode rejects forced tool choices
  */
 const GOOGLE_PROVIDERS = new Set(["google", "google_vertex"]);
 
@@ -431,6 +432,10 @@ export function getToolChoiceParams(provider: string): Record<string, any> {
   // Both use different formats but the passthrough sends it as-is
   if (normalizedProvider === "anthropic") {
     return { tool_choice: { type: "any" } };
+  }
+  // DeepSeek enables thinking by default and rejects `required` in that mode.
+  if (normalizedProvider === "deepseek") {
+    return { tool_choice: "auto" };
   }
   // Nano-GPT routes requests to many upstream models. Some reject the OpenAI
   // compatible `required` value, while still honoring the extraction prompt

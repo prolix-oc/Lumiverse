@@ -3,6 +3,7 @@ import type { VoiceSettings } from '@/types/store'
 import {
   resolveMessageVoices,
   resolveSegmentVoice,
+  voiceCoalesceKey,
   type ResolveVoiceInput,
 } from './voiceResolution'
 
@@ -77,6 +78,15 @@ describe('message voice fallbacks', () => {
 
   test('skip rules still suppress synthesis', () => {
     expect(resolveSegmentVoice(input({ segment: { action: 'skip' } }))).toEqual({ action: 'skip', voice: null })
+  })
+
+  test('preserves character samplers and keeps differently configured segments separate', () => {
+    const voice = resolveSegmentVoice(input({ character: { extensions: { ttsVoice: {
+      connectionId: 'fish', voice: 'alice', parameters: { speed: 1.2, temperature: 0, normalize: false },
+    } } } })).voice!
+    expect(voice.parameters).toEqual({ speed: 1.2, temperature: 0, normalize: false })
+    expect(voiceCoalesceKey(voice)).toBe(voiceCoalesceKey({ ...voice, parameters: { normalize: false, temperature: 0, speed: 1.2 } }))
+    expect(voiceCoalesceKey(voice)).not.toBe(voiceCoalesceKey({ ...voice, parameters: { ...voice.parameters, temperature: 0.8 } }))
   })
 
   test('group member matching keeps another character with the same name from taking the voice', () => {

@@ -42,6 +42,7 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Default URL:** `https://openrouter.ai/api/v1`.
 - **Models:** Fetched live using OpenRouter's speech-output filter.
 - **Voices:** Model-specific; choose a listed voice or enter the model's voice ID.
+- **Speech style:** Gemini 3.8 Flash and Flash Lite TTS default to casual, relaxed conversation with natural pacing and understated expression. Edit **Speech style** to adjust delivery, or clear it to use the voice's usual delivery. OpenRouter receives this separately from the transcript as `instructions`.
 - **Output formats:** Gemini models automatically request PCM, even when MP3 is configured. Lumiverse wraps the PCM as WAV for browser playback. Other models default to MP3 and also support PCM.
 - **Streaming:** Supported. PCM responses are buffered and receive one WAV header before playback.
 
@@ -70,9 +71,10 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **API key:** Required — plain API key, same as the Gemini text connection.
 - **Default URL:** `https://generativelanguage.googleapis.com`.
 - **Voices:** 30 mapped prebuilt voices (e.g. Kore, Charon, Puck, Zephyr, Fenrir, Leda), each with gender labels.
-- **Models:** Fetched live and filtered to TTS/speech models (currently `gemini-3.1-flash-tts-preview`, `gemini-2.5-pro-preview-tts`, `gemini-2.5-flash-preview-tts`), with a static fallback when the API is unreachable.
-- **Parameters:** `language_code` (optional BCP-47 code) and `temperature` (voice variation).
-- **Output format:** WAV (Gemini returns raw PCM; Lumiverse wraps it so browsers can play it).
+- **Models:** Fetched live and filtered to TTS/speech models, with a static fallback including Gemini 3.8 Flash, Gemini 3.8 Flash Lite, Gemini 3.1 Flash Preview, and Gemini 2.5 Pro Preview TTS when the API is unreachable.
+- **Speech style:** Gemini 3.8 models default to casual, relaxed conversation with natural pacing and understated expression. Edit **Speech style** to adjust delivery, or clear it to use the voice's usual delivery. The guidance is sent in `speech_metadata.style`, separately from the transcript and inline vocal cues. Earlier models do not receive this metadata.
+- **Parameters:** `speech_style` (Gemini 3.8 delivery guidance), `language_code` (optional BCP-47 code), and `temperature` (voice variation).
+- **Output format:** WAV. Native WAV output is preserved; raw PCM is wrapped for browser playback.
 - **Streaming:** Supported.
 
 ### Google Vertex TTS
@@ -107,6 +109,20 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Language:** Defaults to English (`en`) for synthesis.
 - **Output format:** WAV.
 - **Streaming:** Lumiverse currently uses OpenVox's buffered speech response.
+
+### Fish Audio
+
+- **API key:** Required — your Fish Audio API key (`Bearer` token).
+- **Default URL:** `https://api.fish.audio`.
+- **Models:** Static list including `s2.1-pro` (Recommended), `s2.1-pro-free` (Zero-cost tier), `s2-pro`, `s1`, and `drama-3-preview`.
+- **Voices:** Fetched dynamically from your account's created voice models (`GET /model?self=true`), falling back to public library models. You can also paste any voice ID directly into the voice field as a reference voice.
+- **Settings:** The connection form groups voice and delivery, sampling, audio output, advanced generation, and pronunciation settings. It uses sliders, inputs, selects, and toggles; untouched settings use Fish's defaults.
+- **Delivery:** Optional plain-language voice direction for S2/Drama, speed (0.5 – 2.0×), volume in dB, and S2 loudness normalization. A saved Fish connection speed takes precedence over the global speed; a character/narrator speed override takes precedence over both.
+- **Sampling and generation:** Temperature, top-p, repetition penalty, chunk lengths, maximum audio tokens, previous-chunk context, early stopping, text normalization, and optional quality guard.
+- **Output:** MP3, WAV, and Opus for app playback, with format-specific sample rates and bitrates. Raw PCM remains available through the API for external playback. Latency can be normal, balanced, or low; Fish audio is buffered before playback in the app.
+- **Pronunciation:** Supply a published Fish dictionary ID and its explicit version ID to apply recurring name/term pronunciations.
+- **Inline directions:** S2/Drama square-bracket directions stay with the following spoken text. Drama also preserves paired delivery tags such as `<whisper>…</whisper>` and experimental language tags through speech/narration parsing. Other voices retain the enclosed words while removing unsupported wrappers.
+- **Streaming:** Supported.
 
 ---
 

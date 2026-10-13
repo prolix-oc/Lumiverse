@@ -67,9 +67,12 @@ to **Lumiverse Desktop** releases tagged `desktop-v...` on the
     that you trust; do not disable system-wide security protections.
 
 Windows needs WebView2 (included with most Windows 11 installations). Linux
-still needs the matching WebKitGTK 4.1 and AppIndicator runtime libraries;
-an AppImage does not remove every system dependency. GNOME Shell also needs
-an AppIndicator/KStatusNotifier extension for the tray icon to appear.
+package installations (`.deb` / `.rpm`) and unpackaged binaries need the matching
+WebKitGTK 4.1, AppIndicator, and GStreamer runtime packages. See
+[Linux audio setup](#audio-is-silent-on-linux) for the GStreamer commands.
+Current official Linux AppImages bundle GTK, WebKitGTK, and the GStreamer audio
+plugins. GNOME Shell also needs an AppIndicator/KStatusNotifier extension for
+the tray icon to appear.
 
 After installation, skip to [Connect Lumiverse Desktop to Lumiverse](#connect-lumiverse-desktop-to-lumiverse).
 
@@ -87,14 +90,17 @@ Only this path requires the following build tools:
 ### Linux build dependencies
 
 The Linux tray icon uses the StatusNotifierItem/AppIndicator D-Bus protocol.
-Install the required native packages before building the app:
+The integrated browser uses GStreamer for audio playback. Install the required
+native packages, including the GStreamer tools and base and good plugin sets,
+before building the app:
 
 === "Debian / Ubuntu"
 
     ```bash
     sudo apt install build-essential curl wget file libssl-dev \
       libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-      librsvg2-dev libxdo-dev
+      librsvg2-dev libxdo-dev gstreamer1.0-tools \
+      gstreamer1.0-plugins-base gstreamer1.0-plugins-good
     ```
 
 === "Fedora"
@@ -102,20 +108,29 @@ Install the required native packages before building the app:
     ```bash
     sudo dnf install gcc gcc-c++ make curl wget file openssl-devel \
       webkit2gtk4.1-devel libappindicator-gtk3-devel \
-      librsvg2-devel libxdo-devel
+      librsvg2-devel libxdo-devel gstreamer1 \
+      gstreamer1-plugins-base gstreamer1-plugins-good
     ```
 
 === "Arch Linux"
 
     ```bash
     sudo pacman -S --needed base-devel curl wget file openssl \
-      webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo
+      webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo \
+      gstreamer gst-plugins-base gst-plugins-good
     ```
 
 Package names vary by distribution. If your distribution does not provide
 `libayatana-appindicator3-dev`, use its `libappindicator` development package
 instead. An unpackaged Linux build also needs the matching AppIndicator
 runtime library on the computer where it runs.
+
+AppImage builds copy these GStreamer plugins into the bundle. From the root of
+your checkout, check the build prerequisites before continuing:
+
+```bash
+bun run desktop:doctor
+```
 
 KDE Plasma displays these tray items natively. GNOME Shell needs an
 AppIndicator/KStatusNotifier extension, such as **AppIndicator and
@@ -402,3 +417,48 @@ Confirm that Rust stable and the platform build tools listed above are
 installed, then run the build commands again from `desktop/`. The tray is a
 native app, so it needs those tools even though the Lumiverse server itself
 does not.
+
+### Audio is silent on Linux
+
+For a `.deb` / `.rpm` installation or an unpackaged Linux binary, install
+GStreamer's tools and base and good plugin sets. These provide the audio
+pipeline, MP3 decoder, and audio output plugins used by the integrated browser.
+
+=== "Debian / Ubuntu"
+
+    ```bash
+    sudo apt update
+    sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good
+    ```
+
+=== "Fedora"
+
+    ```bash
+    sudo dnf install gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good
+    ```
+
+=== "Arch Linux"
+
+    ```bash
+    sudo pacman -S --needed gstreamer gst-plugins-base gst-plugins-good
+    ```
+
+Check that the required system plugins can be found:
+
+```bash
+gst-inspect-1.0 appsrc
+gst-inspect-1.0 autoaudiosink
+gst-inspect-1.0 mpg123audiodec
+gst-inspect-1.0 pulsesink
+```
+
+Each command should print plugin details. If one reports a missing element,
+check that the packages above installed successfully. Quit and reopen Lumiverse
+Desktop after installing them, then check the system volume and selected output
+device.
+
+Current official AppImages include these plugins and use their bundled plugin
+paths. If an older AppImage has no audio, download a current build or rebuild
+it with the [Linux build dependencies](#linux-build-dependencies) above;
+installing system plugins does not repair a bundle missing its own plugins.

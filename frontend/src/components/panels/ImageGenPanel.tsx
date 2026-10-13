@@ -648,6 +648,37 @@ export default function ImageGenPanel() {
             />
             <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharacters')} hint={t('imageGenPanel.includeCharactersHint')} />
             <ToggleRow checked={!!imageGeneration.includePersona} onChange={(checked) => updateTop({ includePersona: checked })} label={t('imageGenPanel.includePersona')} hint={t('imageGenPanel.includePersonaHint')} />
+            <ToggleRow
+              checked={!!imageGeneration.describeCharacterAvatar}
+              onChange={(checked) => updateTop({ describeCharacterAvatar: checked })}
+              label={t('imageGenPanel.describeCharacterAvatar')}
+              hint={t('imageGenPanel.describeCharacterAvatarHint')}
+            />
+            <ToggleRow
+              checked={!!imageGeneration.describePersonaAvatar}
+              onChange={(checked) => updateTop({ describePersonaAvatar: checked })}
+              label={t('imageGenPanel.describePersonaAvatar')}
+              hint={t('imageGenPanel.describePersonaAvatarHint')}
+            />
+            {(imageGeneration.describeCharacterAvatar || imageGeneration.describePersonaAvatar) && (
+              <FormField
+                className={styles.runtimeField}
+                label={t('imageGenPanel.avatarCaptionPreset')}
+                hint={t('imageGenPanel.avatarCaptionPresetHint')}
+              >
+                <Select
+                  aria-label={t('imageGenPanel.avatarCaptionPreset')}
+                  value={imageGeneration.activeCaptioningPresetId || ''}
+                  onChange={(value) => updateTop({ activeCaptioningPresetId: value || null })}
+                  options={[
+                    { value: '', label: t('imageGenPanel.noCaptioningPreset') },
+                    ...((imageGeneration.promptPresets || [])
+                      .filter((p) => p.kind === 'captioning')
+                      .map((p) => ({ value: p.id, label: p.name }))),
+                  ]}
+                />
+              </FormField>
+            )}
           </section>
           <input ref={refInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onRefFiles} />
           {currentJobId && <ImageGenProgressBar jobId={currentJobId} />}

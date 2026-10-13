@@ -78,6 +78,7 @@ function getSpindleStore(): StoreApi<SpindleSlice> {
 
 function readStoreState(): TestStoreState {
   return {
+    user: { id: 'lifecycle-test-user' },
     activeProfileId: null,
     messages: [],
     profiles: [],
@@ -1535,6 +1536,122 @@ test('wrapper opt-out requires app manipulation and is revoked without removing 
   } finally {
     await unloadFrontendExtension(id)
     restoreGlobalProperty('__wrappingContext', descriptor)
+  }
+})
+
+test('system audio is capability-gated, asks the user, and ends on revoke and unload', async () => {
+  const id = 'system-audio-lifecycle'
+  const manifest = { ...placementManifest(id), permissions: ['system_audio'] as SpindleManifest['permissions'] }
+  const globals = globalThis as typeof globalThis & Record<string, any>
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__systemAudioContext')
+  const { registerSystemAudioSource } = await import('./system-audio-source')
+  let stops = 0
+  let stereoSupported = false
+  let handlers: { onFrame(frame: unknown): void } | null = null
+  const unregister = registerSystemAudioSource({
+    availability: () => ({ available: true, ...(stereoSupported ? { stereoSupported: true } : {}) }),
+    async start(h) {
+      handlers = h
+      return { stop: () => { stops++ } }
+    },
+  })
+  const answer = (confirmed: boolean, checkboxChecked = false) => {
+    const request = confirmRequests[confirmRequests.length - 1]
+    useStoreMock.getState().closeSpindleConfirm(request.requestId, confirmed, checkboxChecked)
+  }
+  try {
+    mockedGrantedPermissions = ['system_audio']
+    await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
+    const ctx = globals.__systemAudioContext
+    expect(ctx.host.capabilities['system-audio-v1']).toBe(1)
+    expect(ctx.host.capabilities['system-audio-stereo-v1']).toBe(1)
+    expect(ctx.systemAudio.isAvailable()).toEqual({ available: true })
+
+    // Declined: the host's own prompt names the extension, nothing starts, and no indicator appears.
+    const declined = ctx.systemAudio.start({ onFrame() {} })
+    await Promise.resolve()
+    expect(confirmRequests).toHaveLength(1)
+    expect(confirmRequests[0].extensionId).toBe(id)
+    expect(confirmRequests[0].title).toBe('shared:spindle.systemAudio.consentTitle')
+    expect(confirmRequests[0].message).toBe('shared:spindle.systemAudio.consentMessage')
+    answer(false, true)
+    await expect(declined.ready).rejects.toMatchObject({ name: 'NotAllowedError' })
+    expect(handlers).toBeNull()
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+
+    // Approved: analysis starts, frames arrive, and the host's indicator is up.
+    const frames: unknown[] = []
+    const ended: string[] = []
+    const session = ctx.systemAudio.start({ bands: 8, onFrame: (f: unknown) => frames.push(f), onEnd: (r: string) => ended.push(r) })
+    await Promise.resolve()
+    answer(true)
+    await session.ready
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(1)
+    expect(getSpindleStore().getState().systemAudioSessions[0].extensionId).toBe(id)
+    handlers!.onFrame({ amplitude: 0.5, peak: 0.6, frequencies: [0, 1] })
+    expect(frames).toHaveLength(1)
+    expect((frames[0] as { frequencies: number[] }).frequencies).toHaveLength(8)
+
+    // The indicator's Stop button is the user's own off switch.
+    getSpindleStore().getState().systemAudioSessions[0].stop()
+    expect(ended).toEqual(['user-stopped'])
+    expect(stops).toBe(1)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+
+    // Revoking the permission ends a running session and blocks the next one.
+    const { systemAudioConsent } = await import('./system-audio-consent')
+    const blocked = ctx.systemAudio.start({ onFrame() {} })
+    await expect(blocked.ready).rejects.toMatchObject({ name: 'NotAllowedError' })
+    systemAudioConsent.resume('lifecycle-test-user', id)
+    const next = ctx.systemAudio.start({ onFrame() {}, onEnd: (r: string) => ended.push(r) })
+    await Promise.resolve()
+    answer(true, true)
+    await next.ready
+    expect(systemAudioConsent.read('lifecycle-test-user', id).remembered).toBe(true)
+    for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
+      handler({ extensionId: id, allGranted: [] })
+    }
+    expect(ended).toEqual(['user-stopped', 'revoked'])
+    expect(stops).toBe(2)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+    expect(() => ctx.systemAudio.start({ onFrame() {} })).toThrow('PERMISSION_DENIED:system_audio')
+    expect(systemAudioConsent.read('lifecycle-test-user', id).remembered).toBe(false)
+    expect(ctx.systemAudio.isAvailable()).toEqual({ available: true }) // discovery stays free
+
+    // Unloading mid-session releases the device and shows nothing afterwards.
+    for (const handler of loaderWsHandlers.get('SPINDLE_PERMISSION_CHANGED') ?? []) {
+      handler({ extensionId: id, allGranted: ['system_audio'] })
+    }
+    stereoSupported = true
+    const stereoFrames: any[] = []
+    const last = ctx.systemAudio.start({ stereo: true, bands: 8, onFrame: (frame: unknown) => stereoFrames.push(frame) })
+    await Promise.resolve()
+    answer(true, true)
+    await last.ready
+    handlers!.onFrame({ amplitude: 0, peak: 0, frequencies: [0, 0], stereo: {
+      left: { amplitude: 0.5, peak: 0.6, frequencies: [0, 1] },
+      right: { amplitude: 0.7, peak: 0.8, frequencies: [1, 0] },
+    } })
+    expect(stereoFrames[0].stereo.left.frequencies).toHaveLength(8)
+    expect(stereoFrames[0].stereo.left.frequencies[7]).toBe(1)
+    expect(stereoFrames[0].stereo.right.frequencies[7]).toBe(0)
+    await unloadFrontendExtension(id)
+    expect(stops).toBe(3)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(0)
+    expect(() => ctx.systemAudio.isAvailable()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+
+    // A remembered approval survives unloading; the new extension generation still owns its own live session.
+    const promptsBeforeReload = confirmRequests.length
+    await loadPlacementBundle(id, manifest, 'export function setup(ctx) { globalThis.__systemAudioContext = ctx }')
+    await globals.__systemAudioContext.systemAudio.start({ stereo: true, onFrame() {} }).ready
+    expect(confirmRequests).toHaveLength(promptsBeforeReload)
+    expect(getSpindleStore().getState().systemAudioSessions).toHaveLength(1)
+    await unloadFrontendExtension(id)
+    expect(stops).toBe(4)
+  } finally {
+    unregister()
+    await unloadFrontendExtension(id)
+    restoreGlobalProperty('__systemAudioContext', descriptor)
   }
 })
 

@@ -766,6 +766,7 @@ export async function fetchNanoGptSubscriptionUsage(userId: string, id: string):
       headers: {
         Authorization: `Bearer ${apiKey}`,
       },
+      signal: AbortSignal.timeout(DEFAULT_CONNECTION_TEST_TIMEOUT_MS),
     });
     if (!res.ok) return null;
 

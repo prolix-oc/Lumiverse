@@ -157,6 +157,43 @@ describe('message TTS button with default connection', () => {
     })).toEqual([{ text: 'Before after the cue.', voice: { connectionId: 'default', voice: '' } }])
   })
 
+  test.each(['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3-preview'])('Fish %s keeps directions with dialogue', (model) => {
+    useStore.setState({ ttsProfiles: [{ ...defaultProfile, provider: 'fish_audio', model }] })
+    expect(planMessagePlayback({ messageName: 'Alice', messageIsUser: false, messageContent: '[quiet, hesitant] "Hello there."' }))
+      .toEqual([{ text: '[quiet, hesitant] Hello there.', voice: { connectionId: 'default', voice: '' } }])
+  })
+
+  test('mixed Drama/plain voices retain spoken words and keep directives on the right voice', () => {
+    useStore.setState({
+      ttsProfiles: [
+        { ...defaultProfile, provider: 'fish_audio', model: 'drama-3-preview' },
+        { ...defaultProfile, id: 'narrator', is_default: false },
+      ],
+      activeChatMetadata: { voiceOverrides: { narrator: { connectionId: 'narrator', voice: 'alloy' } } },
+    })
+    expect(planMessagePlayback({ messageName: 'Alice', messageIsUser: false,
+      messageContent: '<whisper>[calm] Narration. [warm] "Hello <emphasis>there</emphasis>."</whisper>',
+    })).toEqual([
+      { text: 'Narration.', voice: { connectionId: 'narrator', voice: 'alloy', parameters: undefined } },
+      { text: '<whisper>[warm] Hello <emphasis>there</emphasis>.</whisper>', voice: { connectionId: 'default', voice: '' } },
+    ])
+  })
+
+  test.each([false, true])('Fish speed and character samplers reach synthesis (streaming=%s)', async (streaming) => {
+    useStore.setState({
+      ttsProfiles: [{ ...defaultProfile, provider: 'fish_audio', model: 's2.1-pro', default_parameters: { speed: 1.3, use_streaming_endpoint: streaming } }],
+      characters: useStore.getState().characters.map((character) => ({
+        ...character,
+        extensions: { ...character.extensions, ttsVoice: {
+          connectionId: 'default', voice: '', parameters: { temperature: 0, normalize: false },
+        } },
+      })),
+    })
+    expect(await synthesizeSaveAndAutoPlay({ messageId: message.id, messageName: 'Alice', messageContent: '"Hello."', messageIsUser: false })).toBe(true)
+    expect(requests[0].path).toBe(streaming ? '/api/v1/tts/synthesize/stream' : '/api/v1/tts/synthesize')
+    expect(requests[0].body.parameters).toEqual({ speed: 1.3, temperature: 0, normalize: false })
+  })
+
   test('preserves cues only for Gemini when speech and narration use different providers', () => {
     useStore.setState({
       ttsProfiles: [

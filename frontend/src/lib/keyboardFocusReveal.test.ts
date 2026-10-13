@@ -10,6 +10,8 @@ const replacements = {
   HTMLElement: dom.window.HTMLElement,
   HTMLInputElement: dom.window.HTMLInputElement,
   HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
+  NodeFilter: dom.window.NodeFilter,
+  ResizeObserver: class { observe() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
 }
 const originals = Object.fromEntries(Object.keys(replacements).map(key => [key, globals[key]]))
@@ -34,14 +36,14 @@ function setRect(element: HTMLElement, top: number, height: number) {
 }
 
 let container: HTMLDivElement
-let target: HTMLTextAreaElement
+let target: HTMLInputElement
 let uninstall: (() => void) | undefined
 beforeEach(() => {
   container = document.createElement('div')
   container.style.overflowY = 'auto'
   setRect(container, 0, 800)
   Object.defineProperty(container, 'offsetHeight', { configurable: true, value: 800 })
-  target = document.createElement('textarea')
+  target = document.createElement('input')
   container.append(target)
   document.body.append(container)
   viewport.height = 400
@@ -100,6 +102,37 @@ describe('keyboard focus reveal', () => {
     container.dataset.component = 'InputArea'
     setRect(target, 450, 40)
     revealKeyboardFocus(target)
+    expect(container.scrollTop).toBe(0)
+  })
+
+  test('gives focused textareas one caret controller and removes it on blur', () => {
+    const textarea = document.createElement('textarea')
+    container.append(textarea)
+    uninstall = installKeyboardFocusReveal()
+    textarea.focus()
+    expect(container.querySelectorAll('[data-keyboard-caret-mirror]').length).toBe(1)
+    viewport.dispatchEvent(new dom.window.Event('resize'))
+    expect(container.querySelectorAll('[data-keyboard-caret-mirror]').length).toBe(1)
+    textarea.blur()
+    expect(container.querySelector('[data-keyboard-caret-mirror]')).toBeNull()
+  })
+
+  test('leaves existing caret owners and composer textareas alone', () => {
+    const textarea = document.createElement('textarea')
+    container.append(textarea)
+    textarea.setAttribute('data-keyboard-caret-managed', 'true')
+    setRect(textarea, 450, 40)
+    uninstall = installKeyboardFocusReveal()
+    textarea.focus()
+    flushFrames()
+    expect(container.querySelector('[data-keyboard-caret-mirror]')).toBeNull()
+    expect(container.scrollTop).toBe(0)
+    textarea.blur()
+    textarea.removeAttribute('data-keyboard-caret-managed')
+    container.dataset.component = 'InputArea'
+    textarea.focus()
+    flushFrames()
+    expect(container.querySelector('[data-keyboard-caret-mirror]')).toBeNull()
     expect(container.scrollTop).toBe(0)
   })
 

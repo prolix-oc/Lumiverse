@@ -1,8 +1,33 @@
 import { Hono } from "hono";
 import * as connSvc from "../services/connections.service";
 import * as svc from "../services/nanogpt.service";
+import { describeProviderError } from "../utils/provider-errors";
 
 const app = new Hono();
+
+app.get("/account", async (c) => {
+  c.header("Cache-Control", "private, no-store");
+  const connectionId = c.req.query("connection_id");
+  if (!connectionId) return c.json({ error: "connection_id is required" }, 400);
+  try {
+    return c.json(await svc.fetchAccountUsage(c.get("userId"), connectionId));
+  } catch (err) {
+    return c.json({ error: describeProviderError(err, "Failed to fetch NanoGPT account") }, err instanceof svc.NanoGptConnectionError ? err.status : 502);
+  }
+});
+
+app.post("/providers/preview", async (c) => {
+  const body = await c.req.json();
+  if (typeof body?.model !== "string" || !body.model.trim()) return c.json({ error: "model is required" }, 400);
+  for (const key of ["connection_id", "api_url", "api_key"] as const) {
+    if (body[key] !== undefined && typeof body[key] !== "string") return c.json({ error: `${key} must be a string` }, 400);
+  }
+  try {
+    return c.json(await svc.discoverModelProviders(c.get("userId"), body));
+  } catch (err) {
+    return c.json({ error: describeProviderError(err, "Failed to discover NanoGPT providers") }, err instanceof svc.NanoGptConnectionError ? err.status : 502);
+  }
+});
 
 app.get("/auth", async (c) => {
   const userId = c.get("userId");

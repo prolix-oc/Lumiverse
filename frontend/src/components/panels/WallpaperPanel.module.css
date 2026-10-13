@@ -13,6 +13,12 @@
   aspect-ratio: 16 / 9;
 }
 
+.mobilePreview {
+  aspect-ratio: 9 / 16;
+  width: min(100%, 240px);
+  align-self: center;
+}
+
 .previewImg {
   display: block;
   width: 100%;

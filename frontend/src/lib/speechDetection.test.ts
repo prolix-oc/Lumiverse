@@ -75,3 +75,54 @@ describe('TTS sanitization', () => {
     expect(sanitizeForTts(text, preserveCues)).toBe('Before hello & after <giggle>.')
   })
 })
+
+describe('Fish Audio directions and parsing', () => {
+  const drama = { fishModel: 'drama-3-preview' }
+
+  test('preserves Drama delivery/language spans and unwraps them for other voices', () => {
+    const text = 'Before <whisper>keep <emphasis>these words</emphasis></whisper> <french>Bonjour</french> after.'
+    expect(sanitizeForTts(text, drama)).toBe(text)
+    expect(sanitizeForTts(text)).toBe('Before keep these words Bonjour after.')
+    expect(sanitizeForTts(text, { fishModel: 's2.1-pro' })).toBe('Before keep these words Bonjour after.')
+  })
+
+  test('metadata inside and around Drama spans is still removed', () => {
+    expect(sanitizeForTts('<tracker><whisper>Hidden</whisper></tracker> <whisper>Visible <thinking>Secret</thinking> words.</whisper>', drama))
+      .toBe('<whisper>Visible words.</whisper>')
+    expect(sanitizeForTts('<whisper>Visible.</whisper> <thinking><whisper>Hidden', drama)).toBe('<whisper>Visible.</whisper>')
+  })
+
+  test('directions containing quotes/asterisks stay attached to quoted speech', () => {
+    const text = 'Narration. [say "hello", *very* softly] "Hello there."'
+    expect(parseSegments(sanitizeForTts(text, drama), rules, drama)).toEqual([
+      { text: 'Narration.', type: 'undecorated', action: 'narration' },
+      { text: '[say "hello", *very* softly] Hello there.', type: 'quoted', action: 'speech' },
+    ])
+  })
+
+  test('balances paired instructions independently across voice boundaries', () => {
+    const text = '<whisper>"Hello." Narration. "<emphasis>Again.</emphasis>"</whisper>'
+    expect(parseSegments(sanitizeForTts(text, drama), rules, drama)).toEqual([
+      { text: '<whisper>Hello.</whisper>', type: 'quoted', action: 'speech' },
+      { text: '<whisper>Narration.</whisper>', type: 'undecorated', action: 'narration' },
+      { text: '<whisper><emphasis>Again.</emphasis></whisper>', type: 'quoted', action: 'speech' },
+    ])
+  })
+
+  test('directions preceding skipped text carry forward to the next spoken span', () => {
+    expect(parseSegments('[gentle] *Hidden stage direction.* "Hello."', rules, drama).filter((segment) => segment.action !== 'skip'))
+      .toEqual([{ text: '[gentle] Hello.', type: 'quoted', action: 'speech' }])
+  })
+
+  test('retains Fish phoneme/speaker markers without exposing them to other providers', () => {
+    const text = '<|speaker:0|>"An <|phoneme_start|>EH1 N JH AH0 N IH0 R<|phoneme_end|>."'
+    expect(parseSegments(sanitizeForTts(text, drama), rules, drama)[0].text).toBe('<|speaker:0|> An <|phoneme_start|>EH1 N JH AH0 N IH0 R<|phoneme_end|>.')
+    expect(sanitizeForTts(text)).toBe('"An EH1 N JH AH0 N IH0 R ."')
+  })
+
+  test('strips Fish directions only when converting a mixed-provider segment', () => {
+    expect(sanitizeForTts('[warm] <whisper>Visible words.</whisper>', { stripFishDirections: true })).toBe('Visible words.')
+    expect(sanitizeForTts('[warm] Visible words.', { fishModel: 's2-pro', stripFishDirections: true })).toBe('[warm] Visible words.')
+    expect(sanitizeForTts('Visible [ordinary annotation].')).toBe('Visible [ordinary annotation].')
+  })
+})

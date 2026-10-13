@@ -1,0 +1,298 @@
+{
+  "groups": {
+    "actions": "Aktionen",
+    "panels": "Bereiche",
+    "settings": "Einstellungen",
+    "extensions": "Erweiterungen"
+  },
+  "items": {
+    "action-regenerate": {
+      "label": "Antwort neu generieren",
+      "description": "Letzte KI-Antwort löschen und eine neue generieren"
+    },
+    "action-continue": {
+      "label": "Generierung fortsetzen",
+      "description": "Die KI auffordern, ihre letzte Antwort fortzusetzen"
+    },
+    "action-new-chat": {
+      "label": "Neuer Chat",
+      "description": "Zur Startseite wechseln, um eine neue Unterhaltung zu beginnen"
+    },
+    "action-character-browser": {
+      "label": "Charaktere durchsuchen",
+      "description": "Die gesamte Charakterbibliothek öffnen"
+    },
+    "action-import-character": {
+      "label": "Charakter importieren",
+      "description": "Eine Charakterkarte hochladen (.png, .charx, .jpg, .json)"
+    },
+    "action-new-chat-same-character": {
+      "label": "Neuer Chat (gleicher Charakter)",
+      "description": "Eine neue Unterhaltung mit dem aktuellen Charakter beginnen"
+    },
+    "action-fork-chat": {
+      "label": "Chat verzweigen",
+      "description": "Den aktuellen Chat an der letzten Nachricht verzweigen"
+    },
+    "action-manage-chats": {
+      "label": "Chats verwalten",
+      "description": "Den Chat-Manager für den aktuellen Charakter öffnen"
+    },
+    "action-copy-last-message": {
+      "label": "Letzte Nachricht kopieren",
+      "description": "Die neueste Nachricht in die Zwischenablage kopieren"
+    },
+    "action-delete-last-message": {
+      "label": "Letzte Nachricht löschen",
+      "description": "Die neueste Nachricht aus diesem Chat entfernen"
+    },
+    "action-toggle-hidden-last": {
+      "label": "Letzte Nachricht aus-/einblenden",
+      "description": "Die letzte Nachricht im KI-Kontext ein- oder ausblenden"
+    },
+    "action-dry-run": {
+      "label": "Prompt-Vorschau",
+      "description": "Probelauf, um den zusammengesetzten Prompt und die Token-Anzahl zu sehen"
+    },
+    "action-edit-character": {
+      "label": "Charakter bearbeiten",
+      "description": "Den Charakter-Editor für den aktuellen Charakter öffnen"
+    },
+    "action-duplicate-character": {
+      "label": "Charakter duplizieren",
+      "description": "Eine Kopie des aktuellen Charakters erstellen"
+    },
+    "action-toggle-portrait": {
+      "label": "Porträtbereich ein-/ausblenden",
+      "description": "Die Charakterporträt-Seitenleiste ein- oder ausblenden"
+    },
+    "action-delete-chat": {
+      "label": "Chat löschen",
+      "description": "Diese Unterhaltung endgültig löschen"
+    },
+    "panel-profile": {
+      "label": "Profil",
+      "description": "Den aktiven Charakter ansehen und bearbeiten"
+    },
+    "panel-presets": {
+      "label": "Reasoning",
+      "description": "Reasoning, Chain-of-Thought und Prompt-Verhalten konfigurieren"
+    },
+    "panel-loom": {
+      "label": "Preset",
+      "description": "Erzählstruktur und Story-Beats konfigurieren"
+    },
+    "panel-dream-weaver": {
+      "label": "Dream Weaver",
+      "description": "Charaktere aus deiner Fantasie erschaffen"
+    },
+    "panel-connections": {
+      "label": "Verbindungen",
+      "description": "API-Verbindungen und Anbieter verwalten"
+    },
+    "panel-browser": {
+      "label": "Paket-Browser",
+      "description": "Inhaltspakete durchsuchen und verwalten"
+    },
+    "panel-characters": {
+      "label": "Charaktere",
+      "description": "Deine Charakterkarten durchsuchen und verwalten"
+    },
+    "panel-personas": {
+      "label": "Personas",
+      "description": "Deine Benutzer-Personas verwalten"
+    },
+    "panel-lorebook": {
+      "label": "Lorebook",
+      "description": "Weltbuch- und Lorebook-Einträge bearbeiten"
+    },
+    "panel-cortex": {
+      "label": "Memory Cortex",
+      "description": "Memory-Cortex-Einträge ansehen und verwalten"
+    },
+    "panel-databank": {
+      "label": "Datenbank",
+      "description": "Referenzdokumente für den KI-Kontext hochladen und verwalten"
+    },
+    "panel-create": {
+      "label": "Creator-Werkstatt",
+      "description": "Lumia-Elemente und Loom-Presets erstellen und bearbeiten"
+    },
+    "panel-ooc": {
+      "label": "OOC",
+      "description": "Anzeigeeinstellungen für Out-of-Character-Kommentare"
+    },
+    "panel-prompt": {
+      "label": "Komposition",
+      "description": "Lumia- und Loom-Inhalte, Sovereign Hand und Kontextfilter auswählen"
+    },
+    "panel-council": {
+      "label": "Council",
+      "description": "Den Lumia Council und Werkzeugfunktionen konfigurieren"
+    },
+    "panel-summary": {
+      "label": "Zusammenfassung",
+      "description": "Kontextzusammenfassung und -kürzung konfigurieren"
+    },
+    "panel-feedback": {
+      "label": "Council-Feedback",
+      "description": "Die neuesten Council-Ausführungsergebnisse ansehen"
+    },
+    "panel-worldinfo": {
+      "label": "Weltinfo",
+      "description": "Aktuell aktivierte Weltinfo-Einträge ansehen"
+    },
+    "panel-imagegen": {
+      "label": "Bildgenerierung",
+      "description": "KI-Szenengenerierung konfigurieren und steuern"
+    },
+    "panel-wallpaper": {
+      "label": "Hintergrundbild",
+      "description": "Globale oder chatspezifische Hintergrundbilder festlegen"
+    },
+    "panel-regex": {
+      "label": "Regex-Skripte",
+      "description": "Regex-Suchen/Ersetzen-Skripte erstellen und verwalten"
+    },
+    "panel-branches": {
+      "label": "Zweigbaum",
+      "description": "Den Verlauf der Chat-Zweige ansehen und darin navigieren"
+    },
+    "panel-theme": {
+      "label": "Design",
+      "description": "Farben, Akzent und visuellen Stil anpassen"
+    },
+    "panel-spindle": {
+      "label": "Erweiterungen",
+      "description": "Spindle-Erweiterungen verwalten"
+    },
+    "settings-account": {
+      "label": "Kontoeinstellungen",
+      "description": "Kontodaten und Passwort verwalten"
+    },
+    "settings-display": {
+      "label": "Anzeige & Layout",
+      "description": "Bereichsbreite, Seitenleistenposition und Layout-Optionen"
+    },
+    "settings-chat": {
+      "label": "Chat-Verhalten",
+      "description": "Nachrichtenanzeigemodus, Sendetaste und Chat-Optionen"
+    },
+    "settings-extensions": {
+      "label": "Erweiterungseinstellungen",
+      "description": "Spindle-Erweiterungskonfiguration verwalten"
+    },
+    "settings-guided": {
+      "label": "Geführte Generierung",
+      "description": "Geführte Generierungssequenzen und Prompt-Biases konfigurieren"
+    },
+    "settings-quickReplies": {
+      "label": "Schnellantworten",
+      "description": "Schnellantwort-Sets und Nachrichtenkürzel verwalten"
+    },
+    "settings-extensionPools": {
+      "label": "Erweiterungs-Pools",
+      "description": "Ressourcenlimits der Erweiterungs-Pools konfigurieren"
+    },
+    "settings-webSearch": {
+      "label": "Websuche",
+      "description": "SearXNG-, Exa- oder Tavily-Websuche für Council-Werkzeuge konfigurieren"
+    },
+    "settings-embeddings": {
+      "label": "Embeddings",
+      "description": "Embedding-Modelle und Vektorspeicher konfigurieren"
+    },
+    "settings-memoryCortex": {
+      "label": "Memory-Cortex-Einstellungen",
+      "description": "Extraktion und Relevanzbewertung des Memory Cortex konfigurieren"
+    },
+    "settings-notifications": {
+      "label": "Benachrichtigungen",
+      "description": "Benachrichtigungseinstellungen und Hinweise konfigurieren"
+    },
+    "settings-voice": {
+      "label": "Stimme & Sprache",
+      "description": "Text-to-Speech, Speech-to-Text und Stimmeinstellungen"
+    },
+    "settings-mcpServers": {
+      "label": "MCP-Server",
+      "description": "Mit externen MCP-Werkzeugservern für Function Calling verbinden"
+    },
+    "settings-advanced": {
+      "label": "Erweiterte Einstellungen",
+      "description": "Erweiterte Konfiguration und Debug-Optionen"
+    },
+    "settings-lumihub": {
+      "label": "LumiHub",
+      "description": "LumiHub-Cloud-Synchronisierung und Freigabeeinstellungen"
+    },
+    "settings-dataPortability": {
+      "label": "Datenportabilität",
+      "description": "Deine Daten exportieren oder ein zuvor exportiertes Archiv importieren"
+    },
+    "settings-diagnostics": {
+      "label": "Diagnose",
+      "description": "Systemzustand, Leistungsmetriken und Debug-Infos"
+    },
+    "settings-operator": {
+      "label": "Operator-Bereich",
+      "description": "Serververwaltung, Updates und Neustart-Steuerung"
+    },
+    "settings-tokenizers": {
+      "label": "Tokenizer-Manager",
+      "description": "Tokenizer-Konfigurationen verwalten und testen"
+    },
+    "settings-users": {
+      "label": "Benutzerverwaltung",
+      "description": "Benutzerkonten, Rollen und Berechtigungen verwalten"
+    },
+    "settings-migration": {
+      "label": "Migration",
+      "description": "Daten aus SillyTavern und anderen Quellen importieren"
+    }
+  },
+  "palette": {
+    "search": "Befehle suchen\u2026",
+    "clear": "Suche löschen",
+    "aria": "Befehlspalette",
+    "noResults": "Keine Ergebnisse für „{{query}}“",
+    "listAria": "Befehle"
+  },
+  "confirm": {
+    "forkChat": {
+      "title": "Chat verzweigen",
+      "message": "Einen neuen Zweig ab der letzten Nachricht erstellen?",
+      "confirm": "Verzweigen",
+      "nameLabel": "Chat-Name (optional)",
+      "namePlaceholder": "Leer lassen für einen automatischen Namen"
+    },
+    "deleteChat": {
+      "title": "Chat löschen",
+      "message": "Diese Unterhaltung endgültig löschen?",
+      "confirm": "Löschen"
+    }
+  },
+  "toast": {
+    "failedRegenerate": "Neugenerierung fehlgeschlagen",
+    "failedContinue": "Fortsetzen fehlgeschlagen",
+    "importedCharacter": "{{name}} importiert",
+    "failedImportCharacter": "Charakter konnte nicht importiert werden",
+    "failedForkChat": "Chat konnte nicht verzweigt werden",
+    "copiedToClipboard": "In die Zwischenablage kopiert",
+    "failedCopy": "Kopieren fehlgeschlagen",
+    "messageDeleted": "Nachricht gelöscht",
+    "failedDeleteMessage": "Nachricht konnte nicht gelöscht werden",
+    "messageHidden": "Nachricht im KI-Kontext ausgeblendet",
+    "messageVisible": "Nachricht im KI-Kontext sichtbar",
+    "failedUpdateMessage": "Nachricht konnte nicht aktualisiert werden",
+    "dryRunFailed": "Probelauf fehlgeschlagen",
+    "duplicatedCharacter": "{{name}} dupliziert",
+    "failedDuplicateCharacter": "Charakter konnte nicht dupliziert werden",
+    "chatDeleted": "Chat gelöscht",
+    "failedDeleteChat": "Chat konnte nicht gelöscht werden"
+  },
+  "misc": {
+    "groupChat": "Gruppenchat",
+    "character": "Charakter"
+  }
+}

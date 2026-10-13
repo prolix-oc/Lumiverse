@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "../../llm/types";
+import { describeGenerationStop } from "../../llm/generation-stop";
 import {
   listCortexSidecarEndpoints,
   type MemoryCortexConfig,
@@ -259,6 +260,23 @@ export function createCortexSidecarGenerateRawAdapter(options: {
       tools: opts.tools,
       signal: opts.signal,
     }, { origin: { kind: "sidecar", name: "Memory Cortex", operation: opts.requestPurpose ?? "analysis" } });
+
+    const stopped = describeGenerationStop(result.finish_reason, result.stop_details);
+    if (stopped) {
+      const details = [
+        `finish_reason=${result.finish_reason}`,
+        `max_tokens=${sidecarParams.max_tokens}`,
+      ];
+      if (result.usage?.completion_tokens !== undefined) {
+        details.push(`completion_tokens=${result.usage.completion_tokens}`);
+      }
+      const completionDetails = result.usage?.provider_raw?.completion_tokens_details;
+      const reasoningTokens = completionDetails && typeof completionDetails === "object" && "reasoning_tokens" in completionDetails
+        ? completionDetails.reasoning_tokens
+        : undefined;
+      if (typeof reasoningTokens === "number") details.push(`reasoning_tokens=${reasoningTokens}`);
+      throw new Error(`Sidecar ${opts.requestPurpose ?? "analysis"} failed (${details.join(", ")}): ${stopped}`);
+    }
 
     return {
       content: typeof result.content === "string" ? result.content : "",

@@ -101,8 +101,8 @@ function readVoiceRef(value: unknown): VoiceRef | null {
   if (typeof v.connectionId !== 'string' || !v.connectionId) return null
   const voice = typeof v.voice === 'string' ? v.voice : ''
   const parameters =
-    v.parameters && typeof v.parameters === 'object'
-      ? { speed: typeof (v.parameters as any).speed === 'number' ? (v.parameters as any).speed : undefined }
+    v.parameters && typeof v.parameters === 'object' && !Array.isArray(v.parameters)
+      ? { ...(v.parameters as Record<string, unknown>), speed: typeof (v.parameters as any).speed === 'number' ? (v.parameters as any).speed : undefined }
       : undefined
   return { connectionId: v.connectionId, voice, parameters }
 }
@@ -222,5 +222,6 @@ export function resolveMessageVoices(input: Omit<ResolveSpeakerInput, 'character
 export function voiceCoalesceKey(voice: VoiceRef | null): string {
   if (!voice) return 'skip'
   const speed = voice.parameters?.speed
-  return `${voice.connectionId}|${voice.voice}|${speed ?? ''}`
+  const parameters = Object.entries(voice.parameters || {}).filter(([key, value]) => key !== 'speed' && value !== undefined).sort(([a], [b]) => a.localeCompare(b))
+  return `${voice.connectionId}|${voice.voice}|${speed ?? ''}${parameters.length ? '|' + JSON.stringify(parameters) : ''}`
 }

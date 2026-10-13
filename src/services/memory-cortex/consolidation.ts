@@ -61,6 +61,7 @@ export interface ConsolidationSidecarOptions {
   sidecarTimeoutMs?: number;
   sidecar?: { connectionProfileId?: string | null; model?: string | null };
   signal?: AbortSignal;
+  onProgress?: (phase: "scene" | "arc") => void;
 }
 
 // ─── Row Mapper ────────────────────────────────────────────────
@@ -273,6 +274,7 @@ function resolveConsolidationSidecarOptions(
       sidecarTimeoutMs: sidecarOptions.sidecarTimeoutMs ?? sidecarTimeoutMs,
       sidecar: sidecarOptions.sidecar,
       signal: sidecarOptions.signal,
+      onProgress: sidecarOptions.onProgress,
     };
   }
 
@@ -307,9 +309,9 @@ export async function maybeConsolidate(
   generateRawFn?: ConsolidationGenerateRawFn,
   sidecarConnectionId?: string,
   sidecarTimeoutMs?: number,
-  /** Sampling parameters forwarded to the underlying LLM call. Caller supplies
-   *  the user-configured sidecar temperature/top_p; max_tokens is set per call
-   *  from config.maxTokensPerSummary. */
+  /** Sampling parameters forwarded to the underlying LLM call, including the
+   *  total generation budget. config.maxTokensPerSummary limits the requested
+   *  summary length separately from reasoning tokens. */
   samplingParameters?: Record<string, unknown>,
   /** Additional scaffold tag names to strip from raw chunk content before
    *  feeding it to the consolidation LLM or extractive scorer. */
@@ -355,6 +357,7 @@ export async function maybeConsolidate(
     userId, sidecarConnectionId, sidecarTimeoutMs, sidecarOptions,
   );
   if (resolvedSidecar.signal?.aborted) return false;
+  resolvedSidecar.onProgress?.("scene");
 
   if (config.useSidecar && generateRawFn) {
     const decision = await generateConsolidationSummary(
@@ -501,6 +504,7 @@ async function maybeConsolidateArcs(
   let arcTitle: string | null = null;
 
   if (sidecarOptions?.signal?.aborted) return;
+  sidecarOptions?.onProgress?.("arc");
 
   if (config.useSidecar && generateRawFn) {
     const combined = summaries.join("\n\n---\n\n");
@@ -645,6 +649,13 @@ function inferTitle(chunks: any[]): string | null {
 
 // ─── Generative Consolidation (Sidecar) ────────────────────────
 
+function consolidationResponseTokenLimit(maxTokens: number, parameters: Record<string, unknown>): number {
+  const configured = parameters.max_tokens;
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
+    ? Math.max(maxTokens + 100, configured)
+    : maxTokens + 100;
+}
+
 const CONSOLIDATION_PROMPT = `Compress these roleplay passages into a factual long-term memory summary.
 
 RULES
@@ -656,6 +667,7 @@ RULES
 - Do NOT add interpretation, motives, symbolism, theme analysis, or likely implications.
 - Do NOT invent links between events that are not stated.
 - Keep chronology clear.
+- Keep the summary within {{MAX_TOKENS}} tokens.
 
 <passages>
 {{CONTENT}}
@@ -688,8 +700,8 @@ export async function generateConsolidationSummary(
         .replace("{{CONTENT}}", content)
         .replace("{{MAX_TOKENS}}", String(maxTokens));
 
-      // Caller-supplied temperature/top_p are honored; max_tokens is always set
-      // here from config.maxTokensPerSummary regardless of what the caller passed.
+      // The configured generation budget includes thinking. The prompt limits
+      // the summary itself, so reasoning does not consume its entire allowance.
       const userParams = samplingParameters ?? { temperature: 0.1 };
       const response = await generateRawFn({
         requestPurpose: "memory summarization",
@@ -700,7 +712,7 @@ export async function generateConsolidationSummary(
         ],
         parameters: {
           ...userParams,
-          max_tokens: maxTokens + 100,
+          max_tokens: consolidationResponseTokenLimit(maxTokens, userParams),
           ...(target.model ? { model: target.model } : {}),
         },
         signal: target.signal,
@@ -730,6 +742,7 @@ RULES
 - Omit scenic filler and details that do not matter later.
 - Do NOT add interpretation, motives, themes, or unsupported links.
 - Dense and factual: this summary replaces the individual scene summaries.
+- Keep the summary within {{MAX_TOKENS}} tokens.
 
 <summaries>
 {{CONTENT}}
@@ -768,7 +781,7 @@ async function generateArcSummary(
         ],
         parameters: {
           ...userParams,
-          max_tokens: maxTokens + 100,
+          max_tokens: consolidationResponseTokenLimit(maxTokens, userParams),
           ...(target.model ? { model: target.model } : {}),
         },
         signal: target.signal,

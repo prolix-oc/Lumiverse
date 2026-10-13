@@ -104,6 +104,7 @@ describe("direct worker desktop capture", () => {
     expect(() => setup.api.prepareGeneration({ ...input, model: "" }, "alice")).toThrow("CAPTURE_DESTINATION_CHANGED");
     expect(() => setup.api.prepareGeneration({ ...input, parameters: { models: ["other"] } }, "alice")).toThrow("CAPTURE_UNSAFE_PARAMETERS");
     expect(() => setup.api.prepareGeneration({ ...input, parameters: { _openrouter: { fallback: true } } }, "alice")).toThrow("CAPTURE_UNSAFE_PARAMETERS");
+    expect(() => setup.api.prepareGeneration({ ...input, parameters: { _nanogpt: { model_overrides: { vision: { only: ["other"] } } } } }, "alice")).toThrow("CAPTURE_UNSAFE_PARAMETERS");
     const result = setup.api.prepareGeneration(input, "alice");
     expect(result.sensitiveMedia).toBe(true);
     expect(result.messages[0].content).toEqual([{ type: "image", data: data.toString("base64"), mime_type: "image/png" }]);

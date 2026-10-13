@@ -135,6 +135,7 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "120_illarin_receipts_per_installation.sql",
   "122_world_book_entry_organization.sql",
   "123_character_library_migration.sql",
+  "124_decision_connections.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);

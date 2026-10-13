@@ -53,7 +53,27 @@ export const GOOGLE_TTS_VOICES = [
   { id: "Zubenelgenubi", name: "Zubenelgenubi", language: "en-US", gender: "masculine", description: "Casual, conversational delivery." },
 ] satisfies TtsVoice[];
 
+export const DEFAULT_GEMINI_TTS_SPEECH_STYLE =
+  "casual, relaxed conversation, natural pacing, understated expression";
+
+export const GEMINI_TTS_SPEECH_STYLE_PARAMETER = {
+  type: "string" as const,
+  default: DEFAULT_GEMINI_TTS_SPEECH_STYLE,
+  description: "Brief delivery guidance for Gemini 3.8 TTS. Defaults to relaxed conversation; clear it to use the voice's usual delivery.",
+  group: "advanced",
+};
+
+/** Gemini 3.8 uses per-part metadata instead of spoken prompt instructions. */
+export function resolveGeminiTtsSpeechStyle(request: Pick<TtsRequest, "model" | "parameters">): string | undefined {
+  if (!/(?:^|\/)gemini-3\.8-flash(?:-lite)?-tts(?:$|[-:])/i.test(request.model)) return undefined;
+  const configured = request.parameters.speech_style ?? request.parameters.instructions;
+  return typeof configured === "string"
+    ? configured.trim() || undefined
+    : DEFAULT_GEMINI_TTS_SPEECH_STYLE;
+}
+
 export const GOOGLE_TTS_PARAMETERS = {
+  speech_style: GEMINI_TTS_SPEECH_STYLE_PARAMETER,
   language_code: {
     type: "string" as const,
     description: "BCP-47 language code for synthesis (e.g. en-US). Leave blank for the default.",
@@ -87,8 +107,11 @@ export function buildGeminiTtsBody(request: TtsRequest): Record<string, any> {
   if (typeof request.parameters.temperature === "number") {
     generationConfig.temperature = request.parameters.temperature;
   }
+  const part: Record<string, any> = { text: request.text };
+  const style = resolveGeminiTtsSpeechStyle(request);
+  if (style) part.speech_metadata = { style };
   return {
-    contents: [{ role: "user", parts: [{ text: request.text }] }],
+    contents: [{ role: "user", parts: [part] }],
     generationConfig,
   };
 }

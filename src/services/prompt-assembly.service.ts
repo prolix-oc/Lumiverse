@@ -2227,19 +2227,19 @@ export async function assemblePrompt(
     .slice(-6)
     .map((m) => m.content)
     .join(" ");
-  let databankEmbeddingConfigPromise: Promise<
+  let assemblyEmbeddingConfigPromise: Promise<
     Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>
   > | null = null;
-  const getDatabankEmbeddingConfig = () => {
+  const getAssemblyEmbeddingConfig = () => {
     if (pf?.embeddingConfig) {
       return Promise.resolve(pf.embeddingConfig);
     }
-    if (!databankEmbeddingConfigPromise) {
-      databankEmbeddingConfigPromise = embeddingsSvc.getEmbeddingConfig(
+    if (!assemblyEmbeddingConfigPromise) {
+      assemblyEmbeddingConfigPromise = embeddingsSvc.getEmbeddingConfig(
         ctx.userId,
       );
     }
-    return databankEmbeddingConfigPromise;
+    return assemblyEmbeddingConfigPromise;
   };
   let databankPrefetchPromise: Promise<
     import("./databank").DatabankRetrievalResult
@@ -2252,7 +2252,7 @@ export async function assemblePrompt(
         : chatBgSignal;
 
       databankPrefetchPromise = (async () => {
-        const embCfg = await getDatabankEmbeddingConfig();
+        const embCfg = await getAssemblyEmbeddingConfig();
         if (!embCfg.enabled) return { chunks: [], formatted: "", count: 0 };
         if (dbSignal.aborted) return { chunks: [], formatted: "", count: 0 };
         const retrievalTopK = databankSvc.loadDatabankSettings(
@@ -2494,6 +2494,9 @@ export async function assemblePrompt(
       if (captureVectorViewCanShareNative) rawVectorActivated = [];
     }
   }
+  const worldInfoMergeOptions: WorldInfoMergeOptions = {
+    hybridWeightMode: (await getAssemblyEmbeddingConfig()).hybrid_weight_mode,
+  };
   const mergedWorldInfo = profiler.measureSync(
     "world-info-merge",
     () => mergeActivatedWorldInfoEntries(
@@ -2504,6 +2507,7 @@ export async function assemblePrompt(
       wiSources.bookNameMap,
       undefined,
       interception.selectionContentByEntryId,
+      worldInfoMergeOptions,
     ),
   );
   const runtimeWorldInfoPlacements = buildRuntimeWorldInfoChatPlacements(
@@ -2587,6 +2591,8 @@ export async function assemblePrompt(
         wiSources.bookSourceMap,
         wiSources.bookNameMap,
         captureRandom,
+        undefined,
+        worldInfoMergeOptions,
       ),
     );
     spindleWorldInfoCaptures = buildWorldInfoCaptureMap(
@@ -2938,7 +2944,7 @@ export async function assemblePrompt(
   // Use the warm-cache pattern: check if a previous generation cached results.
   // On a cold miss, await the pre-flight query so the current generation still
   // gets databank context instead of only warming the cache for the next send.
-  const databankEmbCfg = await getDatabankEmbeddingConfig();
+  const databankEmbCfg = await getAssemblyEmbeddingConfig();
   let databankResult = databankSvc.getCachedDatabankResult(
     ctx.userId,
     ctx.chatId,
@@ -4929,6 +4935,10 @@ export interface WorldInfoMergeSelection {
   dispositions: Map<string, WorldInfoVectorMergeDisposition>;
 }
 
+export interface WorldInfoMergeOptions {
+  hybridWeightMode?: embeddingsSvc.EmbeddingConfig["hybrid_weight_mode"];
+}
+
 export function selectMergedWorldInfoEntries(
   keywordEntries: WorldBookEntryModel[],
   vectorEntries: VectorActivatedEntry[],
@@ -4936,13 +4946,16 @@ export function selectMergedWorldInfoEntries(
   bookSourceMap?: Map<string, BookSource>,
   random?: () => number,
   selectionContentByEntryId?: ReadonlyMap<string, string>,
+  options: WorldInfoMergeOptions = {},
 ): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
+  const vectorFirst = options.hybridWeightMode === "vector_first";
   const mergedEntries: WorldBookEntryModel[] = [];
   const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
   const dispositions = new Map<string, WorldInfoVectorMergeDisposition>();
   const seen = new Set<string>();
   const vectorEntryIds = new Set(vectorEntries.map((item) => item.entry.id));
+  const vectorById = new Map(vectorEntries.map((item) => [item.entry.id, item]));
 
   for (const entry of keywordEntries) {
     if (seen.has(entry.id)) continue;
@@ -4954,7 +4967,11 @@ export function selectMergedWorldInfoEntries(
   for (const item of vectorEntries) {
     if (seen.has(item.entry.id)) {
       if (sources.get(item.entry.id)?.source === "keyword") {
-        dispositions.set(item.entry.id, { code: "already_keyword" });
+        if (vectorFirst && !item.entry.constant) {
+          sources.set(item.entry.id, { source: "vector", score: item.finalScore });
+        } else {
+          dispositions.set(item.entry.id, { code: "already_keyword" });
+        }
       }
       continue;
     }
@@ -4971,6 +4988,18 @@ export function selectMergedWorldInfoEntries(
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
   }
 
+  const compareVectorRetrieval = (a: WorldBookEntryModel, b: WorldBookEntryModel): number => {
+    const aVector = sources.get(a.id)?.source === "vector" ? vectorById.get(a.id) : undefined;
+    const bVector = sources.get(b.id)?.source === "vector" ? vectorById.get(b.id) : undefined;
+    if (aVector && !bVector) return -1;
+    if (bVector && !aVector) return 1;
+    if (aVector && bVector) {
+      if (aVector.distance !== bVector.distance) return aVector.distance - bVector.distance;
+      if (aVector.finalScore !== bVector.finalScore) return bVector.finalScore - aVector.finalScore;
+    }
+    return 0;
+  };
+
   const entriesForDedup = selectionContentByEntryId?.size
     ? mergedEntries.map((entry) => {
         const content = selectionContentByEntryId.get(entry.id);
@@ -4981,6 +5010,7 @@ export function selectMergedWorldInfoEntries(
     entriesForDedup,
     sources,
     bookSourceMap,
+    vectorFirst ? compareVectorRetrieval : undefined,
   );
   const mergedEntryById = new Map(mergedEntries.map((entry) => [entry.id, entry]));
   const dedupResult = {
@@ -5033,6 +5063,10 @@ export function selectMergedWorldInfoEntries(
   }
 
   const competitionOrder = [...groupSelected].sort((a, b) => {
+    if (vectorFirst) {
+      const retrievalOrder = compareVectorRetrieval(a, b);
+      if (retrievalOrder !== 0) return retrievalOrder;
+    }
     const aPriority = budgetPriorityById.get(a.id) ?? a.priority;
     const bPriority = budgetPriorityById.get(b.id) ?? b.priority;
     if (bPriority !== aPriority) return bPriority - aPriority;
@@ -5049,12 +5083,16 @@ export function selectMergedWorldInfoEntries(
     ].map((entry) => entry.id));
   }
 
-  const finalized = finalizeActivatedWorldInfoEntries(groupSelected, settings, {
-    skipGroupLogic: true,
-    preserveOrder: !hasBudget,
-    budgetPriorityById,
-    selectionContentByEntryId,
-  });
+  const finalized = finalizeActivatedWorldInfoEntries(
+    hasBudget || vectorFirst ? competitionOrder : groupSelected,
+    settings,
+    {
+      skipGroupLogic: true,
+      // Selection order already includes the retrieval mode and budget priorities.
+      preserveOrder: true,
+      selectionContentByEntryId,
+    },
+  );
   const activatedIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
   for (const item of vectorEntries) {
     if (dispositions.has(item.entry.id)) continue;
@@ -5078,6 +5116,7 @@ export function mergeActivatedWorldInfoEntries(
   bookNameMap?: Map<string, string>,
   random?: () => number,
   selectionContentByEntryId?: ReadonlyMap<string, string>,
+  options: WorldInfoMergeOptions = {},
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -5087,6 +5126,7 @@ export function mergeActivatedWorldInfoEntries(
     bookSourceMap,
     random,
     selectionContentByEntryId,
+    options,
   );
   const { finalized, sources, dedupResult, dispositions } = selection;
 
@@ -6100,21 +6140,27 @@ async function computeActivatedWorldInfoForChat(
     settings: worldInfoSettings,
   });
 
-  const vectorActivated = await collectVectorActivatedWorldInfo(
-    userId,
-    chatId,
-    wiSources.worldBookIds,
-    wiSources.entries,
-    messages,
-    undefined,
-    worldInfoSettings,
-  );
+  const [vectorActivated, embeddingConfig] = await Promise.all([
+    collectVectorActivatedWorldInfo(
+      userId,
+      chatId,
+      wiSources.worldBookIds,
+      wiSources.entries,
+      messages,
+      undefined,
+      worldInfoSettings,
+    ),
+    embeddingsSvc.getEmbeddingConfig(userId),
+  ]);
   return mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
     wiSources.bookNameMap,
+    undefined,
+    undefined,
+    { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
   );
 }
 

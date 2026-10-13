@@ -435,6 +435,7 @@ export async function safeFetch(
     // Handle redirects manually so we can re-validate each hop
     if (response.status >= 300 && response.status < 400) {
       clearTimeout(timer);
+      await response.body?.cancel();
       const location = response.headers.get("location");
       if (!location) {
         throw new SSRFError(`Redirect with no Location header (status ${response.status})`);
@@ -462,6 +463,7 @@ export async function safeFetch(
     const contentLength = response.headers.get("content-length");
     if (contentLength && Number.parseInt(contentLength, 10) > maxBytes) {
       clearTimeout(timer);
+      await response.body?.cancel();
       throw new SSRFError(`Response too large: ${contentLength} bytes (max ${maxBytes})`);
     }
     if (!response.body) {

@@ -244,7 +244,7 @@ describe('CharacterLoraTab SD API guidance', () => {
     expect(picker?.disabled).toBe(false)
     await click(picker!)
 
-    const discoveredOption = document.querySelector<HTMLButtonElement>('button[role="option"]')
+    const discoveredOption = document.querySelector<HTMLButtonElement>('button[role="option"][aria-label="Ink, styles/ink.safetensors"]')
     expect(discoveredOption).not.toBeNull()
     expect(discoveredOption?.textContent).toContain('Ink')
     await click(discoveredOption!)

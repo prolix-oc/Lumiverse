@@ -100,6 +100,23 @@
     "searchMacros": "マクロを検索..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "システム音声を解析しますか？",
+      "consentMessage": "受け取るのはスペクトルと音量のみで、音声そのものは渡されません。Lumiverse は音声を録音・送信しません。解析中は聞き取り中の表示と停止ボタンが表示されます。同意を記憶しない場合、開始するたびに確認します。",
+      "allow": "許可",
+      "notNow": "今はしない",
+      "listening": "{{name}} がシステム音声を解析しています",
+      "stop": "停止",
+      "minimise": "最小化",
+      "show": "表示: {{name}} がシステム音声を解析しています",
+      "remember": "このデバイスで、この拡張機能への同意を記憶する",
+      "consentSetting": "システム音声の同意",
+      "askEachTime": "開始するたびに確認します。",
+      "remembered": "このデバイスのこのアカウントで同意を記憶しています。",
+      "paused": "開始を一時停止しています。この拡張機能で音声を使う場合は、リクエストを再度許可してください。",
+      "allowAgain": "リクエストを再度許可",
+      "revokeApproval": "同意を取り消す"
+    },
     "floatWidget": "フロート ウィジェット",
     "drawerTab": "ドロワー タブ",
     "dockPanel": "ドック ({{edge}})",

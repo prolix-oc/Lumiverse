@@ -315,6 +315,25 @@ describe("maybeConsolidate secondary fallback writes", () => {
     closeDatabase();
   });
 
+  test("preserves the generation budget for scene and arc summaries", async () => {
+    const calls: Array<{ purpose?: string; maxTokens: number; prompt: string }> = [];
+    const phases: string[] = [];
+    await maybeConsolidate(
+      "user-1", "chat-1", { ...consolidationConfig(), arcThreshold: 1 },
+      async (opts) => {
+        expect(phases.at(-1)).toBe(opts.requestPurpose === "arc summarization" ? "arc" : "scene");
+        calls.push({ purpose: opts.requestPurpose, maxTokens: opts.parameters.max_tokens, prompt: opts.messages[1].content });
+        return { content: JSON.stringify({ title: "Courtyard Arrival", summary: "Elena entered the lantern-lit courtyard." }) };
+      },
+      "primary-conn", 5_000, { max_tokens: 16384 }, undefined, sidecarOpts({ onProgress: (phase) => phases.push(phase) }),
+    );
+
+    expect(calls.map((call) => call.purpose)).toEqual(["memory summarization", "arc summarization"]);
+    expect(calls.every((call) => call.maxTokens === 16384 && call.prompt.includes("200 tokens"))).toBe(true);
+    expect(listConsolidations()).toHaveLength(2);
+    expect(phases).toEqual(["scene", "arc"]);
+  });
+
   test("writes the secondary summary after primary generate fails", async () => {
     const calls: string[] = [];
     await maybeConsolidate(

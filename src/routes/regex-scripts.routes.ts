@@ -4,7 +4,7 @@ import { parsePagination } from "../services/pagination";
 import { applyDisplayRegex } from "../services/display-regex.service";
 import { matchPromptActivation, MAX_ACTIVATION_CONTENT_LENGTH } from "../utils/regex-prompt-activation";
 import { resolveActivationFindPattern } from "../utils/regex-activation-inputs";
-import { loadActivationInputSnapshot } from "../services/regex-activation-inputs.service";
+import { loadActivationInputSnapshot, prepareActivationPatterns } from "../services/regex-activation-inputs.service";
 import type { RegexMacroMode, RegexPlacement, RegexScope, RegexScript, RegexTarget } from "../types/regex-script";
 
 const app = new Hono();
@@ -215,24 +215,8 @@ app.post("/apply", async (c) => {
 // Prepare persisted activation inputs without matching message content.
 app.post("/activation-patterns", async (c) => {
   const body = await c.req.json().catch(() => null);
-  if (!body || typeof body.preset_id !== "string" || !body.preset_id || body.preset_id.length > 200
-    || !Array.isArray(body.patterns) || body.patterns.length === 0 || body.patterns.length > 100
-    || body.patterns.some((pattern: unknown) => typeof pattern !== "string" || pattern.length > 10_000)
-    || body.patterns.reduce((sum: number, pattern: string) => sum + pattern.length, 0) > 100_000) {
-    return c.json({ error: "A preset ID and between 1 and 100 bounded patterns are required" }, 400);
-  }
   try {
-    const inputs = loadActivationInputSnapshot(c.get("userId"), body.preset_id, {
-      chat_id: body.chat_id, character_id: body.character_id,
-      persona_id: body.persona_id, connection_id: body.connection_id,
-    }, body.patterns);
-    return c.json({ patterns: body.patterns.map((pattern: string) => {
-      try {
-        return { source: pattern, resolved: resolveActivationFindPattern(pattern, inputs) };
-      } catch (error) {
-        return { source: pattern, error: error instanceof Error ? error.message : String(error) };
-      }
-    }) });
+    return c.json(prepareActivationPatterns(c.get("userId"), body));
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }

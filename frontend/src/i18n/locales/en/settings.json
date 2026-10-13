@@ -1288,6 +1288,8 @@
       "precompute": "Preparing arbiter input",
       "awaiting_provider": "Awaiting provider response",
       "ingesting": "Ingesting batch results",
+      "consolidating": "Consolidating scene memories",
+      "consolidating_arcs": "Consolidating arc memories",
       "idle_between_batches": "Between batches"
     },
     "rebuildBatchesInFlight": "{{count}} batch in flight",

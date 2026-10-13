@@ -2,6 +2,9 @@ import type { ExtensionInfo } from 'lumiverse-spindle-types'
 
 export type ExtensionSortMode = 'manual' | 'installed' | 'updated' | 'name-asc' | 'name-desc'
 
+export const EXTENSION_STATUS_FILTERS = ['all', 'active', 'inactive', 'updatable'] as const
+export type ExtensionStatusFilter = typeof EXTENSION_STATUS_FILTERS[number]
+
 export const EXTENSION_SORT_OPTIONS: ReadonlyArray<{ value: ExtensionSortMode; labelKey: string }> = [
   { value: 'manual', labelKey: 'manual' },
   { value: 'installed', labelKey: 'dateInstalled' },
@@ -46,12 +49,21 @@ export function reconcileExtensionOrder(extensions: readonly ExtensionInfo[], pe
   return reconciled
 }
 
-/** Simple, predictable client-side search across the fields users can see or reason about. */
-export function filterExtensions(extensions: readonly ExtensionInfo[], query: string): ExtensionInfo[] {
+/** Search visible metadata and filter by enabled state or detected updates. */
+export function filterExtensions(
+  extensions: readonly ExtensionInfo[],
+  query: string,
+  statusFilter: ExtensionStatusFilter = 'all',
+  updatableExtensionIds: ReadonlySet<string> = new Set(),
+): ExtensionInfo[] {
   const needle = normalized(query)
-  if (!needle) return [...extensions]
 
   return extensions.filter((extension) => {
+    if (statusFilter === 'active' && !extension.enabled) return false
+    if (statusFilter === 'inactive' && extension.enabled) return false
+    if (statusFilter === 'updatable' && !updatableExtensionIds.has(extension.id)) return false
+    if (!needle) return true
+
     const metadata = (extension.metadata as Record<string, unknown> | null) ?? {}
     const searchable = [
       extension.name,

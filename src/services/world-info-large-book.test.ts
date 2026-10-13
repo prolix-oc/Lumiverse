@@ -18,6 +18,7 @@ import {
   normalizeWorldInfoSettings,
   type WorldInfoSettings,
 } from "./world-info-activation.service";
+import { rankVectorWorldInfoCandidates } from "./world-info-vector-ranking";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1143,5 +1144,126 @@ describe("mergeActivatedWorldInfoEntries — unified finalization", () => {
       bookName: "Book A",
       estimatedTokens: 3,
     });
+  });
+});
+
+describe("mergeActivatedWorldInfoEntries — Vector First", () => {
+  function vector(entry: WorldBookEntry, distance = 0.3, score = 0.8): VectorActivatedEntry {
+    return { ...asVectorCandidate(entry, score), distance };
+  }
+
+  function merge(
+    keywords: WorldBookEntry[],
+    vectors: VectorActivatedEntry[],
+    settings: Partial<WorldInfoSettings> = {},
+  ) {
+    return mergeActivatedWorldInfoEntries(
+      keywords, vectors, settings, undefined, undefined, () => 0, undefined,
+      { hybridWeightMode: "vector_first" },
+    );
+  }
+
+  test("fills entry and token budgets with vector matches before keyword fallback", () => {
+    const keyword = makeEntry({ content: "keyword lore", priority: 100, order_value: 1 });
+    const semantic = makeEntry({ content: "semantic lore", priority: 1, order_value: 1000 });
+    for (const settings of [{ maxActivatedEntries: 1 }, { maxTokenBudget: 4 }]) {
+      const result = merge([keyword], [vector(semantic)], settings);
+      expect(result.activatedEntries.map((entry) => entry.id)).toEqual([semantic.id]);
+      expect(result.vectorDispositions.get(semantic.id)?.code).toBe("activated");
+    }
+    expect(keyword.priority).toBe(100);
+    expect(semantic.priority).toBe(1);
+  });
+
+  test("preserves distance ordering when scores and entry order favor a weaker vector", () => {
+    const closest = makeEntry({ content: "close match", order_value: 1000 });
+    const weaker = makeEntry({ content: "weak match", order_value: 1 });
+    const result = merge([], [vector(weaker, 0.6, 2), vector(closest, 0.1, 0.4)], { maxActivatedEntries: 1 });
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([closest.id]);
+    expect(result.vectorDispositions.get(weaker.id)?.code).toBe("blocked_by_max_entries");
+  });
+
+  test("retains vector scores and vector activation for entries that also match keywords", () => {
+    const overlap = makeEntry({ content: "overlapping lore", order_value: 1 });
+    const other = makeEntry({ content: "other semantic lore", order_value: 1000 });
+    const result = merge([overlap], [vector(overlap, 0.05, 1.4), vector(other, 0.1)], { maxActivatedEntries: 1 });
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([overlap.id]);
+    expect(result.activatedWorldInfo[0]).toMatchObject({ source: "vector", score: 1.4 });
+    expect(result.vectorActivated).toBe(1);
+    expect(result.keywordActivated).toBe(0);
+    expect(result.vectorDispositions.get(overlap.id)?.code).toBe("activated");
+  });
+
+  test("Balanced and Keyword First retain keyword attribution on overlaps", () => {
+    const overlap = makeEntry({ content: "overlapping lore" });
+    for (const hybridWeightMode of ["balanced", "keyword_first"] as const) {
+      const result = mergeActivatedWorldInfoEntries(
+        [overlap], [vector(overlap)], {}, undefined, undefined, undefined, undefined,
+        { hybridWeightMode },
+      );
+      expect(result.activatedWorldInfo[0].source).toBe("keyword");
+      expect(result.activatedWorldInfo[0].score).toBeUndefined();
+      expect(result.vectorDispositions.get(overlap.id)?.code).toBe("already_keyword");
+    }
+  });
+
+  test("constants remain protected and keywords fill remaining slots", () => {
+    const constant = makeEntry({ constant: true, content: "always active" });
+    const keyword = makeEntry({ content: "keyword fallback" });
+    const semantic = makeEntry({ content: "semantic candidate" });
+    const result = merge([constant, keyword], [vector(semantic)], { maxActivatedEntries: 2 });
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual([constant.id, semantic.id]);
+    const headroom = merge([keyword], [vector(semantic)], { maxActivatedEntries: 2 });
+    expect(headroom.activatedEntries.map((entry) => entry.id)).toEqual([semantic.id, keyword.id]);
+    expect(merge([keyword], [], { maxActivatedEntries: 1 }).activatedEntries).toEqual([keyword]);
+    const overlappingConstant = merge([constant], [vector(constant)]);
+    expect(overlappingConstant.activatedWorldInfo[0].source).toBe("keyword");
+    expect(overlappingConstant.activatedWorldInfo[0].score).toBeUndefined();
+  });
+
+  test("a zero rerank score does not disable Vector First when cutoff filtering is off", () => {
+    const keyword = makeEntry({ content: "keyword fallback", order_value: 1 });
+    const semantic = makeEntry({ content: "semantic candidate", order_value: 1000 });
+    expect(merge([keyword], [vector(semantic, 0.7, 0)], { maxActivatedEntries: 1 }).activatedEntries).toEqual([semantic]);
+  });
+
+  test("deduplication prefers vector matches when entry and book precedence tie", () => {
+    const keyword = makeEntry({ content: "duplicate lore" });
+    const semantic = makeEntry({ content: keyword.content });
+    const result = merge([keyword], [vector(semantic)]);
+    expect(result.activatedEntries).toEqual([semantic]);
+    expect(result.vectorDispositions.get(semantic.id)?.code).toBe("activated");
+  });
+
+  test("minimum priority and explicit group overrides still apply", () => {
+    const keyword = makeEntry({ content: "group winner", group_name: "shared", group_override: true, priority: 100 });
+    const semantic = makeEntry({ content: "group vector", group_name: "shared", priority: 10 });
+    expect(merge([keyword], [vector(semantic)]).vectorDispositions.get(semantic.id)?.code).toBe("blocked_by_group");
+    expect(merge([], [vector(semantic)], { minPriority: 20 }).vectorDispositions.get(semantic.id)?.code).toBe("blocked_by_min_priority");
+  });
+
+  test("zero-cutoff keyword rescue no longer starves vector activation after the complete merge", () => {
+    const keyword = makeEntry({
+      key: ["Silvergate"], comment: "Silvergate", selective: false,
+      content: "Ancient architects built the northern town centuries ago.",
+    });
+    const semantic = makeEntry({
+      comment: "Guard patrols",
+      content: "Watch officers keep the central square safe throughout the night.",
+    });
+    const messages = [makeMessage("Silvergate guards patrol the plaza.")];
+    const activated = activateWorldInfo({ entries: [keyword, semantic], messages, chatTurn: 1, wiState: {}, random: () => 0 });
+    const ranked = rankVectorWorldInfoCandidates({
+      eligibleEntries: [keyword, semantic],
+      pooledCandidates: [{ entry: semantic, candidate: {
+        entry_id: semantic.id, distance: 0.3, lexical_score: null, lexical_strength: 0,
+        content: semantic.content, searchTextPreview: semantic.content, metadata: {},
+      } }],
+      queryText: messages[0].content, hybridWeightMode: "vector_first",
+      similarityThreshold: 0, rerankCutoff: 0, topK: 1,
+    });
+    const result = merge(activated.activatedEntries, ranked.shortlistedEntries, { maxActivatedEntries: 1 });
+    expect(result.activatedEntries).toEqual([semantic]);
+    expect(result.vectorActivated).toBe(1);
   });
 });

@@ -118,7 +118,7 @@ describe('Image Gen runtime drawer and editor boundaries', () => {
     await render()
     expect(host.querySelector('select[aria-label="Connection"]')).not.toBeNull()
     expect(field(t('imageGenPanel.mode'))).toBeDefined(); expect(field(t('imageGenPanel.output'))).toBeDefined()
-    expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(5)
+    expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(7)
     expect(host.querySelector('textarea')).toBeNull(); expect(host.querySelector('[data-lora-editor]')).toBeNull()
     expect(host.textContent).not.toContain('Future Knob'); expect(host.textContent).not.toContain('Image width')
     expect(button('Configure Generation…')).toBeDefined(); expect(button(t('imageGenPanel.generateNow'))).toBeDefined(); expect(button(t('imageGenPanel.forceGenerate'))).toBeDefined()
@@ -244,6 +244,19 @@ describe('Image Gen runtime drawer and editor boundaries', () => {
     const avatar = [...host.querySelectorAll('label')].find(node => node.textContent === t('imageGenPanel.includeCharacterAvatar'))!
     await act(async () => avatar.querySelector<HTMLInputElement>('input')!.click())
     expect(state.imageGenProfiles[0].default_parameters.includeCharacterAvatar).toBe(true)
+  })
+  test('describe-avatar Quick Behavior toggles and captioning preset update settings', async () => {
+    await render()
+    const describeChar = [...host.querySelectorAll('label')].find(node => node.textContent === t('imageGenPanel.describeCharacterAvatar'))!
+    const describePersona = [...host.querySelectorAll('label')].find(node => node.textContent === t('imageGenPanel.describePersonaAvatar'))!
+    await act(async () => describeChar.querySelector<HTMLInputElement>('input')!.click())
+    expect(state.imageGeneration.describeCharacterAvatar).toBe(true)
+    expect(setImageGenSettings).toHaveBeenCalledWith(expect.objectContaining({ describeCharacterAvatar: true }))
+    expect(field(t('imageGenPanel.avatarCaptionPreset'))).toBeDefined()
+    await act(async () => describePersona.querySelector<HTMLInputElement>('input')!.click())
+    expect(state.imageGeneration.describePersonaAvatar).toBe(true)
+    await change(field(t('imageGenPanel.avatarCaptionPreset')).querySelector('select')!, 'captioning-preset')
+    expect(state.imageGeneration.activeCaptioningPresetId).toBe('captioning-preset')
   })
   test('runtime LoRA preset selection hydrates the studio with the selected stack', async () => {
     await render()

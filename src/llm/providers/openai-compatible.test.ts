@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { OpenAICompatibleProvider } from "./openai-compatible";
+import { DeepSeekProvider } from "./deepseek";
+import type { LlmMessage } from "../types";
 
 class TestOpenAICompatibleProvider extends OpenAICompatibleProvider {
   readonly name = "test";
@@ -16,6 +18,16 @@ class TestOpenAICompatibleProvider extends OpenAICompatibleProvider {
 
   public inspect(content: unknown, reasoning: unknown) {
     return this.splitMirroredReasoning(content, reasoning);
+  }
+
+  public flatten(m: LlmMessage) {
+    return this.flattenForChat(m);
+  }
+}
+
+class TestDeepSeekProvider extends DeepSeekProvider {
+  public flatten(m: LlmMessage) {
+    return this.flattenForChat(m);
   }
 }
 
@@ -340,5 +352,43 @@ describe("OpenAICompatibleProvider reasoning_content roundtrip", () => {
 
     expect(body.messages[0]).toEqual({ role: "user", content: "hello" });
     expect("reasoning_content" in body.messages[0]).toBe(false);
+  });
+});
+
+describe("OpenAICompatibleProvider tool-result ordering", () => {
+  const toolResultWithText: LlmMessage = {
+    role: "user",
+    content: [
+      { type: "tool_result", tool_use_id: "call_1", content: "ok, staged" },
+      { type: "text", text: "Call codex_done." },
+    ],
+  };
+
+  test("emits role:tool replies before user text sharing the same message", () => {
+    const out = new TestOpenAICompatibleProvider().flatten(toolResultWithText);
+    expect(out.map((m) => m.role)).toEqual(["tool", "user"]);
+    expect(out[0]).toEqual({ role: "tool", tool_call_id: "call_1", content: "ok, staged" });
+  });
+
+  test("keeps a tool-result-only message as tool messages", () => {
+    const out = new TestOpenAICompatibleProvider().flatten({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "call_1", content: "ok" }],
+    });
+    expect(out).toEqual([{ role: "tool", tool_call_id: "call_1", content: "ok" }]);
+  });
+
+  test("keeps the assistant tool_calls message as a single message", () => {
+    const out = new TestOpenAICompatibleProvider().flatten({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call_1", name: "codex_write", input: { file: "a" } }],
+    });
+    expect(out.map((m) => m.role)).toEqual(["assistant"]);
+    expect(out[0].tool_calls[0].id).toBe("call_1");
+  });
+
+  test("DeepSeek inherits the ordering", () => {
+    const out = new TestDeepSeekProvider().flatten(toolResultWithText);
+    expect(out.map((m) => m.role)).toEqual(["tool", "user"]);
   });
 });

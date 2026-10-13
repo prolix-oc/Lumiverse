@@ -69,6 +69,12 @@ From the Spindle Panel:
 - **Update** — Pull the latest source and rebuild
 - **Uninstall** — Remove the extension, its storage, and its grants
 
+Use **All**, **Active**, **Inactive**, and **Updates** above the installed list to filter extensions. Active and Inactive follow the enable toggle, including enabled extensions whose workers are stopped or have errors. Counts cover the installed list before search; search and sorting apply within the selected filter in both card and list views.
+
+**Updates** shows notices from the existing update monitor. Automatic detection currently checks enabled, git-sourced extensions only, excluding development-mode extensions. Disabling an extension clears its notice, and enabling it schedules a new check. Disabled extensions can still be updated with **Update** or **Update All**.
+
+Manual dragging is available when **All** is selected and search is empty. **Show all extensions** in an empty result clears both controls and restores the full list.
+
 ---
 
 ## Permissions

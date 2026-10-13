@@ -13,6 +13,7 @@ export interface SpindleUploadRecord {
   readonly extensionIdentifier: string;
   offset: number;
   expiresAt: number;
+  pins?: number;
 }
 
 const UPLOAD_TTL_MS = 30 * 60 * 1000;
@@ -59,7 +60,7 @@ export function createUpload(input: {
 export function getUpload(uploadId: string): SpindleUploadRecord | undefined {
   const rec = uploads.get(uploadId);
   if (!rec) return undefined;
-  if (Date.now() > rec.expiresAt) {
+  if (Date.now() > rec.expiresAt && !rec.pins) {
     deleteUpload(uploadId);
     return undefined;
   }
@@ -137,6 +138,7 @@ export async function readUploadChunk(uploadId: string, offset: number): Promise
 export function deleteUpload(uploadId: string): void {
   const rec = uploads.get(uploadId);
   if (!rec) return;
+  if (rec.pins) throw new Error("upload is in use");
   uploads.delete(uploadId);
   try {
     rmSync(dirFor(rec.ownerUserId, uploadId), { recursive: true, force: true });
@@ -147,11 +149,23 @@ export function deleteUpload(uploadId: string): void {
   }
 }
 
+/** Keep a completed upload alive while a host archive operation consumes it. */
+export function pinUpload(rec: SpindleUploadRecord): () => void {
+  rec.pins = (rec.pins ?? 0) + 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    rec.pins = (rec.pins ?? 1) - 1;
+    rec.expiresAt = Date.now() + UPLOAD_TTL_MS;
+  };
+}
+
 const sweepTimer = setInterval(() => {
   try {
     const now = Date.now();
     for (const [id, rec] of uploads) {
-      if (now > rec.expiresAt) deleteUpload(id);
+      if (now > rec.expiresAt && !rec.pins) deleteUpload(id);
     }
   } catch (err) {
     // A throw here would be an unhandled timer exception (process crash).

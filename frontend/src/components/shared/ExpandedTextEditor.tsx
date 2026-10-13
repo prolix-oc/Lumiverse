@@ -24,6 +24,7 @@ import type { MacroGroup } from '@/lib/loom/types'
 import MessageContent from '@/components/chat/MessageContent'
 import { useStore } from '@/store'
 import { installExpandedEditorCaretReveal } from '@/lib/expandedEditorCaret'
+import { findKeyboardScrollContainer } from '@/lib/textareaKeyboardReveal'
 import {
   findExpandedTextMatches,
   replaceAllExpandedTextMatches,
@@ -665,8 +666,10 @@ export default function ExpandedTextEditor({
     const textarea = textareaRef.current
     const mirror = highlightRef.current
     if (!textarea || !mirror) return
-    return installExpandedEditorCaretReveal(textarea, mirror)
-  }, [])
+    return installExpandedEditorCaretReveal(textarea, mirror, {
+      getScrollContainer: () => inline ? findKeyboardScrollContainer(textarea) : null,
+    })
+  }, [inline])
 
   const editorContent = (
     <div className={inline ? s.inlineDialog : s.dialog} onClick={e => e.stopPropagation()}>
@@ -883,6 +886,7 @@ export default function ExpandedTextEditor({
               >{highlightNodes ?? value}{'\u200b'}</pre>
               <textarea
                 ref={textareaRef}
+                data-keyboard-caret-managed="true"
                 className={showHighlight ? s.textareaHighlighted : s.textarea}
                 value={value}
                 onChange={handleTextareaChange}

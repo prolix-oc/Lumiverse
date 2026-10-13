@@ -25,8 +25,10 @@ These are always available:
 | Permission | Description |
 |---|---|
 | `"screen_capture"` | Privileged worker-only requests for a desktop screenshot. Requires a connected native capture client and explicit local approval; never auto-granted. See [Desktop capture](./desktop-capture.md). |
+| `"system_audio"` | Privileged, frontend-only: a spectrum and loudness of the audio the device is playing through `ctx.systemAudio` (never samples). The host asks the user on every start and shows an indicator while it runs. Needs a native desktop adapter. Never auto-granted. See [System audio](../frontend-api/system-audio.md). |
 | `"screen_recording"` | Privileged worker-only requests for bounded desktop video or an explicitly armed replay buffer. Never auto-granted; does not authorize silent recording. |
 | `"generation"` | Fire LLM generations (raw, quiet, batch) on behalf of the user. Also grants access to list/inspect connection profiles. |
+| `"decisions"` | Inspect saved Decision model connections and evaluate typed Choice, Score, and Noul questions through OpenRouter or TypeSafe. See [Decision models](../backend-api/decisions.md). |
 | `"interceptor"` | Register a pre-generation interceptor that can modify the prompt before it reaches the LLM |
 | `"tools"` | Register LLM tools (function calling). Council-eligible tools appear in the Council tools list and can be assigned to members for pre-generation analysis |
 | `"cors_proxy"` | Make HTTP requests through the Lumiverse server (bypass CORS) |

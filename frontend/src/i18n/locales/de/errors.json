@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "Neu generieren fehlgeschlagen",
+  "failedToContinue": "Generierung konnte nicht fortgesetzt werden",
+  "failedToStartGeneration": "Generierung konnte nicht gestartet werden",
+  "failedToImpersonate": "Imitieren fehlgeschlagen",
+  "failedToResolveMacros": "Makros konnten nicht aufgelöst werden",
+  "failedToGenerate": "Generierung fehlgeschlagen",
+  "failedMentionChain": "@Erwähnungs-Kette konnte nicht fortgesetzt werden"
+}

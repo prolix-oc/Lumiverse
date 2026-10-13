@@ -32,6 +32,10 @@
 
 .modal.fullscreen {
   z-index: 10006;
+  /* Start below the desktop/PWA titlebar (0px in a browser tab). Two classes so
+     this outranks the floating panel's own top/height. */
+  top: var(--app-window-controls-overlay-top, 0px);
+  height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) - var(--app-window-controls-overlay-top, 0px));
 }
 
 .header {

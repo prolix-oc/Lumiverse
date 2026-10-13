@@ -102,6 +102,44 @@ const HTML_ENTITY_RE = /&(?:nbsp|amp|lt|gt|quot|apos|#39|ldquo|rdquo|lsquo|rsquo
 
 const MAX_SWEEP_ITERATIONS = 10
 
+const FISH_DELIVERY_TAGS = 'whisper|emphasis|soft|fast|slow|stress|forceful|french|spanish|german|japanese|chinese|korean|italian'
+const FISH_TAG_MARKER_RE = new RegExp(`<\\/?(${FISH_DELIVERY_TAGS})\\s*>`, 'gi')
+const FISH_CONTROL_RE = new RegExp(`<\\/?(?:${FISH_DELIVERY_TAGS})\\s*>|<\\|(?:speaker:\\d+|phoneme_start|phoneme_end)\\|>|\\[[^\\]\\r\\n]+\\]`, 'gi')
+const FISH_SPECIAL_MARKER_RE = /<\|(?:speaker:\d+|phoneme_start|phoneme_end)\|>/g
+
+export interface TtsTextOptions {
+  preserveAudioCues?: boolean
+  /** The selected Fish model determines which text controls survive. */
+  fishModel?: string
+  /** Strip Fish directions when a mixed-provider segment uses another voice. */
+  stripFishDirections?: boolean
+}
+
+function usesFishDirections(model?: string): boolean {
+  return ['s2-pro', 's2.1-pro', 's2.1-pro-free', 'drama-3-preview'].includes(model || '')
+}
+
+/** Hide only marker syntax; their contents still pass through metadata cleanup. */
+function protectMarkers(text: string, pattern: RegExp) {
+  let prefix = '\uE000TTS'
+  while (text.includes(prefix)) prefix += '_'
+  const markers = new Map<string, string>()
+  const protectedText = text.replace(pattern, (marker) => {
+    const placeholder = `${prefix}${markers.size}\uE001`
+    markers.set(placeholder, marker)
+    return placeholder
+  })
+  return {
+    text: protectedText,
+    markers,
+    split: new RegExp(`(${prefix}\\d+\uE001)`, 'g'),
+    restore: (value: string) => {
+      for (const [placeholder, marker] of markers) value = value.replaceAll(placeholder, marker)
+      return value
+    },
+  }
+}
+
 function isProse(tag: string): boolean {
   return PROSE_TAGS.has(tag.toLowerCase())
 }
@@ -117,7 +155,9 @@ function isAudioCue(marker: string, tag: string): boolean {
 
 /** Strip retained inline cues when a segment uses a plain-text TTS provider. */
 export function stripTtsAudioCues(text: string): string {
-  return text.replace(ANY_TAG_MARKER_RE, (match, tag) => isAudioCue(match, tag) ? ' ' : match)
+  return text.replace(FISH_TAG_MARKER_RE, ' ')
+    .replace(FISH_SPECIAL_MARKER_RE, ' ')
+    .replace(ANY_TAG_MARKER_RE, (match, tag) => isAudioCue(match, tag) ? ' ' : match)
     .replace(/\s+/g, ' ').trim()
 }
 
@@ -175,7 +215,7 @@ function stripStrayNonProseClosings(text: string): string {
  * by a provider that understands them. Unfinished metadata still drops the
  * remainder of the message.
  */
-export function sanitizeForTts(text: string, options: { preserveAudioCues?: boolean } = {}): string {
+export function sanitizeForTts(text: string, options: TtsTextOptions = {}): string {
   let out = text
 
   // 1. Strip code first so `<` inside code can't be misread as tag syntax.
@@ -183,6 +223,13 @@ export function sanitizeForTts(text: string, options: { preserveAudioCues?: bool
   out = out.replace(INLINE_CODE_RE, ' ')
   out = out.replace(HTML_COMMENT_RE, ' ')
   out = out.replace(DOCTYPE_RE, ' ')
+
+  // Drama's paired delivery/language tags contain spoken prose. Protect their
+  // markers for Drama and unwrap them for other voices before metadata sweeps.
+  const fishMarkers = protectMarkers(out, FISH_TAG_MARKER_RE)
+  out = options.fishModel === 'drama-3-preview'
+    ? fishMarkers.text
+    : out.replace(FISH_TAG_MARKER_RE, ' ')
 
   // Unwrap HTML before block sweeps so nested font/span wrappers don't hide
   // metadata inside prose containers. Void elements have no contents to drop.
@@ -199,6 +246,10 @@ export function sanitizeForTts(text: string, options: { preserveAudioCues?: bool
   // 3. Markdown: images dropped entirely, links reduced to their label text.
   out = out.replace(MD_IMAGE_RE, ' ')
   out = out.replace(MD_LINK_RE, '$1')
+  if (options.stripFishDirections && !usesFishDirections(options.fishModel)) {
+    out = out.replace(/\[[^\]\r\n]+\]/g, ' ')
+  }
+  if (!options.fishModel) out = out.replace(FISH_SPECIAL_MARKER_RE, ' ')
 
   // 4. Only standalone cue markers can survive the HTML/metadata sweeps.
   out = out.replace(ANY_TAG_MARKER_RE, (match, tag) => (
@@ -211,7 +262,7 @@ export function sanitizeForTts(text: string, options: { preserveAudioCues?: bool
   // 6. Collapse whitespace (including newlines) into single spaces.
   out = out.replace(/\s+/g, ' ').trim()
 
-  return out
+  return fishMarkers.restore(out)
 }
 
 export interface TextSegment {
@@ -240,12 +291,14 @@ function resolveAction(type: SegmentType, rules: SpeechDetectionRules): SegmentA
  *
  * Each segment is assigned an action based on the user's speech detection rules.
  */
-export function parseSegments(text: string, rules: SpeechDetectionRules): TextSegment[] {
+export function parseSegments(text: string, rules: SpeechDetectionRules, options: TtsTextOptions = {}): TextSegment[] {
+  const fishControls = usesFishDirections(options.fishModel) ? protectMarkers(text, FISH_CONTROL_RE) : null
+  const parseText = fishControls?.text ?? text
   const pattern = /\*([^*]+)\*|"([^"]+)"|([^*"]+)/g
   const raw: TextSegment[] = []
 
   let match: RegExpExecArray | null
-  while ((match = pattern.exec(text)) !== null) {
+  while ((match = pattern.exec(parseText)) !== null) {
     if (match[1] !== undefined) {
       const trimmed = match[1].trim()
       if (trimmed) {
@@ -265,6 +318,70 @@ export function parseSegments(text: string, rules: SpeechDetectionRules): TextSe
         raw.push({ text: trimmed, type, action: resolveAction(type, rules) })
       }
     }
+  }
+
+  // Direction-only prefixes belong to the next spoken span. Paired scopes can
+  // cross dialogue/narration boundaries; balance them in each resulting span
+  // so every voice receives a complete instruction, even after skipped text.
+  if (fishControls) {
+    const activeTags: string[] = []
+    const pending: string[] = []
+    const directed: TextSegment[] = []
+    for (let index = 0; index < raw.length; index++) {
+      const segment = raw[index]
+      const parts = segment.text.split(fishControls.split).filter(Boolean)
+      const lastWordIndex = parts.findLastIndex((piece) => !fishControls.markers.has(piece) && !!piece.trim())
+      const previousDirections = [...pending]
+      const localTags: string[] = []
+      let output = ''
+      let hasWords = false
+      const beginWords = () => {
+        if (hasWords) return
+        localTags.push(...activeTags)
+        output += activeTags.map((tag) => `<${tag}>`).join('')
+        if (pending.length) output += pending.splice(0).join(' ') + ' '
+        hasWords = true
+      }
+      for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+        const part = parts[partIndex]
+        const marker = fishControls.markers.get(part)
+        if (!marker) {
+          if (part.trim()) beginWords()
+          if (hasWords) output += part
+          continue
+        }
+        const tag = /^<(\/)?([a-z]+)\s*>$/i.exec(marker)
+        const wordsFollow = partIndex < lastWordIndex
+        if (tag) {
+          const name = tag[2].toLowerCase()
+          if (!tag[1]) {
+            activeTags.push(name)
+            if (hasWords && wordsFollow) {
+              localTags.push(name)
+              output += `<${name}>`
+            }
+          } else {
+            const activeIndex = activeTags.lastIndexOf(name)
+            if (activeIndex !== -1) activeTags.splice(activeIndex)
+            const localIndex = localTags.lastIndexOf(name)
+            if (localIndex !== -1) output += localTags.splice(localIndex).reverse().map((name) => `</${name}>`).join('')
+          }
+        } else if (marker.startsWith('[') || marker.startsWith('<|speaker:')) {
+          const defer = segment.type === 'undecorated' && index + 1 < raw.length && !wordsFollow
+          if (!hasWords || defer) pending.push(marker)
+          else output += marker
+        } else {
+          beginWords()
+          output += marker
+        }
+      }
+      if (hasWords) {
+        output += localTags.reverse().map((name) => `</${name}>`).join('')
+        directed.push({ ...segment, text: output.trim() })
+      }
+      if (segment.action === 'skip') pending.splice(0, pending.length, ...previousDirections)
+    }
+    raw.splice(0, raw.length, ...directed)
   }
 
   // Merge adjacent segments with the same action

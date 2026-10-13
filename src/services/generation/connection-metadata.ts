@@ -9,6 +9,10 @@ export function injectConnectionMetadataFlags(
     params.use_responses_api = true;
   }
 
+  if (connection.provider === "nanogpt" && !connection.metadata?.use_subscription_api && connection.metadata?.nanogpt) {
+    params._nanogpt = connection.metadata.nanogpt;
+  }
+
   if (connection.provider !== "openrouter") return;
   if (connection.metadata?.openrouter) {
     params._openrouter = connection.metadata.openrouter;

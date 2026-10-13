@@ -31,6 +31,8 @@ import { EventType } from '@/ws/events'
 import { getCharacterAvatarLargeUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
+import useIsMobile from '@/hooks/useIsMobile'
+import { resolveGlobalWallpaper } from '@/lib/wallpaper'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import { holdImagesForTransition, prefetchImages } from '@/lib/imageDecodeCache'
@@ -1120,7 +1122,8 @@ function LandingPageNative() {
     : settingsLoaded
       ? landingPageGalleryWidth
       : snapshotGalleryWidth ?? landingPageGalleryWidth
-  const hasGlobalWallpaper = useStore((s) => Boolean(s.wallpaper.global?.image_id))
+  const isMobile = useIsMobile()
+  const hasGlobalWallpaper = useStore((s) => Boolean(resolveGlobalWallpaper(s.wallpaper, isMobile)?.image_id))
   const accountLabel = authUser?.username || authUser?.name || t('account')
   // The selected landing tab is intentionally local UI state. It must not be
   // persisted with account settings: a tab click on one device should never

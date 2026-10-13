@@ -242,6 +242,7 @@ impl CaptureRequest {
         }
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos", test))]
     fn consent_text(&self, origin: &str, account: &str) -> String {
         format!("Extension: {}\nIdentifier: {}\nInstallation: {}\nInstance: {}\nDesktop account: {}\nProvider: {}\nModel: {}\nEndpoint: {}\nConnection: {}\nPurpose: {}\n\n{}\nLimit: {} MiB, {} pixels. Local expiry: {} seconds.\nApproved uploads expire from instance memory after 2 minutes.\nSelecting a source authorizes this one capture and release to the instance/model above. No capture starts before source selection. Review Before Sending pauses release for local inspection. Stop & Discard cancels without uploading.",
             self.extension.name, self.extension.identifier, self.extension.id, origin, account,
@@ -254,6 +255,7 @@ impl CaptureRequest {
             self.expires_at.saturating_sub(now_ms()) / 1000)
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos", test))]
     fn consent_summary(&self, origin: &str, account: &str) -> String {
         format!(
             "{} → {} · {}\n{}\n{} · {}\n{}",
@@ -275,7 +277,7 @@ impl CaptureRequest {
     }
 }
 
-fn trusted_host(window: &WebviewWindow) -> Result<(), String> {
+pub(crate) fn trusted_host(window: &WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Capture controls require the bundled tray host".into());
     }

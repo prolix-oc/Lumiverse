@@ -14,7 +14,7 @@ const PAGE_SIZE = 36
 
 interface WallpaperLibraryModalProps {
   isOpen: boolean
-  target: 'global' | 'chat'
+  target: 'global' | 'mobile' | 'chat' | 'chat-mobile'
   currentImageId: string | null
   onClose: () => void
   onSelect: (ref: WallpaperRef) => Promise<void> | void
@@ -122,7 +122,7 @@ export default function WallpaperLibraryModal({
   }, [onDelete, t])
 
   const canLoadMore = items.length < total
-  const scopeLabel = target === 'chat' ? t('wallpaperPanel.chatWallpaper') : t('wallpaperPanel.globalWallpaper')
+  const scopeLabel = t(target === 'chat-mobile' ? 'wallpaperPanel.chatMobileWallpaper' : target === 'chat' ? 'wallpaperPanel.chatWallpaper' : target === 'mobile' ? 'wallpaperPanel.mobileWallpaper' : 'wallpaperPanel.globalWallpaper')
   const unknownValue = t('wallpaperLibrary.unknownValue')
   const actionBusy = applyingId !== null || deletingId !== null
 

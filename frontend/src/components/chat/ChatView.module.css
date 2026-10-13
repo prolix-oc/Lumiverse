@@ -492,7 +492,8 @@
 .chatToolbar:has([data-component='QuickToolbar'][data-fill-top-dock='1']),
 .chatColumnInner > [data-spindle-mount='chat_top_dock']:has([data-component='QuickToolbar'][data-fill-top-dock='1']) {
   position: fixed !important;
-  top: 0 !important;
+  /* Sit below the desktop/PWA titlebar; 0px in a plain browser tab. */
+  top: var(--app-window-controls-overlay-top, 0px) !important;
   left: 0 !important;
   width: 100% !important;
   max-width: 100% !important;

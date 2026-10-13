@@ -131,6 +131,11 @@ const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
 
 const DOMAIN_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'ctx_member', id: 'ctx.stt.listProviders', source: 'stt.providers', ctxLeaf: 'ctx.stt.listProviders', freeBecause: 'pure-host-action: reads speech capability metadata without audio, credentials, or microphone access' }),
+  free({ surface: 'ctx_member', id: 'ctx.systemAudio.isAvailable', source: 'systemAudio.availability', ctxLeaf: 'ctx.systemAudio.isAvailable', freeBecause: 'pure-host-action: reports whether a native adapter exists and is enabled, without opening it or prompting' }),
+  gated('system_audio', {
+    surface: 'ctx_member', id: 'ctx.systemAudio.start', source: 'systemAudio.start', ctxLeaf: 'ctx.systemAudio.start',
+    gatedBecause: 'Rule-B clause (c): starts host-managed analysis of the audio the device is playing, with host-owned consent and an active capture indicator',
+  }),
   ...(['prepare', 'start', 'transcribe'] as const).map((method) => gated('media', {
     surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: `stt.${method}`, ctxLeaf: `ctx.stt.${method}`,
     gatedBecause: 'Rule-B clause (c): invokes host-managed speech processing; capture additionally requires browser microphone consent',

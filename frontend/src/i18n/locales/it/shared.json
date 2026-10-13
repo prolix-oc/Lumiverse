@@ -90,6 +90,23 @@
     "searchMacros": "Cerca macro..."
   },
   "spindle": {
+    "systemAudio": {
+      "consentTitle": "Analizzare l’audio di sistema?",
+      "consentMessage": "Riceverà solo uno spettro e il livello sonoro, mai l’audio stesso. Lumiverse non registra né trasmette audio. Un indicatore di ascolto e un pulsante Interrompi restano visibili durante l’analisi. Se non memorizzi il consenso, verrà richiesto a ogni avvio.",
+      "allow": "Consenti",
+      "notNow": "Non ora",
+      "listening": "{{name}} sta analizzando l’audio di sistema",
+      "stop": "Interrompi",
+      "minimise": "Riduci a icona",
+      "show": "Mostra: {{name}} sta analizzando l’audio di sistema",
+      "remember": "Memorizza il consenso per questa estensione su questo dispositivo",
+      "consentSetting": "Consenso per l’audio di sistema",
+      "askEachTime": "Chiedi a ogni avvio.",
+      "remembered": "Il consenso è memorizzato per questo account su questo dispositivo.",
+      "paused": "Gli avvii sono sospesi. Consenti di nuovo le richieste quando vuoi che questa estensione utilizzi l’audio.",
+      "allowAgain": "Consenti di nuovo le richieste",
+      "revokeApproval": "Revoca il consenso"
+    },
     "floatWidget": "Widget flottante",
     "drawerTab": "Scheda cassetto",
     "dockPanel": "Dock ({{edge}})",

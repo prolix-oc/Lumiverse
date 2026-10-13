@@ -56,10 +56,12 @@ fn stamp_build_revision() {
 fn main() {
     stamp_build_revision();
     println!("cargo:rerun-if-changed=src/capture/macos.m");
+    println!("cargo:rerun-if-changed=src/system_audio/coreaudio.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let mut capture = cc::Build::new();
         capture
             .file("src/capture/macos.m")
+            .file("src/system_audio/coreaudio.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("lumiverse_capture");
@@ -89,6 +91,7 @@ fn main() {
             "Cocoa",
             "CoreGraphics",
             "AVFoundation",
+            "CoreAudio",
             "AVKit",
             "VideoToolbox",
             "CoreMedia",

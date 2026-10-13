@@ -3,7 +3,7 @@ import { GoogleTtsProvider } from "./google-tts";
 import { GoogleVertexTtsProvider } from "./google-vertex-tts";
 import { resolveEffectiveTtsApiUrl } from "../../services/tts-connections.service";
 import {
-  GOOGLE_TTS_MODELS, GOOGLE_TTS_VOICES, buildGeminiTtsBody,
+  DEFAULT_GEMINI_TTS_SPEECH_STYLE, GOOGLE_TTS_MODELS, GOOGLE_TTS_VOICES, buildGeminiTtsBody,
   extractGeminiTtsAudio, extractGeminiTtsAudioChunks, wrapPcmInWav,
 } from "./google-tts-shared";
 
@@ -61,6 +61,37 @@ describe("Gemini TTS audio extraction", () => {
 
     expect(new Uint8Array(extractGeminiTtsAudio(response).audioData)).toEqual(expected);
     expect(Array.from(extractGeminiTtsAudioChunks(response))[0].data).toEqual(expected);
+  });
+});
+
+describe("Gemini 3.8 speech style metadata", () => {
+  test.each(["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"])("%s sends delivery guidance separately from the transcript and voice", (model) => {
+    const text = "Like a delivery guy. <giggle> Still talking.";
+    const body = buildGeminiTtsBody({ text, model, voice: "Kore", parameters: {} });
+    expect(body.contents[0].parts).toEqual([{ text, speech_metadata: { style: DEFAULT_GEMINI_TTS_SPEECH_STYLE } }]);
+    expect(body.generationConfig.speech_config.voice_config.prebuilt_voice_config.voice_name).toBe("Kore");
+    expect(body.generationConfig).not.toHaveProperty("speech_metadata");
+  });
+
+  test("custom speech style replaces the default and trims surrounding whitespace", () => {
+    const body = buildGeminiTtsBody({
+      text: "Hello.", model: "gemini-3.8-flash-tts", voice: "Puck",
+      parameters: { speech_style: "  soft, conversational  ", instructions: "ignored fallback" },
+    });
+    expect(body.contents[0].parts[0]).toEqual({ text: "Hello.", speech_metadata: { style: "soft, conversational" } });
+  });
+
+  test.each(["", " \n "])("an explicitly blank speech style opts out (%j)", (speech_style) => {
+    const body = buildGeminiTtsBody({
+      text: "Hello.", model: "gemini-3.8-flash-tts", voice: "Kore",
+      parameters: { speech_style, instructions: "ignored fallback" },
+    });
+    expect(body.contents[0].parts).toEqual([{ text: "Hello." }]);
+  });
+
+  test.each(["gemini-3.1-flash-tts-preview", "gemini-2.5-pro-preview-tts"])("older model %s receives no new metadata", (model) => {
+    const body = buildGeminiTtsBody({ text: "Hello.", model, voice: "Kore", parameters: { speech_style: "conversational" } });
+    expect(body.contents[0].parts).toEqual([{ text: "Hello." }]);
   });
 });
 
@@ -285,22 +316,27 @@ describe("Google TTS providers", () => {
     expect(chunks[2].done).toBe(true);
   });
 
-  test("AI Studio streams audio chunks via streamGenerateContent SSE", async () => {
+  test.each(["gemini-3.1-flash-tts-preview", "gemini-3.8-flash-tts"])("AI Studio streams %s with the appropriate speech metadata", async (model) => {
     const sseBody = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcmB64("studio-stream") } }] } }] })}\n\n`;
     const calls: string[] = [];
-    (globalThis as any).fetch = async (input: any) => {
+    let body: Record<string, any> = {};
+    (globalThis as any).fetch = async (input: any, init?: RequestInit) => {
       calls.push(String(input));
+      body = JSON.parse(String(init?.body));
       return new Response(sseBody, { headers: { "content-type": "text/event-stream" } });
     };
 
     const chunks: any[] = [];
     for await (const chunk of studio.synthesizeStream("my-api-key", "", {
-      text: "hello", model: "gemini-3.1-flash-tts-preview", voice: "Puck", parameters: {},
+      text: "hello", model, voice: "Puck", parameters: {},
     })) {
       chunks.push(chunk);
     }
 
-    expect(calls[0]).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:streamGenerateContent?alt=sse&key=my-api-key");
+    expect(calls[0]).toBe(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=my-api-key`);
+    expect(body.contents[0].parts[0]).toEqual(model === "gemini-3.8-flash-tts"
+      ? { text: "hello", speech_metadata: { style: DEFAULT_GEMINI_TTS_SPEECH_STYLE } }
+      : { text: "hello" });
     expect(chunks.length).toBe(2);
     expect(chunks[0].done).toBe(false);
     expect(wavText(chunks[0].data.buffer)).toBe("studio-stream");

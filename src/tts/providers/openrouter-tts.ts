@@ -1,7 +1,7 @@
 import type { TtsProviderCapabilities } from "../param-schema";
 import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "../types";
 import { OpenAICompatibleTtsProvider } from "./openai-compatible-tts";
-import { wrapPcmInWav } from "./google-tts-shared";
+import { GEMINI_TTS_SPEECH_STYLE_PARAMETER, resolveGeminiTtsSpeechStyle, wrapPcmInWav } from "./google-tts-shared";
 import { fetchProviderJson } from "../../utils/provider-errors";
 
 /**
@@ -26,6 +26,7 @@ export class OpenRouterTtsProvider extends OpenAICompatibleTtsProvider {
 
   readonly capabilities: TtsProviderCapabilities = {
     parameters: {
+      speech_style: GEMINI_TTS_SPEECH_STYLE_PARAMETER,
       speed: {
         type: "number",
         default: 1.0,
@@ -88,8 +89,11 @@ export class OpenRouterTtsProvider extends OpenAICompatibleTtsProvider {
   protected override buildBody(request: TtsRequest): Record<string, any> {
     const body = super.buildBody(request);
     body.response_format = this.responseFormat(request);
-    // `instructions` is only honored by the OpenAI gpt-4o-mini-tts family.
-    if (request.parameters.instructions && /gpt-4o-mini-tts/i.test(request.model)) {
+    // OpenRouter maps Gemini delivery instructions to its speech metadata.
+    const style = resolveGeminiTtsSpeechStyle(request);
+    if (style) {
+      body.instructions = style;
+    } else if (request.parameters.instructions && /gpt-4o-mini-tts/i.test(request.model)) {
       body.instructions = request.parameters.instructions;
     }
     return body;

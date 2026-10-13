@@ -89,6 +89,7 @@ async function synthesizeBuffered(
     voice?: string
     model?: string
     speed?: number
+    parameters?: Record<string, unknown>
     outputFormat?: string
     signal?: AbortSignal
     onPlayableSegment?: (segment: SynthesizedTtsSegment) => void
@@ -115,6 +116,7 @@ async function synthesizeStreamed(
     voice?: string
     model?: string
     speed?: number
+    parameters?: Record<string, unknown>
     outputFormat?: string
     signal?: AbortSignal
     onPlayableSegment?: (segment: SynthesizedTtsSegment) => void
@@ -240,6 +242,7 @@ export async function synthesizeTtsSegments(
     voice?: string
     model?: string
     speed?: number
+    parameters?: Record<string, unknown>
     outputFormat?: string
     signal?: AbortSignal
     onPlayableSegment?: (segment: SynthesizedTtsSegment) => void

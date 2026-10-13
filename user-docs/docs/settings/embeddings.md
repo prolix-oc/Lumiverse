@@ -137,7 +137,11 @@ Controls the balance between traditional keyword matching and semantic vector se
 |------|----------|
 | **Keyword First** | Prioritize exact word matches; use vectors as a tiebreaker |
 | **Balanced** | Weight both methods equally (recommended) |
-| **Vector First** | Prioritize semantic similarity; keywords are secondary |
+| **Vector First** | Select semantic matches by vector distance first; keyword evidence breaks ties and keyword activations fill remaining capacity |
+
+Vector First reserves the vector shortlist for entries returned by semantic search. An entry that also matches a trigger keyword retains its vector score and counts as a vector activation. World-info entry and token budgets admit vector matches before keyword fallback, while constants, minimum-priority filters, and configured group rules still apply. Prompt insertion positions and entry ordering remain controlled by the lorebook's placement settings.
+
+Converting a lorebook retains its primary and secondary trigger keywords. Setting Similarity Threshold and Rerank Cutoff to **0** disables filtering; it does not change the selected retrieval mode.
 
 ---
 

@@ -102,6 +102,25 @@ const active = await spindle.regex_scripts.getActive({
 | `delete(scriptId)` | `Promise<boolean>` | Delete a script created by this extension, preset-bound or not, or any script when `regex_scripts_unrestricted` is also granted. Throws for protected scripts; returns `true` if deleted. |
 | `getActive(options)` | `Promise<RegexScriptDTO[]>` | Resolve enabled scripts that would fire for a given target plus character/chat context. Merges global + character + chat scopes and orders them by scope tier then `sort_order`. |
 
+## Preparing activation patterns
+
+Use `spindle.regex_scripts.prepareActivationPatterns()` to fill in names, chat variables, and preset variables before matching an activation pattern. Requires `regex_scripts` permission.
+
+```ts
+const { patterns } = await spindle.regex_scripts.prepareActivationPatterns({
+  presetId: 'preset-id',
+  chatId: 'chat-id',
+  patterns: ['^{{char}}:{{getchatvar::mode}}$'],
+})
+// Each row: { source, resolved } or { source, error }
+```
+
+Pass `presetId` and `patterns`. Add `chatId`, `characterId`, `personaId`, or `connectionId` to select the context. Operator-scoped extensions must also supply `userId`; user-scoped extensions use the installer's account.
+
+Supported inputs are `char`, `user`, `getchatvar`, and `presetvar`. Their values are escaped so punctuation in a name or variable is matched literally. Check each row for `error` before using `resolved`.
+
+Requests accept 1–100 patterns, up to 10,000 characters each and 100,000 characters total. Invalid requests and inaccessible context reject the call.
+
 ## RegexScriptListOptionsDTO
 
 | Field | Type | Description |

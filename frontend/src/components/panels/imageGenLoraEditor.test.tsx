@@ -811,7 +811,7 @@ describe('image generation LoRA editor behavior', () => {
       />,
     )
     await click(selectTrigger())
-    const option = required<HTMLButtonElement>('button[role="option"]')
+    const option = required<HTMLButtonElement>('button[role="option"][aria-label="Ink v2"]')
     expect(option.textContent).toContain('Ink v2')
     await click(option)
 
