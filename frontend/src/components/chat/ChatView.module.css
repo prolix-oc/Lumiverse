@@ -143,15 +143,30 @@
   justify-content: flex-start;
 }
 
+/* Extension strip wrappers size to their own controls, so any extension's button
+   group sits in the rail beside the toolbar instead of claiming an equal share of
+   it. No owner allowlist: this applies to every extension. */
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) {
   position: relative;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: row;
-  justify-content: center;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
   max-width: 100%;
+}
+
+/* Every other extension root (any owner, any or no dock request) keeps its full
+   width; the Quick Toolbar absorbs the squeeze through its own overflow menu. */
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global(:is([data-spindle-ext-id], [data-spindle-ext], [data-spindle-extension-root]):not(:has([data-spindle-host-surface], [data-component='QuickToolbar']))) {
+  flex-shrink: 0;
+}
+
+/* Only the wrapper hosting a workspace surface (the strip-mounted Quick Toolbar) fills the rail. */
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']:has(> [data-spindle-host-surface])) {
+  flex: 1 1 auto;
+  justify-content: center;
+  align-items: stretch;
   width: 100%;
 }
 
@@ -593,6 +608,15 @@
 }
 
 .chatToolbar[data-native-action-side='right'] > :global([data-component='QuickToolbar']) {
+  order: 1;
+}
+
+/* A core button placed directly in the rail follows the native group's side. */
+.chatToolbar[data-native-action-side='right'] > .toolbarBtn {
+  order: 2;
+}
+
+.chatToolbar[data-native-action-side='left'] > .toolbarBtn {
   order: 1;
 }
 
