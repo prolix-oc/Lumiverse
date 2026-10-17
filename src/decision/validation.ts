@@ -1,5 +1,11 @@
 import type { DecisionEvaluationInput, DecisionQuestion, DecisionResult } from "./contract";
 
+/**
+ * Decoded image bytes per request. Fits 8 NovelAI 832x1216 PNGs (largest seen: 2.5 MiB) or 8 JPEGs at 1568 px;
+ * as base64 (+33%) plus the 1 MiB question cap it stays under TypeSafe's 32 MiB request limit.
+ */
+export const DECISION_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
 export class DecisionValidationError extends Error {}
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -15,6 +21,34 @@ function jsonValue(value: unknown, depth = 0): boolean {
 }
 function description(value: unknown): boolean {
   return (typeof value === "string" || Array.isArray(value) || isRecord(value)) && jsonValue(value);
+}
+function strings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value) || isRecord(value)) for (const item of Object.values(value)) strings(item, out);
+  return out;
+}
+/** Images and Box questions need TypeSafe's images header and are only sent to TypeSafe. */
+export function usesDecisionImages(input: DecisionEvaluationInput): boolean {
+  return Object.keys(input.assets ?? {}).length > 0 || Object.values(input.questions).some((q) => q.type === "box");
+}
+function validateAssets(assets: unknown, text: string[]): void {
+  if (!isRecord(assets)) fail("assets must be an object");
+  let bytes = 0;
+  for (const [ref, asset] of Object.entries(assets)) {
+    if (!ref.trim() || Buffer.byteLength(ref) > 1024) fail("Asset references must be 1–1024 bytes");
+    if (!text.some((s) => s.includes(ref))) fail(`Asset ${ref} is not referenced in state, instructions, or criteria`);
+    if (!isRecord(asset) || (asset.type !== undefined && asset.type !== "image")) fail(`Asset ${ref} must be an image`);
+    if (asset.image_id !== undefined) {
+      if (typeof asset.image_id !== "string" || !asset.image_id.trim() || asset.data_base64 !== undefined) fail(`Asset ${ref} needs either an image_id or data_base64`);
+      continue;
+    }
+    const data = asset.data_base64;
+    if (!["png", "jpg", "jpeg"].includes(asset.format as string) || typeof data !== "string" || !data || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+      fail(`Asset ${ref} requires an image_id, or a png/jpg format with plain base64 data`);
+    }
+    bytes += data.length / 4 * 3 - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+  }
+  if (bytes > DECISION_IMAGE_MAX_BYTES) fail(`Decision images exceed ${DECISION_IMAGE_MAX_BYTES / (1024 * 1024)} MiB`);
 }
 export function validateDecisionInput(input: unknown): asserts input is DecisionEvaluationInput {
   if (!isRecord(input)) fail("Decision input must be an object");
@@ -33,9 +67,15 @@ export function validateDecisionInput(input: unknown): asserts input is Decision
     } else if (q.type === "noul") {
       if (q.criteria !== undefined && (!isRecord(q.criteria) || !description(q.criteria.true) || !description(q.criteria.false)
         || Object.keys(q.criteria).some((key) => key !== "true" && key !== "false"))) fail(`Question ${id} Noul criteria require true and false descriptions`);
+    } else if (q.type === "box") {
+      if (q.criteria !== undefined) fail(`Question ${id} is a Box question and takes no criteria`);
     } else fail(`Question ${id} has an unsupported type`);
   }
-  if (Buffer.byteLength(JSON.stringify(input)) > 1024 * 1024) fail("Decision input exceeds 1 MiB");
+  const { assets, ...rest } = input;
+  const questions = Object.values(input.questions) as DecisionQuestion[];
+  if (assets !== undefined) validateAssets(assets, strings([input.state, ...questions.map((q) => [q.instructions, "criteria" in q ? q.criteria : null])]));
+  if (questions.some((q) => q.type === "box") && !Object.keys(assets ?? {}).length) fail("Box questions require an image in assets");
+  if (Buffer.byteLength(JSON.stringify(rest)) > 1024 * 1024) fail("Decision input exceeds 1 MiB");
 }
 const probability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 function sameKeys(value: unknown, keys: string[]): value is Record<string, unknown> {
@@ -49,6 +89,12 @@ export function validateDecisionResult(value: unknown, questions: Record<string,
     if (!isRecord(answer) || answer.type !== question.type) fail(`Provider returned a mismatched answer for ${id}`);
     if (question.type === "noul") {
       if (!probability(answer.noul)) fail(`Provider returned an invalid Noul probability for ${id}`);
+      continue;
+    }
+    if (question.type === "box") {
+      const box = answer.box;
+      if (!probability(answer.confidence) || !sameKeys(box, ["top", "bottom", "left", "right"]) || !Object.values(box).every(probability)
+        || !((box.left as number) < (box.right as number)) || !((box.top as number) < (box.bottom as number))) fail(`Provider returned an invalid Box for ${id}`);
       continue;
     }
     const keys = question.type === "choice" ? Object.keys(question.criteria) : question.criteria.map((_, i) => String(i));

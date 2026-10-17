@@ -18,7 +18,7 @@ describe("Decision provider adapters", () => {
     }) as unknown as typeof fetch;
     const models = await fetchDecisionModels({ provider: "typesafe" }, "test-key");
     expect(models.map((m) => m.id)).toEqual(["jev-latest", "jev-preview"]);
-    expect(models[0].input_modalities).toEqual(["text"]);
+    expect(models[0].input_modalities).toEqual(["text", "image"]);
   });
   test("filters OpenRouter by modality and flags incompatible protocols", async () => {
     globalThis.fetch = (async (url: any) => {
@@ -43,12 +43,31 @@ describe("Decision provider adapters", () => {
       expect(url).toBe("https://openrouter.ai/api/alpha/decisions");
       expect(JSON.parse(init.body)).toEqual({ model: "~typesafe/jev-latest", state: input.state, questions: input.questions });
       expect(init.redirect).toBe("error");
+      expect(init.headers).not.toHaveProperty("TypeSafe-Danger-Zone-Images");
       return Response.json({ model: "typesafe/resolved", answers: { yes: { type: "noul", noul: 0.81234 } }, usage: { input_tokens: null, cost: 0.00001 }, id: "request-id", provider: "TypeSafe", secret_extra: "hidden" });
     }) as unknown as typeof fetch;
     const result = await evaluateProviderDecision({ provider: "openrouter", model: "~typesafe/jev-latest", default_parameters: {} }, "key", input);
     expect(result.usage).toEqual({ input_tokens: null, cost: 0.00001 });
     expect(result.id).toBe("request-id");
     expect(result).not.toHaveProperty("secret_extra");
+  });
+  test("sends TypeSafe image assets and Box questions with the images header", async () => {
+    const input: DecisionEvaluationInput = {
+      state: { page: "ref-page" }, assets: { "ref-page": { type: "image", format: "jpg", data_base64: "/9j/" } },
+      questions: { face: { type: "box", instructions: "the face in `page`" } },
+    };
+    globalThis.fetch = (async (url: any, init: any) => {
+      expect(url).toBe("https://api.typesafe.ai/v1/systemone");
+      expect(init.headers["TypeSafe-Danger-Zone-Images"]).toBe("true");
+      expect(JSON.parse(init.body)).toEqual({ model: "jev-preview", state: input.state, questions: input.questions, assets: input.assets });
+      return Response.json({ model: "jev-1.14.0", answers: { face: { type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 } } });
+    }) as unknown as typeof fetch;
+    const result = await evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {} }, "key", input);
+    expect(result.answers.face).toEqual({ type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 });
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({}); }) as unknown as typeof fetch;
+    await expect(evaluateProviderDecision({ provider: "openrouter", model: "~typesafe/jev-latest", default_parameters: {} }, "key", input)).rejects.toThrow("TypeSafe Decision connection");
+    expect(calls).toBe(0);
   });
   test("rejects arbitrary defaults and preserves permitted routing", () => {
     expect(() => validateDecisionParameters("openrouter", { model: "override" })).toThrow();

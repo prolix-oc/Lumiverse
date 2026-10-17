@@ -5,6 +5,8 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 const keys = new Map<string, string>();
 const keyFor = (user: string, key: string) => `${user}:${key}`;
 mock.module("./secrets.service", () => ({
+  SYSTEM_SECRET_PRINCIPAL: "__system__",
+  SYSTEM_SECRET_PRINCIPAL_EMAIL: "system@lumiverse.local",
   getSecret: async (user: string, key: string) => keys.get(keyFor(user, key)) ?? null,
   getSecretForStatus: async (user: string, key: string) => keys.get(keyFor(user, key)) ?? null,
   putSecret: async (user: string, key: string, value: string) => { keys.set(keyFor(user, key), value); },

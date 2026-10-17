@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { validateDecisionInput, validateDecisionResult } from "./validation";
+import { validateDecisionInput, validateDecisionResult, usesDecisionImages } from "./validation";
 import type { DecisionEvaluationInput } from "./contract";
 
 const input: DecisionEvaluationInput = {
@@ -42,5 +42,52 @@ describe("Decision contracts", () => {
     if (failure === "usage") value.usage = { input_tokens: -1 };
     if (failure === "score") value.answers.intensity.score = NaN;
     expect(() => validateDecisionResult(value, input.questions)).toThrow();
+  });
+});
+
+const imageInput: DecisionEvaluationInput = {
+  state: { page: "ref-page" },
+  assets: { "ref-page": { type: "image", format: "png", data_base64: "iVBORw0KGgo=" }, "ref-badge": { image_id: "stored-image" } },
+  questions: {
+    present: { type: "noul", instructions: "Is the person from ref-badge in `page`?" },
+    face: { type: "box", instructions: "the face in `page`" },
+  },
+};
+const boxResult = () => ({ model: "jev-1.14.0", answers: {
+  present: { type: "noul", noul: 0.9 },
+  face: { type: "box", box: { top: 0.1, bottom: 0.4, left: 0.3, right: 0.6 }, confidence: 0.7 },
+} });
+describe("Decision images and Box", () => {
+  test("accepts referenced base64 and image_id assets with Box questions", () => {
+    expect(() => validateDecisionInput(imageInput)).not.toThrow();
+    expect(usesDecisionImages(imageInput)).toBe(true);
+    expect(usesDecisionImages(input)).toBe(false);
+    const value = boxResult();
+    validateDecisionResult(value, imageInput.questions);
+    expect(value.answers.face.box.right).toBe(0.6);
+  });
+  test.each([
+    ["Box criteria", { questions: { ...imageInput.questions, face: { type: "box", instructions: "x", criteria: ["a", "b"] } } }],
+    ["Box without image", { assets: undefined, state: "text" }],
+    ["unreferenced asset", { assets: { ...imageInput.assets, "ref-unused": { image_id: "other" } } }],
+    ["image_id with data", { assets: { ...imageInput.assets, "ref-badge": { image_id: "stored", format: "png", data_base64: "AAAA" } } }],
+    ["unknown format", { assets: { ...imageInput.assets, "ref-page": { format: "webp", data_base64: "AAAA" } } }],
+    ["data URL", { assets: { ...imageInput.assets, "ref-page": { format: "png", data_base64: "data:image/png;base64,AAAA" } } }],
+    ["line breaks", { assets: { ...imageInput.assets, "ref-page": { format: "png", data_base64: "AAAA\nAAAA" } } }],
+    ["over 20 MiB", { assets: { ...imageInput.assets, "ref-page": { format: "jpg", data_base64: "A".repeat(28 * 1024 * 1024) } } }],
+  ])("rejects %s", (_name, patch) => {
+    expect(() => validateDecisionInput({ ...imageInput, ...patch })).toThrow();
+  });
+  test("image bytes do not count toward the 1 MiB question cap", () => {
+    const large = { format: "jpg", data_base64: "A".repeat(4 * 1024 * 1024) };
+    expect(() => validateDecisionInput({ ...imageInput, assets: { ...imageInput.assets, "ref-page": large } })).not.toThrow();
+  });
+  test.each(["range", "order", "keys", "confidence"])("rejects invalid Box answers: %s", (failure) => {
+    const value: any = boxResult();
+    if (failure === "range") value.answers.face.box.bottom = 1.2;
+    if (failure === "order") value.answers.face.box.left = 0.7;
+    if (failure === "keys") delete value.answers.face.box.top;
+    if (failure === "confidence") delete value.answers.face.confidence;
+    expect(() => validateDecisionResult(value, imageInput.questions)).toThrow();
   });
 });

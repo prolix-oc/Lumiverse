@@ -1,5 +1,5 @@
 import type { DecisionModelDTO, DecisionProviderDTO, DecisionResult, DecisionEvaluationInput } from "./contract";
-import { DecisionValidationError, isRecord, validateDecisionResult } from "./validation";
+import { DecisionValidationError, isRecord, usesDecisionImages, validateDecisionResult } from "./validation";
 import { fetchProviderJson, describeProviderError, clampErrorMessage, ProviderRequestError } from "../utils/provider-errors";
 import { redactRequestValue } from "../utils/redact-request";
 
@@ -58,7 +58,7 @@ export async function fetchDecisionModels(profile: { provider: string; api_url?:
     models.set(id, {
       id, label: profile.provider === "openrouter" && typeof item.name === "string" ? item.name : id,
       ...(typeof item.description === "string" ? { description: item.description } : {}),
-      ...(profile.provider === "typesafe" ? { input_modalities: ["text"] } : Array.isArray(architecture.input_modalities) ? { input_modalities: architecture.input_modalities.filter((v): v is string => typeof v === "string") } : {}),
+      ...(profile.provider === "typesafe" ? { input_modalities: ["text", "image"] } : Array.isArray(architecture.input_modalities) ? { input_modalities: architecture.input_modalities.filter((v): v is string => typeof v === "string") } : {}),
       ...(Array.isArray(architecture.output_modalities) ? { output_modalities: architecture.output_modalities.filter((v): v is string => typeof v === "string") } : {}),
       ...(typeof item.context_length === "number" ? { context_length: item.context_length } : {}),
       ...(isRecord(item.pricing) ? { pricing: Object.fromEntries(Object.entries(item.pricing).filter((entry): entry is [string, string] => typeof entry[1] === "string")) } : {}),
@@ -90,9 +90,15 @@ export async function evaluateProviderDecision(profile: { provider: string; api_
   const model = input.model?.trim() || profile.model.trim();
   if (!model) throw new DecisionValidationError("Select a Decision model for this connection");
   if (isUnsupportedDecisionModel(profile.provider, model)) throw new DecisionValidationError("This model uses chat completions and does not support the Decision API");
-  const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions };
+  const images = usesDecisionImages(input);
+  if (images && profile.provider !== "typesafe") throw new DecisionValidationError("Images and Box questions need a TypeSafe Decision connection");
+  const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions, ...(input.assets ? { assets: input.assets } : {}) };
   const value = await fetchProviderJson<unknown>(provider.name, "decision evaluation", decisionEvaluationUrl(profile), {
-    method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...(profile.provider === "openrouter" ? { "HTTP-Referer": "https://lumiverse.chat", "X-Title": "Lumiverse" } : {}) },
+    method: "POST", headers: {
+      Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json",
+      ...(profile.provider === "openrouter" ? { "HTTP-Referer": "https://lumiverse.chat", "X-Title": "Lumiverse" } : {}),
+      ...(images ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
+    },
     body: JSON.stringify(body), redirect: "error", signal,
   });
   try { validateDecisionResult(value, input.questions); }

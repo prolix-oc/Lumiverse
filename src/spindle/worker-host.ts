@@ -1320,6 +1320,7 @@ export class WorkerHost {
           "required-interceptors-v1": 1,
           "mcp-servers-v1": 1,
           "decisions-v1": 1,
+          "decision-images-v1": 1,
           "desktop-capture-worker-v1": 1,
         }),
         extensionInstallationId: this.extensionId,
