@@ -1,5 +1,10 @@
 import { getDb } from "../db/connection";
 import type { EmbeddingConnectionDTO, EmbeddingsEmbedResult } from "lumiverse-spindle-types";
+import {
+  withInferenceLease,
+  withLeaseAbort,
+  type InferenceRequestClass,
+} from "./inference-scheduler";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import type {
@@ -140,6 +145,9 @@ export function isEmbeddingAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const name = (err as { name?: string }).name;
   if (name === "AbortError") return true;
+  // A background embedding preempted by interactive work is a cancellation,
+  // not a provider failure: do not burn the fallback chain on it.
+  if ((err as { code?: string }).code === "INFERENCE_PREEMPTED") return true;
   const message = (err as { message?: string }).message || "";
   return name === "DOMException" && /abort/i.test(message);
 }
@@ -2336,11 +2344,60 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
   }
 }
 
+export interface EmbeddingRequestOptions {
+  omitDimensions?: boolean;
+  signal?: AbortSignal;
+  inputType?: EmbeddingInputType;
+  /** Local-inference scheduling class for the resource this request hits. */
+  leaseClass?: InferenceRequestClass;
+  /** Short diagnostics label for the scheduler queue entry. */
+  leasePurpose?: string;
+}
+
+/**
+ * Gate the driver call on the local-inference resource that owns its endpoint.
+ * Vertex is remote and keeps its original path.
+ */
 async function requestEmbeddingsWithDriver(
+  userId: string,
   driver: EmbeddingDriverConfig,
   apiKey: string,
   texts: string[],
-  options?: { omitDimensions?: boolean; signal?: AbortSignal; inputType?: EmbeddingInputType }
+  options?: EmbeddingRequestOptions,
+): Promise<number[][]> {
+  if (!texts.length) return [];
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
+
+  if (driver.provider === "google_vertex") {
+    return requestEmbeddingsWithDriverInner(driver, apiKey, texts, options, userId);
+  }
+
+  const requestClass: InferenceRequestClass = options?.leaseClass
+    ?? (options?.inputType === "query" ? "retrieval" : "bulk");
+  return withInferenceLease(
+    {
+      userId,
+      endpoint: driver.api_url,
+      requestClass,
+      purpose: options?.leasePurpose ?? "embeddings",
+      signal: options?.signal,
+    },
+    (lease) => requestEmbeddingsWithDriverInner(
+      driver,
+      apiKey,
+      texts,
+      { ...options, signal: withLeaseAbort(options?.signal, lease) },
+      userId,
+    ),
+  );
+}
+
+async function requestEmbeddingsWithDriverInner(
+  driver: EmbeddingDriverConfig,
+  apiKey: string,
+  texts: string[],
+  options: EmbeddingRequestOptions | undefined,
+  userId: string,
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw resolveAbortError(options.signal);
@@ -2362,6 +2419,7 @@ async function requestEmbeddingsWithDriver(
     const vectors: number[][] = [];
     for (let offset = 0; offset < texts.length; offset += 96) {
       vectors.push(...await requestEmbeddingsWithDriver(
+        userId,
         driver,
         apiKey,
         texts.slice(offset, offset + 96),
@@ -2386,7 +2444,7 @@ async function requestEmbeddingsWithDriver(
   if (isOllamaLegacySingleOnly && texts.length > 1) {
     const results: number[][] = [];
     for (const text of texts) {
-      const [vec] = await requestEmbeddingsWithDriver(driver, apiKey, [text], options);
+      const [vec] = await requestEmbeddingsWithDriver(userId, driver, apiKey, [text], options);
       results.push(vec);
     }
     return results;
@@ -2463,7 +2521,7 @@ async function requestEmbeddingsWithDriver(
 async function requestEmbeddings(
   userId: string,
   texts: string[],
-  options?: { omitDimensions?: boolean; signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   // Resolve which user's settings + API key actually drive this call. In gate
   // mode non-owners inherit the owner's config and use the owner's key.
@@ -2499,7 +2557,7 @@ async function requestEmbeddings(
           "Embedding API key is not configured",
         );
       }
-      const vectors = await requestEmbeddingsWithDriver(driver, apiKey, texts, options);
+      const vectors = await requestEmbeddingsWithDriver(ctx.userId, driver, apiKey, texts, options);
       if (options?.signal?.aborted) throw resolveAbortError(options.signal);
       return vectors;
     } catch (err) {
@@ -2521,7 +2579,7 @@ async function requestEmbeddings(
 export async function embedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   return requestEmbeddings(userId, texts, options);
 }
@@ -2579,7 +2637,7 @@ const inflightEmbeddings = new Map<string, InflightEmbeddingEntry>();
 export async function cachedEmbedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw resolveAbortError(options.signal);
@@ -2600,7 +2658,15 @@ export async function cachedEmbedTexts(
     const cached = embeddingCache.get(key);
     if (cached) return [cached];
 
-    const vec = await joinOrStartInflight(userId, texts, key, options?.signal, inputType);
+    const vec = await joinOrStartInflight(
+      userId,
+      texts,
+      key,
+      options?.signal,
+      inputType,
+      options?.leaseClass,
+      options?.leasePurpose,
+    );
     return [vec];
   }
 
@@ -2638,7 +2704,12 @@ export async function embedQuery(
   text: string,
   options?: { signal?: AbortSignal },
 ): Promise<number[]> {
-  const [vector] = await cachedEmbedTexts(userId, [text], { signal: options?.signal, inputType: "query" });
+  const [vector] = await cachedEmbedTexts(userId, [text], {
+    signal: options?.signal,
+    inputType: "query",
+    leaseClass: "retrieval",
+    leasePurpose: "embeddings-query",
+  });
   return vector ?? [];
 }
 
@@ -2650,7 +2721,12 @@ export async function embedInBatches<T>(
   getText: (item: T) => string,
   onBatchReady: (items: T[], texts: string[], vectors: number[][]) => Promise<void>,
   onItemFailed: (items: T[], error: Error) => void | Promise<void>,
-  options?: { signal?: AbortSignal; label?: string },
+  options?: {
+    signal?: AbortSignal;
+    label?: string;
+    leaseClass?: InferenceRequestClass;
+    leasePurpose?: string;
+  },
 ): Promise<void> {
   if (items.length === 0) return;
   const bs = Math.max(1, Math.min(initialBatchSize, 200));
@@ -2662,7 +2738,11 @@ export async function embedInBatches<T>(
     }
     const texts = batch.map(getText);
     try {
-      const vectors = await cachedEmbedTexts(userId, texts, { signal: options?.signal });
+      const vectors = await cachedEmbedTexts(userId, texts, {
+        signal: options?.signal,
+        leaseClass: options?.leaseClass ?? "bulk",
+        leasePurpose: options?.leasePurpose ?? options?.label ?? "embeddings-batch",
+      });
       await onBatchReady(batch, texts, vectors);
     } catch (err) {
       if (options?.signal?.aborted) {
@@ -2690,6 +2770,8 @@ function joinOrStartInflight(
   key: string,
   signal: AbortSignal | undefined,
   inputType: EmbeddingInputType,
+  leaseClass: InferenceRequestClass | undefined,
+  leasePurpose: string | undefined,
 ): Promise<number[]> {
   const existing = inflightEmbeddings.get(key);
   if (existing) {
@@ -2704,7 +2786,12 @@ function joinOrStartInflight(
     hasUncancellableJoiner: false,
   };
 
-  entry.promise = requestEmbeddings(userId, texts, { signal: controller.signal, inputType }).then(
+  entry.promise = requestEmbeddings(userId, texts, {
+    signal: controller.signal,
+    inputType,
+    leaseClass,
+    leasePurpose,
+  }).then(
     (vecs) => {
       if (controller.signal.aborted) {
         inflightEmbeddings.delete(key);
@@ -2896,10 +2983,11 @@ export async function testEmbeddingConnection(
   const apiKey = await resolveProfileSecret(ctx.userId, profile);
   if (!apiKey) throw new Error("No API key is configured for this embedding connection");
   const vectors = await requestEmbeddingsWithDriver(
+    ctx.userId,
     profileToDriverConfig(cfg, profile),
     apiKey,
     [text],
-    { omitDimensions: true },
+    { omitDimensions: true, leaseClass: "retrieval", leasePurpose: "embeddings-test" },
   );
   const first = vectors[0] || [];
   if (!first.length) throw new Error("No embedding vector returned");
@@ -2983,7 +3071,12 @@ export async function embedTextsWithConnection(
       const indices = missing.slice(offset, offset + batchSize);
       let vectors: number[][];
       try {
-        vectors = await requestEmbeddingsWithDriver(driver, apiKey, indices.map((index) => texts[index]), { inputType, signal: options.signal });
+        vectors = await requestEmbeddingsWithDriver(ctx.userId, driver, apiKey, indices.map((index) => texts[index]), {
+          inputType,
+          signal: options.signal,
+          leaseClass: "bulk",
+          leasePurpose: "embeddings-batch",
+        });
       } catch (err) {
         if (options.signal?.aborted || isEmbeddingAbortError(err)) throw resolveAbortError(options.signal);
         throw sanitizeEmbeddingError(err, [apiKey]);
@@ -5056,4 +5149,22 @@ export function mapDatabankSearchHits(
   }
 
   return results;
+}
+
+/**
+ * Endpoint the active embedding chain will contact first. Used by the
+ * inference scheduler to pick the resource for work that is dispatched to a
+ * worker or subprocess, where the request itself is not visible to the host.
+ */
+export function resolvePrimaryEmbeddingEndpoint(userId: string): string | null {
+  try {
+    const ctx = resolveEmbeddingUserContext(userId);
+    const cfg = readRawEmbeddingConfig(ctx.userId);
+    const chain = selectFallbackChain(cfg);
+    const profile = chain[0];
+    const endpoint = profile ? profile.api_url || cfg.api_url : cfg.api_url;
+    return endpoint || null;
+  } catch {
+    return null;
+  }
 }

@@ -259,7 +259,11 @@ export function createCortexSidecarGenerateRawAdapter(options: {
       parameters: sidecarParams,
       tools: opts.tools,
       signal: opts.signal,
-    }, { origin: { kind: "sidecar", name: "Memory Cortex", operation: opts.requestPurpose ?? "analysis" } });
+    }, {
+      origin: { kind: "sidecar", name: "Memory Cortex", operation: opts.requestPurpose ?? "analysis" },
+      leaseClass: "background",
+      leasePurpose: `memory-cortex:${opts.requestPurpose ?? "analysis"}`,
+    });
 
     const stopped = describeGenerationStop(result.finish_reason, result.stop_details);
     if (stopped) {

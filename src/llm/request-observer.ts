@@ -11,6 +11,14 @@ export interface GenerationCallOptions {
   origin?: RequestOrigin;
   chatId?: string;
   generationId?: string;
+  /**
+   * Local-inference scheduling class. Callers that run in the background
+   * (sidecar extraction, summaries, extensions) pass a lower-priority class so
+   * interactive chat can preempt them.
+   */
+  leaseClass?: import("../services/inference-scheduler/types").InferenceRequestClass;
+  /** Short diagnostics label for the scheduler queue entry. */
+  leasePurpose?: string;
 }
 
 export interface ProviderRequestSnapshot {

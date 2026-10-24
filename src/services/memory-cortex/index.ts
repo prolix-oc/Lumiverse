@@ -1319,6 +1319,12 @@ export async function runQueryGenerationSidecar<T>(options: {
       throw new Error("sidecar returned empty extraction");
     } catch (err: unknown) {
       if (signal?.aborted) return finish("aborted", { role: lastRole, attempts });
+      // Local-inference scheduling aborted this background call to make room
+      // for an interactive request. Do not try fallbacks (they would queue
+      // behind the same work) and do not count it as a provider failure.
+      if ((err as { code?: string } | null)?.code === "INFERENCE_PREEMPTED") {
+        return finish("exhausted", { role: lastRole, attempts });
+      }
       const timedOut = timeoutController?.signal.aborted === true;
       if (timedOut) sawTimeout = true;
       const transient = isTransientCortexSidecarError(err, false) || timedOut;

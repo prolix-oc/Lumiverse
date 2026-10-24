@@ -3,7 +3,7 @@ import {
   Sliders, MessageSquare, Users, PanelRight,
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
   Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
-  PackageOpen, KeyRound,
+  PackageOpen, KeyRound, Cpu,
   Keyboard,
 } from 'lucide-react'
 import { useStore } from '@/store'
@@ -187,6 +187,26 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure memory cortex extraction and salience',
     tabIcon: Brain,
     keywords: ['memory', 'cortex', 'entities', 'relations', 'salience', 'extraction', 'brain', 'recall'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'inference',
+    shortName: 'Inference',
+    tabName: 'Local Inference Scheduling',
+    tabDescription: 'Serialize local chat, embedding, and image models so they stop competing for VRAM',
+    tabIcon: Cpu,
+    keywords: [
+      'inference', 'scheduler', 'scheduling', 'queue', 'local', 'gpu', 'vram', 'ram',
+      'memory cortex', 'sidecar', 'embeddings', 'image generation', 'contention', 'serialize',
+    ],
+    sections: [
+      {
+        key: 'scheduling',
+        titleKey: 'inferenceScheduler.title',
+        titleFallback: 'Local Inference Scheduling',
+        keywords: ['scheduler', 'queue', 'gpu', 'vram', 'local models', 'sidecar', 'embeddings', 'image generation'],
+      },
+    ],
     component: INLINE_SENTINEL,
   },
   {

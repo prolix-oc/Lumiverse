@@ -61,6 +61,8 @@ import { iosLiveActivityRoutes, iosLiveActivityTransportRoutes } from "./routes/
 import { iosWidgetRoutes, iosWidgetTransportRoutes } from "./routes/ios-widgets.routes";
 import { desktopApiRoutes } from "./routes/desktop-api.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
+import { inferenceSchedulerRoutes } from "./routes/inference-scheduler.routes";
+import "./services/inference-scheduler/notifier";
 import { operatorRoutes } from "./routes/operator.routes";
 import { openrouterRoutes } from "./routes/openrouter.routes";
 import { nanogptRoutes } from "./routes/nanogpt.routes";
@@ -469,6 +471,7 @@ app.route("/api/v1/push/ios/activities", iosLiveActivityRoutes);
 app.route("/api/v1/lumihub", lumihubRoutes);
 app.route("/api/v1/illarin", illarinRoutes);
 app.route("/api/v1/memory-cortex", memoryCortexRoutes);
+app.route("/api/v1/inference-scheduler", inferenceSchedulerRoutes);
 app.route("/api/v1/operator", operatorRoutes);
 app.route("/api/v1/tts-connections", ttsConnectionsRoutes);
 app.route("/api/v1/stt-connections", sttConnectionsRoutes);

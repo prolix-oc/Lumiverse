@@ -32,3 +32,16 @@ export interface ImageProvider {
     subtype: string,
   ): Promise<Array<{ id: string; label: string }>>;
 }
+
+/**
+ * Image connections may omit `api_url` and rely on the provider's built-in
+ * local default. Resolve it before admission so the request is scheduled
+ * against the endpoint that will actually be contacted.
+ */
+export function resolveImageProviderApiUrl(
+  apiUrl: string | null | undefined,
+  provider: Pick<ImageProvider, "capabilities">,
+): string {
+  const configured = (apiUrl ?? "").trim();
+  return configured || provider.capabilities.defaultUrl || "";
+}

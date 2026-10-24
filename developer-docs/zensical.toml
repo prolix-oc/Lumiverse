@@ -33,6 +33,7 @@ nav = [
     { "Generation" = "backend-api/generation.md" },
     { "Decision Models" = "backend-api/decisions.md" },
     { "Embeddings" = "backend-api/embeddings.md" },
+    { "Inference Scheduling" = "backend-api/inference-scheduling.md" },
     { "Image Generation" = "backend-api/image-generation.md" },
     { "Images" = "backend-api/images.md" },
     { "Media" = "backend-api/media.md" },

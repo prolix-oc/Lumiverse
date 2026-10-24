@@ -65,6 +65,7 @@ import TokenizerManager from '@/components/settings/TokenizerManager'
 import Diagnostics from '@/components/settings/Diagnostics'
 import NotificationSettings from '@/components/settings/NotificationSettings'
 import MemoryCortexSettings from '@/components/settings/MemoryCortexSettings'
+import InferenceSchedulerSettings from '@/components/settings/InferenceSchedulerSettings'
 import OperatorPanel from '@/components/settings/OperatorPanel'
 import VoiceSettings from '@/components/settings/VoiceSettings'
 import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettings'
@@ -321,6 +322,8 @@ function SettingsView({ view }: { view: string }) {
       coreContent = <SsoProviderSettings />; break
     case 'memoryCortex':
       coreContent = <MemoryCortexSettings />; break
+    case 'inference':
+      coreContent = <InferenceSchedulerSettings />; break
     case 'notifications':
       coreContent = <NotificationSettings />; break
     case 'voice':

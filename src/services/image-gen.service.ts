@@ -23,6 +23,7 @@ import { resizeInsideToWebp } from "../utils/image-pipeline";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
+import { resolveImageProviderApiUrl } from "../image-gen/provider";
 import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig, readComfyUIWorkflowLibrary } from "../image-gen/comfyui-workflow-storage";
@@ -30,6 +31,7 @@ import { patchWorkflow, type ComfyUIPatchValues, type LoraEntry } from "../image
 import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
 import type { ImageParameterSchemaMap } from "../image-gen/param-schema";
 import { rawGenerate } from "./generate.service";
+import { withInferenceLease, withLeaseAbort } from "./inference-scheduler";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
 import type { Message } from "../types/message";
@@ -749,41 +751,70 @@ async function runProviderGeneration(
 ): Promise<import("../image-gen/types").ImageGenResponse> {
   if (!provider) throw new Error("Image provider not available");
 
-  // generateStream is optional on the ImageProvider interface; only Comfy/Swarm
-  // implement it today.
-  const stream = (provider as any).generateStream;
-  if (typeof stream === "function") {
-    const iter = stream.call(provider, apiKey, apiUrl, request) as AsyncGenerator<
-      { step?: number; totalSteps?: number; preview?: string; nodeId?: string },
-      import("../image-gen/types").ImageGenResponse,
-      unknown
-    >;
-    let lastStep = 0;
-    let lastTotal = 0;
-    while (true) {
-      const next = await iter.next();
-      if (next.done) {
-        return next.value;
-      }
-      const chunk = next.value;
-      if (typeof chunk.step === "number") lastStep = chunk.step;
-      if (typeof chunk.totalSteps === "number") lastTotal = chunk.totalSteps;
-      eventBus.emit(
-        EventType.IMAGE_GEN_PROGRESS,
-        {
-          assetId: ctx.jobId,
-          chatId: ctx.chatId,
-          step: typeof chunk.step === "number" ? chunk.step : lastStep,
-          totalSteps: typeof chunk.totalSteps === "number" ? chunk.totalSteps : lastTotal,
-          preview: chunk.preview,
-          nodeId: chunk.nodeId,
-        },
-        ctx.userId,
-      );
-    }
-  }
+  // Connections may omit `api_url` and rely on the provider's local default
+  // (ComfyUI 8188, SDAPI 7860, SwarmUI 7801). Resolve it before admission so
+  // those requests are scheduled instead of silently bypassing the queue.
+  const effectiveApiUrl = resolveImageProviderApiUrl(apiUrl, provider);
 
-  return provider.generate(apiKey, apiUrl, request);
+  return withInferenceLease(
+    {
+      userId: ctx.userId,
+      endpoint: effectiveApiUrl,
+      requestClass: "user",
+      purpose: "image-generation",
+      signal: request.signal,
+    },
+    async (lease) => {
+      const leasedRequest: ImageGenRequest = {
+        ...request,
+        signal: withLeaseAbort(request.signal, lease),
+      };
+
+      // generateStream is optional on the ImageProvider interface; only Comfy/Swarm
+      // implement it today.
+      const stream = (provider as any).generateStream;
+      if (typeof stream === "function") {
+        const iter = stream.call(provider, apiKey, effectiveApiUrl, leasedRequest) as AsyncGenerator<
+          { step?: number; totalSteps?: number; preview?: string; nodeId?: string },
+          import("../image-gen/types").ImageGenResponse,
+          unknown
+        >;
+        let lastStep = 0;
+        let lastTotal = 0;
+        try {
+          while (true) {
+            const next = await iter.next();
+            if (next.done) {
+              return next.value;
+            }
+            const chunk = next.value;
+            if (typeof chunk.step === "number") lastStep = chunk.step;
+            if (typeof chunk.totalSteps === "number") lastTotal = chunk.totalSteps;
+            eventBus.emit(
+              EventType.IMAGE_GEN_PROGRESS,
+              {
+                assetId: ctx.jobId,
+                chatId: ctx.chatId,
+                step: typeof chunk.step === "number" ? chunk.step : lastStep,
+                totalSteps: typeof chunk.totalSteps === "number" ? chunk.totalSteps : lastTotal,
+                preview: chunk.preview,
+                nodeId: chunk.nodeId,
+              },
+              ctx.userId,
+            );
+          }
+        } finally {
+          try {
+            await (iter as AsyncGenerator<unknown, unknown, unknown>).return?.(undefined);
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
+
+      return provider.generate(apiKey, effectiveApiUrl, leasedRequest);
+    },
+  );
 }
 
 /**

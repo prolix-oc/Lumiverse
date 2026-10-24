@@ -118,6 +118,7 @@ nav = [
   { "Settings" = [
     { "Disk Health & SMART" = "settings/disk-health.md" },
     { "Embeddings" = "settings/embeddings.md" },
+    { "Local Inference Scheduling" = "settings/inference-scheduling.md" },
     { "Web Search" = "settings/web-search.md" },
     { "Notifications" = "settings/push-notifications.md" },
     { "LumiHub" = "settings/lumihub.md" },

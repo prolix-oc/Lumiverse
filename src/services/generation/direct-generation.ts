@@ -13,6 +13,13 @@ import type {
 import type { ConnectionProfile } from "../../types/connection-profile";
 import type { GenerationReasoningOverrideDTO } from "lumiverse-spindle-types";
 import { applyPromptCaching } from "../caching";
+import {
+  withInferenceLease,
+  withInferenceLeaseStream,
+  withLeaseAbort,
+  type InferenceLeaseOptions,
+  type InferenceRequestClass,
+} from "../inference-scheduler";
 import * as presetsSvc from "../presets.service";
 import { injectConnectionMetadataFlags } from "./connection-metadata";
 import {
@@ -238,15 +245,22 @@ export async function rawGenerate(
     input,
     options,
   );
-  if (input.tools && input.tools.length > 0) {
-    return consumeStream(
-      provider.generateStream(apiKey, apiUrl, { ...request, stream: true }),
-      userId,
-    );
-  }
-  return applyDelimitedReasoningParsing(
-    userId,
-    await provider.generate(apiKey, apiUrl, { ...request, stream: false }),
+  return withInferenceLease(
+    leaseOptionsFor(userId, apiUrl, input.signal, options, "user", "raw-generate"),
+    async (lease) => {
+      const signal = withLeaseAbort(request.signal, lease);
+      if (input.tools && input.tools.length > 0) {
+        const result = await consumeStream(
+          provider.generateStream(apiKey, apiUrl, { ...request, signal, stream: true }),
+          userId,
+        );
+        throwIfGenerationAborted(signal);
+        return result;
+      }
+      const result = await provider.generate(apiKey, apiUrl, { ...request, signal, stream: false });
+      throwIfGenerationAborted(signal);
+      return applyDelimitedReasoningParsing(userId, result);
+    },
   );
 }
 
@@ -260,15 +274,22 @@ export async function quietGenerate(
     input,
     options,
   );
-  if (request.tools && request.tools.length > 0) {
-    return consumeStream(
-      provider.generateStream(apiKey, apiUrl, { ...request, stream: true }),
-      userId,
-    );
-  }
-  return applyDelimitedReasoningParsing(
-    userId,
-    await provider.generate(apiKey, apiUrl, { ...request, stream: false }),
+  return withInferenceLease(
+    leaseOptionsFor(userId, apiUrl, input.signal, options, "background", "quiet-generate"),
+    async (lease) => {
+      const signal = withLeaseAbort(request.signal, lease);
+      if (request.tools && request.tools.length > 0) {
+        const result = await consumeStream(
+          provider.generateStream(apiKey, apiUrl, { ...request, signal, stream: true }),
+          userId,
+        );
+        throwIfGenerationAborted(signal);
+        return result;
+      }
+      const result = await provider.generate(apiKey, apiUrl, { ...request, signal, stream: false });
+      throwIfGenerationAborted(signal);
+      return applyDelimitedReasoningParsing(userId, result);
+    },
   );
 }
 
@@ -284,7 +305,14 @@ export async function rawGenerateStream(
   const { provider, apiKey, apiUrl, request } = await prepareRawCall(userId, input, options);
   return wrapDelimitedReasoningForUser(
     userId,
-    provider.generateStream(apiKey, apiUrl, { ...request, stream: true }),
+    withInferenceLeaseStream(
+      leaseOptionsFor(userId, apiUrl, input.signal, options, "user", "raw-generate-stream"),
+      (lease) => provider.generateStream(apiKey, apiUrl, {
+        ...request,
+        signal: withLeaseAbort(request.signal, lease),
+        stream: true,
+      }),
+    ),
   );
 }
 
@@ -300,6 +328,40 @@ export async function quietGenerateStream(
   const { provider, apiKey, apiUrl, request } = await prepareQuietCall(userId, input, options);
   return wrapDelimitedReasoningForUser(
     userId,
-    provider.generateStream(apiKey, apiUrl, { ...request, stream: true }),
+    withInferenceLeaseStream(
+      leaseOptionsFor(userId, apiUrl, input.signal, options, "background", "quiet-generate-stream"),
+      (lease) => provider.generateStream(apiKey, apiUrl, {
+        ...request,
+        signal: withLeaseAbort(request.signal, lease),
+        stream: true,
+      }),
+    ),
   );
+}
+
+function leaseOptionsFor(
+  userId: string,
+  apiUrl: string,
+  signal: AbortSignal | undefined,
+  options: GenerationCallOptions | undefined,
+  fallbackClass: InferenceRequestClass,
+  fallbackPurpose: string,
+): InferenceLeaseOptions {
+  return {
+    userId,
+    endpoint: apiUrl,
+    requestClass: options?.leaseClass ?? fallbackClass,
+    purpose: options?.leasePurpose ?? options?.origin?.name ?? fallbackPurpose,
+    signal,
+  };
+}
+
+/**
+ * A provider stream can end normally after an abort (notably OpenAI-compatible
+ * transports). Treat the lease/caller abort as authoritative so partial output
+ * is never returned or persisted as a successful completion.
+ */
+function throwIfGenerationAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw signal.reason ?? new DOMException("Aborted", "AbortError");
 }
