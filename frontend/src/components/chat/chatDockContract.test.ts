@@ -196,6 +196,37 @@ describe('P12 chat dock preservation contracts', () => {
     expect(stripChain).toContain('max-width: 100%;')
   })
 
+  test('sizes every extension strip wrapper to its content; only a host-surface wrapper fills', async () => {
+    // Source contract only: it pins the mechanism, not rendered geometry.
+    const css = await readSource('ChatView.module.css')
+    const ruleBody = (selectorTail: string) => {
+      const selector = `.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global(${selectorTail}) {`
+      const start = css.indexOf(selector)
+      expect(start).toBeGreaterThan(-1)
+      return css.slice(start + selector.length, css.indexOf('}', start))
+    }
+
+    const defaultStrip = ruleBody("[data-dock-request='strip']")
+    expect(defaultStrip).toMatch(/flex:\s*0 0 auto;/)
+    expect(defaultStrip).toMatch(/align-items:\s*center;/)
+    expect(defaultStrip).not.toMatch(/(^|[^-])width:\s*100%/)
+
+    const fillStrip = ruleBody("[data-dock-request='strip']:has(> [data-spindle-host-surface])")
+    expect(fillStrip).toMatch(/flex:\s*1 1 auto;/)
+    expect(fillStrip).toMatch(/width:\s*100%;/)
+
+    // Any extension root, with or without a dock request, keeps its full width.
+    const anyExtension = ruleBody(":is([data-spindle-ext-id], [data-spindle-ext], [data-spindle-extension-root]):not(:has([data-spindle-host-surface], [data-component='QuickToolbar']))")
+    expect(anyExtension).toMatch(/flex-shrink:\s*0;/)
+
+    // A core button placed directly in the rail follows the native group's side.
+    expect(css).toMatch(/\.chatToolbar\[data-native-action-side='right'\] > \.toolbarBtn\s*\{\s*order:\s*2;/)
+    expect(css).toMatch(/\.chatToolbar\[data-native-action-side='left'\] > \.toolbarBtn\s*\{\s*order:\s*1;/)
+
+    // No owner-specific escape hatch in core.
+    expect(css).not.toMatch(/data-spindle-ext-id=['"]?(prism|luminyx)/)
+  })
+
   test('keeps the sparse strip rail centered while Select Messages stays at the right edge', async () => {
     const chatCss = await readSource('ChatView.module.css')
     const toolbarCss = await readSource('../quick-toolbar/QuickToolbar.module.css')
