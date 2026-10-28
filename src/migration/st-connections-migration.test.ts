@@ -128,14 +128,16 @@ describe("SillyTavern connection migration", () => {
       { id: "vertex", name: "Vertex", api: "vertexai", "api-url": "https://example.test" },
       { id: "openrouter", name: "Router", api: "custom", "api-url": "https://openrouter.ai/api/v1" },
       { id: "custom", name: "Custom", api: "openai", "api-url": "https://custom.example/v1" },
+      { id: "obscurify", name: "Obscurify", api: "custom", "api-url": "https://obscurify.ai/v1" },
     ];
     const fs = makeFs(false, profiles, [{ name: "Groq", url: "https://api.groq.com/openai/v1" }]);
-    expect(await importSTConnections("owner-a", root, {}, logger, fs)).toMatchObject({ imported: 6, skipped: 0 });
+    expect(await importSTConnections("owner-a", root, {}, logger, fs)).toMatchObject({ imported: 7, skipped: 0 });
     const rows = getDb().query("SELECT name, provider FROM connection_profiles WHERE user_id = ? ORDER BY name").all("owner-a");
     expect(rows).toEqual([
       { name: "Claude", provider: "anthropic" },
       { name: "Custom", provider: "custom" },
       { name: "Google", provider: "google" },
+      { name: "Obscurify", provider: "obscurify" },
       { name: "Proxy: Groq", provider: "groq" },
       { name: "Router", provider: "openrouter" },
       { name: "Vertex", provider: "google_vertex" },

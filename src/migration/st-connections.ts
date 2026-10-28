@@ -41,7 +41,7 @@ function inferProvider(api: string, apiUrl: string): string {
   if (value === "vertexai") return "google_vertex";
   if (value === "openai") return url.includes("api.openai.com") || !url ? "openai" : "custom";
   if (value === "infermaticai") return "infermatic";
-  for (const [needle, provider] of [["openrouter.ai", "openrouter"], ["api.deepseek.com", "deepseek"], ["api.groq.com", "groq"], ["api.mistral.ai", "mistral"], ["api.x.ai", "xai"], ["api.fireworks.ai", "fireworks"], ["api.perplexity.ai", "perplexity"], ["electronhub", "electronhub"], ["siliconflow", "siliconflow"], ["nano-gpt.com", "nanogpt"], ["chutes.ai", "chutes"], ["infermatic", "infermatic"], ["pollinations.ai", "pollinations_text"]] as const) {
+  for (const [needle, provider] of [["openrouter.ai", "openrouter"], ["api.deepseek.com", "deepseek"], ["api.groq.com", "groq"], ["api.mistral.ai", "mistral"], ["api.x.ai", "xai"], ["api.fireworks.ai", "fireworks"], ["api.perplexity.ai", "perplexity"], ["electronhub", "electronhub"], ["siliconflow", "siliconflow"], ["nano-gpt.com", "nanogpt"], ["chutes.ai", "chutes"], ["infermatic", "infermatic"], ["obscurify.ai", "obscurify"], ["pollinations.ai", "pollinations_text"]] as const) {
     if (url.includes(needle)) return provider;
   }
   return value === "openrouter" || value === "groq" || value === "mistral" ? value : "custom";

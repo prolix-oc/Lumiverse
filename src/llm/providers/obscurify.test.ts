@@ -46,16 +46,24 @@ describe("Obscurify.ai provider", () => {
     expect(sent[0].url).toBe("https://obscurify.ai/v1/models");
   });
 
-  test("key validation does not rely on the public model list", async () => {
-    mockFetch(() => Response.json({ error: "bad request" }, { status: 400 }));
-    expect(await provider.validateKey("sk-obs1_good", "")).toBe(true);
-    expect(sent[0].url).toBe("https://obscurify.ai/v1/chat/completions");
-    expect(sent[0].init?.method).toBe("POST");
-    expect(sent[0].body).toEqual({ model: "", messages: [] });
-  });
+  // A good key passes auth and only the empty probe body is rejected
+  // (production answers 404 model_not_found for `model: ""`).
+  for (const status of [400, 404, 422]) {
+    test(`key validation accepts a ${status} for the empty probe and does not use the public model list`, async () => {
+      mockFetch(() => Response.json({ error: { code: "model_not_found", message: "The model  does not exist." } }, { status }));
+      expect(await provider.validateKey("sk-obs1_good", "")).toBe(true);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].url).toBe("https://obscurify.ai/v1/chat/completions");
+      expect(sent[0].init?.method).toBe("POST");
+      expect((sent[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer sk-obs1_good");
+      expect(sent[0].body).toEqual({ model: "", messages: [] });
+    });
+  }
 
-  test("key validation rejects a 401", async () => {
-    mockFetch(() => Response.json({ error: "Invalid token." }, { status: 401 }));
-    await expect(provider.validateKey("sk-obs1_bad", "")).rejects.toThrow();
-  });
+  for (const [status, message] of [[401, "Invalid token."], [403, "Forbidden"], [402, "Insufficient balance"], [429, "Rate limited"], [503, "Upstream unavailable"]] as const) {
+    test(`key validation rejects a ${status} with the provider's message`, async () => {
+      mockFetch(() => Response.json({ error: { message } }, { status }));
+      await expect(provider.validateKey("sk-obs1_key", "")).rejects.toThrow(message);
+    });
+  }
 });

@@ -24,10 +24,15 @@ export class ObscurifyProvider extends OpenAICompatibleProvider {
     modelListStyle: "openai",
   };
 
+  /** Statuses that mean the key passed auth and only the empty probe body was rejected. */
+  private static readonly KEY_ACCEPTED_STATUSES = new Set([400, 404, 422]);
+
   /**
    * `/models` is public on Obscurify.ai, so it accepts any key. Send an empty
    * chat request instead: the auth layer answers 401/403 for a bad key before
-   * the body is validated, and a good key gets a 400 without running a model.
+   * the body is validated, and a good key gets a request-validation error
+   * (400/404/422, e.g. `model_not_found`) without running a model. Any other
+   * status (402, 429, 5xx) is surfaced instead of being reported as success.
    */
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
     try {
@@ -36,7 +41,7 @@ export class ObscurifyProvider extends OpenAICompatibleProvider {
         headers: this.headers(apiKey),
         body: JSON.stringify({ model: "", messages: [] }),
       });
-      if (res.status === 401 || res.status === 403) {
+      if (!res.ok && !ObscurifyProvider.KEY_ACCEPTED_STATUSES.has(res.status)) {
         await throwProviderResponseError(this.displayName, "authentication", res);
       }
       return true;

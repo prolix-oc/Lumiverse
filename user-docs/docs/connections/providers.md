@@ -4,7 +4,7 @@ title: Supported Providers
 
 # Supported Providers
 
-Lumiverse supports 21 AI providers out of the box. Each provider has its own model catalog, API format, and capabilities.
+Lumiverse supports 22 AI providers out of the box. Each provider has its own model catalog, API format, and capabilities.
 
 ---
 
@@ -29,6 +29,7 @@ Lumiverse supports 21 AI providers out of the box. Each provider has its own mod
 | **SiliconFlow** | Yes | Chinese and international models |
 | **NanoGPT** | Yes | Pay-per-token aggregator with PAYG provider routing, balance, and subscription usage |
 | **Infermatic** | Yes | TotalGPT — uncensored open-weights hosting (`https://api.totalgpt.ai/v1`) |
+| **Obscurify.ai** | Yes | Privacy-focused OpenAI-compatible API: anonymous account numbers, prompts and responses not stored (`https://obscurify.ai/v1`) |
 | **Chutes** | Yes | Model hosting platform |
 | **Z.AI** | Yes | Standard and Coding Plan endpoints |
 | **Pollinations** | No | Free text models, no API key required |
