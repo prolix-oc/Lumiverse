@@ -187,6 +187,7 @@ export const PROVIDER_PARAMS: Record<string, Set<string>> = {
   infermatic: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
   pollinations: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'frequencyPenalty', 'presencePenalty']),
   siliconflow: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
+  obscurify: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'frequencyPenalty', 'presencePenalty']),
   custom: new Set(['maxTokens', 'contextSize', 'temperature', 'topP', 'topK', 'minP', 'frequencyPenalty', 'presencePenalty', 'repetitionPenalty']),
 }
 
@@ -219,6 +220,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   infermatic: 'Infermatic',
   pollinations: 'Pollinations',
   siliconflow: 'SiliconFlow',
+  obscurify: 'Obscurify.ai',
   custom: 'Custom',
 }
 

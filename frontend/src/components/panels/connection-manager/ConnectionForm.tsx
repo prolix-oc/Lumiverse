@@ -54,6 +54,7 @@ const FALLBACK_PROVIDERS = [
   { value: 'pollinations', label: 'Pollinations (Gen)' },
   { value: 'openrouter', label: 'OpenRouter' },
   { value: 'nanogpt', label: 'NanoGPT' },
+  { value: 'obscurify', label: 'Obscurify.ai' },
   { value: 'custom', label: 'Custom (OpenAI-compatible)' },
 ]
 

@@ -12,6 +12,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   typesafe: '#22c55e',
   infermatic: '#8b5cf6',
   nanogpt: '#10b981',
+  obscurify: '#64748b',
   pollinations_text: '#f89c73',
   pollinations: '#ff6b35',
   // image-gen
