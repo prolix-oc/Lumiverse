@@ -298,6 +298,15 @@ test("detects dependency inputs newer than the last completed install", () => {
   expect(dependencyInstallStampIsStale(dir)).toBe(true);
 });
 
+test("runner rebuilds run every package generation step before bundling", () => {
+  const { scripts } = JSON.parse(readFileSync(join(import.meta.dir, "../../frontend/package.json"), "utf8"));
+  const generationCommands = scripts.generate.split(/\s*&&\s*/).map((command: string) => {
+    const name = command.replace(/^bun run /, "");
+    return scripts[name].split(/\s+/);
+  });
+  expect(FRONTEND_BUILD_STEPS.slice(0, -1).map((step) => [...step.command])).toEqual(generationCommands);
+});
+
 test("reports frontend build phases separately while preserving their order", () => {
   expect(FRONTEND_BUILD_STEPS.map(({ label, command }) => ({ label, command }))).toEqual([
     {
@@ -307,6 +316,10 @@ test("reports frontend build phases separately while preserving their order", ()
     {
       label: "frontend CSS variable extraction",
       command: ["bun", "run", "scripts/extract-css-vars.ts"],
+    },
+    {
+      label: "frontend theme reference generation",
+      command: ["bun", "run", "scripts/generate-theme-reference.ts"],
     },
     {
       label: "frontend Vite bundling",
@@ -327,6 +340,7 @@ test("runs frontend build entrypoints directly through the selected Termux Bun w
   )).toEqual([
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/extract-props.ts"],
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/extract-css-vars.ts"],
+    ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/generate-theme-reference.ts"],
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/build-frontend.ts"],
   ]);
 });

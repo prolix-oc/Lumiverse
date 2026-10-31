@@ -1053,6 +1053,11 @@ export const FRONTEND_BUILD_STEPS = [
     command: ["bun", "run", "scripts/extract-css-vars.ts"],
   },
   {
+    label: "frontend theme reference generation",
+    progress: "Generating frontend theme references...",
+    command: ["bun", "run", "scripts/generate-theme-reference.ts"],
+  },
+  {
     label: "frontend Vite bundling",
     progress: "Building the frontend bundle with Vite...",
     command: ["bun", "run", "scripts/build-frontend.ts"],
