@@ -1,4 +1,5 @@
 import { get, post, type RequestOptions } from './client'
+import { shareRead } from '@/lib/shared-read'
 import { flushSettingsNow } from '@/store/slices/settings'
 import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
 
@@ -389,7 +390,7 @@ export const generateApi = {
   },
 
   getActive() {
-    return get<ActiveGenerationEntry[]>('/generate/active')
+    return shareRead('active-generations', () => get<ActiveGenerationEntry[]>('/generate/active'))
   },
 
   acknowledge(chatId: string) {

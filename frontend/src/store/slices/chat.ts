@@ -1,4 +1,5 @@
 import type { StateCreator } from 'zustand'
+import { sharedReadScope } from '@/lib/shared-read'
 import type { ChatSlice } from '@/types/store'
 import type { Message } from '@/types/api'
 import { settingsApi } from '@/api/settings'
@@ -159,8 +160,9 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     totalChatLength: 0,
     impersonateDraftContent: null,
     landingRecentChats: null,
+    landingRecentChatsScope: null,
 
-    setLandingRecentChats: (result) => set({ landingRecentChats: result }),
+    setLandingRecentChats: (result) => set({ landingRecentChats: result, landingRecentChatsScope: result ? sharedReadScope() : null }),
 
     setActiveChat: (chatId, characterId = null, hydration) => {
       generationEpoch++

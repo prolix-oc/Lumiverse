@@ -72,6 +72,29 @@ beforeEach(() => {
 
 afterEach(() => closeDatabase());
 
+describe('lightweight character loading', () => {
+  test('serves picker identity and crop without leaking card content', async () => {
+    const response = await app.request('http://localhost/index?limit=1000');
+    expect(response.status).toBe(200);
+    const page = await response.json();
+    expect(page.data[0].id).toBe(CHARACTER_ID);
+    expect(page.data[0].avatar_crop_image_id).toBe('avatar-crop');
+    expect(page.data[0]).not.toHaveProperty('description');
+    expect(page.data[0]).not.toHaveProperty('extensions');
+    expect(page.data[0]).not.toHaveProperty('user_id');
+  });
+  test('bounds demand reads and omits unavailable, foreign and deleting records', async () => {
+    expect((await app.request('http://localhost/details')).status).toBe(400);
+    expect((await app.request('http://localhost/details?ids=' + Array.from({ length: 101 }, (_, index) => index).join(','))).status).toBe(400);
+    const read = () => app.request(`http://localhost/details?ids=${CHARACTER_ID},missing,${CHARACTER_ID}`);
+    expect((await (await read()).json()).map((item: any) => item.id)).toEqual([CHARACTER_ID]);
+    getDb().run('UPDATE characters SET deleting=1');
+    expect(await (await read()).json()).toEqual([]);
+    getDb().run("UPDATE characters SET deleting=0, user_id='other'");
+    expect(await (await read()).json()).toEqual([]);
+  });
+});
+
 describe("POST /:id/replace-card", () => {
   test("replaces JSON card fields while preserving the character name, avatar, and local assets", async () => {
     const form = new FormData();

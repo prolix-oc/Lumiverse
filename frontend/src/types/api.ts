@@ -32,6 +32,8 @@ export interface CharacterPerspectiveLayer {
   intensity: number;
 }
 
+export type CharacterIndexItem = Pick<Character, 'id' | 'name' | 'avatar_path' | 'image_id' | 'creator' | 'folder' | 'library_scope' | 'tags' | 'created_at' | 'updated_at'> & { avatar_crop_image_id?: string | null };
+
 export interface CreateCharacterInput {
   name: string;
   description?: string;
@@ -849,6 +851,7 @@ export type UpdatePresetInput = Partial<CreatePresetInput> & {
 };
 
 export interface PresetRegistryItem {
+  cache_revision?: number;
   id: string;
   name: string;
   provider: string;

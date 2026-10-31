@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -17,7 +18,7 @@ import styles from './GroupChatsPanel.module.css'
 import clsx from 'clsx'
 
 function MosaicThumb({ charIds, size = 'small' }: { charIds: string[]; size?: 'small' | 'large' }) {
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const displayIds = charIds.slice(0, 4)
   const count = charIds.length
   const mosaicClass =

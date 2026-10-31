@@ -1,4 +1,5 @@
 import { useStore } from '@/store'
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Toggle } from '@/components/shared/Toggle'
 import { persistKey } from '@/store/slices/settings'
@@ -268,6 +269,7 @@ export default function ProductivitySettings() {
   const tokenCountMode = lorebook.tokenCountMode ?? PRODUCTIVITY_DEFAULTS.lorebookEditorSettings.tokenCountMode
   const tokenizerAvailability = useTokenizerAvailability()
   const characters = useStore((state) => state.characters) ?? []
+  const catalog = useCharacterCatalog()
   const profiles = useStore((state) => state.profiles)
   const updateProfile = useStore((state) => state.updateProfile)
   const { actionById, visibleIds, orderedIds, reorderActions, toggleAction } = useQuickToolbarActions()
@@ -509,7 +511,7 @@ export default function ProductivitySettings() {
       <NumberField id="home-max-tags" label="Maximum visible tags" value={homepage.maxVisibleTags} onChange={(maxVisibleTags) => update('homepageCharacterLibrarySettings', { maxVisibleTags })} min={1} max={20} />
       <NumberField id="home-panel-width" label="Preview panel width" value={homepage.panelWidth} onChange={(panelWidth) => update('homepageCharacterLibrarySettings', { panelWidth })} min={360} max={720} suffix="px" />
       <NumberField id="home-image-height" label="Preview image height" value={homepage.panelImageHeight} onChange={(panelImageHeight) => update('homepageCharacterLibrarySettings', { panelImageHeight })} min={180} max={560} suffix="px" />
-      <Field id="home-last-character" label="Last selected character"><select id="home-last-character" aria-label="Last selected character" value={homepage.lastSelectedCharacterId ?? ''} onChange={(event) => update('homepageCharacterLibrarySettings', { lastSelectedCharacterId: event.target.value || null })}><option value="">None</option>{characters.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select></Field>
+      <Field id="home-last-character" label="Last selected character"><select id="home-last-character" aria-label="Last selected character" value={homepage.lastSelectedCharacterId ?? ''} onChange={(event) => update('homepageCharacterLibrarySettings', { lastSelectedCharacterId: event.target.value || null })}><option value="">None</option>{catalog.map((character) => <option key={character.id} value={character.id}>{character.name}</option>)}</select></Field>
       <CheckField id="home-name-background" label="Show card-name background" checked={Boolean(homepage.showNameBackground)} onChange={(showNameBackground) => update('homepageCharacterLibrarySettings', { showNameBackground })} hint="Adds a dark backing behind names in compact glass mode." />
       <CheckField id="home-pinned" label="Pin selected-character panel" checked={Boolean(homepage.panelPinned)} onChange={(panelPinned) => update('homepageCharacterLibrarySettings', { panelPinned })} />
       <div className={styles.presetRow}><button type="button" className={styles.resetButton} onClick={resetHomepageLayout}>Reset homepage layout</button><button type="button" className={styles.resetButton} onClick={() => update('homepageCharacterLibrarySettings', PRODUCTIVITY_DEFAULTS.homepageCharacterLibrarySettings)}>Reset all homepage library settings</button></div>

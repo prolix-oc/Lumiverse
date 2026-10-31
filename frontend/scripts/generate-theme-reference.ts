@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile
 import { dirname, resolve, sep } from 'node:path'
 import ts from 'typescript'
 import { resolveConfig, preprocessCSS, type ResolvedConfig } from 'vite'
-import VARIABLES from '../src/lib/generatedCssVariables'
-import { getComponentTemplate } from '../src/lib/componentTemplates'
-import { isExcludedPath, joinComponentRegistryPaths } from '../src/lib/componentRegistryJoin'
+import VARIABLES from '../src/lib/generatedCssVariables.ts'
+import { getComponentTemplate } from '../src/lib/componentTemplates.ts'
+import { isExcludedPath, joinComponentRegistryPaths } from '../src/lib/componentRegistryJoin.ts'
 
 export async function createThemeReference(config: ResolvedConfig) {
   const root = config.root

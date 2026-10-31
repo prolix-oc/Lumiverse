@@ -75,6 +75,7 @@ let pendingRegistryRefresh: Promise<void> | null = null
 
 const storeState = {
   activeLoomPresetId: presetId,
+  loomRegistryLoaded: true,
   loomRegistry: { [presetId]: { name: persistedPreset.name, blockCount: 1, updatedAt: 1, isDefault: false } },
   setActiveLoomPreset: (_id: string | null) => {},
   setLoomRegistry: (_registry: Record<string, unknown>) => {},
@@ -111,7 +112,7 @@ const presetsApiMock = {
       cache_revision: 2,
     }
   },
-  listRegistry: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
+  listRegistryAll: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
     events.push('registry:refresh')
     if (holdRegistryRefresh) {
       const refreshGate = new Promise<void>((resolve) => { resolveRegistryRefresh = resolve })

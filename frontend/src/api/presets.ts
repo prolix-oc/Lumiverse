@@ -1,6 +1,7 @@
 import { BASE_URL, get, post, put, del } from './client'
 import type { Preset, PresetRegistryItem, CreatePresetInput, UpdatePresetInput, PaginatedResult } from '@/types/api'
 import type { PromptBlock } from '@/lib/loom/types'
+import { shareRead } from '@/lib/shared-read'
 
 export interface StashedPromptBlock {
   id: string
@@ -16,11 +17,26 @@ export const presetsApi = {
   },
 
   listRegistry(params?: { limit?: number; offset?: number; provider?: string; engine?: string }) {
-    return get<PaginatedResult<PresetRegistryItem>>('/presets/registry', params)
+    return shareRead(`preset-registry:${JSON.stringify(params ?? {})}`, () => get<PaginatedResult<PresetRegistryItem>>('/presets/registry', params))
+  },
+
+  listRegistryAll(params?: { provider?: string; engine?: string }) {
+    return shareRead(`preset-registry-all:${JSON.stringify(params ?? {})}`, async () => {
+      const data: PresetRegistryItem[] = []
+      for (;;) {
+        const page = await presetsApi.listRegistry({ ...params, limit: 200, offset: data.length })
+        data.push(...page.data)
+        if (data.length >= page.total || page.data.length === 0) return { ...page, data, offset: 0, limit: data.length }
+      }
+    })
   },
 
   get(id: string) {
-    return get<Preset>(`/presets/${id}`)
+    return shareRead(`preset:${id}`, () => get<Preset>(`/presets/${id}`))
+  },
+
+  capabilities(id: string) {
+    return shareRead(`preset-capabilities:${id}`, () => get<{ id: string; cache_revision: number; has_prompt_variables: boolean }>(`/presets/${id}/capabilities`))
   },
 
   create(input: CreatePresetInput) {

@@ -1,8 +1,37 @@
 import type { StateCreator } from 'zustand'
 import type { CharactersSlice } from '@/types/store'
 import { settingsApi } from '@/api/settings'
+import type { Character, CharacterIndexItem } from '@/types/api'
+
+function indexMutation(state: CharactersSlice, updates: CharacterIndexItem[] = [], removed: string[] = []) {
+  const index = new Map(state.characterIndex.map(item => [item.id, item]))
+  const revision = state.characterIndexRevision + 1
+  const changes = { ...state.characterIndexChanges }
+  for (const id of removed) { index.delete(id); changes[id] = revision }
+  for (const item of updates) {
+    const { id, name, avatar_path, image_id, creator, folder, library_scope, tags, created_at, updated_at } = item
+    const avatar_crop_image_id = (item as Character).extensions?.avatar_crop_image_id ?? item.avatar_crop_image_id ?? null
+    index.set(id, { id, name, avatar_path, image_id, creator, folder, library_scope, tags, created_at, updated_at, avatar_crop_image_id })
+    changes[id] = revision
+  }
+  return { characterIndex: [...index.values()], characterIndexRevision: revision, characterIndexChanges: changes }
+}
 
 export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) => ({
+  characterIndex: [],
+  characterIndexLoaded: false,
+  characterIndexRevision: 0,
+  characterIndexGeneration: 0,
+  invalidateCharacterIndex: () => set(state => ({ characterIndexLoaded: false, characterIndexGeneration: state.characterIndexGeneration + 1 })),
+  characterIndexChanges: {},
+  setCharacterIndex: (items, startedAtRevision) => set(state => {
+    const current = new Map(state.characterIndex.map(item => [item.id, item]))
+    const next = new Map(items.filter(item => (state.characterIndexChanges[item.id] ?? 0) <= startedAtRevision).map(item => [item.id, item]))
+    for (const [id, revision] of Object.entries(state.characterIndexChanges)) {
+      if (revision > startedAtRevision && current.has(id)) next.set(id, current.get(id)!)
+    }
+    return { characterIndex: [...next.values()], characterIndexLoaded: true }
+  }),
   characters: [],
   charactersLoaded: false,
   favorites: [],
@@ -19,7 +48,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
   batchMode: false,
   batchSelected: [],
 
-  setCharacters: (characters) => set({ characters, charactersLoaded: true }),
+  setCharacters: (characters) => set(state => ({ characters, charactersLoaded: true, ...indexMutation(state, characters) })),
 
   setCharactersLoaded: (loaded) => set({ charactersLoaded: loaded }),
 
@@ -48,12 +77,12 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
     set((state) => {
       const existingIndex = state.characters.findIndex((c) => c.id === id)
       if (existingIndex === -1) {
-        return { characters: [character, ...state.characters] }
+        return { characters: [character, ...state.characters], ...indexMutation(state, [character]) }
       }
 
       const characters = [...state.characters]
       characters[existingIndex] = character
-      return { characters }
+      return { characters, ...indexMutation(state, [character]) }
     })
   },
 
@@ -70,14 +99,18 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
   setSearchQuery: (query) => set({ searchQuery: query }),
 
   addCharacter: (character) =>
-    set((state) => ({ characters: [character, ...state.characters] })),
+    set((state) => ({ characters: [character, ...state.characters], ...indexMutation(state, [character]) })),
 
   addCharacters: (characters) =>
-    set((state) => ({ characters: [...characters, ...state.characters] })),
+    set((state) => {
+      const ids = new Set(characters.map(character => character.id))
+      return { characters: [...characters, ...state.characters.filter(character => !ids.has(character.id))], ...indexMutation(state, characters) }
+    }),
 
   removeCharacter: (id) =>
     set((state) => ({
       characters: state.characters.filter((c) => c.id !== id),
+      ...indexMutation(state, [], [id]),
       favorites: state.favorites.filter((f) => f !== id),
       batchSelected: state.batchSelected.filter((s) => s !== id),
     })),
@@ -87,6 +120,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
       const idSet = new Set(ids)
       return {
         characters: state.characters.filter((c) => !idSet.has(c.id)),
+        ...indexMutation(state, [], ids),
         favorites: state.favorites.filter((f) => !idSet.has(f)),
         batchSelected: state.batchSelected.filter((s) => !idSet.has(s)),
       }

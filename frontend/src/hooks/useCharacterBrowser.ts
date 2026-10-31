@@ -1,3 +1,4 @@
+import { loadCharacterIndex, refreshCachedCharacters, useCharacterCatalog } from './useCharacterCatalog'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from '@/lib/toast'
@@ -13,7 +14,6 @@ import type { ExpressionsImportInfo } from '@/components/modals/ExpressionsImpor
 import type { AlternateFieldsSummaryInfo } from '@/components/modals/AlternateFieldsSummaryModal'
 import { getEmbeddedCharacterBookEntryCount } from '@/utils/character-world-books'
 import { sortFolderGroups } from '@/lib/folderSorting'
-import { reconcileLoadedCharacters } from '@/lib/reconcileLoadedCharacters'
 import i18n from '@/i18n'
 import { startCharacterChat } from '@/lib/characterChat'
 
@@ -52,9 +52,7 @@ export function useCharacterBrowser() {
   const setSetting = useStore((s) => s.setSetting)
 
   // Store state (still used for background population for other components)
-  const characters = useStore((s) => s.characters)
-  const charactersLoaded = useStore((s) => s.charactersLoaded)
-  const setCharacters = useStore((s) => s.setCharacters)
+  const catalog = useCharacterCatalog()
   const favorites = useStore((s) => s.favorites)
   const toggleFavorite = useStore((s) => s.toggleFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
@@ -196,11 +194,11 @@ export function useCharacterBrowser() {
 
   const allFolders = useMemo(() => {
     const folders = new Set<string>()
-    for (const character of characters) {
+    for (const character of catalog) {
       if (character.folder) folders.add(character.folder)
     }
     return Array.from(folders).sort((a, b) => a.localeCompare(b))
-  }, [characters])
+  }, [catalog])
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -259,22 +257,6 @@ export function useCharacterBrowser() {
     [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab]
   )
 
-  const loadAllCharacters = useCallback(async () => {
-    const previousIds = new Set(useStore.getState().characters.map((character) => character.id))
-    const PAGE = 200
-    let all: Character[] = []
-    let offset = 0
-    let total = Infinity
-    while (offset < total) {
-      const result = await charactersApi.list({ limit: PAGE, offset })
-      all = all.concat(result.data)
-      total = result.total
-      offset += result.data.length
-      if (result.data.length < PAGE) break
-    }
-    setCharacters(reconcileLoadedCharacters(previousIds, all, useStore.getState().characters))
-  }, [setCharacters])
-
   // ─── Fetch current page from server ─────────────────────────────────────
   useEffect(() => {
     if (!settingsLoaded) return
@@ -314,12 +296,6 @@ export function useCharacterBrowser() {
   useEffect(() => {
     charactersApi.listTags().then(setAllTags).catch(() => {})
   }, [fetchVersion])
-
-  // ─── Background: populate store with full characters (for other components) ──
-  useEffect(() => {
-    if (charactersLoaded) return
-    loadAllCharacters().catch((err) => console.error('[CharacterBrowser] Background load failed:', err))
-  }, [charactersLoaded, loadAllCharacters])
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -631,13 +607,12 @@ export function useCharacterBrowser() {
   const applyFolderUpdates = useCallback((updated: Character[]) => {
     if (updated.length === 0) return
     const updatedById = new Map(updated.map((character) => [character.id, character]))
-    const currentCharacters = useStore.getState().characters
-    setCharacters(currentCharacters.map((character) => updatedById.get(character.id) ?? character))
+    useStore.getState().addCharacters(updated)
     setBrowserItems((items) => items.map((item) => {
       const character = updatedById.get(item.id)
       return character ? { ...item, folder: character.folder, updated_at: character.updated_at } : item
     }))
-  }, [setCharacters])
+  }, [])
 
   const renameFolder = useCallback(async (oldName: string, newName: string) => {
     const result = await charactersApi.renameFolder(oldName, newName)
@@ -709,9 +684,10 @@ export function useCharacterBrowser() {
   }, [])
 
   const reloadAllCharacters = useCallback(async () => {
-    await loadAllCharacters()
+    useStore.getState().invalidateCharacterIndex()
+    await Promise.all([loadCharacterIndex(), refreshCachedCharacters()])
     setFetchVersion((v) => v + 1)
-  }, [loadAllCharacters])
+  }, [])
 
   const handleToggleFavorite = useCallback(
     (id: string) => {
@@ -781,7 +757,7 @@ export function useCharacterBrowser() {
     // State — browser items come from server-side pagination
     characters: browserItems,
     groupedCharacters,
-    allCharacters: characters,
+    allCharacters: catalog,
     allFolders,
     totalFiltered: browserTotal,
     favoriteCharacters,

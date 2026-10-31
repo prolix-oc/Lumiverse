@@ -120,6 +120,26 @@ describe("preset body size limit", () => {
 });
 
 describe("preset cache validators", () => {
+  test('capabilities stay small, owner scoped and fresh after same-second edits', async () => {
+    insertPreset('capabilities', 'u1');
+    const read = (user = 'u1') => app.request('http://localhost/capabilities/capabilities', { headers: { 'x-test-user': user } });
+    expect((await (await read()).json()).has_prompt_variables).toBe(false);
+    getDb().run('UPDATE presets SET prompt_order = ?, cache_revision = 1 WHERE id = ?', [
+      JSON.stringify([{ content: 'x'.repeat(100_000), variables: [{ name: 'mood' }] }]), 'capabilities',
+    ]);
+    const response = await read();
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({ id: 'capabilities', cache_revision: 1, has_prompt_variables: true });
+    expect(body.length).toBeLessThan(150);
+    expect((await read('u2')).status).toBe(404);
+    for (const value of ['not json', JSON.stringify(['string', null, 12, { variables: 'bad' }]), '[]']) {
+      getDb().run('UPDATE presets SET prompt_order = ? WHERE id = ?', [value, 'capabilities']);
+      const malformed = await read();
+      expect(malformed.status).toBe(200);
+      expect((await malformed.json()).has_prompt_variables).toBe(false);
+    }
+  });
+
   test("scopes empty registry ETags to the authenticated user and varies on cookies", async () => {
     const first = await app.request("http://localhost/registry", { headers: { "x-test-user": "u1" } });
     const second = await app.request("http://localhost/registry", { headers: { "x-test-user": "u2" } });

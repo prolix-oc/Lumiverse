@@ -74,6 +74,7 @@ let registryUpdates: Array<Record<string, unknown>> = []
 
 const storeState = {
   activeLoomPresetId: presetId,
+  loomRegistryLoaded: true,
   loomRegistry: { [presetId]: { name: persistedPreset.name, blockCount: 2, updatedAt: 1, isDefault: false } },
   setActiveLoomPreset: (_id: string | null) => {},
   setLoomRegistry: (registry: Record<string, unknown>) => {
@@ -111,7 +112,7 @@ const presetsApiMock = {
       cache_revision: 2,
     }
   },
-  listRegistry: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
+  listRegistryAll: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
     events.push('registry:start')
     await new Promise<void>((resolve) => { resolveRegistry = resolve })
     events.push('registry:end')

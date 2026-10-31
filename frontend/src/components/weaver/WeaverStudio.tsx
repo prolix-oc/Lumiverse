@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
@@ -212,7 +213,7 @@ function PipelineHeader({ session, onClose }: { session: WeaverSession; onClose:
   const { t } = useTranslation('weaver')
   const openSession = useStore((s) => s.openWeaverSession)
   const buildTypes = useStore((s) => s.weaverBuildTypes)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const hideAdvisories = useStore((s) => s.weaverHideAdvisories)
   const setHideAdvisories = useStore((s) => s.setWeaverHideAdvisories)
   const d = sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))

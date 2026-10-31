@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
@@ -1394,7 +1395,7 @@ interface SortableGuideRowProps {
   guide: GuidedGeneration
   editing: boolean
   chats: ChatSummary[]
-  characters: Character[]
+  characters: Array<Pick<Character, 'id' | 'name'>>
   activeChatId: string | null
   activeCharacterId: string | null
   onToggleEnabled: (id: string, value: boolean) => void
@@ -1684,7 +1685,7 @@ function GuidedGenerationSettings() {
   const openModal = useStore((s) => s.openModal)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [chats, setChats] = useState<ChatSummary[]>([])
 

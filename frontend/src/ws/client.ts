@@ -1,3 +1,4 @@
+import { invalidateSharedReads } from '@/lib/shared-read'
 import { activeTab } from '@/lib/active-tab'
 import { uuidv4 } from '@/lib/uuid'
 import { EventType } from './events'
@@ -272,6 +273,7 @@ export class WebSocketClient {
   }
 
   private emit(event: string, payload: any, metadata?: EventMetadata) {
+    if (event === EventType.CONNECTED || /(?:CHANGED|DELETED|EDITED|CREATED|UPDATED|MESSAGE_SENT|GENERATION_ENDED)$/.test(event)) invalidateSharedReads()
     this.handlers.get(event)?.forEach(handler => {
       try {
         handler(payload, metadata)

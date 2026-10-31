@@ -1,4 +1,5 @@
 import { get, put, del } from './client'
+import { shareRead } from '@/lib/shared-read'
 
 interface SettingRow {
   key: string
@@ -9,7 +10,7 @@ interface SettingRow {
 export const settingsApi = {
   /** GET /settings — returns all settings as an array of { key, value, updated_at } */
   getAll() {
-    return get<SettingRow[]>('/settings')
+    return shareRead('settings', () => get<SettingRow[]>('/settings'))
   },
 
   /** GET /settings/:key — get a single setting */

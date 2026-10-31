@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -53,7 +54,7 @@ export default function ManageChatsModal() {
 
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const modalProps = useStore((s) => s.modalProps) as {
     characterId: string
     characterName: string

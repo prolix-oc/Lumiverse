@@ -16,6 +16,7 @@ const storeState = {
   landingHiddenCharacterIds: ['character-1'],
   setSetting,
 }
+mock.module('@/hooks/useCharacterCatalog', () => ({ useCharacterCatalog: () => storeState.characters }))
 
 mock.module('@/store', () => ({
   useStore: (selector: (state: typeof storeState) => unknown) => selector(storeState),

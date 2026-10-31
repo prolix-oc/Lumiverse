@@ -51,7 +51,8 @@ export function paginatedQuery<TRow, TEntity>(
   countSql: string,
   params: any[],
   pagination: PaginationParams,
-  rowMapper: (row: TRow) => TEntity
+  rowMapper: (row: TRow) => TEntity,
+  countParams: any[] = params,
 ): PaginatedResult<TEntity> {
   // Fetch one extra row to detect if there are more results (avoids COUNT query when possible)
   const rows = cachedQuery(`${dataSql} LIMIT ? OFFSET ?`)
@@ -67,7 +68,7 @@ export function paginatedQuery<TRow, TEntity>(
     // First page and all results fit — total is just the row count
     total = rows.length;
   } else {
-    const countRow = cachedQuery(countSql).get(...params) as { count: number } | null;
+    const countRow = cachedQuery(countSql).get(...countParams) as { count: number } | null;
     total = countRow?.count ?? 0;
   }
 

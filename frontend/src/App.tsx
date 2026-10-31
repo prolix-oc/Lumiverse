@@ -1,4 +1,5 @@
 import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
+import { Spinner } from '@/components/shared/Spinner'
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { Outlet } from 'react-router'
 import { listen } from '@tauri-apps/api/event'
@@ -19,7 +20,6 @@ import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ActiveTabGuard from '@/components/auth/ActiveTabGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
-import CharacterEditorPage from '@/components/panels/character-browser/CharacterEditorPage'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
@@ -63,7 +63,9 @@ import { useIOSDuoLayout } from '@/hooks/useIOSDuoLayout'
 import { duoChatStyle } from '@/lib/ios-duo-layout'
 import { useIOSShortcuts } from '@/hooks/useIOSShortcuts'
 
+const CharacterEditorPage = lazy(() => import('@/components/panels/character-browser/CharacterEditorPage'))
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
+
 
 export { acknowledgePendingConnectionsDeepLink }
 
@@ -411,11 +413,11 @@ function Application() {
                   data-duo-chat={duoLayout ? '' : undefined}
                   style={duoLayout ? duoChatStyle(duoLayout) as React.CSSProperties : undefined}
                 >
-                  <Outlet />
+                  <Suspense fallback={<Spinner />}><Outlet /></Suspense>
                 </main>
                 <ViewportDrawer duoLayout={duoLayout} />
                 {!isDesktopFloatingWidgetWindow() && <WindowFileDropHost />}
-                {editingCharacterId && <CharacterEditorPage />}
+                {editingCharacterId && <Suspense fallback={null}><CharacterEditorPage /></Suspense>}
                 <ModalContainer />
                 {customCSSDockOpen && !customCSSDockUnavailable && (
                   <Suspense fallback={null}>

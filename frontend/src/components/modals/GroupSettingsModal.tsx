@@ -147,7 +147,7 @@ export default function GroupSettingsModal() {
   useEffect(() => {
     let cancelled = false
     setLoadingPresets(true)
-    presetsApi.listRegistry({ provider: 'loom', limit: 200 })
+    presetsApi.listRegistryAll({ provider: 'loom' })
       .then((result) => {
         if (!cancelled) setPresetOptions(result.data)
       })

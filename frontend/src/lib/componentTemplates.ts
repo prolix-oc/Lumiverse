@@ -142,7 +142,7 @@ const TEMPLATES: Record<string, ComponentTemplate> = {
   ChatView: genericTemplate('ChatView', '  //   (no props — uses useParams and store)'),
 }
 
-import GENERATED_PROPS from './generatedComponentProps'
+import GENERATED_PROPS from './generatedComponentProps.ts'
 
 /** Get the starter template for a component, or a fallback generic one. */
 export function getComponentTemplate(componentName: string): ComponentTemplate {

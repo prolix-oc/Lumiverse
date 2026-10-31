@@ -476,6 +476,39 @@ describe("chat message search", () => {
 });
 
 describe("recent chats", () => {
+  test('later pages reuse summaries, and local writes and reset replace the model', () => {
+    seedChat('a', 'c1', 'A', '{}', 200);
+    seedChat('b', 'c2', 'B', '{}', 100);
+    listRecentChatsGrouped('u1', { limit: 1, offset: 0 });
+    const query = spyOn(getDb(), 'query');
+    try {
+      const next = listRecentChatsGrouped('u1', { limit: 1, offset: 1 });
+      expect(next.data[0]?.latest_chat_id).toBe('b');
+      expect(query.mock.calls.some(([sql]) => /FROM chats c/.test(sql))).toBe(false);
+    } finally { query.mockRestore(); }
+    getDb().run("UPDATE chats SET name = 'Changed', updated_at = 300 WHERE id = 'b'");
+    expect(listRecentChatsGrouped('u1', { limit: 1, offset: 0 }).data[0]?.latest_chat_name).toBe('Changed');
+    initChatsTestDb();
+    expect(listRecentChatsGrouped('u1', { limit: 1, offset: 0 }).total).toBe(0);
+  });
+
+  test('a second SQLite connection invalidates the warm summary and sorting caches', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'recent-summary-'));
+    const path = join(directory, 'test.sqlite');
+    let writer: Database | undefined;
+    try {
+      initChatsTestDb(path);
+      seedCharacter('c1', 'Before');
+      seedChat('external', 'c1', 'Before', '{}', 1);
+      expect(listRecentChatsGrouped('u1', { limit: 10, offset: 0 }).data[0]?.latest_chat_name).toBe('Before');
+      writer = new Database(path);
+      writer.run("UPDATE chats SET name = 'After worker write', metadata = ? WHERE id = 'external'", [JSON.stringify({ multiplayer: true })]);
+      const updated = listRecentChatsGrouped('u1', { limit: 10, offset: 0 });
+      expect(updated.data[0]?.latest_chat_name).toBe('After worker write');
+      expect(updated.data[0]?.multiplayer).toBe(true);
+    } finally { writer?.close(); closeDatabase(); rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test.each([
     ["flat", listRecentChats],
     ["grouped", listRecentChatsGrouped],

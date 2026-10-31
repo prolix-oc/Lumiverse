@@ -1,4 +1,5 @@
 import type { RecentConnections } from '@/lib/connectionRecents'
+import type { CharacterIndexItem } from './api'
 import type { ConnectionLibraries } from '@/lib/connectionLibrary'
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
@@ -59,6 +60,7 @@ export interface ChatSlice {
    * it when applied, so later mounts and WS-driven refreshes always refetch.
    */
   landingRecentChats: PaginatedResult<GroupedRecentChat> | null
+  landingRecentChatsScope: number | null
   setLandingRecentChats: (result: PaginatedResult<GroupedRecentChat> | null) => void
   setActiveChat: (
     chatId: string | null,
@@ -161,6 +163,13 @@ export interface StartupSettings {
 }
 
 export interface CharactersSlice {
+  characterIndex: CharacterIndexItem[]
+  characterIndexLoaded: boolean
+  characterIndexRevision: number
+  characterIndexGeneration: number
+  invalidateCharacterIndex: () => void
+  characterIndexChanges: Record<string, number>
+  setCharacterIndex: (items: CharacterIndexItem[], startedAtRevision: number) => void
   characters: Character[]
   charactersLoaded: boolean
   favorites: string[]
@@ -976,6 +985,7 @@ export interface SpindleSettings {
 
 // ---- Loom Registry Entry ----
 export interface LoomRegistryEntry {
+  cacheRevision?: number
   name: string
   blockCount: number
   coverUrl: string | null
@@ -989,6 +999,7 @@ export interface PresetsSlice {
   activePresetId: string | null
   activeLoomPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
+  loomRegistryLoaded: boolean
   setActiveLoomPreset: (id: string | null) => void
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void

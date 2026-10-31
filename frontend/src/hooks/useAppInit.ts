@@ -137,7 +137,9 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
   let landingPreloadHandled = false
   const imageGenProfilesVersion = useStore.getState().imageGenProfilesVersion
 
-  const landingPromise = bootstrapApi.fetchLanding()
+  // Recent-chat grouping is landing data, not a prerequisite for direct chat
+  // navigation or native widget startup.
+  const landingPromise = window.location.pathname === '/' ? bootstrapApi.fetchLanding()
     .then((response) => {
       if (!isCurrent()) return
       const appliedRecentChats = applyLandingBootstrap(response.payload, response.errors ?? {}, {
@@ -147,7 +149,7 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
     })
     .catch((err) => {
       console.warn('[useAppInit] landing bootstrap failed; landing page will fetch its own chats:', err)
-    })
+    }) : Promise.resolve()
 
   try {
     const response = await bootstrapApi.fetch()

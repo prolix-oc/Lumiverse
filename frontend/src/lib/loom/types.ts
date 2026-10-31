@@ -227,6 +227,7 @@ export interface LoomPreset {
 }
 
 export interface LoomRegistryEntry {
+  cacheRevision?: number
   name: string
   blockCount: number
   coverUrl: string | null

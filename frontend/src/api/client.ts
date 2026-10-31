@@ -1,5 +1,7 @@
 import { activeTab } from '@/lib/active-tab'
 import { isExpiredSessionResponse, signalInvalidAuthSession } from './session-lifecycle'
+import { invalidateSharedReads } from '@/lib/shared-read'
+import { beginApiRead } from '@/lib/displayPerformance'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE || '/api/v1'
 
@@ -111,6 +113,8 @@ export async function get<T>(path: string, params?: Record<string, any>, options
     }
   }
   const { signal, cleanup, timeoutMs } = buildSignal(options)
+  const finish = beginApiRead(path)
+  let failed = true
   try {
     const res = await fetch(url.toString(), {
       headers: { 'Accept': 'application/json' },
@@ -119,15 +123,19 @@ export async function get<T>(path: string, params?: Record<string, any>, options
       credentials: 'include',
       signal,
     })
-    return handleResponse<T>(res)
+    const result = await handleResponse<T>(res)
+    failed = false
+    return result
   } catch (error) {
     throw maybeWrapTimeoutError(error, url.toString(), signal, timeoutMs)
   } finally {
+    finish(failed)
     cleanup()
   }
 }
 
 export async function post<T>(path: string, body?: any, options?: RequestOptions): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -141,15 +149,17 @@ export async function post<T>(path: string, body?: any, options?: RequestOptions
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
 
 export async function put<T>(path: string, body?: any, options?: RequestOptions): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -163,15 +173,17 @@ export async function put<T>(path: string, body?: any, options?: RequestOptions)
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
 
 export async function del<T>(path: string, options?: RequestOptions): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -181,15 +193,17 @@ export async function del<T>(path: string, options?: RequestOptions): Promise<T>
       credentials: 'include',
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
 
 export async function patch<T>(path: string, body?: any, options?: RequestOptions): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -203,10 +217,11 @@ export async function patch<T>(path: string, body?: any, options?: RequestOption
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
@@ -249,6 +264,7 @@ function parseContentDispositionFilename(header: string | null): string | null {
 }
 
 export async function postBlob(path: string, body?: any, options?: RequestOptions): Promise<Blob> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -279,6 +295,7 @@ export async function postBlob(path: string, body?: any, options?: RequestOption
 }
 
 export async function upload<T>(path: string, formData: FormData, options?: RequestOptions): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -288,10 +305,11 @@ export async function upload<T>(path: string, formData: FormData, options?: Requ
       body: formData,
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
@@ -306,6 +324,7 @@ export async function uploadRaw<T>(
   body: Blob,
   options?: RequestOptions & { contentType?: string },
 ): Promise<T> {
+  invalidateSharedReads()
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`
   try {
@@ -319,10 +338,11 @@ export async function uploadRaw<T>(
       body,
       signal,
     })
-    return handleResponse<T>(res)
+    return await handleResponse<T>(res)
   } catch (error) {
     throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
   } finally {
+    invalidateSharedReads()
     cleanup()
   }
 }
@@ -332,6 +352,7 @@ export function uploadWithProgress<T>(
   formData: FormData,
   onProgress?: (percent: number) => void,
 ): Promise<T> {
+  invalidateSharedReads()
   return new Promise((resolve, reject) => {
     activeTab.assertActive()
     const xhr = new XMLHttpRequest()
@@ -347,6 +368,7 @@ export function uploadWithProgress<T>(
     }
 
     xhr.onload = () => {
+      invalidateSharedReads()
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(JSON.parse(xhr.responseText))
@@ -363,7 +385,10 @@ export function uploadWithProgress<T>(
 
     const onInactive = () => xhr.abort()
     activeTab.signal.addEventListener('abort', onInactive, { once: true })
-    xhr.onloadend = () => activeTab.signal.removeEventListener('abort', onInactive)
+    xhr.onloadend = () => {
+      invalidateSharedReads()
+      activeTab.signal.removeEventListener('abort', onInactive)
+    }
     xhr.onabort = () => reject(activeTab.signal.reason ?? new DOMException('Upload cancelled', 'AbortError'))
     xhr.onerror = () => reject(new Error('Network error'))
     xhr.send(formData)

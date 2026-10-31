@@ -487,27 +487,21 @@ export default function WorldBookPanel() {
 
   // Chat-scoped world books
   const [chatWorldBookIds, setChatWorldBookIds] = useState<string[]>([])
-  const [chatMetadata, setChatMetadata] = useState<Record<string, any>>({})
+  const activeChatMetadata = useStore(s => s.activeChatMetadata)
 
   useEffect(() => {
     if (!activeChatId) {
       setChatWorldBookIds([])
-      setChatMetadata({})
       return
     }
-    chatsApi.get(activeChatId, { messages: false }).then((chat) => {
-      const meta = (chat as any).metadata || {}
-      setChatMetadata(meta)
-      setChatWorldBookIds((meta.chat_world_book_ids as string[]) ?? [])
-    }).catch(() => {})
-  }, [activeChatId])
+    setChatWorldBookIds((activeChatMetadata?.chat_world_book_ids as string[]) ?? [])
+  }, [activeChatId, activeChatMetadata])
 
   // Atomic partial merge so concurrent server-side writers (post-generation
   // expression detection, council caching, etc.) can't clobber this change.
   const setChatBooks = useCallback(
     (next: string[]) => {
       setChatWorldBookIds(next)
-      setChatMetadata((prev) => ({ ...prev, chat_world_book_ids: next }))
       if (activeChatId) chatsApi.patchMetadata(activeChatId, { chat_world_book_ids: next }).catch(() => {})
     },
     [activeChatId],

@@ -1490,7 +1490,8 @@ describe('LandingPage character library', () => {
     expect(tab(host, 'Characters')?.getAttribute('aria-selected')).toBe('true')
     expect(storeState.setSetting).not.toHaveBeenCalledWith('landingPageActiveTab', expect.anything())
     expect(charactersMount(host).querySelectorAll('[data-homepage-character-library-root]')).toHaveLength(1)
-    expect(listRecentGrouped).toHaveBeenCalledTimes(1)
+    // Returning to native Chats refreshes once after hidden native reads were paused.
+    expect(listRecentGrouped).toHaveBeenCalledTimes(2)
     expect(listSummaries).not.toHaveBeenCalled()
   })
 })

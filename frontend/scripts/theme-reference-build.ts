@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { parse, walk } from 'css-tree'
 import ts from 'typescript'
 import type { Plugin, ResolvedConfig } from 'vite'
-import { createThemeReference } from './generate-theme-reference'
+import { createThemeReference } from './generate-theme-reference.ts'
 
 export function themeReferenceBuild(): Plugin {
   let config: ResolvedConfig

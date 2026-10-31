@@ -343,12 +343,12 @@ export function listCharacterSummaries(
       }
   }
 
+  // Sorting joins do not change membership. Keep them out of COUNT so a
+  // second chat-recency/group-membership aggregation is not needed per page.
   return paginatedQuery(
     `SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} ${extraJoin} WHERE ${whereStr} ${orderBy}`,
-    `SELECT COUNT(*) as count FROM ${fromClause} ${extraJoin} WHERE ${whereStr}`,
-    queryParams,
-    pagination,
-    rowToSummary
+    `SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`,
+    queryParams, pagination, rowToSummary, whereParams,
   );
 }
 
@@ -735,6 +735,18 @@ export function listCharacters(userId: string, pagination: PaginationParams): Pa
   );
 }
 
+/** Complete picker/folder index without greetings, prompt text or extensions. */
+type CharacterIndexItem = Pick<Character, 'id' | 'name' | 'avatar_path' | 'image_id' | 'creator' | 'folder' | 'library_scope' | 'tags' | 'created_at' | 'updated_at'> & { avatar_crop_image_id: string | null };
+export function listCharacterIndex(userId: string, pagination: PaginationParams): PaginatedResult<CharacterIndexItem> {
+  return paginatedQuery<any, CharacterIndexItem>(
+    `SELECT id, name, avatar_path, image_id, creator, folder, library_scope, tags, created_at, updated_at,
+      CASE WHEN json_valid(extensions) THEN json_extract(extensions, '$.avatar_crop_image_id') END AS avatar_crop_image_id
+     FROM characters WHERE user_id = ? AND deleting = 0 ORDER BY id`,
+    'SELECT COUNT(*) AS count FROM characters WHERE user_id = ? AND deleting = 0',
+    [userId], pagination, row => ({ ...row, tags: JSON.parse(row.tags) }),
+  );
+}
+
 /**
  * Discovery sort: surfaces characters the user hasn't interacted with recently,
  * while still producing a broad seeded shuffle across the full gallery.
@@ -858,10 +870,10 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
   return result;
 }
 
-export async function getCharactersByIdsAsync(userId: string, ids: string[]): Promise<Map<string, Character>> {
+export async function getCharactersByIdsAsync(userId: string, ids: string[], options: { excludeDeleting?: boolean } = {}): Promise<Map<string, Character>> {
   if (ids.length === 0) return new Map();
   const rows = await readDatabaseRows<any>(
-    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?`, [...ids, userId],
+    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?${options.excludeDeleting ? ' AND deleting = 0' : ''}`, [...ids, userId],
   );
   return new Map(rows.map((row) => [row.id, rowToCharacter(row)]));
 }

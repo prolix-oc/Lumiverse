@@ -537,6 +537,17 @@ app.get("/", (c) => {
 });
 
 // ─── Lightweight summary endpoint for character browser ───────────────────
+app.get("/index", (c) => c.json(svc.listCharacterIndex(c.get('userId'), parsePagination(c.req.query('limit'), c.req.query('offset')))));
+
+app.get("/details", async (c) => {
+  const ids = [...new Set((c.req.query('ids') ?? '').split(',').filter(Boolean))];
+  if (ids.length === 0 || ids.length > 100 || ids.some(id => id.length > 128)) {
+    return c.json({ error: 'Supply between 1 and 100 character ids' }, 400);
+  }
+  const characters = await svc.getCharactersByIdsAsync(c.get('userId'), ids, { excludeDeleting: true });
+  return c.json(ids.flatMap(id => characters.has(id) ? [characters.get(id)!] : []));
+});
+
 app.get("/summary", (c) => {
   const userId = c.get("userId");
   const rawScope = c.req.query("scope");

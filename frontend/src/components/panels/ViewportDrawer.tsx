@@ -11,6 +11,7 @@ import {
   DRAWER_TABS,
   adaptExtensionTabs,
   sanitizeHiddenDrawerTabIds,
+  preloadDrawerTab,
   type DrawerTabEntry,
 } from '@/lib/drawer-tab-registry'
 import {
@@ -31,6 +32,8 @@ import { useDrawerTabDrag } from '@/hooks/useDrawerTabDrag'
 import { useDrawerResize } from '@/hooks/useDrawerResize'
 import { getUiScale } from '@/lib/uiScale'
 import { duoPaneStyle, type DuoLayout } from '@/lib/ios-duo-layout'
+import { useDrawerTabPreload } from '@/hooks/useDrawerTabPreload'
+import { scheduleIdleDrawerPreload } from '@/lib/drawer-tab-preload'
 
 export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLayout | null }) {
   const { t } = useTranslation('panels')
@@ -64,6 +67,7 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
+  const preloadOnIntent = useDrawerTabPreload()
 
   // Publish actual drawer geometry so chat reflow also follows live resizing and UI zoom.
   useEffect(() => {
@@ -194,6 +198,20 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
     : []
   const activeFolderView = activeFolder?.type === 'folder' ? activeFolder.view ?? 'list' : 'list'
 
+  // Warm one neighboring top-level tab after opening, rather than importing
+  // every panel at startup. Folder contents wait for their own interaction.
+  const nearbyTabId = useMemo(() => {
+    if (!settingsLoaded || (!drawerOpen && !pinned) || activeFolder) return null
+    const ids = layout.flatMap(item => item.type === 'tab' && isTabVisible(item.tabId)
+      && !extensionIds.has(item.tabId) ? [tabEntryById.get(item.tabId)!.id] : [])
+    const index = ids.indexOf(activeTab)
+    return index >= 0 ? ids[index + 1] ?? ids[index - 1] ?? null : null
+  }, [settingsLoaded, drawerOpen, pinned, activeFolder, layout, isTabVisible, extensionIds, tabEntryById, activeTab])
+  useEffect(() => {
+    if (!nearbyTabId) return
+    return scheduleIdleDrawerPreload(() => preloadDrawerTab(nearbyTabId))
+  }, [nearbyTabId])
+
   const activeTabTitle =
     activeTab === 'profile' && isGroupChat
       ? t('group')
@@ -233,6 +251,7 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
   const handleTabClick = useCallback(
     (layoutTabId: string) => {
       const runtimeTabId = tabEntryById.get(layoutTabId)?.id ?? layoutTabId
+      preloadDrawerTab(runtimeTabId)
       setActiveFolderId(null)
       setDrawerTab(runtimeTabId)
       openDrawer(runtimeTabId)
@@ -322,6 +341,7 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
           organizedAnchor && styles.organizedTabAnchor,
         )}
         data-tab-id={entry.id}
+        {...(organizedAnchor ? {} : preloadOnIntent(entry.id))}
         onClick={organizedAnchor ? undefined : () => handleTabClick(layoutTabId)}
         onContextMenu={organizedAnchor ? undefined : handleTabContextMenu}
         onTouchStart={organizedAnchor ? undefined : tabQuickMenu.onTouchStart}
@@ -377,13 +397,17 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
             drawerOpen && styles.drawerTabActive,
             drawerTabDrag.isDragging && styles.drawerTabDragging,
           )}
+          {...preloadOnIntent(activeTab)}
+          {...drawerTabDrag.pointerHandlers}
           onClick={(event) => {
             if (drawerTabDrag.consumeSuppressedClick(event)) return
             if (drawerOpen) closeDrawer()
-            else openDrawer()
+            else {
+              preloadDrawerTab(activeTab)
+              openDrawer()
+            }
           }}
           style={{ marginTop: `${drawerTabDrag.verticalPosition}vh` }}
-          {...drawerTabDrag.pointerHandlers}
         >
           <div className={styles.tabIconBox}>
             <Sparkles size={isCompact ? 14 : 16} />
@@ -544,6 +568,7 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
                             key={layoutTabId}
                             type="button"
                             className={styles.folderTile}
+                            {...preloadOnIntent(entry.id)}
                             onClick={() => handleTabClick(layoutTabId)}
                           >
                             <span className={styles.folderTileIcon}><Icon size={19} strokeWidth={1.6} /></span>

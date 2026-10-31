@@ -36,6 +36,8 @@ import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
 import { presetsApi } from '@/api/presets'
 import { refreshAppDataAfterImport } from '@/hooks/useAppInit'
+import { refreshCachedCharacters } from '@/hooks/useCharacterCatalog'
+import { readAccountEpoch } from '@/lib/shared-read'
 import { toast } from '@/lib/toast'
 import { notifyImageDeleted, notifyDeletionOperation, notifyDeletionReconnect, notifyGalleryItemRemoved, onImageDeleted, type DeletionOperation, type GalleryItemRemoved } from '@/lib/deletion-events'
 import i18n from '@/i18n'
@@ -431,7 +433,9 @@ function sendDrawerTabRegistrySnapshot(drawerTabs: ReadonlyArray<{
 }
 
 async function refreshLoomRegistry() {
-  const result = await presetsApi.listRegistry({ provider: 'loom', limit: 200 })
+  const epoch = readAccountEpoch()
+  const result = await presetsApi.listRegistryAll({ provider: 'loom' })
+  if (epoch !== readAccountEpoch()) return
   useStore.getState().setLoomRegistry(Object.fromEntries(
     result.data.map((preset) => [
       preset.id,
@@ -440,6 +444,7 @@ async function refreshLoomRegistry() {
         blockCount: preset.block_count,
         coverUrl: preset.cover_url ?? null,
         updatedAt: preset.updated_at,
+        cacheRevision: preset.cache_revision,
         isDefault: false,
       },
     ]),
@@ -1474,6 +1479,29 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.PRESET_CHANGED, (payload: { id: string; preset?: import('@/types/api').Preset }) => {
+        const preset = payload.preset
+        if (!preset) {
+          void refreshLoomRegistry().catch(error => console.warn('[presets] Could not refresh registry:', error))
+          return
+        }
+        const registry = { ...store.getState().loomRegistry }
+        if (preset.provider === 'loom') {
+          registry[payload.id] = {
+            name: preset.name, blockCount: preset.prompt_order.length,
+            coverUrl: preset.metadata?.coverUrl ?? preset.metadata?.cover_url ?? null,
+            updatedAt: preset.updated_at, cacheRevision: preset.cache_revision, isDefault: false,
+          }
+        } else delete registry[payload.id]
+        // A pushed entry does not imply the entire registry has been loaded.
+        store.setState({ loomRegistry: registry })
+      }),
+      wsClient.on(EventType.PRESET_DELETED, (payload: { id: string }) => {
+        const registry = { ...store.getState().loomRegistry }
+        delete registry[payload.id]
+        store.setState({ loomRegistry: registry })
+      }),
+
       wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: import('@/types/api').Character }) => {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
@@ -1485,6 +1513,8 @@ export function useWebSocket() {
         // Mark the full-object cache stale; paginated surfaces independently
         // refresh their lightweight summaries once.
         store.getState().setCharactersLoaded(false)
+        store.getState().invalidateCharacterIndex()
+        void refreshCachedCharacters().catch(error => console.warn('[character-library] Could not refresh cached details:', error))
       }),
 
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {

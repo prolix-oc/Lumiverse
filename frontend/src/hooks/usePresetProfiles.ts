@@ -134,6 +134,16 @@ export function usePresetProfiles(
     }
   }, [activeChatId, activePersonaId, activeCharacterId, activeProfileId, presetId, authUserId, mutationCoordinator])
 
+  const readContext = useCallback(() => authUserId ? presetProfilesApi.context({
+    ...(presetId ? { preset_id: presetId } : {}),
+    ...(activeChatId ? { chat_id: activeChatId } : {}),
+    ...(activePersonaId ? { persona_id: activePersonaId } : {}),
+    ...(activeCharacterId ? { character_id: activeCharacterId } : {}),
+    ...(activeProfileId ? { connection_id: activeProfileId } : {}),
+    is_group: isGroupChat,
+    revision: profileRevision,
+  }) : Promise.resolve({ defaults: null, chat: null, persona: null, character: null, connection: null }), [authUserId, presetId, activeChatId, activePersonaId, activeCharacterId, activeProfileId, isGroupChat, profileRevision])
+
   // Load defaults for the currently selected preset. Defaults are stored per
   // preset, so switching presets should load a different default snapshot.
   useEffect(() => {
@@ -144,7 +154,7 @@ export function usePresetProfiles(
     setDefaultsFor(null)
     if (!targetPresetId || !scope || !fetchToken) return
     let cancelled = false
-    presetProfilesApi.getDefaults(targetPresetId)
+    readContext().then(context => context.defaults)
       .then((d) => {
         if (cancelled || !mutationCoordinator.isFetchCurrent(scope, fetchToken)) return
         setDefaults(d)
@@ -156,7 +166,7 @@ export function usePresetProfiles(
         setDefaultsFor(targetPresetId)
       })
     return () => { cancelled = true }
-  }, [presetId, mutationCoordinator, profileRevision])
+  }, [presetId, mutationCoordinator, readContext])
 
   // Load chat binding when chat changes. Stale fetches are discarded by the
   // cancelled flag, and the slot is keyed by the chat id it was fetched for so
@@ -171,7 +181,7 @@ export function usePresetProfiles(
     }
     let cancelled = false
     setChatSlot((prev) => (prev.for === target ? prev : EMPTY_CHAT_SLOT))
-    presetProfilesApi.getChatBinding(target)
+    readContext().then(context => context.chat)
       .then((b) => {
         if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
           setChatSlot({ for: target, binding: b })
@@ -183,7 +193,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeChatId, mutationCoordinator, profileRevision])
+  }, [activeChatId, mutationCoordinator, readContext])
 
   // Load persona binding when the active persona changes. A persona profile
   // takes precedence over the character profile, mirroring backend resolution.
@@ -197,7 +207,7 @@ export function usePresetProfiles(
     }
     let cancelled = false
     setPersonaSlot((prev) => (prev.for === target ? prev : EMPTY_PERSONA_SLOT))
-    presetProfilesApi.getPersonaBinding(target)
+    readContext().then(context => context.persona)
       .then((b) => {
         if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
           setPersonaSlot({ for: target, binding: b })
@@ -209,7 +219,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activePersonaId, mutationCoordinator, profileRevision])
+  }, [activePersonaId, mutationCoordinator, readContext])
 
   // Load character binding when character changes (same pattern as chat).
   useEffect(() => {
@@ -222,7 +232,7 @@ export function usePresetProfiles(
     }
     let cancelled = false
     setCharSlot((prev) => (prev.for === target ? prev : EMPTY_CHAR_SLOT))
-    presetProfilesApi.getCharacterBinding(target)
+    readContext().then(context => context.character)
       .then((b) => {
         if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
           setCharSlot({ for: target, binding: b })
@@ -234,7 +244,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeCharacterId, mutationCoordinator, profileRevision])
+  }, [activeCharacterId, mutationCoordinator, readContext])
 
   // Load connection profile binding when active connection changes.
   useEffect(() => {
@@ -247,7 +257,7 @@ export function usePresetProfiles(
     }
     let cancelled = false
     setConnectionSlot((prev) => (prev.for === target ? prev : EMPTY_CONNECTION_SLOT))
-    presetProfilesApi.getConnectionBinding(target)
+    readContext().then(context => context.connection)
       .then((b) => {
         if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
           setConnectionSlot({ for: target, binding: b })
@@ -259,7 +269,7 @@ export function usePresetProfiles(
         }
       })
     return () => { cancelled = true }
-  }, [activeProfileId, mutationCoordinator, profileRevision])
+  }, [activeProfileId, mutationCoordinator, readContext])
 
   // A binding is only considered current when it was fetched for the active id.
   const chatBinding = chatSlot.for === activeChatId ? chatSlot.binding : null

@@ -1,37 +1,47 @@
-import { useEffect, Suspense, lazy } from 'react'
+import { useEffect, useState, Suspense, lazy, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
-import SettingsModal from './SettingsModal'
-import GreetingPickerModal from './GreetingPickerModal'
-import WorldBookEditorModal from './WorldBookEditorModal'
-import LumiaEditorModal from '@/components/panels/creator-workshop/LumiaEditorModal'
-import LoomEditorModal from '@/components/panels/creator-workshop/LoomEditorModal'
-import ToolEditorModal from '@/components/panels/creator-workshop/ToolEditorModal'
-import DryRunModal from './DryRunModal'
-import PromptItemizerModal from './PromptItemizerModal'
-import GroupChatCreatorModal from './GroupChatCreatorModal'
-import AddGroupMemberModal from '@/components/chat/AddGroupMemberModal'
-import MemberVoiceModal from './MemberVoiceModal'
-import ManageChatsModal from './ManageChatsModal'
-import ChatPickerModal from './ChatPickerModal'
-import MemoryCortexDiagnosticsModal from './MemoryCortexDiagnosticsModal'
 import PermissionRequestModal from './PermissionRequestModal'
-import CommandPalette from './CommandPalette'
-import RegexEditorModal from './RegexEditorModal'
-import RegexImportModal from './RegexImportModal'
-import RegenFeedbackModal from './RegenFeedbackModal'
-import PersonaAddonsModal from './PersonaAddonsModal'
-import GlobalAddonsLibraryModal from './GlobalAddonsLibraryModal'
-import ChatSettingsModal from './GroupSettingsModal'
-import ConfigureDrawerTabsModal from './ConfigureDrawerTabsModal'
-import ImagePromptPreviewModal from './ImagePromptPreviewModal'
-import ImageCaptionModal from './ImageCaptionModal'
-import QwenCustomVoiceModal from './QwenCustomVoiceModal'
-import HiddenFromHomeModal from './HiddenFromHomeModal'
-import { WeaverStudio } from '@/components/weaver/WeaverStudio'
 
-const CustomCSSModal = lazy(() => import('./CustomCSSModal'))
+// Each dialog owns its loading boundary so opening one never hides an
+// already mounted settings editor or permission/confirmation dialog.
+function deferredModal<P extends object>(load: () => Promise<{ default: ComponentType<P> }>) {
+  const Component = lazy(load)
+  return function DeferredModal(props: P) {
+    return <Suspense fallback={null}><Component {...props} /></Suspense>
+  }
+}
+
+const SettingsModal = deferredModal(() => import('./SettingsModal'))
+const GreetingPickerModal = deferredModal(() => import('./GreetingPickerModal'))
+const WorldBookEditorModal = deferredModal(() => import('./WorldBookEditorModal'))
+const LumiaEditorModal = deferredModal(() => import('@/components/panels/creator-workshop/LumiaEditorModal'))
+const LoomEditorModal = deferredModal(() => import('@/components/panels/creator-workshop/LoomEditorModal'))
+const ToolEditorModal = deferredModal(() => import('@/components/panels/creator-workshop/ToolEditorModal'))
+const DryRunModal = deferredModal(() => import('./DryRunModal'))
+const PromptItemizerModal = deferredModal(() => import('./PromptItemizerModal'))
+const GroupChatCreatorModal = deferredModal(() => import('./GroupChatCreatorModal'))
+const AddGroupMemberModal = deferredModal(() => import('@/components/chat/AddGroupMemberModal'))
+const MemberVoiceModal = deferredModal(() => import('./MemberVoiceModal'))
+const ManageChatsModal = deferredModal(() => import('./ManageChatsModal'))
+const ChatPickerModal = deferredModal(() => import('./ChatPickerModal'))
+const MemoryCortexDiagnosticsModal = deferredModal(() => import('./MemoryCortexDiagnosticsModal'))
+const CommandPalette = deferredModal(() => import('./CommandPalette'))
+const RegexEditorModal = deferredModal(() => import('./RegexEditorModal'))
+const RegexImportModal = deferredModal(() => import('./RegexImportModal'))
+const RegenFeedbackModal = deferredModal(() => import('./RegenFeedbackModal'))
+const PersonaAddonsModal = deferredModal(() => import('./PersonaAddonsModal'))
+const GlobalAddonsLibraryModal = deferredModal(() => import('./GlobalAddonsLibraryModal'))
+const ChatSettingsModal = deferredModal(() => import('./GroupSettingsModal'))
+const ConfigureDrawerTabsModal = deferredModal(() => import('./ConfigureDrawerTabsModal'))
+const ImagePromptPreviewModal = deferredModal(() => import('./ImagePromptPreviewModal'))
+const ImageCaptionModal = deferredModal(() => import('./ImageCaptionModal'))
+const QwenCustomVoiceModal = deferredModal(() => import('./QwenCustomVoiceModal'))
+const HiddenFromHomeModal = deferredModal(() => import('./HiddenFromHomeModal'))
+const WeaverStudio = deferredModal(() => import('@/components/weaver/WeaverStudio').then(module => ({ default: module.WeaverStudio })))
+const CustomCSSModal = deferredModal(() => import('./CustomCSSModal'))
+
 
 export default function ModalContainer() {
   const { t } = useTranslation('modals')
@@ -54,6 +64,9 @@ export default function ModalContainer() {
   const closeModal = useStore((s) => s.closeModal)
   const lastRegenFeedback = useStore((s) => s.lastRegenFeedback)
   const setLastRegenFeedback = useStore((s) => s.setLastRegenFeedback)
+  const commandPaletteOpen = useStore(s => s.commandPaletteOpen)
+  const [paletteUsed, setPaletteUsed] = useState(false)
+  useEffect(() => { if (commandPaletteOpen) setPaletteUsed(true) }, [commandPaletteOpen])
 
   return (
     <>
@@ -162,7 +175,7 @@ export default function ModalContainer() {
       {activeModal === 'weaver' && <WeaverStudio />}
 
       <PermissionRequestModal />
-      <CommandPalette />
+      {(commandPaletteOpen || paletteUsed) && <CommandPalette />}
     </>
   )
 }

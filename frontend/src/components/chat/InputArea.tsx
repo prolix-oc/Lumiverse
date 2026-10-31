@@ -6,6 +6,7 @@ import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendConfirmedRoomMessage } from '@/ws/confirmedRoomMessage'
 import { wsClient } from '@/ws/client'
+import { readAccountEpoch } from '@/lib/shared-read'
 import { EventType } from '@/types/ws-events'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
@@ -27,7 +28,6 @@ import {
 } from '@/lib/impersonationPreset'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
-  inspectPromptVariablesAvailability,
   type PromptVariablesAvailability,
 } from '@/lib/loom/prompt-variable-availability'
 import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
@@ -957,7 +957,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const manuallyActiveGuideCount = guidedGenerations.filter((guide) => guide.enabled).length
   const activeQuickReplySets = quickReplySets.filter((s) => s.enabled)
   const activeLoomPresetRegistryUpdatedAt = activeLoomPresetId
-    ? loomRegistry[activeLoomPresetId]?.updatedAt ?? null
+    ? loomRegistry[activeLoomPresetId]?.cacheRevision ?? loomRegistry[activeLoomPresetId]?.updatedAt ?? null
     : null
   const promptVariablesAvailable = !!activeLoomPresetId
     && promptVariablesAvailability?.presetId === activeLoomPresetId
@@ -971,24 +971,18 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     let cancelled = false
     const presetId = activeLoomPresetId
     const registryUpdatedAt = activeLoomPresetRegistryUpdatedAt
+    const epoch = readAccountEpoch()
     const isCurrent = () => {
       const state = useStore.getState()
       return !cancelled
+        && readAccountEpoch() === epoch
         && state.activeLoomPresetId === presetId
-        && (state.loomRegistry[presetId]?.updatedAt ?? null) === registryUpdatedAt
+        && (state.loomRegistry[presetId]?.cacheRevision ?? state.loomRegistry[presetId]?.updatedAt ?? null) === registryUpdatedAt
     }
 
-    void inspectPromptVariablesAvailability({
-      presetId,
-      registryUpdatedAt,
-      loadBlocks: async () => {
-        const preset = await presetsApi.get(presetId)
-        return unmarshalPreset(preset).blocks
-      },
-      isCurrent,
-    }).then((availability) => {
-      if (!availability) return
-      setPromptVariablesAvailability(availability)
+    void presetsApi.capabilities(presetId).then((capabilities) => {
+      if (!isCurrent()) return
+      setPromptVariablesAvailability({ presetId, registryUpdatedAt, hasDefinitions: capabilities.has_prompt_variables })
     }).catch((err) => {
       if (!isCurrent()) return
       console.warn('[InputArea] Failed to inspect prompt variable availability:', err)
@@ -1009,8 +1003,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     setPromptVariablesLoading(true)
     const presetId = activeLoomPresetId
     try {
-      const resolvedProfile = await presetProfilesApi.resolve(chatId, presetId, activeProfileId, activePersonaId)
-      const preset = await presetsApi.get(presetId)
+      const [resolvedProfile, preset] = await Promise.all([
+        presetProfilesApi.resolve(chatId, presetId, activeProfileId, activePersonaId),
+        presetsApi.get(presetId),
+      ])
       if (useStore.getState().activeLoomPresetId !== presetId) {
         return
       }

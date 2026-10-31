@@ -6,6 +6,7 @@ export const createPresetsSlice: StateCreator<AppStore, [], [], PresetsSlice> = 
   activePresetId: null,
   activeLoomPresetId: null,
   loomRegistry: {},
+  loomRegistryLoaded: false,
 
   setPresets: (presets) => set({ presets }),
   setActivePreset: (id) => set({ activePresetId: id }),
@@ -20,7 +21,7 @@ export const createPresetsSlice: StateCreator<AppStore, [], [], PresetsSlice> = 
       set({ activeLoomPresetId: id })
     }
   },
-  setLoomRegistry: (registry) => set({ loomRegistry: registry }),
+  setLoomRegistry: (registry) => set({ loomRegistry: registry, loomRegistryLoaded: true }),
   getActivePresetForGeneration: () => {
     const { activeChatMetadata, activeLoomPresetId } = get()
     // Keep the editor's global selection while opting this chat out on every turn.

@@ -4,7 +4,7 @@ import { executeDatabaseOperation } from "../db/execution";
 import { createHash } from "node:crypto";
 import { shieldMessageLiterals, withMessageLiteralExtra, type MessageLiteralContent } from "../macros/message-literals";
 import type { VariableValues } from "../utils/variable-checkpoint";
-import { getDatabasePath, getDb } from "../db/connection";
+import { getDatabasePath, getDb, getDbGeneration, onDbReset } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -846,17 +846,56 @@ function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentCh
   }]));
 }
 
+// A bounded, disposable read model. SQLite's connection change counter covers
+// local writes; data_version covers supervised-worker and other connections.
+// Unlike event-only invalidation this also sees imports, cascades and direct SQL.
+const recentSummaryCache = new Map<string, { version: string; rows: any[] }>();
+const recentSortedCache = new WeakMap<any[], Map<string, any[]>>();
+onDbReset(() => recentSummaryCache.clear());
+
+function recentChatSummaryRows(userId: string): any[] {
+  const db = getDb();
+  const changeState = db.query('SELECT total_changes() AS changes, data_version FROM pragma_data_version')
+    .get() as { data_version: number; changes: number };
+  const version = `${getDbGeneration()}:${changeState.data_version}:${changeState.changes}`;
+  const cached = recentSummaryCache.get(userId);
+  if (cached?.version === version) return cached.rows;
+  const rows = withRecentChatRecovery("loading grouped recent chats", () => db.query(`
+    SELECT c.id, c.character_id, c.name, c.metadata, c.created_at, c.updated_at,
+      ch.name AS character_name
+    FROM chats c LEFT JOIN characters ch ON ch.id = c.character_id
+    WHERE c.user_id = ? AND c.character_id IS NOT NULL ORDER BY c.updated_at DESC
+  `).all(userId) as any[]).map(row => {
+    const metadata = parseMetadataObject(row.metadata);
+    // Retain only the grouping/filter inputs, never arbitrary extension data.
+    return { ...row, metadata: {
+      group: metadata.group, character_ids: metadata.character_ids,
+      branched_from: metadata.branched_from, hidden_from_recent: metadata.hidden_from_recent,
+      multiplayer: metadata.multiplayer,
+    } };
+  });
+  recentSummaryCache.delete(userId);
+  // Bound cache memory independently of account/library size.
+  if (rows.length <= 20_000 && JSON.stringify(rows).length <= 2_000_000) recentSummaryCache.set(userId, { version, rows });
+  while (recentSummaryCache.size > 4) recentSummaryCache.delete(recentSummaryCache.keys().next().value!);
+  return rows;
+}
+
 export function listRecentChatsGrouped(
   userId: string,
   pagination: PaginationParams,
   options: GroupedRecentChatOptions = {},
+  /** Internal callers may reuse a just-read, server-owned settings snapshot. */
+  savedHiddenCharacterIds?: string[],
 ): PaginatedResult<GroupedRecentChat> {
   const db = getDb();
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: GroupedRecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
   const favoriteCharacterIds = new Set(options.favoriteCharacterIds ?? []);
-  const hiddenCharacterIds = readHiddenRecentCharacterIds(userId, options.hiddenCharacterIds);
+  const hiddenCharacterIds = savedHiddenCharacterIds === undefined
+    ? readHiddenRecentCharacterIds(userId, options.hiddenCharacterIds)
+    : new Set([...savedHiddenCharacterIds, ...(options.hiddenCharacterIds ?? [])]);
   const isDefaultRecentSort = !searchTerm
     && favoriteCharacterIds.size === 0
     && sort === 'recent'
@@ -864,127 +903,118 @@ export function listRecentChatsGrouped(
 
   // Parse metadata in JS so a single malformed row cannot make SQLite abort
   // the landing-page recent-chat query while evaluating json_extract().
-  const rows = withRecentChatRecovery("loading grouped recent chats", () =>
-    isDefaultRecentSort
-      ? db.query(`
-          SELECT id, character_id, name, metadata, updated_at
-          FROM chats
-          WHERE user_id = ? AND character_id IS NOT NULL
-          ORDER BY updated_at DESC
-        `).all(userId) as any[]
-      : db.query(`
-          SELECT
-            c.id,
-            c.character_id,
-            c.name,
-            c.metadata,
-            c.created_at,
-            c.updated_at,
-            ch.name AS character_name,
-            ch.avatar_path AS character_avatar_path,
-            ch.image_id AS character_image_id,
-            ch.extensions AS character_extensions
-          FROM chats c
-          LEFT JOIN characters ch ON ch.id = c.character_id
-          WHERE c.user_id = ? AND c.character_id IS NOT NULL
-          ORDER BY c.updated_at DESC
-        `).all(userId) as any[]
-  );
+  const rows = recentChatSummaryRows(userId);
 
   // Parse metadata first, then filter out chats the user has explicitly
   // hidden from the landing-page recent list. Build the lineage lookup from
   // the full set so forking/grouping resolution stays correct even when a
   // hidden chat sits in a group's ancestry.
-  const allParsedRows = rows.map((row) => {
-    const metadata = parseMetadataObject(row.metadata);
-    const isGroup = isGroupMetadata(metadata);
-    return { ...row, metadata, isGroup, groupKey: null as string | null };
-  });
-  const parsedRows = allParsedRows.filter((row) => {
-    if (isHiddenFromRecent(row.metadata)) return false;
-    // Character visibility applies only to solo cards. Group chats remain
-    // chat-scoped entities even when one of their members is hidden from home.
-    return row.isGroup || !hiddenCharacterIds.has(row.character_id);
-  });
+  const queryKey = JSON.stringify([searchTerm, sort, direction, [...favoriteCharacterIds].sort(), [...hiddenCharacterIds].sort()]);
+  const sortedCache = recentSortedCache.get(rows) ?? new Map<string, any[]>();
+  recentSortedCache.set(rows, sortedCache);
+  const buildSortedRows = (): any[] => {
+    const allParsedRows = rows.map((row) => {
+      const metadata = row.metadata;
+      const isGroup = isGroupMetadata(metadata);
+      return { ...row, metadata, isGroup, groupKey: null as string | null };
+    });
+    const parsedRows = allParsedRows.filter((row) => {
+      if (isHiddenFromRecent(row.metadata)) return false;
+      // Character visibility applies only to solo cards. Group chats remain
+      // chat-scoped entities even when one of their members is hidden from home.
+      return row.isGroup || !hiddenCharacterIds.has(row.character_id);
+    });
 
-  const soloCounts = new Map<string, number>();
-  const groupCounts = new Map<string, number>();
-  for (const row of parsedRows) {
-    if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
-  }
-
-  // Build a metadata lookup so we can resolve each group chat's lineage root.
-  // Branches inherit the root's member-set key — without this, mutating the
-  // parent's membership (or a branch's) after forking pushes the branch into
-  // a separate landing-page entry, which users perceive as "new group chats
-  // spawning on every fork."
-  const metadataById = new Map<string, Record<string, any>>();
-  for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
-
-  const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
-    const visited = new Set<string>([rowId]);
-    let currentMeta = metadata;
-    for (let i = 0; i < 64; i++) {
-      const parentId = typeof currentMeta?.branched_from === "string" ? currentMeta.branched_from : null;
-      if (!parentId || visited.has(parentId)) break;
-      const parentMeta = metadataById.get(parentId);
-      if (!parentMeta || !isGroupMetadata(parentMeta)) break;
-      visited.add(parentId);
-      currentMeta = parentMeta;
+    const soloCounts = new Map<string, number>();
+    const groupCounts = new Map<string, number>();
+    for (const row of parsedRows) {
+      if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
     }
-    return getGroupMemberKey(currentMeta);
-  };
 
-  for (const row of parsedRows) {
-    if (!row.isGroup) continue;
-    const groupKey = resolveGroupDedupKey(row.id, row.metadata);
-    row.groupKey = groupKey;
-    if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
-  }
+    // Build a metadata lookup so we can resolve each group chat's lineage root.
+    // Branches inherit the root's member-set key — without this, mutating the
+    // parent's membership (or a branch's) after forking pushes the branch into
+    // a separate landing-page entry, which users perceive as "new group chats
+    // spawning on every fork."
+    const metadataById = new Map<string, Record<string, any>>();
+    for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
 
-  // Dedup on the rows pre-sorted by updated_at DESC so the surviving row
-  // is always the most recent chat per solo character / group member set.
-  const seenSoloCharacterIds = new Set<string>();
-  const seenGroupKeys = new Set<string>();
-  const dedupedRows = parsedRows.filter((row) => {
-    if (row.isGroup) {
-      if (!row.groupKey) return true;
-      if (seenGroupKeys.has(row.groupKey)) return false;
-      seenGroupKeys.add(row.groupKey);
+    const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
+      const visited = new Set<string>([rowId]);
+      let currentMeta = metadata;
+      for (let i = 0; i < 64; i++) {
+        const parentId = typeof currentMeta?.branched_from === "string" ? currentMeta.branched_from : null;
+        if (!parentId || visited.has(parentId)) break;
+        const parentMeta = metadataById.get(parentId);
+        if (!parentMeta || !isGroupMetadata(parentMeta)) break;
+        visited.add(parentId);
+        currentMeta = parentMeta;
+      }
+      return getGroupMemberKey(currentMeta);
+    };
+
+    for (const row of parsedRows) {
+      if (!row.isGroup) continue;
+      const groupKey = resolveGroupDedupKey(row.id, row.metadata);
+      row.groupKey = groupKey;
+      if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
+    }
+
+    // Dedup on the rows pre-sorted by updated_at DESC so the surviving row
+    // is always the most recent chat per solo character / group member set.
+    const seenSoloCharacterIds = new Set<string>();
+    const seenGroupKeys = new Set<string>();
+    const dedupedRows = parsedRows.filter((row) => {
+      if (row.isGroup) {
+        if (!row.groupKey) return true;
+        if (seenGroupKeys.has(row.groupKey)) return false;
+        seenGroupKeys.add(row.groupKey);
+        return true;
+      }
+      if (seenSoloCharacterIds.has(row.character_id)) return false;
+      seenSoloCharacterIds.add(row.character_id);
       return true;
-    }
-    if (seenSoloCharacterIds.has(row.character_id)) return false;
-    seenSoloCharacterIds.add(row.character_id);
-    return true;
-  });
+    });
 
-  const displayName = (row: any): string => {
-    if (row.isGroup) return (row.name || row.character_name || '').toString();
-    return (row.character_name || row.name || '').toString();
+    const displayName = (row: any): string => {
+      if (row.isGroup) return (row.name || row.character_name || '').toString();
+      return (row.character_name || row.name || '').toString();
+    };
+
+    const filteredRows = searchTerm
+      ? dedupedRows.filter((row) => {
+          const chatName = (row.name || '').toLowerCase();
+          const charName = (row.character_name || '').toLowerCase();
+          return chatName.includes(searchTerm) || charName.includes(searchTerm);
+        })
+      : dedupedRows;
+
+    const sign = direction === 'asc' ? 1 : -1;
+    const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
+      const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
+      const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
+      if (aFavorite !== bFavorite) return bFavorite - aFavorite;
+      if (sort === 'name') {
+        return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
+      }
+      const aVal = sort === 'created' ? (a.created_at ?? 0) : (a.updated_at ?? 0);
+      const bVal = sort === 'created' ? (b.created_at ?? 0) : (b.updated_at ?? 0);
+      return sign * (aVal - bVal);
+    });
+    return sortedRows.map(row => ({ ...row, chat_count: row.isGroup
+      ? (row.groupKey ? groupCounts.get(row.groupKey) ?? 1 : 1)
+      : soloCounts.get(row.character_id) ?? 1 }));
   };
-
-  const filteredRows = searchTerm
-    ? dedupedRows.filter((row) => {
-        const chatName = (row.name || '').toLowerCase();
-        const charName = (row.character_name || '').toLowerCase();
-        return chatName.includes(searchTerm) || charName.includes(searchTerm);
-      })
-    : dedupedRows;
-
-  const sign = direction === 'asc' ? 1 : -1;
-  const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
-    const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
-    const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
-    if (aFavorite !== bFavorite) return bFavorite - aFavorite;
-    if (sort === 'name') {
-      return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
-    }
-    const aVal = sort === 'created' ? (a.created_at ?? 0) : (a.updated_at ?? 0);
-    const bVal = sort === 'created' ? (b.created_at ?? 0) : (b.updated_at ?? 0);
-    return sign * (aVal - bVal);
-  });
+  let sortedRows = sortedCache.get(queryKey);
+  if (!sortedRows) {
+    sortedRows = buildSortedRows();
+    if (sortedCache.size >= 4) sortedCache.delete(sortedCache.keys().next().value!);
+    sortedCache.set(queryKey, sortedRows);
+  }
   const pageRows = sortedRows.slice(pagination.offset, pagination.offset + pagination.limit);
-  const characterInfoById = isDefaultRecentSort ? loadRecentChatCharacterInfo(db, pageRows) : null;
+  // Avatars and extension blobs do not participate in filtering or sorting.
+  // Hydrate them once per returned character, including the favorites path.
+  const characterInfoById = loadRecentChatCharacterInfo(db, pageRows);
 
   return {
     data: pageRows.map((row: any) => {
@@ -1000,7 +1030,7 @@ export function listRecentChatsGrouped(
         latest_chat_id: row.id,
         latest_chat_name: row.name || '',
         updated_at: row.updated_at,
-        chat_count: isGroup ? (row.groupKey ? groupCounts.get(row.groupKey) ?? 1 : 1) : (soloCounts.get(row.character_id) ?? 1),
+        chat_count: row.chat_count,
         is_group: isGroup,
         multiplayer: !!metadata?.multiplayer,
         ...(isGroup && getGroupMemberIds(metadata).length > 0 ? {

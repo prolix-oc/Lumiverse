@@ -125,7 +125,7 @@ function createBinding(
 }
 
 function assertPresetExists(userId: string, presetId: string): void {
-  if (!presetsSvc.getPreset(userId, presetId)) throw new Error("Preset not found");
+  if (!presetsSvc.presetExists(userId, presetId)) throw new Error("Preset not found");
 }
 
 function getValidBinding(
@@ -135,7 +135,7 @@ function getValidBinding(
   const s = settingsSvc.getSetting(userId, key);
   if (!s) return null;
   const binding = s.value as PresetProfileBinding;
-  if (!binding?.preset_id || !presetsSvc.getPreset(userId, binding.preset_id)) {
+  if (!binding?.preset_id || !presetsSvc.presetExists(userId, binding.preset_id)) {
     settingsSvc.deleteSetting(userId, key);
     return null;
   }

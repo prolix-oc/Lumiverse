@@ -3,6 +3,8 @@ import { triggerBlobDownload, triggerUrlDownload } from '@/lib/downloads'
 import { uuidv4 } from '@/lib/uuid'
 import { completeDeletion } from '@/lib/deletion-completion'
 import type { DeletionOperation } from '@/lib/deletion-events'
+import type { CharacterIndexItem } from '@/types/api'
+import { shareRead } from '@/lib/shared-read'
 
 /** Ceiling for calls that may download a full expression pack (~20 MB). */
 const EXPRESSION_FETCH_TIMEOUT_MS = 5 * 60 * 1000
@@ -44,6 +46,19 @@ export type CharacterPerspectiveLayerKind = 'background' | 'framing' | 'subject'
 export type CharacterPerspectiveLayerInput = Pick<CharacterPerspectiveLayer, 'id' | 'image_id' | 'intensity'> & { label?: string }
 
 export const charactersApi = {
+  getBatch(ids: string[], options?: RequestOptions) {
+    return get<Character[]>('/characters/details', { ids: ids.join(',') }, options)
+  },
+  listIndex(generation = 0) {
+    return shareRead(`character-index:${generation}`, async () => {
+      const data: CharacterIndexItem[] = []
+      for (;;) {
+        const page = await get<PaginatedResult<CharacterIndexItem>>('/characters/index', { limit: 1000, offset: data.length })
+        data.push(...page.data)
+        if (data.length >= page.total || page.data.length === 0) return data
+      }
+    })
+  },
   list(params?: { limit?: number; offset?: number; search?: string; sort?: string; seed?: number }) {
     return get<PaginatedResult<Character>>('/characters', params)
   },

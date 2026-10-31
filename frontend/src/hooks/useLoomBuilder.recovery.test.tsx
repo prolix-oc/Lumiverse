@@ -41,6 +41,11 @@ mock.module('@/api/presets', () => ({
       }))
       return { data: data.slice(offset, offset + limit), total: data.length }
     },
+    listRegistryAll: async () => {
+      if (registryGate) await registryGate
+      const data = [...rows.values()].map(row => ({ id: row.id, name: row.name, provider: 'loom', block_count: 2, updated_at: 1 }))
+      return { data, total: data.length }
+    },
     create: async (input: CreatePresetInput) => {
       created.push(structuredClone(input))
       const row = { ...input, id: 'recovered', created_at: 1, updated_at: 1 } as Preset

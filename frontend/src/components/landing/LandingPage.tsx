@@ -23,6 +23,9 @@ import {
 import { Spinner } from '@/components/shared/Spinner'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { chatsApi, messagesApi } from '@/api/chats'
+import { bootstrapApi } from '@/api/bootstrap'
+import { sharedReadScope } from '@/lib/shared-read'
+import { markDisplayMilestone } from '@/lib/displayPerformance'
 import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
 import { wsClient } from '@/ws/client'
@@ -1101,6 +1104,7 @@ function LandingPageNative() {
     setRequestedLandingTab(readDeviceLandingPageStartTab(userId))
   }, [authUser?.id, suiteLandingTabsReady])
   const activeLandingTab = normalizeLandingPageTab(requestedLandingTab, availableLandingTabs)
+  const nativeChatsVisible = activeLandingTab === 'chats' && !chatsSurfaceReady
   const handleLandingTabChange = useCallback((tab: (typeof availableLandingTabs)[number]) => {
     if (!availableLandingTabs.includes(tab)) return
     setRequestedLandingTab(tab)
@@ -1112,6 +1116,11 @@ function LandingPageNative() {
   ))
   const [loading, setLoading] = useState(() => !restoredSnapshot)
   const [loadingMore, setLoadingMore] = useState(false)
+  useEffect(() => {
+    if (settingsLoaded && ((!loading && nativeChatsVisible) || homepageSurfaceReady || chatsSurfaceReady)) {
+      markDisplayMilestone('landingContent')
+    }
+  }, [settingsLoaded, loading, nativeChatsVisible, homepageSurfaceReady, chatsSurfaceReady])
   const [guidesOpen, setGuidesOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [total, setTotal] = useState(() => restoredSnapshot?.total ?? 0)
@@ -1446,8 +1455,8 @@ function LandingPageNative() {
   }, [updateVirtualScrollMargin])
 
   const fetchChats = useCallback(async () => {
-    if (!settingsLoaded) return
     const requestSequence = ++fetchSequenceRef.current
+    if (!settingsLoaded || !nativeChatsVisible) return
     // Choose the expanded-grid capacity once per fresh query. Later offset
     // requests must use this exact same size even if a measurement changes
     // while the user is scrolling.
@@ -1460,8 +1469,12 @@ function LandingPageNative() {
     // Bootstrap delivers the first recent-chats page alongside settings —
     // consume it once instead of issuing another round trip. Later runs
     // (WS chat-deleted, limit changes, revisits) find it cleared and fetch.
+    const landingRequest = bootstrapApi.pendingLanding()
+    if (landingRequest) await landingRequest.catch(() => {})
+    if (requestSequence !== fetchSequenceRef.current) return
     const preload = useStore.getState().landingRecentChats
-    const canUsePreload = !debouncedSearchQuery
+    const canUsePreload = useStore.getState().landingRecentChatsScope === sharedReadScope()
+      && !debouncedSearchQuery
       && sortField === 'recent'
       && sortDirection === 'desc'
       && (!preload || preload.total <= preload.data.length || preload.data.length >= pageSize)
@@ -1493,14 +1506,14 @@ function LandingPageNative() {
     } finally {
       if (requestSequence === fetchSequenceRef.current) setLoading(false)
     }
-  }, [debouncedSearchQuery, recentChatPageSize, recentChatQuery, restoredSnapshot?.items.length, settingsLoaded, sortDirection, sortField])
+  }, [debouncedSearchQuery, recentChatPageSize, recentChatQuery, restoredSnapshot?.items.length, settingsLoaded, sortDirection, sortField, nativeChatsVisible])
 
   const loadMore = useCallback(async () => {
     // Intersection observers may deliver multiple entries during a grid
     // resize (or while reconnecting after a column-count change). Use a ref
     // so those synchronous deliveries cannot request the same page twice
     // before React has rendered `loadingMore`.
-    if (loadingMoreRef.current || items.length >= total) return
+    if (!nativeChatsVisible || loadingMoreRef.current || items.length >= total) return
     loadingMoreRef.current = true
     const requestSequence = fetchSequenceRef.current
     setLoadingMore(true)
@@ -1519,7 +1532,7 @@ function LandingPageNative() {
       loadingMoreRef.current = false
       setLoadingMore(false)
     }
-  }, [items.length, total, recentChatQuery])
+  }, [items.length, total, recentChatQuery, nativeChatsVisible])
 
   useEffect(() => {
     fetchChats()
