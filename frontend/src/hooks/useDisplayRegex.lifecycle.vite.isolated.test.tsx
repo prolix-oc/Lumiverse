@@ -336,6 +336,37 @@ describe('useDisplayRegex resolver lifecycle', () => {
     }
   })
 
+  test('oversized template results still resolve when the reuse cache rejects them', async () => {
+    const replacement = '{{getvar::large}}' + 'x'.repeat(2 * 1024 * 1024)
+    getPresetScripts.mockImplementationOnce(async () => [{ ...storeState.regexScripts[0], id: 'source-only', preset_id: 'source-preset',
+      replace_string: replacement, substitute_macros: 'escaped' }])
+    storeState.messages = [{ ...sourceMessage(), id: 'large-template' }]
+    const { host, root } = await createHarness()
+    try {
+      await render(root, { content: 'chunk large template', identity: { chatId: 'source-chat', messageId: 'large-template' }, isStreaming: false })
+      await waitForPending('chunk large template')
+      const context = applyDisplayRegexTiered.mock.calls.at(-1)?.[2] as { resolvedReplacements: Map<string, string> }
+      expect(context.resolvedReplacements.get('source-only')).toBe(replacement)
+      await settle('chunk large template', 'fully resolved')
+      expect(readRendered(host)).toBe('fully resolved')
+      expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('false')
+      expect(getDisplayContentCacheStatsForTests().templateSize).toBe(0)
+    } finally { await destroyHarness(host, root) }
+  })
+
+  test('oversized bodies finish both display stages without requiring a cache entry', async () => {
+    const content = 'chunk ' + 'x'.repeat(2 * 1024 * 1024)
+    const { host, root } = await createHarness()
+    try {
+      await render(root, { content, identity: { chatId: 'source-chat', messageId: 'large-body' }, isStreaming: false })
+      await waitForPending(content)
+      await settle(content, 'large body resolved')
+      expect(readRendered(host)).toBe('large body resolved')
+      expect(host.querySelector('output')?.getAttribute('data-pending')).toBe('false')
+      expect(getDisplayContentCacheStatsForTests().size).toBe(0)
+    } finally { await destroyHarness(host, root) }
+  })
+
   test.each(['replacement', 'actions', 'reload', 'order'])('script %s changes invalidate cached output without relying on timestamps', async change => {
     isDisplayChatOwnedMock.mockImplementation(() => false)
     const originalScripts = storeState.regexScripts

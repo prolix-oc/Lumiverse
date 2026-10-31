@@ -175,6 +175,49 @@ afterEach(async () => {
   resetMessageTagRuntimeReadinessForTests()
 })
 
+describe('MessageContent display readiness', () => {
+  test.each(['Unchanged ordinary text', '<div><style>p{color:purple}</style><p>Unchanged HTML</p></div>'])(
+    'notifies the row when processing finishes without changing its content: %s', async content => {
+      const previous = useStore.getState()
+      const pending = Promise.withResolvers<{ content: string }>()
+      const events: Array<{ ready: boolean; pending: boolean }> = []
+      const record = (event: Event) => {
+        const detail = (event as CustomEvent).detail
+        if (detail?.displayReady) events.push({ ready: true, pending: host.querySelector('[data-display-pending]') !== null })
+      }
+      host.addEventListener('lumiverse:message-content-layout', record)
+      useStore.setState({ activeChatId: 'ready-chat', activeChatDisplayOwner: 'ready-owner', messages: [], regexScripts: [] })
+      const dispose = registerDisplayResolver('ready-owner', {
+        ready: () => true, finalizeWithoutScripts: true,
+        resolveBody: () => pending.promise,
+        resolveTemplates: async ({ templates }) => ({ resolved: templates }),
+        applyScripts: async ({ content }) => ({ content }),
+      })
+      try {
+        const { resetDisplayRegexCachesForTests } = await import('@/hooks/useDisplayRegex')
+        resetDisplayRegexCachesForTests()
+        await act(async () => { root?.render(<MessageContent content={content} chatId="ready-chat" messageId="ready-message" isUser={false} userName="Reader" />) })
+        expect(host.querySelector('[data-display-pending]')).not.toBeNull()
+        // Provisional source must never enter the rendered tree, including
+        // authored HTML whose descendants override inherited visibility.
+        expect(host.textContent).not.toContain('Unchanged')
+        expect(host.querySelector('[data-lumiverse-html-island]')).toBeNull()
+        expect(events).toEqual([])
+        await act(async () => { pending.resolve({ content }); await Promise.resolve() })
+        for (let i = 0; i < 10 && host.querySelector('[data-display-pending]'); i++) await flushLayout()
+        expect(host.querySelector('[data-display-pending]')).toBeNull()
+        expect(events).toEqual([{ ready: true, pending: false }])
+      } finally {
+        await act(async () => {
+          root?.unmount(); root = null; dispose()
+          useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts })
+        })
+        host.removeEventListener('lumiverse:message-content-layout', record)
+      }
+    },
+  )
+})
+
 describe('MessageContent inline HTML rendering', () => {
   test('action activation identifies displayed captures while retaining configured effect templates', async () => {
     const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')
@@ -507,10 +550,10 @@ describe('MessageContent long-message collapsing', () => {
       )
     })
 
-    expect(host.querySelector<HTMLImageElement>('img[src*="images.example"]')).not.toBeNull()
     await act(async () => {
       await new Promise((resolve) => domWindow.setTimeout(resolve, 20))
     })
+    expect(host.querySelector<HTMLImageElement>('img[src*="images.example"]')).not.toBeNull()
     expect(getChatDisplaySettleDiagnostics('chat-images').blockers).toEqual([])
     expect(isChatDisplaySettled('chat-images')).toBe(true)
   })

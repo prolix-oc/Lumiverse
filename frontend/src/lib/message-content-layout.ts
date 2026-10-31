@@ -1,12 +1,18 @@
 export const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 
 export interface MessageContentLayoutOptions {
+  /** A cold display pass completed; size its row before exposing its chrome. */
+  displayReady?: boolean
   /**
    * The layout change came from programmatic replacement/insertion of message
    * content. Virtualized chat lists should preserve the current viewport even
    * if their last recorded scroll direction was backward.
    */
   preserveScrollAnchor?: boolean
+}
+
+export function isMessageDisplayReadyLayout(event: Event): boolean {
+  return (event as CustomEvent<MessageContentLayoutOptions | undefined>).detail?.displayReady === true
 }
 
 export function dispatchMessageContentLayout(

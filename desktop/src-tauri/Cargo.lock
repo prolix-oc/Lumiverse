@@ -2374,6 +2374,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "webkit2gtk",
+ "webview2-com",
  "window-vibrancy",
  "windows",
  "windows-future",

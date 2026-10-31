@@ -11,6 +11,7 @@ export interface MessageListScrollAdjustmentInput {
   isFocusedEditableRow?: boolean
   isUserToggledCollapsibleRow?: boolean
   isProgrammaticContentReflow?: boolean
+  isAboveVisibleAnchor?: boolean
 }
 
 export function shouldAdjustMessageListScrollOnResize({
@@ -25,6 +26,7 @@ export function shouldAdjustMessageListScrollOnResize({
   isFocusedEditableRow,
   isUserToggledCollapsibleRow,
   isProgrammaticContentReflow,
+  isAboveVisibleAnchor,
 }: MessageListScrollAdjustmentInput) {
   const overlapsViewportTop = itemStart < scrollOffset && itemEnd > scrollOffset
 
@@ -61,6 +63,10 @@ export function shouldAdjustMessageListScrollOnResize({
   if (hasMeasuredSize && isUserToggledCollapsibleRow && overlapsViewportTop) {
     return false
   }
+
+  // Cold rows can finish inside the viewport after a fast scroll. Preserve
+  // already visible, finished text below them while replacing placeholders.
+  if (isAboveVisibleAnchor) return true
 
   // A regex result, message-tag interceptor, or extension widget may replace
   // an already measured row asynchronously. The virtualizer's scrollDirection

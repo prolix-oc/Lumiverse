@@ -49,6 +49,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSAp
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKPreferences", "WKWebViewConfiguration", "WKUserContentController", "std"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38.2"
 windows-version = "0.1"
 windows-future = "0.2"
 windows = { version = "0.61", features = [

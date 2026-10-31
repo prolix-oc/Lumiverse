@@ -1836,8 +1836,15 @@ export default function MessageContent({
     [risuResolvedContent, charName, userName],
   )
   const deferredResolvedContent = useDeferredValue(resolvedContent)
-  const renderContent = isStreaming ? balanceStreamingDetails(deferredResolvedContent) : resolvedContent
+  // Cold rows already reserve their estimated height in MessageList. Do not
+  // parse/mount provisional Markdown or HTML that will immediately be replaced:
+  // apart from the extra work, WebKit can briefly rasterize that source while
+  // the row's visibility and measured position are being committed.
+  const renderContent = isStreaming
+    ? balanceStreamingDetails(deferredResolvedContent)
+    : displayPending ? '' : resolvedContent
   const previousRenderContentRef = useRef<string | null>(null)
+  const previousDisplayPendingRef = useRef(displayPending)
   const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
@@ -1893,13 +1900,15 @@ export default function MessageContent({
   // scrollDirection value. Initial mounts deliberately remain unmarked.
   useLayoutEffect(() => {
     const previous = previousRenderContentRef.current
+    const displayReady = previousDisplayPendingRef.current && !displayPending && !isStreaming
     previousRenderContentRef.current = renderContent
-    if (previous === null || previous === renderContent) return
+    previousDisplayPendingRef.current = displayPending
+    if (previous === null || (previous === renderContent && !displayReady)) return
 
     const container = containerRef.current
     if (!container) return
-    dispatchMessageContentLayout(container, { preserveScrollAnchor: true })
-  }, [renderContent])
+    dispatchMessageContentLayout(container, { preserveScrollAnchor: true, displayReady })
+  }, [renderContent, displayPending, isStreaming])
 
   const handleLightboxClose = useCallback(() => setLightboxSrc(null), [])
 

@@ -580,6 +580,7 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, eagerImages, shift
   const rectRef = useRef<DOMRect | null>(null)
   const parallaxFrameRef = useRef<number | null>(null)
   const parallaxPointerRef = useRef<{ clientX: number; clientY: number } | null>(null)
+  const parallaxReleaseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
   const isFavorite = useStore((state) => !item.is_group && state.favorites.includes(item.character_id))
@@ -617,12 +618,16 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, eagerImages, shift
   useEffect(() => {
     return () => {
       if (parallaxFrameRef.current !== null) cancelAnimationFrame(parallaxFrameRef.current)
+      if (parallaxReleaseRef.current !== null) clearTimeout(parallaxReleaseRef.current)
     }
   }, [])
 
   const handleMouseEnter = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
     const tilt = tiltRef.current
     if (!tilt) return
+    if (parallaxReleaseRef.current !== null) clearTimeout(parallaxReleaseRef.current)
+    parallaxReleaseRef.current = null
+    tilt.dataset.compositing = ''
     rectRef.current = tilt.getBoundingClientRect()
     tilt.classList.add(styles.tilting)
     scheduleParallax(e.clientX, e.clientY)
@@ -643,6 +648,13 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, eagerImages, shift
     tilt.style.removeProperty('--pointer-x')
     tilt.style.removeProperty('--pointer-y')
     rectRef.current = null
+    // Keep perspective throughout the 500ms image return transition, then
+    // let WebKit flatten ordinary cards and reclaim their backing surfaces.
+    if (parallaxReleaseRef.current !== null) clearTimeout(parallaxReleaseRef.current)
+    parallaxReleaseRef.current = setTimeout(() => {
+      delete tilt.dataset.compositing
+      parallaxReleaseRef.current = null
+    }, 550)
   }, [])
 
   const displayName = getRecentChatDisplayName(item, t)

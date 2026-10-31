@@ -13,6 +13,7 @@ import type { Message } from '@/types/api'
 import type { MessagePresetContext, RegexScript } from '@/types/regex'
 import { resetMessagePresetScriptsForTests, useMessagePresetScripts } from './useMessagePresetScripts'
 import { canOptimisticallyAppendStreamingText } from '@/lib/display-streaming'
+import { TextBudgetCache } from '@/lib/textBudgetCache'
 
 interface ResolvedDisplayRegexTemplates {
   resolvedFindPatterns: Map<string, string>
@@ -20,12 +21,14 @@ interface ResolvedDisplayRegexTemplates {
 }
 
 interface DisplayRegexCacheEntry {
+  pendingCharacters?: number
   value?: ResolvedDisplayRegexTemplates
   promise?: Promise<ResolvedDisplayRegexTemplates>
   touchedVars?: ReadonlySet<string>
 }
 
 interface DisplayRegexContentCacheEntry {
+  pendingCharacters?: number
   processingState?: string
   value?: string
   promise?: Promise<string>
@@ -81,6 +84,7 @@ interface PendingDisplayPreprocess {
 }
 
 interface DisplayPreprocessCacheEntry {
+  pendingCharacters?: number
   processingState?: string
   value?: string
   promise?: Promise<DisplayPreprocessOutcome>
@@ -89,36 +93,38 @@ interface DisplayPreprocessCacheEntry {
   incrementalRawAppendSafe?: boolean
 }
 
-const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
-const DISPLAY_REGEX_TEMPLATE_CACHE_MAX = 300
+// Count limits alone allow hundreds of full, progressively longer streaming
+// frames or macro-expanded templates to remain live after leaving a chat.
+const DISPLAY_CACHE_TEXT_BUDGET = 2 * 1024 * 1024
+function variableCharacters(entry: { touchedVars?: ReadonlySet<string> }): number {
+  let total = 0
+  for (const name of entry.touchedVars ?? []) total += name.length
+  return total
+}
+const displayRegexResolutionCache = new TextBudgetCache<DisplayRegexCacheEntry>(300, DISPLAY_CACHE_TEXT_BUDGET, (entry) => {
+  let total = (entry.pendingCharacters ?? 0) + variableCharacters(entry)
+  if (entry.value) {
+    for (const map of [entry.value.resolvedFindPatterns, entry.value.resolvedReplacements]) {
+      for (const [key, value] of map) total += key.length + value.length
+    }
+  }
+  return total
+})
 
 function cacheResolvedTemplates(key: string, entry: DisplayRegexCacheEntry): void {
   displayRegexResolutionCache.set(key, entry)
-  if (displayRegexResolutionCache.size > DISPLAY_REGEX_TEMPLATE_CACHE_MAX) {
-    displayRegexResolutionCache.delete(displayRegexResolutionCache.keys().next().value!)
-  }
 }
-const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
-const displayPreprocessCache = new Map<string, DisplayPreprocessCacheEntry>()
+function bodyCharacters(entry: DisplayPreprocessCacheEntry | DisplayRegexContentCacheEntry): number {
+  return (entry.pendingCharacters ?? 0) + (entry.value?.length ?? 0)
+    + (entry.processingState?.length ?? 0) + (entry.messageId?.length ?? 0) + variableCharacters(entry)
+}
+const displayRegexContentCache = new TextBudgetCache<DisplayRegexContentCacheEntry>(300, DISPLAY_CACHE_TEXT_BUDGET, bodyCharacters)
+const displayPreprocessCache = new TextBudgetCache<DisplayPreprocessCacheEntry>(500, DISPLAY_CACHE_TEXT_BUDGET, bodyCharacters)
 function getDisplayContentCacheEntry(key: string, processingState: string | undefined) {
   const entry = displayRegexContentCache.get(key)
   return entry?.processingState === processingState ? entry : undefined
 }
 
-const DISPLAY_PREPROCESS_CACHE_MAX = 500
-const DISPLAY_REGEX_CONTENT_CACHE_MAX = 300
-
-// FIFO eviction for displayRegexContentCache; streaming inserts one key per
-// chunk with full content embedded, so the map needs a hard size bound.
-function evictDisplayRegexContentCacheOverflow(): void {
-  if (displayRegexContentCache.size <= DISPLAY_REGEX_CONTENT_CACHE_MAX) return
-  const drop = displayRegexContentCache.size - DISPLAY_REGEX_CONTENT_CACHE_MAX
-  let i = 0
-  for (const k of displayRegexContentCache.keys()) {
-    if (i++ >= drop) break
-    displayRegexContentCache.delete(k)
-  }
-}
 const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexGlobalCv = 0
 const displayRegexPerMessageCv = new Map<string, number>()
@@ -432,10 +438,7 @@ function useDisplayPreprocessedState(
         return { content, ok: false }
       })
       assigned = trackForDisplaySettle(promise)
-      displayPreprocessCache.set(key, { promise: assigned, messageId })
-      while (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
-        displayPreprocessCache.delete(displayPreprocessCache.keys().next().value!)
-      }
+      displayPreprocessCache.set(key, { promise: assigned, messageId, pendingCharacters: content.length })
       return assigned
     }, (outcome) => setState({ key, version, raw: content, outcome }))
   }, [key, version, chatId, messageId, content, opts?.swipeIndex, opts?.presetContext, opts?.role, opts?.depth, opts?.messageIndex,
@@ -619,13 +622,13 @@ export function seedDisplayContentEntryForTests(entry: {
     ...(entry.messageId ? { messageId: entry.messageId } : {}),
     ...(entry.touchedVars ? { touchedVars: new Set(entry.touchedVars) } : {}),
   })
-  evictDisplayRegexContentCacheOverflow()
 }
 
-export function getDisplayContentCacheStatsForTests(): { size: number; templateSize: number; keyCharacters: number; hasKey(key: string): boolean } {
+export function getDisplayContentCacheStatsForTests(): { size: number; templateSize: number; keyCharacters: number; retainedCharacters: number; hasKey(key: string): boolean } {
   let keyCharacters = 0
   for (const key of displayRegexContentCache.keys()) keyCharacters += key.length
-  return { size: displayRegexContentCache.size, templateSize: displayRegexResolutionCache.size, keyCharacters, hasKey: (k) => displayRegexContentCache.has(k) }
+  return { size: displayRegexContentCache.size, templateSize: displayRegexResolutionCache.size, keyCharacters,
+    retainedCharacters: displayRegexContentCache.retainedCharacters, hasKey: (k) => displayRegexContentCache.has(k) }
 }
 
 export function resetDisplayRegexCachesForTests(): void {
@@ -854,7 +857,8 @@ export function useDisplayRegexState(
       return () => { cancelled = true }
     }
 
-    if (!cached?.promise) {
+    let pendingTemplates = cached?.promise
+    if (!pendingTemplates) {
       let assignedPromise: Promise<ResolvedDisplayRegexTemplates>
       const promise = resolveTemplatesWithResolver(templates, {
         chatId: scopedChatId ?? undefined,
@@ -888,10 +892,15 @@ export function useDisplayRegexState(
           return createEmptyResolvedTemplates()
         })
       assignedPromise = trackInitialDisplayResolve(promise, scopedChatId)
-      cacheResolvedTemplates(templateCacheKey, { promise: assignedPromise })
+      pendingTemplates = assignedPromise
+      cacheResolvedTemplates(templateCacheKey, {
+        promise: assignedPromise,
+        pendingCharacters: templateEntries.reduce((sum, [key, value]) => sum + key.length + value.length, 0),
+      })
     }
 
-    displayRegexResolutionCache.get(templateCacheKey)?.promise?.then(applyResolvedTemplates)
+    // Delivery must not depend on admission to the optional reuse cache.
+    pendingTemplates.then(applyResolvedTemplates)
 
     return () => { cancelled = true }
   }, [scriptsNeedingResolution, templateCacheKey, scopedChatId, macroCharacterId, activePersonaId, cvSnapshot,
@@ -968,8 +977,8 @@ export function useDisplayRegexState(
       assigned = trackContentForDisplaySettle(promise)
       displayRegexContentCache.set(contentCacheKey, {
         promise: assigned, processingState, messageId: preprocessOpts?.messageId,
+        pendingCharacters: content.length,
       })
-      evictDisplayRegexContentCacheOverflow()
       return assigned
     }, (value) => setResolvedContentState({ key: contentCacheKey, version, content, value }))
   }, [contentCacheKey, version, content, processingState, displayScripts, isUser, depth, macroCtx,

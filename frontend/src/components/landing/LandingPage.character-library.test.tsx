@@ -630,6 +630,25 @@ afterEach(async () => {
 })
 
 describe('LandingPage character library', () => {
+  test('releases ordinary card compositing after return motion and cancels release on reentry', async () => {
+    storeState = { ...createStoreState(false), landingPageLayoutMode: 'cards' }
+    listRecentGrouped.mockResolvedValue(page([recentChat('character-1', 'Ava')]))
+    const host = await mountLanding()
+    const card = host.querySelector<HTMLElement>('.cardTilt')!
+    const enter = () => card.dispatchEvent(new domWindow.MouseEvent('mouseover', { bubbles: true, clientX: 10, clientY: 10 }))
+    const leave = () => card.dispatchEvent(new domWindow.MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
+    expect(card.hasAttribute('data-compositing')).toBe(false)
+    await act(async () => { enter(); leave() })
+    expect(card.hasAttribute('data-compositing')).toBe(true)
+    expect(card.classList.contains('tilting')).toBe(false)
+    await act(async () => { enter() })
+    await new Promise(resolve => setTimeout(resolve, 600))
+    expect(card.hasAttribute('data-compositing')).toBe(true)
+    await act(async () => { leave() })
+    await new Promise(resolve => setTimeout(resolve, 600))
+    expect(card.hasAttribute('data-compositing')).toBe(false)
+  })
+
   test('shows imported recent chats on the mounted landing page without reopening it', async () => {
     storeState = createStoreState(false)
     listRecentGrouped.mockResolvedValueOnce(page([]))
