@@ -36,6 +36,7 @@ import type { DryRunResultDTO, GetBreakdownWorkerMessage, StreamDoneChunkDTO } f
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { getGitMetadata } from "../utils/git-metadata";
+import { uuidv4, uuidv7 } from "../utils/uuid";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { CharacterGalleryWorkerMessage, ConnectionModelDTO, ConnectionModelsWorkerMessage } from "./gallery-models-contract";
 import type { ActivationPatternsMessage } from "./activation-patterns-contract";
@@ -351,6 +352,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | import("./uuid-contract").UUIDWorkerMessage
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
   | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
@@ -1391,6 +1393,7 @@ export class WorkerHost {
         lumiverseVersion: await getBackendVersion(),
         capabilities: Object.freeze({
           ...SPINDLE_HOST_CAPABILITIES,
+          "uuid-v1": 1,
           ...CONNECTION_ORGANIZATION_CAPABILITIES,
           "character-search-v1": 1,
           "message-preset-context-v1": 1,
@@ -2638,6 +2641,10 @@ export class WorkerHost {
         break;
       case "ui_navigate":
         this.presentationApi.handleUINavigate(msg.requestId, msg.action, msg.tabId, msg.viewId, msg.userId);
+        break;
+      // ─── UUID Generation (free tier) ─────────────────────────────────
+      case "uuid_generate":
+        this.handleUUIDGenerate(msg.requestId, msg.version);
         break;
       // ─── Version (free tier) ─────────────────────────────────────────
       case "version_get_backend":
@@ -5402,6 +5409,20 @@ export class WorkerHost {
   }
 
   // ─── Frontend Process Lifecycle (free tier) ─────────────────────────
+
+  // ─── UUID Generation (free tier) ────────────────────────────────────
+
+  private handleUUIDGenerate(requestId: string, version: 4 | 7): void {
+    try {
+      if (version !== 4 && version !== 7) {
+        throw new Error("UUID version must be 4 or 7");
+      }
+      const result = version === 4 ? uuidv4() : uuidv7();
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err) {
+      this.postToWorker({ type: "response", requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   // ─── Version (free tier) ────────────────────────────────────────────
 

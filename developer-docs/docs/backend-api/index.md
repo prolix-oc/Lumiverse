@@ -64,3 +64,4 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Commands](commands.md) | Free | Register custom commands in the command palette (Cmd/Ctrl+K) |
 | [UI Automation](ui-automation.md) | Free | Enumerate drawer / settings tabs and navigate the user to a specific surface |
 | [Version](version.md) | Free | Read the backend and frontend semantic versions |
+| [UUIDs](uuid.md) | Free | Generate UUID v4 or v7 strings through the backend |

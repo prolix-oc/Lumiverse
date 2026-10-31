@@ -71,6 +71,7 @@ nav = [
     { "Commands" = "backend-api/commands.md" },
     { "UI Automation" = "backend-api/ui-automation.md" },
     { "Version" = "backend-api/version.md" },
+    { "UUIDs" = "backend-api/uuid.md" },
   ] },
   { "Frontend API" = [
     { "Overview" = "frontend-api/index.md" },

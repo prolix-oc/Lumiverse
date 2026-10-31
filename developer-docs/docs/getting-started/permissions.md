@@ -17,6 +17,7 @@ These are always available:
 - **Input Bar Actions** — register actions in the chat input bar Extras popover
 - **Variables** — read/write local (chat-scoped) and global (cross-chat) variables
 - **Logging** — write to the server console
+- **UUIDs** — generate UUID v4 or v7 strings through the backend
 - **Toast Notifications** — show success/warning/error/info toasts in the frontend UI
 - **Frontend <-> Backend messaging** — relay messages between your modules
 
