@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse, walk } from 'css-tree'
 import ts from 'typescript'
 import type { Plugin, ResolvedConfig } from 'vite'
+import { createThemeReference } from './generate-theme-reference'
 
 export function themeReferenceBuild(): Plugin {
   let config: ResolvedConfig
@@ -12,6 +13,9 @@ export function themeReferenceBuild(): Plugin {
     name: 'lumiverse-theme-reference-output',
     apply: 'build',
     enforce: 'post',
+    buildStart() {
+      moduleClasses.clear()
+    },
     transform(code, id) {
       if (!id.endsWith('.module.css')) return
       const values = new Set<string>()
@@ -34,20 +38,10 @@ export function themeReferenceBuild(): Plugin {
     configResolved(value) {
       config = value
     },
-    writeBundle(options, output) {
+    async generateBundle(_options, output) {
       if (!output['index.html']) return
-      const root = resolve(config.root, options.dir ?? config.build.outDir)
-      const indexPath = resolve(root, 'assets/theme-reference-index.json')
-      const index = JSON.parse(readFileSync(indexPath, 'utf8'))
-      if (
-        !/^[a-f0-9]{64}$/.test(index.hash) ||
-        index.asset !== `assets/theme-reference.${index.hash}.json`
-      )
-        throw new Error('Invalid theme reference index')
-      const oldPath = resolve(root, index.asset)
-      const reference = JSON.parse(readFileSync(oldPath, 'utf8')) as {
-        components: Array<{ classSelectors: Record<string, string> }>
-      }
+      // Build references directly; runners and clean checkouts need no public cache.
+      const reference = await createThemeReference(config)
       const wanted = new Set(
         reference.components.flatMap((component) =>
           Object.values(component.classSelectors).flatMap((selector) =>
@@ -87,9 +81,24 @@ export function themeReferenceBuild(): Plugin {
       const body = JSON.stringify(reference)
       const hash = createHash('sha256').update(body).digest('hex')
       const asset = `assets/theme-reference.${hash}.json`
-      writeFileSync(resolve(root, asset), body)
-      writeFileSync(indexPath, JSON.stringify({ ...index, hash, asset }))
-      if (hash !== index.hash) unlinkSync(oldPath)
+      this.emitFile({ type: 'asset', fileName: asset, source: body })
+      this.emitFile({
+        type: 'asset',
+        fileName: 'assets/theme-reference-index.json',
+        source: JSON.stringify({ version: reference.version, hash, asset }),
+      })
+    },
+    writeBundle(options, output) {
+      if (!output['index.html']) return
+      // Older generation steps may still leave source references in public/.
+      // Keep only references emitted by this build when Vite copies those files.
+      const assetsDir = resolve(config.root, options.dir ?? config.build.outDir, 'assets')
+      if (!existsSync(assetsDir)) return
+      for (const name of readdirSync(assetsDir)) {
+        if (/^theme-reference\.[a-f0-9]{64}\.json$/.test(name) && !output[`assets/${name}`]) {
+          unlinkSync(resolve(assetsDir, name))
+        }
+      }
     },
   }
 }
