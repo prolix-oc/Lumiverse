@@ -526,6 +526,7 @@ export interface SavedThemeConfigEntry {
 }
 /** A user-saved theme made from a .lumitheme bundle import — preserves CSS, components, and assets. */
 export interface SavedThemePackEntry {
+  authoringSnapshot?: { version: 1; globalEnabled: boolean; themeWasNull: boolean }
   kind: 'pack'
   id: string
   name: string
@@ -889,7 +890,7 @@ export interface SettingsSlice {
   addSavedTheme: (input: SavedThemeInput) => SavedTheme
   renameSavedTheme: (id: string, name: string) => void
   deleteSavedTheme: (id: string) => Promise<void>
-  applySavedTheme: (id: string) => void
+  applySavedTheme: (id: string) => void | Promise<void>
   /** Replace a saved theme with the complete current theme snapshot and persist it. */
   updateSavedTheme: (id: string) => Promise<void>
   loadSettings: () => Promise<void>

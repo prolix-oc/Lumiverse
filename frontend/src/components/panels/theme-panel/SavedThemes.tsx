@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next'
 import { Bookmark, Check, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useStore } from '@/store'
+import { toast } from '@/lib/toast'
 import type { SavedTheme } from '@/types/store'
 import styles from './SavedThemes.module.css'
 
@@ -235,7 +236,11 @@ export default function SavedThemes() {
                 entry={entry}
                 isActive={isActive}
                 autoEdit={entry.id === newlyAddedId}
-                onApply={() => applySavedTheme(entry.id)}
+                onApply={() => {
+                  void Promise.resolve(applySavedTheme(entry.id)).catch((error) => {
+                    toast.error(error instanceof Error ? error.message : 'Failed to restore theme backup.')
+                  })
+                }}
                 onRename={(name) => renameSavedTheme(entry.id, name)}
                 onUpdate={() => handleUpdate(entry)}
                 onDelete={() => handleDelete(entry)}

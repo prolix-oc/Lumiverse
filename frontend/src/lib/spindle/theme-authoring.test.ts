@@ -90,9 +90,24 @@ function fixture() {
 }
 
 describe('Spindle native theme authoring bridge', () => {
+  test('inspection checks permission and context lifetime before reading the DOM', () => {
+    const { dependencies } = fixture()
+    let inspected = false
+    dependencies.inspect = () => { inspected = true; return { count: 0, matches: [] } }
+    dependencies.requireAppManipulation = () => { throw new Error('Permission denied') }
+    const api = createThemeAuthoringAPI(dependencies)
+    expect(() => api.inspect({ selector: 'body' })).toThrow('Permission denied')
+    expect(inspected).toBe(false)
+    dependencies.requireAppManipulation = () => {}
+    dependencies.assertActive = () => { throw new Error('Disposed') }
+    expect(() => api.inspect({ selector: 'body' })).toThrow('Disposed')
+    expect(inspected).toBe(false)
+  })
+
   test('advertises each independently feature-detectable capability', () => {
     expect(THEME_AUTHORING_HOST_CAPABILITIES).toEqual({
       'theme-assets-v1': 1,
+      'theme-inspection-v1': 1,
       'theme-packs-v1': 1,
       'theme-catalog-v1': 1,
       'theme-editor-navigation-v1': 1,

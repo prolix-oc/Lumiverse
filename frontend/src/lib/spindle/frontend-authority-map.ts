@@ -238,6 +238,7 @@ const LEGACY_ROWS: readonly AuthorityRow[] = [
 ]
 
 const THEME_AUTHORING_ROWS: readonly AuthorityRow[] = [
+  gated('app_manipulation', { surface: 'ctx_member', id: 'ctx.theme.inspect', source: 'theme.inspect', ctxLeaf: 'ctx.theme.inspect', gatedBecause: 'Reads bounded layout and style metadata from the host document.' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.getActiveBundleId', source: 'theme.assets.activeBundleId', ctxLeaf: 'ctx.theme.assets.getActiveBundleId', freeBecause: 'rest: exposes only the active user-scoped theme asset bundle identifier' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.createBundle', source: 'theme.assets.bundleId', ctxLeaf: 'ctx.theme.assets.createBundle', freeBecause: 'pure-host-action: generates an inert bundle UUID without persisting host state' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.list', source: 'theme.assets.read', ctxLeaf: 'ctx.theme.assets.list', freeBecause: 'rest: returns the authenticated user-scoped theme asset projection' }),

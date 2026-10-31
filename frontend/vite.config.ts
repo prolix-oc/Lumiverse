@@ -1,3 +1,4 @@
+import { themeReferenceBuild } from './scripts/theme-reference-build.ts'
 import { defineConfig } from 'vite'
 import { createReactCompilerPlugins } from './scripts/react-compiler.ts'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -9,6 +10,7 @@ const chunkImportMap = process.env.LUMIVERSE_CHUNK_IMPORT_MAP !== '0'
 export default defineConfig({
   experimental: { bundledDev: process.env.LUMIVERSE_BUNDLED_DEV !== '0' },
   plugins: [
+    themeReferenceBuild(),
     {
       name: 'lumiverse-bundled-refresh-order',
       config(config, { command }) {
@@ -68,7 +70,7 @@ export default defineConfig({
   resolve: {
     // Shared source lives outside frontend/; resolve its Spindle runtime from
     // this application's dependencies even when the backend copy is older.
-    dedupe: ['lumiverse-spindle-types'],
+    dedupe: ['lumiverse-spindle-types', 'fflate'],
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
     },

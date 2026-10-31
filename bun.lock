@@ -20,17 +20,19 @@
         "apache-arrow": "18.1.0",
         "archiver": "^8.0.0",
         "better-auth": "1.7.14",
+        "css-tree": "3.2.1",
         "fflate": "^0.8.3",
         "gpt-tokenizer": "^2.8.1",
         "hono": "^4.13.14",
         "js-tiktoken": "^1.0.16",
         "linkedom": "0.18.13",
-        "lumiverse-spindle-types": "0.6.75",
+        "lumiverse-spindle-types": "0.6.76",
         "mute-stream": "^3.0.0",
         "sharp": "0.35.5",
         "ssh2-sftp-client": "^12.1.1",
       },
       "devDependencies": {
+        "@types/css-tree": "^3.2.0",
         "@types/jsdom": "^28.0.1",
         "@types/mute-stream": "^0.0.4",
         "@types/ssh2-sftp-client": "^9.0.6",
@@ -273,6 +275,8 @@
     "@types/command-line-args": ["@types/command-line-args@5.2.3", "", {}, "sha512-uv0aG6R0Y8WHZLTamZwtfsDLVRnOa+n+n5rEvFWL5Na5gZ8V2Teab/duDPFzIIIhs9qizDpcavCusCLJZu62Kw=="],
 
     "@types/command-line-usage": ["@types/command-line-usage@5.0.4", "", {}, "sha512-BwR5KP3Es/CSht0xqBcUXS3qCAUVXwpRKsV2+arxeb65atasuXG9LykC9Ab10Cw3s2raH92ZqOeILaQbsB2ACg=="],
+
+    "@types/css-tree": ["@types/css-tree@3.2.0", "", {}, "sha512-J5KXmk6BFIepOT7280FdFyNs4c5fh0Uee0otjKEvzchrRs38Ii9qminqc4ds0L19X8Zd/rT+brR9jkBthygjWw=="],
 
     "@types/jsdom": ["@types/jsdom@28.0.3", "", { "dependencies": { "@types/node": "*", "@types/tough-cookie": "*", "parse5": "^8.0.0", "undici-types": "^7.21.0" } }, "sha512-/HQ2uFoetFTXuye8vzIcHw2z6Fwi7Hi/qcgC+RoS9NCyewiqxhVGqlG+ViGB6lkax481R6dmhf1I7lIGlzJStQ=="],
 
@@ -686,7 +690,7 @@
 
     "lru-cache": ["lru-cache@11.2.7", "", {}, "sha512-aY/R+aEsRelme17KGQa/1ZSIpLpNYYrhcrepKTZgE+W3WM16YMCaPwOHLHsmopZHELU0Ojin1lPVxKR0MihncA=="],
 
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.75", "", {}, "sha512-4xOiW0c/pFPOyBBt54Y8iz+bsMaur8hjrQbeDAm0577KkuIKn6DtAvrLITAFuZOwGQpsl6rEdAUFmtv1x3oeng=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.76", "", {}, "sha512-HlJotmrb+0l6TtUSTa+yO4QWxnGOlwXyXAwQCIBch1oqyI5xqv1QJRuTP2SqMXK1pQp9ePje13qnq/Xb0AxtkQ=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 

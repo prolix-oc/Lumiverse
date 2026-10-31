@@ -1,3 +1,4 @@
+import { inspectThemeElements } from './theme-inspection'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { useStore } from '@/store'
 import { CSS_MODULE_REGISTRY } from '@/lib/cssModuleRegistry'
@@ -15,6 +16,7 @@ export function createNativeThemeAuthoringAPI(
 ): SpindleThemeAuthoringAPI {
   return createThemeAuthoringAPI({
     assertActive,
+    inspect: inspectThemeElements,
     requireAppManipulation,
     assetClient: themeAssetsApi,
     getStore: () => useStore.getState(),

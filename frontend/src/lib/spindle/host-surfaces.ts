@@ -379,7 +379,7 @@ function defaultRuntime(
       const preset = PRESETS.find((theme) => theme.id === themeId)
       if (preset) return applyThemePreset(preset)
       if (!state.savedThemes.some((theme) => theme.id === themeId)) throw new Error(`${HOST_ACTION_NOT_FOUND}:themeId`)
-      state.applySavedTheme(themeId)
+      return state.applySavedTheme(themeId)
     },
     openCharacterChat: (characterId, mode) => openCharacterChat(characterId, mode, (path) => { void navigateApp(path) }),
   }

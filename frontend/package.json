@@ -9,7 +9,7 @@
     "dev": "bun run generate && vite",
     "dev:bundled": "bun run dev",
     "dev:unbundled": "bun run generate && LUMIVERSE_BUNDLED_DEV=0 vite",
-    "generate": "bun run extract-props && bun run extract-css-vars",
+    "generate": "bun run extract-props && bun run extract-css-vars && bun run generate:theme-reference",
     "extract-props": "bun run scripts/extract-props.ts",
     "extract-css-vars": "bun run scripts/extract-css-vars.ts",
     "typecheck": "bun run generate && tsc -b",
@@ -19,7 +19,9 @@
     "build:import-map": "bun run build:checked",
     "build:legacy": "LUMIVERSE_CHUNK_IMPORT_MAP=0 LUMIVERSE_REACT_COMPILER=babel bun run build:checked",
     "preview": "vite preview",
-    "postinstall": "node scripts/postinstall-bindings.cjs || true"
+    "postinstall": "node scripts/postinstall-bindings.cjs || true",
+    "generate:theme-reference": "bun run scripts/generate-theme-reference.ts",
+    "check:theme-reference": "bun run scripts/generate-theme-reference.ts --check"
   },
   "dependencies": {
     "@babel/parser": "^7.29.2",
@@ -47,7 +49,7 @@
     "highlight.js": "^11.11.1",
     "i18next": "^26.2.0",
     "lucide-react": "^0.468.0",
-    "lumiverse-spindle-types": "0.6.75",
+    "lumiverse-spindle-types": "0.6.76",
     "marked": "^15.0.4",
     "motion": "^12.0.0",
     "react": "^19.3.1",
@@ -79,7 +81,8 @@
     "workbox-expiration": "^7.4.1",
     "workbox-precaching": "^7.4.1",
     "workbox-routing": "^7.4.1",
-    "workbox-strategies": "^7.4.1"
+    "workbox-strategies": "^7.4.1",
+    "css-tree": "3.2.1"
   },
   "overrides": {
     "rolldown": "1.2.15",

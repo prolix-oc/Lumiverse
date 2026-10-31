@@ -1,3 +1,5 @@
+import { ThemeAuthoringHost } from './theme-authoring-host';
+import { handleThemeReferences } from './theme-references-host';
 import { ConnectionOrganizationHost } from './connection-organization-host';
 import type { OrganizationWorkerMessage, OrganizationHostMessage } from './connection-organization-contract';
 import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../shared/connection-organization';
@@ -1043,6 +1045,7 @@ export class WorkerHost {
   private readonly embeddingsApi: WorkerHostEmbeddingsApi;
   private readonly processApi: WorkerHostProcessApi;
   private readonly interactionApi: WorkerHostInteractionApi;
+  private readonly themeAuthoringApi: ThemeAuthoringHost;
   private readonly presentationApi: WorkerHostPresentationApi;
   private readonly mcpApi: WorkerHostMcpApi;
   private readonly desktopCaptureApi: WorkerHostDesktopCaptureApi;
@@ -1054,6 +1057,15 @@ export class WorkerHost {
     extensionInfo: ExtensionInfo
   ) {
     this.messageGenerations = new MessageGenerations(extensionId);
+    this.themeAuthoringApi = new ThemeAuthoringHost({
+      resolveUser: (userId) => {
+        const resolved = this.resolveEffectiveUserId(userId);
+        this.enforceScopedUser(resolved);
+        return resolved;
+      },
+      canMutate: () => this.hasPermission("app_manipulation"),
+      post: (message) => this.postToWorker(message),
+    });
     const metadata = (extensionInfo.metadata || {}) as Record<string, unknown>;
     this.installScope = metadata.install_scope === "user" ? "user" : "operator";
     this.installedByUserId =
@@ -1415,6 +1427,7 @@ export class WorkerHost {
   }
 
   async stop(): Promise<void> {
+    this.themeAuthoringApi.dispose();
     this.decisionsApi.dispose();
     this.embeddingsApi.dispose();
     await this.filesApi.dispose();
@@ -2809,6 +2822,12 @@ export class WorkerHost {
         this.presentationApi.handleChatSetStyleMode(msg.requestId, msg.chatId, msg.mode, msg.userId);
         break;
       // ─── Theme (gated: "app_manipulation") ──────────────────────────────
+      case "theme_authoring":
+        void this.themeAuthoringApi.handle(msg);
+        break;
+      case "theme_references":
+        void handleThemeReferences(msg, message => this.postToWorker(message));
+        break;
       case "theme_apply":
         this.presentationApi.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
         break;
