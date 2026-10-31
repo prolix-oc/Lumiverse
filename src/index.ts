@@ -21,11 +21,9 @@ if (!("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env)) {
 await bootstrapBunRuntime(_resolve(import.meta.dir, ".."));
 
 // ── Native Dependency Pre-flight ────────────────────────────────────────────
-// Must run BEFORE any application code is imported so that environment variables
-// take precedence when NAPI-RS resolves bindings via `require()`.
-import { configureLanceDbNativeOverride } from "./lancedb-preflight";
+// Sharp is needed by every provider. LanceDB runs its own preflight immediately
+// before lazily loading native bindings, once the vector provider is known.
 import { configureSharpNativeOverride } from "./sharp-preflight";
-await configureLanceDbNativeOverride();
 await configureSharpNativeOverride();
 
 // ── Application Boot ────────────────────────────────────────────────────────

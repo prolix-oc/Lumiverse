@@ -1,6 +1,5 @@
 import type { AssemblyResult } from "../llm/types";
 import type { MacroDefinition, MacroEnv, MacroHandler } from "../macros/types";
-import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
 import type { AssemblyWorkerRequest, AssemblyWorkerResponse } from "./prompt-assembly-worker-protocol";
@@ -20,7 +19,6 @@ let lastTokenizerRevision = -1;
 function ensureInitialized(): Promise<void> {
   if (!initialized) {
     initialized = (async () => {
-      await configureLanceDbNativeOverride();
       await initIdentity();
       initDatabase();
     })();

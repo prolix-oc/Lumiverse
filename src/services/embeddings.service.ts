@@ -50,6 +50,7 @@ import {
   worldBookVectorTrackingFingerprint,
 } from "./world-book-vector-state";
 import { getActiveVectorStore } from "./vector-store";
+import { getResolvedVectorStoreConfig } from "./vector-store-config.service";
 import {
   MAX_SOURCE_FILTER_IDS,
   andFilter,
@@ -3784,7 +3785,9 @@ export async function reindexWorldBookEntries(
   if (optimizeAfter) {
     try {
       const store = await getActiveVectorStore();
-      if (rebuildVectorIndex) getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
+      if (store.id === "lancedb" && rebuildVectorIndex) {
+        getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
+      }
       await store.optimize(["embeddings_world_books"]);
     } catch (err) {
       console.warn("[embeddings] Post-reindex optimize failed:", err);
@@ -4172,6 +4175,11 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   await settingsSvc.putSettingAsync(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
   worldBookVectorVersionChecked.add(getWorldBookVectorVersionCacheKey(userId));
 
+  resetLanceDbIndexState();
+}
+
+function resetLanceDbIndexState(): void {
+  if (getResolvedVectorStoreConfig().provider !== "lancedb") return;
   for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
     const state = getTableState(tableName);
     state.vectorIndexReady = false;
@@ -4225,15 +4233,7 @@ function markAllVectorStateStaleAfterReset(): void {
     console.warn("[embeddings] Failed to mark vector state stale after reset:", err);
   }
 
-  for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
-    const state = getTableState(tableName);
-    state.vectorIndexReady = false;
-    state.scalarIndexReady = false;
-    state.ftsIndexReady = false;
-    state.lastIndexRebuildAt = 0;
-    state.unindexedRowEstimate = 0;
-  }
-  stopIndexHealthMonitor();
+  resetLanceDbIndexState();
 }
 
 /**

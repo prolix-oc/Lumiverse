@@ -26,6 +26,8 @@ import { EventType } from "../../ws/events";
 import { getDb } from "../../db/connection";
 import { env } from "../../env";
 import { getEmbeddingConfig } from "../embeddings.service";
+import { getResolvedVectorStoreConfig } from "../vector-store-config.service";
+import { loadLanceDb } from "../../lancedb-preflight";
 import {
   TABLE_REGISTRY,
   VIA_CHAT_TABLES,
@@ -432,9 +434,10 @@ async function exportLancedbVectors(
   onProgress: (table: string, count: number) => void,
 ): Promise<{ counts: Record<string, number> }> {
   const counts: Record<string, number> = {};
+  if (getResolvedVectorStoreConfig().provider !== "lancedb") return { counts };
   let lance: any;
   try {
-    lance = await import("@lancedb/lancedb");
+    lance = await loadLanceDb();
   } catch {
     return { counts };
   }

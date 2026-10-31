@@ -40,6 +40,8 @@ import { env } from "../../env";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
 import { getEmbeddingConfig } from "../embeddings.service";
+import { getResolvedVectorStoreConfig } from "../vector-store-config.service";
+import { loadLanceDb } from "../../lancedb-preflight";
 import { detectAudioFormat } from "../notification-sounds.service";
 import {
   parseManifest,
@@ -2362,10 +2364,11 @@ async function applyLancedbVectors(
     /* ignore */
   }
 
-  if (!embeddingConfigsMatch(archiveCfg, currentCfg)) {
+  const vectorStoreProvider = getResolvedVectorStoreConfig().provider;
+  if (vectorStoreProvider !== "lancedb" || !embeddingConfigsMatch(archiveCfg, currentCfg)) {
     emit(ctx.job, EventType.USER_IMPORT_PROGRESS, {
       phase: "lancedb_skipped",
-      reason: "embedding config mismatch",
+      reason: vectorStoreProvider !== "lancedb" ? "external vector store configured" : "embedding config mismatch",
       archive: archiveCfg,
       current: currentCfg,
     });
@@ -2402,7 +2405,7 @@ async function applyLancedbVectors(
   // Lazy import LanceDB only when we actually have vectors to restore.
   let lance: any;
   try {
-    lance = await import("@lancedb/lancedb");
+    lance = await loadLanceDb();
   } catch {
     return;
   }

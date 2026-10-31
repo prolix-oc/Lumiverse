@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const settings = new Map<string, unknown>();
 const resetActiveVectorStore = mock(() => {});
+const scheduleLanceDbStartupMaintenance = mock(() => {});
 const deleteSecret = mock(() => {});
 const putSecret = mock(async () => {});
 
@@ -22,6 +23,7 @@ mock.module("./secrets.service", () => ({
 }));
 mock.module("../auth/seed", () => ({ getFirstUserId: () => "owner" }));
 mock.module("./vector-store", () => ({ resetActiveVectorStore }));
+mock.module("./lancedb-maintenance-supervisor", () => ({ scheduleLanceDbStartupMaintenance }));
 
 const { env } = await import("../env");
 const { getResolvedVectorStoreConfig, updateVectorStoreConfig, VECTOR_STORE_CONFIG_KEY } = await import("./vector-store-config.service");
@@ -30,11 +32,21 @@ const originalEnv = { ...env.vectorStore };
 beforeEach(() => {
   settings.clear();
   resetActiveVectorStore.mockClear();
+  scheduleLanceDbStartupMaintenance.mockClear();
   deleteSecret.mockClear();
   putSecret.mockClear();
   Object.assign(env.vectorStore, originalEnv, { provider: "" });
 });
 afterEach(() => Object.assign(env.vectorStore, originalEnv));
+
+test("switching back to LanceDB schedules its usual deferred checks", async () => {
+  settings.set(VECTOR_STORE_CONFIG_KEY, { provider: "milvus" });
+  await updateVectorStoreConfig("owner", { provider: "lancedb" });
+  expect(scheduleLanceDbStartupMaintenance).toHaveBeenCalledTimes(1);
+  await updateVectorStoreConfig("owner", { provider: "lancedb" });
+  await updateVectorStoreConfig("owner", { provider: "qdrant", qdrant: { url: "https://qdrant.example" } });
+  expect(scheduleLanceDbStartupMaintenance).toHaveBeenCalledTimes(1);
+});
 
 describe("Milvus runtime flush policy", () => {
   test("updates both policies without replacing the connection or credentials", async () => {

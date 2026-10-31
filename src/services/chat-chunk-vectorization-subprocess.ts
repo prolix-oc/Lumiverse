@@ -1,4 +1,3 @@
-import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
 import { createChatChunkVectorizationBatchTimeoutError } from "./chat-chunk-vectorization-timeouts";
@@ -28,7 +27,6 @@ function send(message: SubprocessToHostMessage): void {
 function ensureInitialized(): Promise<void> {
   if (!initialized) {
     initialized = (async () => {
-      await configureLanceDbNativeOverride();
       await initIdentity();
       initDatabase();
     })();

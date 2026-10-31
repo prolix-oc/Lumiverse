@@ -389,6 +389,11 @@ export async function updateVectorStoreConfig(
   const { resetActiveVectorStore } = await import("./vector-store");
   resetActiveVectorStore();
 
+  if (previous.provider !== "lancedb" && normalized.provider === "lancedb") {
+    const { scheduleLanceDbStartupMaintenance } = await import("./lancedb-maintenance-supervisor");
+    scheduleLanceDbStartupMaintenance();
+  }
+
   return getVectorStoreConfigForApi();
 }
 

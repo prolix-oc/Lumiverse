@@ -19,6 +19,7 @@ import {
   stopExtensionUpdateMonitor,
 } from "./spindle/update-check.service";
 import { sendRunnerMessage } from "./services/runner-channel";
+import { scheduleLanceDbStartupMaintenance } from "./services/lancedb-maintenance-supervisor";
 
 // TLS terminates at Bun, before Hono receives a Request. Resolve and validate
 // certificate material before performing the rest of the (potentially lengthy)
@@ -38,7 +39,6 @@ if (isTermuxLikeEnvironment()) {
   process.env.TMP = tempDir;
   process.env.TEMP = tempDir;
   console.log(`[startup] Temp directory: ${tempDir}`);
-  console.log("[startup] Termux LanceDB mode: cross-process write locking enabled");
 }
 
 try {
@@ -344,21 +344,7 @@ if (process.env.LUMIVERSE_RUNNER_IPC === "1") {
 // in the serving process: it can make the already-listening frontend appear
 // hung. Run it in a child after readiness instead; ordinary index repair still
 // happens on demand where it is scoped to the affected vector request.
-const lancedbStartupMaintenanceEnabled = !["0", "false", "no", "off"].includes(
-  (process.env.LUMIVERSE_LANCEDB_STARTUP_MAINTENANCE ?? "").trim().toLowerCase(),
-);
-if (lancedbStartupMaintenanceEnabled) {
-  setTimeout(() => {
-    console.info("[startup] Starting deferred LanceDB maintenance child...");
-    import("./services/lancedb-maintenance-supervisor").then(({ runLanceDbMaintenanceInChild }) =>
-      runLanceDbMaintenanceInChild({ mode: "startup" })
-    ).catch((err) => {
-      console.warn("[embeddings] Deferred startup maintenance failed:", err);
-    });
-  }, 5_000);
-} else {
-  console.info("[startup] Automatic LanceDB startup maintenance is disabled; use an Operator maintenance window to run compaction.");
-}
+scheduleLanceDbStartupMaintenance();
 
 // Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP
 // server gets a chance to service its first requests before the WebSocket
