@@ -54,7 +54,7 @@ import {
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
-import { unlockNotificationAudio } from '@/lib/notificationAudio'
+import { playNotificationSound, unlockNotificationAudio } from '@/lib/notificationAudio'
 import { webSearchApi, type WebSearchProvider, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, LongMessageCollapsePreset, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings, ChatSummary, Character, CharacterSummary } from '@/types/api'
@@ -857,10 +857,7 @@ function CompletionSoundUploader({ disabled, current, onChange, onError, onSucce
         onError(t('display.completionSound.blocked'))
         return
       }
-      const url = notificationSoundsApi.completionUrl(current.uploadedAt)
-      const audio = new Audio(url)
-      audio.volume = 0.5
-      await audio.play().catch((err) => {
+      await playNotificationSound(current.uploadedAt).catch((err) => {
         onError(err?.message || t('display.completionSound.playFailed'))
       })
     } finally {
