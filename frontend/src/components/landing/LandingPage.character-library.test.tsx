@@ -16,6 +16,7 @@ import {
   writeLandingPageSnapshot,
   type LandingPageSnapshot,
 } from '@/lib/landingPageSnapshot'
+import type { DeviceRotationListener } from '@/lib/deviceRotation'
 
 let createRoot: typeof CreateRoot
 let LandingPage: () => ReactNode
@@ -297,11 +298,17 @@ mock.module('@/lib/uiProductivityDefaults', () => ({
   PRODUCTIVITY_DEFAULTS: { homepageCharacterLibrarySettings: defaultHomepageSettings(true) },
 }))
 mock.module('@/lib/landingPageStartTab', () => ({ readDeviceLandingPageStartTab }))
+let motionSupported = false
+let motionPermissionNeeded = false
+let motionListener: DeviceRotationListener | undefined
+const stopMotion = jest.fn()
+const subscribeMotion = jest.fn((listener: DeviceRotationListener) => { motionListener = listener; return stopMotion })
+const defaultMatchMedia = domWindow.matchMedia
 mock.module('@/lib/deviceRotation', () => ({
-  doesDeviceRotationNeedPermission: () => false,
-  isDeviceRotationSupported: () => false,
+  doesDeviceRotationNeedPermission: () => motionPermissionNeeded,
+  isDeviceRotationSupported: () => motionSupported,
   requestDeviceRotationPermission: async () => ({ state: 'denied' }),
-  subscribeDeviceRotation: () => () => {},
+  subscribeDeviceRotation: subscribeMotion,
 }))
 mock.module('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -627,9 +634,65 @@ afterEach(async () => {
   readDeviceLandingPageStartTab.mockReturnValue('characters')
   Object.defineProperty(domWindow, 'innerWidth', { configurable: true, value: 1024 })
   storeState = createStoreState()
+  motionSupported = false
+  motionPermissionNeeded = false
+  motionListener = undefined
+  subscribeMotion.mockClear()
+  stopMotion.mockClear()
+  domWindow.matchMedia = defaultMatchMedia
 })
 
 describe('LandingPage character library', () => {
+  test('applies both motion axes to layered cards and stops immediately for Reduce Motion', async () => {
+    motionSupported = true
+    let reduced = false
+    const changes = new domWindow.EventTarget()
+    domWindow.matchMedia = ((query: string) => ({
+      media: query,
+      get matches() { return query.includes('prefers-reduced-motion') ? reduced : query.includes('hover: none') },
+      addEventListener: changes.addEventListener.bind(changes),
+      removeEventListener: changes.removeEventListener.bind(changes),
+    })) as typeof window.matchMedia
+    storeState = { ...createStoreState(false), landingPageLayoutMode: 'cards' }
+    const layeredChat = { ...recentChat('layered', 'Ava'), character_perspective_layers: [
+      { id: 'back', image_id: 'back', intensity: 0.6 }, { id: 'front', image_id: 'front', intensity: 0.6 },
+    ] }
+    listRecentGrouped.mockResolvedValue(page([layeredChat]))
+    const host = await mountLanding()
+    await flush()
+    expect(subscribeMotion).toHaveBeenCalledTimes(1)
+    const emit = (beta: number, gamma: number) => motionListener!({
+      orientation: { alpha: 0, beta, gamma, absolute: false }, rotationRate: null,
+      timestamp: 10, hasReading: true, permission: 'granted',
+    })
+    await act(async () => { emit(70, 0); emit(75, 5) })
+    const card = host.querySelector<HTMLElement>('.mobileMotionTilting')!
+    expect(card).not.toBeNull()
+    expect(Number(card.style.getPropertyValue('--pointer-x'))).toBeGreaterThan(0.18)
+    expect(Number(card.style.getPropertyValue('--pointer-y'))).toBeGreaterThan(0.28)
+    await act(async () => { emit(65, -5) })
+    expect(Number(card.style.getPropertyValue('--pointer-x'))).toBeLessThan(-0.18)
+    expect(Number(card.style.getPropertyValue('--pointer-y'))).toBeLessThan(-0.28)
+    await act(async () => { reduced = true; changes.dispatchEvent(new domWindow.Event('change')) })
+    expect(stopMotion).toHaveBeenCalledTimes(1)
+    expect(card.classList.contains('mobileMotionTilting')).toBe(false)
+    await act(async () => { reduced = false; changes.dispatchEvent(new domWindow.Event('change')) })
+    expect(subscribeMotion).toHaveBeenCalledTimes(2)
+    await act(async () => { emit(80, 10) })
+    expect(Number(card.style.getPropertyValue('--pointer-x'))).toBeCloseTo(0)
+    expect(Number(card.style.getPropertyValue('--pointer-y'))).toBeCloseTo(0)
+  })
+
+  test('does not subscribe to motion when the gallery has no layered avatars', async () => {
+    motionSupported = true
+    domWindow.matchMedia = ((query: string) => ({ ...defaultMatchMedia(query), matches: query.includes('hover: none') })) as typeof window.matchMedia
+    storeState = { ...createStoreState(false), landingPageLayoutMode: 'cards' }
+    listRecentGrouped.mockResolvedValue(page([recentChat('ordinary', 'Ava')]))
+    await mountLanding()
+    await flush()
+    expect(subscribeMotion).not.toHaveBeenCalled()
+  })
+
   test('releases ordinary card compositing after return motion and cancels release on reentry', async () => {
     storeState = { ...createStoreState(false), landingPageLayoutMode: 'cards' }
     listRecentGrouped.mockResolvedValue(page([recentChat('character-1', 'Ava')]))

@@ -1,4 +1,8 @@
+import { hasIOSNativeBridge, iosNativeRequest } from './ios-native'
+
 type PermissionRequestState = 'granted' | 'denied'
+
+export interface DeviceAttitudeQuaternion { x: number; y: number; z: number; w: number }
 
 type PermissionCapableConstructor = {
   requestPermission?: (absolute?: boolean) => Promise<PermissionRequestState>
@@ -33,6 +37,9 @@ export interface DeviceRotationRateReading {
 }
 
 export interface DeviceRotationSnapshot {
+  quaternion?: DeviceAttitudeQuaternion | null
+  /** Changes when a sensor stream restarts; consumers should recalibrate. */
+  reference?: number
   orientation: DeviceOrientationReading | null
   rotationRate: DeviceRotationRateReading | null
   permission: DeviceRotationPermissionState
@@ -64,6 +71,16 @@ let permission: DeviceRotationPermissionState = 'unknown'
 let timestamp = 0
 let listening = false
 let absoluteListenerCount = 0
+let quaternion: DeviceAttitudeQuaternion | null = null
+let reference = 0
+let nativeID: string | null = null
+let nativeUnavailable = false
+let streamID = 0
+
+function supportsNativeMotion(): boolean {
+  return !nativeUnavailable && hasIOSNativeBridge() &&
+    (window as Window & { __LUMIVERSE_IOS_NATIVE__?: { deviceMotion?: number } }).__LUMIVERSE_IOS_NATIVE__?.deviceMotion === 1
+}
 
 function hasWindow(): boolean {
   return typeof window !== 'undefined'
@@ -96,17 +113,20 @@ function supportsMotion(): boolean {
 }
 
 function needsPermission(): boolean {
+  if (supportsNativeMotion()) return false
   return typeof getOrientationConstructor()?.requestPermission === 'function' ||
     typeof getMotionConstructor()?.requestPermission === 'function'
 }
 
 function snapshot(): DeviceRotationSnapshot {
   return {
+    quaternion,
+    reference,
     orientation,
     rotationRate,
     permission,
     timestamp,
-    hasReading: Boolean(orientation || rotationRate),
+    hasReading: Boolean(quaternion || orientation || rotationRate),
   }
 }
 
@@ -118,6 +138,7 @@ function notify(): void {
 }
 
 function handleOrientation(event: DeviceOrientationEvent): void {
+  if (nativeID) return
   orientation = {
     alpha: normalize(event.alpha),
     beta: normalize(event.beta),
@@ -130,6 +151,7 @@ function handleOrientation(event: DeviceOrientationEvent): void {
 }
 
 function handleMotion(event: DeviceMotionEvent): void {
+  if (nativeID) return
   const rate = event.rotationRate
   rotationRate = rate
     ? {
@@ -148,24 +170,89 @@ function handleAbsoluteOrientation(event: Event): void {
   handleOrientation(event as DeviceOrientationEvent)
 }
 
-function startListening(): void {
-  if (!hasWindow() || listening) return
+function clearReading(): void {
+  orientation = null
+  rotationRate = null
+  quaternion = null
+  timestamp = 0
+  reference++
+}
+
+function nativeFailed(id: string): void {
+  if (nativeID !== id) return
+  stopTransport()
+  nativeUnavailable = true
+  permission = needsPermission() ? 'prompt' : 'unknown'
+  startTransport()
+  notify()
+}
+
+function handleNativeMotion(event: Event): void {
+  const detail = (event as CustomEvent).detail
+  if (!nativeID || detail?.id !== nativeID) return
+  if (detail.available === false) { nativeFailed(nativeID); return }
+  const q = detail.quaternion
+  if (!q || ![q.x, q.y, q.z, q.w].every(v => typeof v === 'number' && Number.isFinite(v))) return
+  const length = Math.hypot(q.x, q.y, q.z, q.w)
+  if (length < 0.5 || length > 1.5) return
+  if (detail.reset) reference++
+  quaternion = { x: q.x / length, y: q.y / length, z: q.z / length, w: q.w / length }
+  permission = 'granted'
+  timestamp = now()
+  notify()
+}
+
+function startTransport(): void {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+  clearReading()
+  if (supportsNativeMotion()) {
+    const id = `rotation-${Date.now()}-${++streamID}`
+    nativeID = id
+    window.addEventListener('lumiverse:ios-device-motion', handleNativeMotion)
+    void iosNativeRequest<{ available: boolean }>('motion.start', { id }).then(result => {
+      if (!result?.available) nativeFailed(id)
+    }).catch(() => nativeFailed(id))
+    return
+  }
   window.addEventListener('deviceorientation', handleOrientation)
   window.addEventListener('devicemotion', handleMotion)
+  updateAbsoluteListener()
+}
+
+function stopTransport(): void {
+  const id = nativeID
+  nativeID = null
+  if (id) void iosNativeRequest('motion.stop', { id }).catch(() => {})
+  window.removeEventListener('lumiverse:ios-device-motion', handleNativeMotion)
+  window.removeEventListener('deviceorientation', handleOrientation)
+  window.removeEventListener('devicemotion', handleMotion)
+  window.removeEventListener('deviceorientationabsolute', handleAbsoluteOrientation)
+  clearReading()
+}
+
+function handleVisibility(): void {
+  stopTransport()
+  startTransport()
+  notify()
+}
+
+function startListening(): void {
+  if (!hasWindow() || listening) return
   listening = true
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', handleVisibility)
+  startTransport()
 }
 
 function stopListening(): void {
   if (!hasWindow() || !listening || listeners.size > 0) return
-  window.removeEventListener('deviceorientation', handleOrientation)
-  window.removeEventListener('devicemotion', handleMotion)
-  window.removeEventListener('deviceorientationabsolute', handleAbsoluteOrientation)
+  stopTransport()
+  if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', handleVisibility)
   listening = false
   absoluteListenerCount = 0
 }
 
 function updateAbsoluteListener(): void {
-  if (!hasWindow() || !listening) return
+  if (!hasWindow() || !listening || nativeID || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
   if (absoluteListenerCount > 0) {
     window.addEventListener('deviceorientationabsolute', handleAbsoluteOrientation)
   } else {
@@ -174,7 +261,7 @@ function updateAbsoluteListener(): void {
 }
 
 export function isDeviceRotationSupported(): boolean {
-  return supportsOrientation() || supportsMotion()
+  return supportsNativeMotion() || supportsOrientation() || supportsMotion()
 }
 
 export function doesDeviceRotationNeedPermission(): boolean {
@@ -191,6 +278,10 @@ export async function requestDeviceRotationPermission(
   if (!hasWindow()) {
     permission = 'unsupported'
     return { state: permission, requiresUserGesture: false, reason: 'window_unavailable' }
+  }
+
+  if (supportsNativeMotion()) {
+    return { state: 'granted', requiresUserGesture: false }
   }
 
   if (!isDeviceRotationSupported()) {

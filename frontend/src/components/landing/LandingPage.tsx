@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref, type RefObject } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type MouseEvent as ReactMouseEvent, type Ref, type RefObject } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
@@ -87,6 +87,9 @@ import {
 } from '@/lib/landingPageSnapshot'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
 import { isMacTauriWebView, isTauriDesktop } from '@/lib/desktopWebView'
+import { isNativeIOS } from '@/lib/ios-native'
+import { createRelativeDeviceTilt, deviceScreenAngle } from '@/lib/relativeDeviceTilt'
+import { getPerspectiveLayerStyle } from '@/lib/perspectiveLayerStyle'
 
 function getRecentChatDisplayName(item: GroupedRecentChat, t: TFunction<'landing'>): string {
   return item.is_group
@@ -216,48 +219,6 @@ function reconcileRecentChatsWithCharacters(
   })
 }
 
-function getPerspectiveLayerStyle(index: number, total: number, intensity: number): CSSProperties {
-  const frontness = total <= 1 ? 1 : index / (total - 1)
-  const clampedIntensity = Math.max(0, Math.min(1.5, intensity))
-
-  // Motion, tilt, and Z-depth still depend on frontness — that's what creates
-  // the parallax depth effect between layers.
-  const motionX = clampedIntensity * (2 + frontness * 11)
-  const motionY = clampedIntensity * (1.5 + frontness * 8.5)
-  const motionDepth = clampedIntensity * (-1 + frontness * 4)
-  const tiltAmount = clampedIntensity * (0.15 + frontness * 0.85)
-  const originDepth = -12 + frontness * 58
-  const hoverDepthTarget = clampedIntensity * (1 + frontness * 18)
-
-  // Scale is derived from this layer's own motion amplitude, not directly from
-  // its position in the parent stack. The layer is rendered at 116% size, giving
-  // an intrinsic 16% overscan on each half-axis. Compute the minimum scale
-  // needed to cover the worst-case translation + rotation for the smallest
-  // supported card (CARD_MOBILE_MIN_WIDTH).
-  const INTRINSIC_OVERSCAN = 0.16 // (116% - 100%) / 2 / 50%
-  const halfCard = CARD_MOBILE_MIN_WIDTH / 2
-  const halfDiagonal = halfCard * Math.sqrt(2)
-  const maxTranslate = Math.hypot(motionX, motionY)
-  const maxRotationOffset = (Math.abs(tiltAmount) * Math.PI / 180) * halfDiagonal
-  const totalDisplacement = maxTranslate + maxRotationOffset
-  const requiredOverscan = totalDisplacement / halfCard
-  const functionalScale = (1 + requiredOverscan) / (1 + INTRINSIC_OVERSCAN)
-  const baseScale = 1.015
-  const hoverScale = Math.max(baseScale, Math.min(1.18, functionalScale))
-
-  return {
-    '--layer-origin-depth': `${originDepth}px`,
-    '--layer-scale': baseScale.toFixed(3),
-    '--layer-hover-depth-target': `${hoverDepthTarget}px`,
-    '--layer-hover-scale': hoverScale.toFixed(3),
-    '--layer-motion-x': `${motionX}px`,
-    '--layer-motion-y': `${motionY}px`,
-    '--layer-motion-depth': `${motionDepth}px`,
-    '--layer-tilt-amount': `${tiltAmount}deg`,
-    '--layer-tilt-amount-neg': `${-tiltAmount}deg`,
-  } as CSSProperties
-}
-
 interface RecentChatAvatarProps {
   item: GroupedRecentChat
   variant: 'card' | 'compact'
@@ -356,7 +317,7 @@ function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProp
             decoding={imageDecoding}
             draggable={false}
             style={{
-              ...getPerspectiveLayerStyle(index, perspectiveLayers.length, layer.intensity),
+              ...getPerspectiveLayerStyle(index, perspectiveLayers.length, layer.intensity, CARD_MOBILE_MIN_WIDTH),
               zIndex: index,
             }}
           />
@@ -422,8 +383,6 @@ const CARD_MOBILE_MAX_COLUMNS = 2
 const COMPACT_MIN_WIDTH = 320
 const COMPACT_GAP = 12
 const COMPACT_ROW_ESTIMATE = 86
-const MOBILE_PARALLAX_MAX_GAMMA_DELTA = 10
-const MOBILE_PARALLAX_MAX_BETA_DELTA = 14
 
 type IdleWindow = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
@@ -473,14 +432,11 @@ function getColumnGap(width: number, layout: 'cards' | 'compact') {
   return layout === 'compact' ? COMPACT_GAP : CARD_GAP
 }
 
-function clampParallax(value: number): number {
-  return Math.max(-1, Math.min(1, value))
-}
-
 function shouldUseMobileMotionParallax(): boolean {
   if (typeof window === 'undefined') return false
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false
   return Boolean(
+    isNativeIOS() ||
     window.matchMedia?.('(hover: none)').matches ||
     window.matchMedia?.('(pointer: coarse)').matches
   )
@@ -1358,22 +1314,16 @@ function LandingPageNative() {
     return () => window.cancelAnimationFrame(frame)
   }, [activeLandingTab, chatsSurfaceReady, items.length, loading, settingsLoaded, virtualRestoreSnapshot])
 
-  useEffect(() => {
-    setShowMobileMotionEnable(
-      landingPageLayoutMode === 'cards' &&
-      shouldUseMobileMotionParallax() &&
-      isDeviceRotationSupported() &&
-      doesDeviceRotationNeedPermission()
-    )
-  }, [landingPageLayoutMode])
+  const hasPerspectiveCards = items.some(item => (item.character_perspective_layers?.length ?? 0) >= 2)
 
   useEffect(() => {
     const root = scrollRef.current
-    if (!root || landingPageLayoutMode !== 'cards' || !shouldUseMobileMotionParallax()) return
+    setShowMobileMotionEnable(false)
+    if (!root || landingPageLayoutMode !== 'cards' || activeLandingTab !== 'chats' || !hasPerspectiveCards) return
 
     let frame = 0
-    let baselineBeta: number | null = null
-    let baselineGamma: number | null = null
+    let relativeTilt = createRelativeDeviceTilt()
+    let unsubscribe: (() => void) | undefined
     let nextTiltX = 0
     let nextTiltY = 0
 
@@ -1387,27 +1337,41 @@ function LandingPageNative() {
 
     const handleRotation = (snapshot: DeviceRotationSnapshot) => {
       setMobileMotionPermission(snapshot.permission)
-      if (snapshot.hasReading) setShowMobileMotionEnable(false)
-
-      const orientation = snapshot.orientation
-      if (!orientation || orientation.beta === null || orientation.gamma === null) return
-
-      baselineBeta ??= orientation.beta
-      baselineGamma ??= orientation.gamma
-
-      nextTiltX = clampParallax((orientation.gamma - baselineGamma) / MOBILE_PARALLAX_MAX_GAMMA_DELTA)
-      nextTiltY = clampParallax((orientation.beta - baselineBeta) / MOBILE_PARALLAX_MAX_BETA_DELTA)
+      const tilt = relativeTilt(snapshot, deviceScreenAngle())
+      setShowMobileMotionEnable(!tilt && doesDeviceRotationNeedPermission())
+      if (!tilt) {
+        if (frame) window.cancelAnimationFrame(frame)
+        frame = 0
+        clearMobilePerspectiveParallax(root)
+        return
+      }
+      nextTiltX = tilt.x
+      nextTiltY = tilt.y
       scheduleApply()
     }
 
-    const unsubscribe = subscribeDeviceRotation(handleRotation, { emitCurrent: true })
+    const syncMotionPreference = () => {
+      unsubscribe?.()
+      unsubscribe = undefined
+      if (frame) window.cancelAnimationFrame(frame)
+      frame = 0
+      clearMobilePerspectiveParallax(root)
+      relativeTilt = createRelativeDeviceTilt()
+      const enabled = shouldUseMobileMotionParallax() && isDeviceRotationSupported()
+      setShowMobileMotionEnable(enabled && doesDeviceRotationNeedPermission())
+      if (enabled) unsubscribe = subscribeDeviceRotation(handleRotation, { emitCurrent: true })
+    }
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    reducedMotion.addEventListener('change', syncMotionPreference)
+    syncMotionPreference()
 
     return () => {
       if (frame) window.cancelAnimationFrame(frame)
-      unsubscribe()
+      reducedMotion.removeEventListener('change', syncMotionPreference)
+      unsubscribe?.()
       clearMobilePerspectiveParallax(root)
     }
-  }, [landingPageLayoutMode, items.length])
+  }, [landingPageLayoutMode, activeLandingTab, hasPerspectiveCards])
 
   const handleEnableMobileMotion = useCallback(async () => {
     try {

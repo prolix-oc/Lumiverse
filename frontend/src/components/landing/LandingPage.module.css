@@ -591,11 +591,11 @@
   --layer-motion-depth: 0px;
   --layer-tilt-amount: 0deg;
   --layer-tilt-amount-neg: 0deg;
-  --layer-scale: 1;
+  --layer-scale: var(--layer-base-scale, 1);
   position: absolute;
-  inset: -8%;
+  inset: -12% -8%;
   width: 116%;
-  height: 116%;
+  height: 124%;
   max-width: none;
   max-height: none;
   object-fit: cover;
@@ -618,7 +618,8 @@
   z-index: 3;
 }
 
-.card:hover .perspectiveLayer {
+.card:hover .perspectiveLayer,
+.cardTilt.mobileMotionTilting .perspectiveLayer {
   --layer-hover-depth: var(--layer-hover-depth-target);
   --layer-scale: var(--layer-hover-scale);
 }
