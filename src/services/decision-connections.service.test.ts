@@ -180,7 +180,7 @@ test("worker bridge enforces live permission and account scope on every call", a
   await api.handle({ type: "decisions_providers", requestId: "1" });
   expect(responses.pop().error).toContain("decisions");
   allowed = true; await api.handle({ type: "decisions_providers", requestId: "2" });
-  expect(responses.pop().result).toHaveLength(3);
+  expect(responses.pop().result.map((provider: { id: string }) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception"]);
   await api.handle({ type: "decisions_connections_list", requestId: "3", userId: "bob" });
   expect(responses.pop().error).toContain("scope denied");
   allowed = false; await api.handle({ type: "decisions_connections_list", requestId: "4" });
@@ -199,4 +199,23 @@ test.each(["cancel", "dispose"])("worker %s aborts pending inference", async (mo
   await started;
   if (mode === "cancel") await api.handle({ type: "decisions_cancel", requestId: "pending" }); else api.dispose();
   await pending; expect(responses[0].error).toContain("cancelled");
+});
+
+test("Inception profiles discover only decisions and evaluate with the owning account's saved key", async () => {
+  const profile = await connection("alice", { provider: "inception", model: "mercury-decide", is_default: true });
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: any, options: any) => {
+    calls.push(String(url));
+    expect(options.headers.Authorization).toBe("Bearer secret-for-test");
+    if (String(url).endsWith("/models")) return Response.json({ data: [
+      { id: "mercury-decide", supported_endpoints: ["decisions"] },
+      { id: "mercury-3", supported_endpoints: ["chat.completions"] },
+    ] });
+    expect(JSON.parse(options.body)).toEqual({ model: "mercury-decide", state: input.state, questions: input.questions });
+    return Response.json({ model: "mercury-decide", answers: { check: { type: "noul", noul: 0.9 } }, usage: { input_tokens: 10, output_tokens: 1 } });
+  }) as unknown as typeof fetch;
+  expect((await svc.listConnectionModels("alice", profile.id)).models.map(m => m.id)).toEqual(["mercury-decide"]);
+  expect(await evaluateDecision("alice", { ...input, connection_id: profile.id })).toMatchObject({ model: "mercury-decide", usage: { input_tokens: 10, output_tokens: 1 } });
+  await expect(evaluateDecision("bob", { ...input, connection_id: profile.id })).rejects.toThrow();
+  expect(calls).toEqual(["https://api.inceptionlabs.ai/v1/models", "https://api.inceptionlabs.ai/v1/decisions"]);
 });

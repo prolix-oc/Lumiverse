@@ -1,6 +1,6 @@
 # Decision models
 
-`spindle.decisions` evaluates named questions against text or JSON using the user's saved Decision connections. Built-in providers are OpenRouter, NanoGPT, and TypeSafe. Declare the `decisions` permission in `spindle.json` and obtain the user's grant. The host advertises `decisions-v1: 1` in `spindle.host.capabilities`; check this before calling the API on older hosts.
+`spindle.decisions` evaluates named questions against text or JSON using the user's saved Decision connections. Built-in providers are OpenRouter, NanoGPT, TypeSafe, and Inception. Inception uses its native `/v1/decisions` endpoint and suggests `mercury-decide`. Declare the `decisions` permission in `spindle.json` and obtain the user's grant. The host advertises `decisions-v1: 1` in `spindle.host.capabilities`; check this before calling the API on older hosts.
 
 Use `lumiverse-spindle-types` version **0.6.45** or newer for `SpindleDecisionsAPI`, the `Decision*` types, and the `decisions` permission.
 
