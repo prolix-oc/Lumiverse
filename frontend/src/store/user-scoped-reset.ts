@@ -4,6 +4,8 @@ import { resetSettingsPersistence } from './slices/settings'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { clearLandingPageSnapshot } from '@/lib/landingPageSnapshot'
 import { resetAccountReads } from '@/lib/shared-read'
+import { setIOSMediaCacheAccount } from '@/lib/ios-media-cache'
+import { clearImageCache } from '@/lib/imageDecodeCache'
 type StoreApi = {
   getState: () => AppStore
   setState: (partial: Partial<AppStore>) => void
@@ -26,6 +28,8 @@ export function registerUserScopedResetStore(api: StoreApi, initial: AppStore): 
 }
 
 export function resetUserScopedStoreState(): void {
+  setIOSMediaCacheAccount(null)
+  clearImageCache()
   resetAccountReads()
   resetSettingsPersistence()
   setPresetSaveCoordinatorScope(null)

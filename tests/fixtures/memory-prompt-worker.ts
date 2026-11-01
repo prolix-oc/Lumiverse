@@ -1,0 +1,127 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import assert from "node:assert/strict";
+import { resolve } from "node:path";
+import { mock } from "bun:test";
+import type { CortexResult, LinkedCortexResult } from "../../src/services/memory-cortex/types";
+import type { CortexWarmJob } from "../../src/services/cortex-warm-worker";
+
+let warmResult: { mainResult: CortexResult | null; linkedResult: LinkedCortexResult | null } = { mainResult: null, linkedResult: null };
+const warmJobs: CortexWarmJob[] = [];
+
+const root = resolve(import.meta.dir, "../..");
+// Keep retrieval offline while exercising the real host warmer and assembly worker.
+mock.module(`${root}/src/services/cortex-warm-worker-client.ts`, () => ({
+  canUseCortexWorker: () => true,
+  warmCortexInWorker: async (job: CortexWarmJob) => { warmJobs.push(job); return warmResult; },
+}));
+const dataDir = mkdtempSync("/private/tmp/lumiverse-memory-worker-");
+process.env.DATA_DIR = dataDir;
+delete process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
+(globalThis as any).__LUMIVERSE_ASSEMBLY_WORKER = true;
+const { initDatabase, closeDatabase, getDb } = await import("../../src/db/connection.ts");
+const { createChat, createMessage, updateChat } = await import("../../src/services/chats.service.ts");
+const { createPreset } = await import("../../src/services/presets.service.ts");
+const { putSetting } = await import("../../src/services/settings.service.ts");
+const { assemblePrompt } = await import("../../src/services/prompt-assembly.service.ts");
+const { putCortexConfig, primeCortexCache, primeLinkedCortexCache, clearCortexResultCaches } = await import("../../src/services/memory-cortex/index.ts");
+const { refreshChatMemoryCache } = await import("../../src/services/chat-memory-cache.service.ts");
+const { assemblePromptInWorker, releaseIdlePromptAssemblyWorkers, canUsePromptAssemblyWorker } = await import("../../src/services/prompt-assembly-worker-client.ts");
+const db = initDatabase();
+db.run("PRAGMA foreign_keys = OFF");
+db.run(await Bun.file(`${root}/src/db/baseline.sql`).text());
+const userId = "memory-worker-repro";
+const chat = createChat(userId, { name: "Worker reproduction" });
+const message = createMessage(chat.id, { is_user: true, name: "User", content: "What was the secret?" }, userId);
+putSetting(userId, "embeddingConfig", { enabled: true, vectorize_chat_messages: true });
+putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5 });
+putCortexConfig(userId, { enabled: true, useChatMemoryFormatting: true });
+const block = (id: string, content: string, marker: string | null = null) => ({ id, name: id, content, marker,
+  enabled: true, role: "system" as const, position: "pre_history" as const, depth: 0,
+  isLocked: false, color: null, injectionTrigger: [], group: null });
+const result: CortexResult = {
+  memories: [],
+  entityContext: [{ id: "entity", name: "Kael", type: "character", status: "active", description: "A traveler",
+    lastSeenAt: null, mentionCount: 1, topFacts: ["CORTEX_SECRET"], emotionalProfile: {}, relationships: [] }],
+  activeRelationships: [], arcContext: null,
+  stats: { candidatePoolSize: 0, vectorSearchResults: 0, entitiesMatched: 1, scoreFusionApplied: false, topScore: 0, retrievalTimeMs: 0 },
+};
+primeCortexCache(chat.id, result, [message.id]);
+const preset = createPreset(userId, { name: "Memory probe", provider: "openai", prompt_order: [
+  block("memory", "ACTIVE={{memoriesActive}} CORTEX={{cortexActive}}\n{{memories}}"), block("history", "", "chat_history"),
+] });
+const ctx = { userId, chatId: chat.id, generationType: "normal" as const, presetOverride: preset, macroCommit: false };
+const content = (assembled: Awaited<ReturnType<typeof assemblePrompt>>) => JSON.stringify(assembled.messages);
+const linked: LinkedCortexResult = {
+  vaults: [{ vaultId: "vault", vaultName: "Archive", entities: [{ ...result.entityContext[0], topFacts: ["LINKED_SECRET"] }], relations: [] }],
+  interlinks: [],
+};
+primeLinkedCortexCache(chat.id, linked);
+try {
+  assert.equal(canUsePromptAssemblyWorker(), true);
+  const direct = await assemblePrompt(ctx);
+  const worker = await assemblePromptInWorker(ctx);
+  assert.match(content(direct), /CORTEX_SECRET/);
+  assert.match(content(worker), /ACTIVE=yes CORTEX=yes/);
+  assert.match(content(worker), /CORTEX_SECRET/);
+  assert.match(content(worker), /LINKED_SECRET/);
+  assert.equal(worker.deferredCortexWarmJob, undefined);
+  await Bun.sleep(0);
+  assert.equal(warmJobs.length, 1);
+  assert.deepEqual(warmJobs[0].mainQuery.excludeMessageIds, [message.id]);
+
+  // A reused worker must consume the new empty snapshot, then return warm work
+  // to the host so the following assembly can read the newly populated cache.
+  clearCortexResultCaches();
+  warmResult = { mainResult: result, linkedResult: linked };
+  const cold = await assemblePromptInWorker(ctx);
+  assert.doesNotMatch(content(cold), /CORTEX_SECRET|LINKED_SECRET/);
+  await Bun.sleep(0);
+  warmResult = { mainResult: null, linkedResult: null };
+  const rewarmed = await assemblePromptInWorker(ctx);
+  assert.match(content(rewarmed), /CORTEX_SECRET/);
+  assert.match(content(rewarmed), /LINKED_SECRET/);
+
+  // Database opt-outs take precedence over warm snapshots in a reused worker.
+  updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: false } } });
+  const optedOut = await assemblePromptInWorker(ctx);
+  assert.doesNotMatch(content(optedOut), /CORTEX_SECRET|LINKED_SECRET/);
+  updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: true } } });
+
+  // Warm-cache exclusion checks survive transfer, including an explicit target.
+  primeCortexCache(chat.id, result, []);
+  const unsafe = await assemblePromptInWorker(ctx);
+  assert.doesNotMatch(content(unsafe), /CORTEX_SECRET/);
+  clearCortexResultCaches();
+
+  putCortexConfig(userId, { enabled: false });
+  const insertMessage = getDb().query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, 1, 'User', ?)");
+  let lastMessageId = "";
+  for (let i = 1; i < 8; i++) {
+    lastMessageId = crypto.randomUUID();
+    insertMessage.run(lastMessageId, chat.id, i, `Recent turn ${i}`);
+  }
+  getDb().query("UPDATE messages SET is_user = 0, name = 'Assistant' WHERE id = ?").run(lastMessageId);
+  getDb().query(`INSERT INTO chat_chunks (id,chat_id,start_message_id,end_message_id,message_ids,content,token_count,message_count,created_at,updated_at)
+    VALUES ('old-chunk',?,?,?,?, 'BASIC_SECRET',4,1,0,0)`).run(chat.id, message.id, message.id, JSON.stringify([message.id]));
+  await refreshChatMemoryCache(userId, chat.id);
+  const basicDirect = await assemblePrompt(ctx);
+  const basicWorker = await assemblePromptInWorker(ctx);
+  assert.equal(JSON.stringify(basicDirect.messages).includes("BASIC_SECRET"), true);
+  assert.equal(JSON.stringify(basicWorker.messages).includes("BASIC_SECRET"), true);
+  const regenCtx = { ...ctx, generationType: "regenerate" as const, excludeMessageId: lastMessageId };
+  const regenDirect = await assemblePrompt(regenCtx);
+  const regenWorker = await assemblePromptInWorker(regenCtx);
+  assert.equal(JSON.stringify(regenDirect.messages).includes("BASIC_SECRET"), true);
+  assert.equal(JSON.stringify(regenWorker.messages).includes("BASIC_SECRET"), true);
+  assert.equal(regenDirect.memoryStats?.chunksAvailable, 1);
+  assert.equal(regenDirect.memoryStats?.chunksRetrieved, 1);
+  // A swipe can blank the persisted target before assembly starts.
+  getDb().query("UPDATE messages SET content = '' WHERE id = ?").run(lastMessageId);
+  assert.match(content(await assemblePromptInWorker(regenCtx)), /BASIC_SECRET/);
+  console.log("memory worker integration passed");
+} finally {
+  releaseIdlePromptAssemblyWorkers();
+  closeDatabase();
+  rmSync(dataDir, { recursive: true, force: true });
+}
+process.exit(0);

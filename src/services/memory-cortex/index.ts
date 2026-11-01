@@ -64,6 +64,7 @@ import type {
   ChunkIngestionData,
   CortexQuery,
   CortexResult,
+  CortexCacheSnapshot,
   CortexMemory,
   MemoryEntity,
   EntitySnapshot,
@@ -555,11 +556,14 @@ function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): st
 export function getCachedCortexResult(
   chatId: string,
   requiredExcludedMessageIds?: string | string[],
+  snapshot?: CortexCacheSnapshot,
 ): CortexResult | null {
-  const entry = cortexResultCache.get(chatId);
+  const entry = snapshot
+    ? (snapshot.chatId === chatId ? snapshot.local : null)
+    : cortexResultCache.get(chatId);
   if (!entry) return null;
   if (Date.now() - entry.queriedAt > CACHE_TTL_MS) {
-    cortexResultCache.delete(chatId);
+    if (!snapshot) cortexResultCache.delete(chatId);
     return null;
   }
   const required = typeof requiredExcludedMessageIds === "string"
@@ -640,14 +644,26 @@ function scheduleVaultAutoReindex(userId: string, vaultId: string): void {
   })();
 }
 
-export function getCachedLinkedCortexResult(chatId: string): LinkedCortexResult | null {
-  const entry = linkedCortexResultCache.get(chatId);
+export function getCachedLinkedCortexResult(chatId: string, snapshot?: CortexCacheSnapshot): LinkedCortexResult | null {
+  const entry = snapshot
+    ? (snapshot.chatId === chatId ? snapshot.linked : null)
+    : linkedCortexResultCache.get(chatId);
   if (!entry) return null;
   if (Date.now() - entry.queriedAt > CACHE_TTL_MS) {
-    linkedCortexResultCache.delete(chatId);
+    if (!snapshot) linkedCortexResultCache.delete(chatId);
     return null;
   }
   return entry.result;
+}
+
+/** Capture at dispatch time. Preserve timestamps and exclusions across isolates;
+ * an empty snapshot must also override any state in a reused worker. */
+export function getCortexCacheSnapshot(chatId: string): CortexCacheSnapshot {
+  return {
+    chatId,
+    local: getCachedCortexResult(chatId) ? cortexResultCache.get(chatId)! : null,
+    linked: getCachedLinkedCortexResult(chatId) ? linkedCortexResultCache.get(chatId)! : null,
+  };
 }
 
 export function invalidateLinkedCortexCache(chatId: string): void {

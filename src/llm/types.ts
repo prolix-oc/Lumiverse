@@ -361,6 +361,8 @@ export interface AssemblyContext {
   /** Pre-fetched data to avoid redundant DB calls during assembly.
    *  When provided, assembly reads from this instead of querying DB. */
   prefetched?: PrefetchedData;
+  /** Main-process warm Cortex results, captured when an assembly worker is dispatched. */
+  cortexCache?: import("../services/memory-cortex/types").CortexCacheSnapshot;
   /** Optional abort signal. When fired, in-flight embedding requests
    *  (WI vector retrieval) are cancelled and assembly short-circuits with
    *  an AbortError so the caller can unwind cleanly. */
@@ -584,6 +586,8 @@ export interface AssemblyResult {
    *  this writer owns; merged via mergeChatMetadata so concurrent user edits
    *  to chat metadata are not clobbered. */
   deferredWiState?: { chatId: string; partial: Record<string, any> };
+  /** Internal worker handoff; the host schedules this after assembly completes. */
+  deferredCortexWarmJob?: import("../services/cortex-warm-worker").CortexWarmJob;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
   /** The macro environment built during assembly — used downstream for regex script macro substitution. */

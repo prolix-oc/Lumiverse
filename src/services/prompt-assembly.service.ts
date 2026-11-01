@@ -138,10 +138,8 @@ import { readCachedChatMemory } from "./chat-memory-cache.service";
 import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import * as memoryCortex from "./memory-cortex";
 import { buildEmotionalContext } from "./memory-cortex";
-import {
-  canUseCortexWorker,
-  warmCortexInWorker,
-} from "./cortex-warm-worker-client";
+import { scheduleCortexPromptWarm } from "./cortex-prompt-warm.service";
+import type { CortexWarmJob } from "./cortex-warm-worker";
 import * as databankSvc from "./databank";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -2059,12 +2057,8 @@ export async function assemblePrompt(
     | import("./embeddings.service").PerChatMemoryOverrides
     | null = null;
 
-  // Skip the warm task when assembly runs inside the assembly worker: its
-  // results must land in the MAIN process's cortex cache, and warmCortexInWorker
-  // would otherwise spawn a nested cortex worker from in here. Cortex warming
-  // runs only on the in-process assembly path (where it reaches the real cache),
-  // matching prior behavior — the per-call worker killed this task anyway.
-  if (cortexEnabledForChat && !runningInAssemblyWorker()) {
+  let prepareCortexWarmJob: ((signal?: AbortSignal) => Promise<CortexWarmJob | undefined>) | undefined;
+  if (cortexEnabledForChat) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
@@ -2076,38 +2070,14 @@ export async function assemblePrompt(
       (chat.metadata?.memory_settings as
         | import("./embeddings.service").PerChatMemoryOverrides
         | undefined) ?? null;
-
-    // Cortex retrieval is best-effort warm-cache work for subsequent
-    // generations. It must stay detached from the hot path.
-    // Resolving the embedding config early is cheap/cached; the actual query
-    // text + retrieval are built inside the deferred task below.
     const embCfgPromise = pf?.embeddingConfig
       ? Promise.resolve(pf.embeddingConfig)
       : embeddingsSvc.getEmbeddingConfig(ctx.userId);
 
-    // Combine the generation's own abort with the chat-scoped background
-    // signal. Either firing tears down the fire-and-forget task: stop on
-    // the current gen OR a newer gen arriving on this chat aborts any
-    // orphan cortex/databank work left over from prior gens.
-    const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
-    const cortexSignal = ctx.signal
-      ? AbortSignal.any([ctx.signal, chatBgSignal])
-      : chatBgSignal;
-
-    // Gate the heavy work behind assembly completion. The task is created and
-    // tracked now (so stop/teardown wiring is in place), but parks on this
-    // gate until the function's finally releases it. By then the hot path is
-    // done, so the work runs during the network-bound streaming window
-    // instead of stealing CPU from the cooperatively-yielding assembly loop.
-    const cortexGate = new Promise<void>((resolve) => {
-      resolveCortexGate = resolve;
-    });
-
-    const cortexBgTask = (async () => {
-      await cortexGate;
-      if (cortexSignal.aborted) return;
+    prepareCortexWarmJob = async (signal) => {
+      if (signal?.aborted) return undefined;
       const embCfg = await embCfgPromise;
-      if (cortexSignal.aborted) return;
+      if (signal?.aborted) return undefined;
       const effective = cortexChatMemSettings
         ? embeddingsSvc.resolveEffectiveChatMemorySettings(
             cortexChatMemSettings,
@@ -2145,72 +2115,25 @@ export async function assemblePrompt(
         excludeMessageIds,
       };
 
-      // Off-thread the retrieval. queryCortex/queryLinkedCortex perform native
-      // LanceDB vector search + Arrow marshaling that blocks whatever event
-      // loop they run on; on the main thread (the in-process assembly path)
-      // that stalls the WS ping handler long enough to trip the frontend's
-      // pong watchdog and flash a spurious disconnect overlay mid-generation.
-      // The worker computes the results and we mirror them into the host warm
-      // cache here. The worker has no AbortSignal — warm work is best-effort,
-      // so it runs to completion off-thread, but we skip priming if this
-      // generation aborted in the meantime.
-      if (canUseCortexWorker()) {
-        try {
-          const { mainResult, linkedResult } = await warmCortexInWorker({
-            chatId: ctx.chatId,
-            userId: ctx.userId,
-            cortexConfig,
-            mainQuery: mainQueryParams,
-            linkedQueryText: cortexQueryText,
-          });
-          if (cortexSignal.aborted) return;
-          if (mainResult) {
-            memoryCortex.primeCortexCache(
-              ctx.chatId,
-              mainResult,
-              excludeMessageIds,
-            );
-          }
-          if (linkedResult) {
-            memoryCortex.primeLinkedCortexCache(ctx.chatId, linkedResult);
-          }
-          return;
-        } catch (err) {
-          if (cortexSignal.aborted) return;
-          console.warn(
-            "[prompt-assembly] Cortex worker failed; falling back to in-process retrieval:",
-            err,
-          );
-          // Fall through to the in-process path below.
-        }
-      }
-
-      // In-process fallback (worker disabled via env or crashed). The combined
-      // signal is threaded through so a user-initiated stop OR a newer
-      // generation on this chat tears down the embedding API call and LanceDB
-      // retrieval instead of letting the background task live on as an orphan.
-      // These calls self-populate the warm cache as a side effect.
-      const mainQuery = memoryCortex.queryCortex(
-        mainQueryParams,
+      return {
+        chatId: ctx.chatId,
+        userId: ctx.userId,
         cortexConfig,
-        cortexSignal,
-      );
+        mainQuery: mainQueryParams,
+        linkedQueryText: cortexQueryText,
+      };
+    };
 
-      // Linked cortex queries use the same queryText for semantic relevance
-      const linkedQuery = memoryCortex.queryLinkedCortex(
-        ctx.chatId,
-        ctx.userId,
-        cortexConfig,
-        cortexQueryText,
-        cortexSignal,
-      );
-
-      await Promise.all([mainQuery, linkedQuery]);
-    })().catch((err) => {
-      if (cortexSignal.aborted) return;
-      console.warn("[prompt-assembly] Background cortex query failed:", err);
-    });
-    trackChatBackgroundTask(ctx.userId, ctx.chatId, cortexBgTask);
+    if (!runningInAssemblyWorker()) {
+      // Keep retrieval behind assembly completion. Worker assembly returns the
+      // same prepared job below, and the host schedules it in its own process.
+      const cortexGate = new Promise<void>((resolve) => { resolveCortexGate = resolve; });
+      const prepare = prepareCortexWarmJob;
+      scheduleCortexPromptWarm(ctx.userId, ctx.chatId, async (signal) => {
+        await cortexGate;
+        return prepare(signal);
+      }, ctx.signal);
+    }
   }
 
   // ---- Pre-flight: kick off databank retrieval ----
@@ -2855,6 +2778,7 @@ export async function assemblePrompt(
     perChatOverrides,
     cortexConfig,
     excludeMessageId: ctx.excludeMessageId,
+    cortexCache: ctx.cortexCache,
   });
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
 
@@ -4477,6 +4401,12 @@ export async function assemblePrompt(
     databankStats,
     contextClipStats,
     deferredWiState,
+    deferredCortexWarmJob: runningInAssemblyWorker() && prepareCortexWarmJob
+      ? await prepareCortexWarmJob().catch((err) => {
+          console.warn("[prompt-assembly] Preparing Cortex warm job failed:", err);
+          return undefined;
+        })
+      : undefined,
     deliberationHandledByMacro: !!(macroEnv.extra as any)
       ._deliberationMacroUsed,
     macroEnv,
@@ -6259,6 +6189,7 @@ export async function populateMemoryMacroContext({
     import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null,
   cortexConfig = memoryCortex.getCortexConfig(userId),
   excludeMessageId,
+  cortexCache,
 }: {
   userId: string;
   chat: Chat;
@@ -6269,6 +6200,7 @@ export async function populateMemoryMacroContext({
   perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null;
   cortexConfig?: memoryCortex.MemoryCortexConfig;
   excludeMessageId?: string;
+  cortexCache?: import("./memory-cortex/types").CortexCacheSnapshot;
 }) {
   const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata);
   // A warm result must have excluded the live-context tail (and regen target)
@@ -6282,6 +6214,7 @@ export async function populateMemoryMacroContext({
           perChatOverrides,
           excludeMessageId,
         ),
+        cortexCache,
       )
     : null;
   let memoryResult: MemoryRetrievalResult | null = null;
@@ -6309,7 +6242,7 @@ export async function populateMemoryMacroContext({
 
   // Merge linked cortex data (vaults + interlinks) if available
   const linkedCortexResult = cortexEnabledForChat
-    ? memoryCortex.getCachedLinkedCortexResult(chat.id)
+    ? memoryCortex.getCachedLinkedCortexResult(chat.id, cortexCache)
     : null;
   let linkedMemoryText = "";
   if (
@@ -6500,7 +6433,7 @@ export async function collectChatVectorMemory(
   perChatOverrides?:
     | import("./embeddings.service").PerChatMemoryOverrides
     | null,
-  _excludeMessageId?: string,
+  excludeMessageId?: string,
 ): Promise<MemoryRetrievalResult> {
   const result = await readCachedChatMemory(
     userId,
@@ -6508,22 +6441,21 @@ export async function collectChatVectorMemory(
     messages,
     chatMemorySettings ?? null,
     perChatOverrides ?? null,
+    excludeMessageId,
   );
 
-  if (_excludeMessageId && result.chunks.length > 0) {
+  if (result.chunks.length > 0) {
+    const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+    const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
+    const excludedIds = new Set(buildMemoryExcludeMessageIds(messages, settings, perChatOverrides, excludeMessageId));
     const filteredChunks = result.chunks.filter((chunk) => {
       const messageIds = Array.isArray(chunk.metadata?.messageIds)
         ? (chunk.metadata.messageIds as string[])
         : null;
-      return !(messageIds && messageIds.includes(_excludeMessageId));
+      return !messageIds?.some((id) => excludedIds.has(id));
     });
 
     if (filteredChunks.length !== result.chunks.length) {
-      const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-      const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(
-        chatMemorySettings ?? null,
-        cfg,
-      );
       return {
         chunks: filteredChunks,
         formatted: formatMemoryOutput(filteredChunks, settings),

@@ -46,6 +46,7 @@ import { useLandingVirtualizer } from '@/hooks/useLandingVirtualizer'
 import type { LandingVirtualizerHandle } from '@/lib/landingVirtualSnapshot'
 import { landingScrollOffset } from '@/lib/landingVirtualSnapshot'
 import LazyImage from '@/components/shared/LazyImage'
+import CachedImage from '@/components/shared/CachedImage'
 import VirtualGrid from '@/components/shared/VirtualGrid'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { GuideViewer } from '@/components/shared/GuideViewer'
@@ -346,7 +347,7 @@ function RecentChatAvatar({ item, variant, eager = false }: RecentChatAvatarProp
     return (
       <div className={clsx(imageClassName, styles.perspectiveStack)} aria-hidden="true">
         {perspectiveLayers.map((layer, index) => (
-          <img
+          <CachedImage
             key={layer.id || layer.image_id}
             className={styles.perspectiveLayer}
             src={imagesApi.largeUrl(layer.image_id)}

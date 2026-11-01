@@ -97,6 +97,10 @@ select option:checked {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  img[data-image-decoded] {
+    transition-duration: 0s !important;
+  }
+
   .lumiverse-panel-enter {
     animation: none;
   }

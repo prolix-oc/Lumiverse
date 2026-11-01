@@ -12,7 +12,7 @@ import { createChat, createMessage, updateChat } from "./chats.service";
 import { refreshChatMemoryCache } from "./chat-memory-cache.service";
 import { createDatabank } from "./databank";
 import { clearAllDatabankCache, setCachedDatabankResult } from "./databank/retrieval-cache.service";
-import { clearCortexResultCaches, primeCortexCache, primeLinkedCortexCache, putCortexConfig, type CortexResult } from "./memory-cortex";
+import { clearCortexResultCaches, getCortexCacheSnapshot, getCachedCortexResult, getCachedLinkedCortexResult, primeCortexCache, primeLinkedCortexCache, putCortexConfig, type CortexResult } from "./memory-cortex";
 import { DEFAULT_CORTEX_CONFIG } from "./memory-cortex/config";
 import { recordColorAttribution } from "./memory-cortex/font-attribution";
 import { createPreset } from "./presets.service";
@@ -168,7 +168,7 @@ async function expectPreviewMatchesAssembly() {
   });
   expect(batch.status).toBe(200);
   // Batch resolution preserves whitespace; assembly normalizes each block.
-  expect(normalizePromptBlockText((await batch.json()).resolved.memory)).toBe(expected);
+  expect(normalizePromptBlockText((await batch.json()).resolved.memory)).toBe(expected!);
   return expected!;
 }
 
@@ -217,6 +217,23 @@ afterEach(async () => {
 });
 
 describe("memory macro placement", () => {
+  test("transferred Cortex results retain expiry, chat identity and exclusions", () => {
+    enableCortex();
+    primeLinkedCortexCache(chat.id, { vaults: [], interlinks: [] });
+    const snapshot = structuredClone(getCortexCacheSnapshot(chat.id));
+    expect(getCachedCortexResult(chat.id, [message.id], snapshot)).not.toBeNull();
+    expect(getCachedCortexResult(chat.id, ["another-target"], snapshot)).toBeNull();
+    expect(getCachedCortexResult("another-chat", [], snapshot)).toBeNull();
+    expect(getCachedLinkedCortexResult("another-chat", snapshot)).toBeNull();
+    snapshot.local!.queriedAt = Date.now() - 6 * 60_000;
+    snapshot.linked!.queriedAt = Date.now() - 6 * 60_000;
+    expect(getCachedCortexResult(chat.id, [], snapshot)).toBeNull();
+    expect(getCachedLinkedCortexResult(chat.id, snapshot)).toBeNull();
+    // Rejecting a transferred snapshot must not mutate the source caches.
+    expect(getCachedCortexResult(chat.id)).not.toBeNull();
+    expect(getCachedLinkedCortexResult(chat.id)).not.toBeNull();
+  });
+
   test("falls back before history when Cortex macros are absent, including with macro-only chat memory", async () => {
     enableCortex();
     const result = await assemble();
@@ -379,6 +396,62 @@ describe("memory macro placement", () => {
     enableCortex(cortexResult({ memories: [], entityContext: [], activeRelationships: [], arcContext: null }));
     const result = await assemble();
     expect(result.messages.map(({ content }) => content)).toEqual([liveContent]);
+  });
+});
+
+describe("basic recall regeneration", () => {
+  async function regenerate(excludeMessageId?: string) {
+    const preset = createPreset(userId, {
+      name: "Regeneration recall",
+      provider: "openai",
+      prompt_order: [block("{{memories}}"), block("", { marker: "chat_history" })],
+    });
+    const result = await assemblePrompt({ userId, chatId: chat.id, presetOverride: preset,
+      generationType: "regenerate", excludeMessageId, skipPromptRegex: true, macroCommit: false });
+    return { result, content: result.messages.map(({ content }) => content).join("\n") };
+  }
+
+  test.each([false, true])("retains old recall when the omitted target is blank: %s", async (blank) => {
+    await enableBasicRecall();
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    getDb().query("UPDATE messages SET is_user = 0, content = ? WHERE id = ?").run(blank ? "" : "Reply", target.id);
+    const { result, content } = await regenerate(target.id);
+    expect(content).toContain("BASIC_MEMORY");
+    expect(result.memoryStats?.chunksRetrieved).toBe(1);
+  });
+
+  test("rejects a cache when history was actually deleted", async () => {
+    await enableBasicRecall();
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    getDb().query("DELETE FROM messages WHERE id = ?").run(target.id);
+    const { content } = await regenerate(target.id);
+    expect(content).not.toContain("BASIC_MEMORY");
+  });
+
+  test("one omitted target cannot mask an additional history deletion", async () => {
+    await enableBasicRecall();
+    const rows = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 2").all(chat.id);
+    getDb().query("DELETE FROM messages WHERE id = ?").run(rows[1].id);
+    const { content } = await regenerate(rows[0].id);
+    expect(content).not.toContain("BASIC_MEMORY");
+  });
+
+  test("filters a cached chunk that overlaps the newly expanded live tail", async () => {
+    await enableBasicRecall();
+    // Index 2 is outside the last five messages normally, but moves into that
+    // window when regeneration omits index 7. Its cached chunk must then go.
+    const boundary = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? AND index_in_chat = 2").get(chat.id)!;
+    getDb().query(`INSERT INTO chat_chunks
+      (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at)
+      VALUES ('boundary-chunk', ?, ?, ?, ?, 'BOUNDARY_MEMORY', 4, 1, 0, 0)`)
+      .run(chat.id, boundary.id, boundary.id, JSON.stringify([boundary.id]));
+    await refreshChatMemoryCache(userId, chat.id);
+    const normal = await assemble([block("{{memories}}")]);
+    expect(normal.messages.map(({ content }) => content).join("\n")).toContain("BOUNDARY_MEMORY");
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    const { content } = await regenerate(target.id);
+    expect(content).toContain("BASIC_MEMORY");
+    expect(content).not.toContain("BOUNDARY_MEMORY");
   });
 });
 

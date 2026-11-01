@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef, type CSSProperties, type Reac
 import { Spinner } from '@/components/shared/Spinner'
 import { isImageDecoded, onImageDecoded, rememberImageDecoded } from '@/lib/imageDecodeCache'
 import { getTauriMobilePlatform, isMacTauriWebView } from '@/lib/desktopWebView'
+import { useIOSMediaImage } from '@/hooks/useIOSMediaImage'
+import { useImageDecodeReveal } from '@/hooks/useImageDecodeReveal'
 
 interface LazyImageProps {
   src?: string | null
@@ -37,7 +39,8 @@ export default function LazyImage({
   // A detached image decode is only a metadata hint. WKWebView can report that
   // decode as complete while a newly mounted <img> still has no paintable
   // backing surface, which briefly exposes a black image layer. On macOS
-  // desktop, keep this particular element hidden until its own load and decode.
+  // desktop, also keep this particular element out of view until its own
+  // load/decode and paint guard. Other fading images use the same decode gate.
   const requiresMountedDecode = isMacTauriWebView()
   const androidWebView = getTauriMobilePlatform() === 'android'
   // Skip the spinner when the image is already decoded in the cache — it'll
@@ -52,6 +55,8 @@ export default function LazyImage({
   const [hasError, setHasError] = useState(false)
   const prevSrcRef = useRef(src)
   const imageRef = useRef<HTMLImageElement>(null)
+  const nativeImage = useIOSMediaImage(src, imageRef, loading)
+  const presentation = useImageDecodeReveal(nativeImage.src, imageRef)
   const currentSrcRef = useRef(src)
   currentSrcRef.current = src
 
@@ -103,24 +108,20 @@ export default function LazyImage({
   const handleLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     onLoad?.(event)
     const image = event.currentTarget
-    if (!requiresMountedDecode || typeof image.decode !== 'function') {
+    if (androidWebView) {
       finishLoad(image)
       return
     }
-
-    // decode() belongs to the mounted element here, rather than the detached
-    // prefetch object. It therefore gates presentation without expanding the
-    // set of images WKWebView chooses to lazy-load near the viewport.
-    void image.decode().catch(() => {}).then(() => {
-      window.requestAnimationFrame(() => finishLoad(image))
-    })
-  }, [finishLoad, onLoad, requiresMountedDecode])
+    presentation.reveal(image, () => finishLoad(image))
+  }, [finishLoad, onLoad, androidWebView, presentation.reveal])
   const handleError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    presentation.cancel()
+    if (nativeImage.retryOriginal()) return
     setIsLoading(false)
     setShowLoadingIndicator(false)
     setHasError(true)
     onError?.(event)
-  }, [onError])
+  }, [onError, nativeImage.retryOriginal, presentation.cancel])
 
   if (hasError || !src) return <>{fallback}</>
 
@@ -149,7 +150,7 @@ export default function LazyImage({
       )}
       <img
         ref={imageRef}
-        src={src}
+        src={nativeImage.src}
         alt={alt}
         draggable={false}
         style={{
@@ -158,17 +159,18 @@ export default function LazyImage({
           objectFit: 'cover',
           // Virtualized Android rows are already near the viewport. Replaying
           // an opacity fade on each remount makes fast scrolling look blank.
-          transition: requiresMountedDecode || androidWebView
+          transition: androidWebView
             ? 'transform var(--lazy-image-transform-transition, 0ms)'
             : 'opacity 0.2s ease, transform var(--lazy-image-transform-transition, 0ms)',
           objectPosition,
-          opacity: requiresMountedDecode ? 1 : isLoading ? 0 : 1,
-          visibility: requiresMountedDecode && isLoading ? 'hidden' : 'visible',
+          opacity: androidWebView ? isLoading ? 0 : 1 : presentation.ready ? 1 : 0,
+          visibility: requiresMountedDecode && !presentation.ready ? 'hidden' : 'visible',
           ...style,
         }}
         className={className}
         decoding={decoding}
         loading={androidWebView ? 'eager' : loading}
+        data-image-decoded={androidWebView ? undefined : presentation.ready}
         onLoad={handleLoad}
         onError={handleError}
         {...props}

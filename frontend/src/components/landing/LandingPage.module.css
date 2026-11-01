@@ -572,6 +572,7 @@
 }
 
 .perspectiveLayer {
+  --lazy-image-transform-transition: 500ms cubic-bezier(0.22, 1, 0.36, 1);
   --layer-origin-x: 0px;
   --layer-origin-y: 0px;
   --layer-origin-depth: 0px;
@@ -623,6 +624,7 @@
 }
 
 .cardTilt.tilting .perspectiveLayer {
+  --lazy-image-transform-transition: 120ms ease-out;
   transition: transform 120ms ease-out;
   will-change: transform;
 }
@@ -712,9 +714,16 @@
 .container[data-scrolling] .listAvatar img,
 .container[data-scrolling] .listAvatar picture img,
 .container[data-scrolling] .mosaicCell img,
-.container[data-scrolling] .mosaicCell picture img,
-.container[data-scrolling] .cardAvatarFallback {
+.container[data-scrolling] .mosaicCell picture img {
   --lazy-image-transform-transition: 0ms;
+  /* Decode completion can happen during the gesture. Keep its opacity fade
+     while preventing hover/tilt transforms from animating during scrolling. */
+  transition-property: opacity !important;
+  will-change: auto;
+  transform: none !important;
+}
+
+.container[data-scrolling] .cardAvatarFallback {
   transition: none !important;
   will-change: auto;
   transform: none !important;
@@ -722,7 +731,7 @@
 
 .container[data-scrolling] .cardTilt.tilting .perspectiveLayer,
 .container[data-scrolling] .cardTilt.mobileMotionTilting .perspectiveLayer {
-  transition: none;
+  --lazy-image-transform-transition: 0ms;
   will-change: auto;
   transform: none !important;
 }

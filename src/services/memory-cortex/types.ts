@@ -474,6 +474,13 @@ export interface LinkedCortexResult {
   interlinks: InterlinkCortexData[];
 }
 
+/** Per-request transfer of main-process warm results into prompt assembly workers. */
+export interface CortexCacheSnapshot {
+  chatId: string;
+  local: { result: CortexResult; queriedAt: number; excludeMessageIds: string[] } | null;
+  linked: { result: LinkedCortexResult; queriedAt: number } | null;
+}
+
 // ─── Ingestion Pipeline Types ──────────────────────────────────
 
 /** Data produced during chunk ingestion for cortex processing */

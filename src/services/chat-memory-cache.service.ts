@@ -598,6 +598,7 @@ export async function readCachedChatMemory(
   messages: Array<{ id: string; is_user: boolean; name: string; content: string; extra?: Record<string, any> }>,
   chatMemorySettings: embeddingsSvc.ChatMemorySettings | null,
   perChatOverrides: embeddingsSvc.PerChatMemoryOverrides | null,
+  excludedMessageId?: string,
 ): Promise<CachedChatMemoryResult> {
   if (perChatOverrides?.enabled === false) {
     return { ...EMPTY_RESULT, enabled: false, settingsSource: "per_chat" };
@@ -638,9 +639,16 @@ export async function readCachedChatMemory(
     };
   }
 
-  const delta = visibleMessageCount - row.source_message_count;
-  if (delta > 0) {
-    scheduleChatMemoryRefresh(userId, chatId, delta > MAX_STALE_VISIBLE_MESSAGES ? 9 : 6);
+  let delta = visibleMessageCount - row.source_message_count;
+  // Regeneration omits one persisted reply (which may already be a blank
+  // swipe placeholder). That omission is not a history deletion. Compensate
+  // only for an existing target absent from the supplied visible history.
+  if (delta < 0 && excludedMessageId && !messageViews.some((m) => m.id === excludedMessageId && m.content.trim())) {
+    const target = getDb().query("SELECT 1 FROM messages WHERE id = ? AND chat_id = ?").get(excludedMessageId, chatId);
+    if (target) delta++;
+  }
+  if (delta !== 0) {
+    scheduleChatMemoryRefresh(userId, chatId, delta < 0 || delta > MAX_STALE_VISIBLE_MESSAGES ? 9 : 6);
   }
 
   if (delta < 0 || delta > MAX_STALE_VISIBLE_MESSAGES) {
