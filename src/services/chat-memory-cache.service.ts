@@ -1,6 +1,7 @@
 import { shieldMessageLiterals } from "../macros/message-literals";
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "./embeddings.service";
+import { passesMemoryDistanceThreshold } from "./chat-memory-distance";
 import { type SanitizeOptions } from "../utils/content-sanitizer";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { type MacroEnv } from "../macros";
@@ -436,8 +437,10 @@ async function computeFreshMemoryResult(
     }
   }
 
-  if (chunksPending > 0) {
-    const chunks = getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
+  // A cutoff requires a measured match. If part of the chat is already
+  // indexed, search that portion rather than replacing it with unscored text.
+  if (chunksPending > 0 && (effectiveThreshold <= 0 || chunksPending === chunksAvailable)) {
+    const chunks = effectiveThreshold > 0 ? [] : getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
     return {
       settingsKey,
       sourceMessageCount,
@@ -496,9 +499,7 @@ async function computeFreshMemoryResult(
     // keyword-only hit has no distance (score === null) and can't clear a
     // distance cutoff, so drop it when filtering is active. With threshold 0
     // (the default) nothing is filtered and keyword hits are kept.
-    const filteredHits = effectiveThreshold > 0
-      ? hits.filter(h => h.score != null && h.score <= effectiveThreshold)
-      : hits;
+    const filteredHits = hits.filter(h => passesMemoryDistanceThreshold(h.score, effectiveThreshold));
 
     const chunks = filteredHits.map(h => ({
       content: h.content,
@@ -523,7 +524,7 @@ async function computeFreshMemoryResult(
     };
   } catch (err) {
     console.warn("[chat-memory-cache] Background refresh failed, storing recency fallback:", err);
-    const chunks = getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
+    const chunks = effectiveThreshold > 0 ? [] : getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
     return {
       settingsKey,
       sourceMessageCount,

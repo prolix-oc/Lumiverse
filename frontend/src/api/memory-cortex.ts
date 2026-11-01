@@ -95,6 +95,8 @@ export interface CortexConfig {
   };
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
   useChatMemoryFormatting: boolean;
+  replaceConsolidatedMessagesInContext: boolean;
+  replaceArcSummariesInContext: boolean;
   contextTokenBudget: number;
   retrievalTimeoutMs: number;
   sidecarTimeoutMs: number;

@@ -622,6 +622,30 @@ export default function MemoryCortexSettings() {
           {/* ── Context Formatting ── */}
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
+              <BookOpen size={14} />
+              <span>{t("memoryCortex.historyReplacement")}</span>
+            </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.replaceConsolidatedMessagesInContext ?? false}
+                onChange={(v) => updateConfig({ replaceConsolidatedMessagesInContext: v })}
+                label={t("memoryCortex.replaceConsolidatedMessagesInContext")}
+                hint={t("memoryCortex.replaceConsolidatedMessagesInContextHint")}
+              />
+            </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.replaceArcSummariesInContext ?? false}
+                onChange={(v) => updateConfig({ replaceArcSummariesInContext: v })}
+                label={t("memoryCortex.replaceArcSummariesInContext")}
+                hint={t("memoryCortex.replaceArcSummariesInContextHint")}
+              />
+            </div>
+            <div className={styles.hintText}>{t("memoryCortex.historyReplacementHint")}</div>
+          </div>
+
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}>
               <Sparkles size={14} />
               <span>{t("memoryCortex.formattingSection")}</span>
             </div>

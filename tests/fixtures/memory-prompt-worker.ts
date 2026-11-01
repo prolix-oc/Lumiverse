@@ -149,6 +149,43 @@ try {
   // A swipe can blank the persisted target before assembly starts.
   getDb().query("UPDATE messages SET content = '' WHERE id = ?").run(lastMessageId);
   assert.match(content(await assemblePromptInWorker(regenCtx)), /BASIC_SECRET/);
+
+  // Saved summaries are read inside the worker on both cold and reused runs.
+  // The source range uses timestamps in legacy records; only IDs define it.
+  getDb().query(`INSERT INTO memory_consolidations
+    (id, chat_id, tier, summary, source_chunk_ids, message_range_start, message_range_end, created_at, updated_at)
+    VALUES ('worker-scene', ?, 1, 'WORKER_RECAP {{user}}', '["old-chunk"]', 1700000000, 1700000000, 0, 0)`).run(chat.id);
+  putCortexConfig(userId, { enabled: true, replaceConsolidatedMessagesInContext: true });
+  const compressedDirect = await assemblePrompt(ctx);
+  const compressedWorker = await assemblePromptInWorker(ctx);
+  for (const compressed of [compressedDirect, compressedWorker]) {
+    assert.match(content(compressed), /WORKER_RECAP \{\{user\}\}/);
+    assert.doesNotMatch(content(compressed), /BASIC_SECRET/);
+    assert.doesNotMatch(content(compressed), /What was Kael's secret/);
+  }
+  putCortexConfig(userId, { replaceConsolidatedMessagesInContext: false });
+  const uncompressed = await assemblePromptInWorker(ctx);
+  assert.doesNotMatch(content(uncompressed), /WORKER_RECAP/);
+  assert.match(content(uncompressed), /What was Kael's secret/);
+
+  // Worker snapshots enforce the current distance cutoff independently of
+  // the stored rank. Tightening it must work without another vector query.
+  const cachedMemories: CortexResult = { ...result, memories: [
+    { source: "chunk", sourceId: "measured-close", content: "WORKER_CLOSE_LOW_RANK", vectorDistance: 0.35, finalScore: 0.2,
+      components: { semantic: 0.65, salience: 0, recency: 0, reinforcement: 0, emotional: 0, entity: 0 },
+      emotionalTags: [], entityNames: [], messageRange: [0, 0], timeRange: [0, 0] },
+    { source: "chunk", sourceId: "measured-far", content: "WORKER_FAR_HIGH_RANK", vectorDistance: 0.8, finalScore: 0.99,
+      components: { semantic: 0.2, salience: 1, recency: 1, reinforcement: 1, emotional: 1, entity: 1 },
+      emotionalTags: [], entityNames: [], messageRange: [0, 0], timeRange: [0, 0] },
+  ] };
+  const sourceMessageIds = getDb().query("SELECT id FROM messages WHERE chat_id = ?").all(chat.id) as Array<{ id: string }>;
+  primeCortexCache(chat.id, cachedMemories, sourceMessageIds.map((m) => m.id));
+  putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.6 });
+  const gated = await assemblePromptInWorker(ctx);
+  assert.match(content(gated), /WORKER_CLOSE_LOW_RANK/);
+  assert.doesNotMatch(content(gated), /WORKER_FAR_HIGH_RANK|BASIC_SECRET/);
+  putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.3 });
+  assert.doesNotMatch(content(await assemblePromptInWorker(ctx)), /WORKER_CLOSE_LOW_RANK|WORKER_FAR_HIGH_RANK/);
   console.log("memory worker integration passed");
 } finally {
   releaseIdlePromptAssemblyWorkers();

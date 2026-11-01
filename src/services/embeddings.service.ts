@@ -458,7 +458,7 @@ export interface ChatMemorySettings {
   // --- Retrieval ---
   queryContextSize: number;       // Default 6. Range: 1–64. Messages used to build query vector
   retrievalTopK: number;          // Default 4. Range: 1+
-  similarityThreshold: number;    // Default 0 (disabled). Range: 0–2
+  similarityThreshold: number;    // Maximum cosine distance (lower = closer). Default 0 (disabled). Range: 0–2
 
   // --- Query ---
   queryStrategy: "recent_messages" | "last_user_message" | "weighted_recent";
@@ -656,6 +656,14 @@ export function loadChatMemorySettings(userId: string): ChatMemorySettings | nul
   const setting = settingsSvc.getSetting(userId, CHAT_MEMORY_SETTINGS_KEY);
   if (!setting?.value) return null;
   return normalizeChatMemorySettings(setting.value);
+}
+
+/** Shared by basic recall and Cortex, including users with only legacy settings. */
+export async function getChatMemoryDistanceThreshold(
+  userId: string,
+  settings: ChatMemorySettings | null = loadChatMemorySettings(userId),
+): Promise<number> {
+  return settings?.similarityThreshold ?? (await getEmbeddingConfig(userId)).similarity_threshold;
 }
 
 /**

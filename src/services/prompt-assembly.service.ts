@@ -138,6 +138,9 @@ import { readCachedChatMemory } from "./chat-memory-cache.service";
 import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import * as memoryCortex from "./memory-cortex";
 import { buildEmotionalContext } from "./memory-cortex";
+import { buildCortexHistoryPlan, selectCortexHistoryMessages, type CortexHistoryPlan } from "./memory-cortex/history-replacement";
+import { filterCortexMemoriesForPrompt } from "./memory-cortex/prompt-memory-filter";
+import { filterLinkedCortexByDistance, passesMemoryDistanceThreshold } from "./chat-memory-distance";
 import { scheduleCortexPromptWarm } from "./cortex-prompt-warm.service";
 import type { CortexWarmJob } from "./cortex-warm-worker";
 import * as databankSvc from "./databank";
@@ -201,6 +204,7 @@ export type {
 // outbound requests, so the tag never leaks to the LLM.
 
 const CHAT_HISTORY_KEY = "__chatHistorySource";
+const CORTEX_HISTORY_SUMMARY_KEY = "__cortexHistorySummary";
 const WORLD_INFO_KEY = "__worldInfoSource";
 const RUNTIME_WORLD_INFO_PLACEMENT_KEY = "__runtimeWorldInfoPlacementId";
 const SOURCE_ID_KEY = "__sourceMessageId";
@@ -829,6 +833,7 @@ async function applyPromptRegexScriptsBeforeClipping(
     if (i > 0 && (i & 15) === 0) await yieldAndCheckAbort(ctx.signal);
 
     const msg = result[i];
+    if ((msg as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     const placement =
       msg.role === "user"
         ? ("user_input" as const)
@@ -948,6 +953,7 @@ export async function resolvePromptMacrosAfterRegexPass(
   // pass or a regex script left in a block must not be expanded or healed here.
   for (let i = 0; i < result.length; i++) {
     const msg = result[i];
+    if ((msg as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     if (typeof msg.content === "string") {
       if (!msg.content.includes("{{") && !msg.content.includes("<")) continue;
       const resolved = await withJsonBlocksProtected(msg.content, macroEnv, async (protectedContent) =>
@@ -2078,12 +2084,7 @@ export async function assemblePrompt(
       if (signal?.aborted) return undefined;
       const embCfg = await embCfgPromise;
       if (signal?.aborted) return undefined;
-      const effective = cortexChatMemSettings
-        ? embeddingsSvc.resolveEffectiveChatMemorySettings(
-            cortexChatMemSettings,
-            embCfg,
-          )
-        : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+      const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg);
 
       const cortexQueryText = await buildQueryText(
         messages,
@@ -2110,6 +2111,7 @@ export async function assemblePrompt(
         emotionalContext,
         generationType: ctx.generationType,
         topK: cortexPerChatOverrides?.retrievalTopK ?? effective.retrievalTopK,
+        maxDistance: effective.similarityThreshold,
         includeConsolidations: cortexConfig.consolidation.enabled,
         includeRelationships: cortexConfig.retrieval.relationshipInjection,
         excludeMessageIds,
@@ -2763,6 +2765,18 @@ export async function assemblePrompt(
       | undefined) ??
     null;
 
+  const effectiveHistoryMessages = selectCortexHistoryMessages(
+    messages,
+    settingsMap.get("summarization") as { messageLimitEnabled?: boolean; messageLimitCount?: number } | undefined,
+    contextAnchorIndex,
+  );
+  const hasActiveHistoryBlock = effectiveBlocks.some((block) => block.enabled && block.marker === "chat_history" &&
+    (!block.injectionTrigger?.length || block.injectionTrigger.includes(ctx.generationType)) &&
+    promptBlockMatchesCharacterTags(block.characterTagTrigger, focusedCharacter.tags));
+  const cortexHistoryPlan = cortexEnabledForChat && hasActiveHistoryBlock
+    ? buildCortexHistoryPlan(chat.id, effectiveHistoryMessages, cortexConfig, contextAnchorIndex, ctx.continueMessageId)
+    : undefined;
+
   const {
     memoryResult,
     combinedFormatted,
@@ -2779,6 +2793,7 @@ export async function assemblePrompt(
     cortexConfig,
     excludeMessageId: ctx.excludeMessageId,
     cortexCache: ctx.cortexCache,
+    historyPlan: cortexHistoryPlan ?? null,
   });
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
 
@@ -3151,35 +3166,9 @@ export async function assemblePrompt(
 
       firstChatIdx = result.length;
 
-      // Apply message limit — keep only the N most recent messages when enabled.
-      // This works independently of summarization; users can use {{loomSummary}}
-      // in their preset to retain context from older messages.
-      const summarizationSettings = settingsMap.get("summarization") as
-        | { messageLimitEnabled?: boolean; messageLimitCount?: number }
-        | undefined;
-      let effectiveMessages = messages;
-      if (
-        summarizationSettings?.messageLimitEnabled &&
-        summarizationSettings.messageLimitCount != null &&
-        summarizationSettings.messageLimitCount > 0
-      ) {
-        const requestedStart = Math.max(
-          0,
-          messages.length - summarizationSettings.messageLimitCount,
-        );
-        const anchorStart = contextAnchorIndex == null
-          ? -1
-          : messages.findIndex(
-              (message) => message.index_in_chat >= contextAnchorIndex,
-            );
-        // An anchor tail always wins over the count-based Message Limit. This
-        // may include more than N messages, but never slices the marked
-        // message or anything newer out of model context.
-        const start = anchorStart >= 0
-          ? Math.min(requestedStart, anchorStart)
-          : requestedStart;
-        effectiveMessages = messages.slice(start);
-      }
+      // Select original turns before compression so a summary cannot pull
+      // history back across the message limit or a regeneration boundary.
+      const effectiveMessages = effectiveHistoryMessages;
       const generatedImageContextPolicy = resolveGeneratedImageContextPolicy(
         settingsMap.get("imageGeneration"),
         effectiveMessages,
@@ -3193,6 +3182,7 @@ export async function assemblePrompt(
       const attachmentSources = new Map<string, MessageAttachment>();
       for (const msg of effectiveMessages) {
         if (msg.extra?.hidden === true) continue;
+        if (cortexHistoryPlan?.replacedMessageIds.has(msg.id)) continue;
         const atts = attachmentsForContext(msg, generatedImageContextPolicy);
         for (const att of atts) {
           if (att.image_id) attachmentSources.set(attachmentCacheKey(att), att);
@@ -3225,6 +3215,15 @@ export async function assemblePrompt(
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
         const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+        const replacement = cortexHistoryPlan?.replacements.get(msg.id);
+        if (replacement) {
+          result.push(markAsChatHistory({
+            role, content: replacement.content, [CORTEX_HISTORY_SUMMARY_KEY]: true,
+          } as LlmMessage, { id: msg.id, index_in_chat: msg.index_in_chat }));
+          historyCount++;
+          continue;
+        }
+        if (cortexHistoryPlan?.replacedMessageIds.has(msg.id)) continue;
         // Inline fast-path: most stored messages contain no macro markers.
         // Skip the full evaluate() call (lex → parse → AST walk → diagnostics
         // alloc) when no markers are present. This mirrors the evaluator's own
@@ -6191,6 +6190,7 @@ export async function populateMemoryMacroContext({
   cortexConfig = memoryCortex.getCortexConfig(userId),
   excludeMessageId,
   cortexCache,
+  historyPlan,
 }: {
   userId: string;
   chat: Chat;
@@ -6202,9 +6202,19 @@ export async function populateMemoryMacroContext({
   cortexConfig?: memoryCortex.MemoryCortexConfig;
   excludeMessageId?: string;
   cortexCache?: import("./memory-cortex/types").CortexCacheSnapshot;
+  historyPlan?: CortexHistoryPlan | null;
 }) {
   const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata);
   const memorySettings = chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+  const maxDistance = cortexEnabledForChat
+    ? await embeddingsSvc.getChatMemoryDistanceThreshold(userId, chatMemSettings) : 0;
+  if (historyPlan === undefined && cortexEnabledForChat &&
+      (cortexConfig.replaceConsolidatedMessagesInContext || cortexConfig.replaceArcSummariesInContext)) {
+    const anchorId = chat.metadata?.context_history_anchor_message_id;
+    const anchorIndex = messages.find((m) => m.id === anchorId && m.extra?.hidden !== true)?.index_in_chat;
+    historyPlan = buildCortexHistoryPlan(chat.id, selectCortexHistoryMessages(messages,
+      settingsSvc.getSetting(userId, "summarization")?.value, anchorIndex), cortexConfig, anchorIndex);
+  }
   // Revalidate retrieved sources against this turn's tail; read saved graph
   // context locally when no usable vector result is cached.
   const cortexResult = cortexEnabledForChat
@@ -6218,8 +6228,13 @@ export async function populateMemoryMacroContext({
         cortexConfig,
         buildMemoryExcludeMessageIds(messages, memorySettings, perChatOverrides, excludeMessageId),
         cortexCache,
+        maxDistance,
       )
     : null;
+  if (cortexResult && historyPlan?.replacedMessageIds.size) {
+    cortexResult.memories = filterCortexMemoriesForPrompt(chat.id, cortexResult.memories, [...historyPlan.replacedMessageIds]);
+  }
+  if (cortexResult && historyPlan?.suppressArcContext) cortexResult.arcContext = null;
   let memoryResult: MemoryRetrievalResult | null = null;
   if (cortexResult) {
     const cortexMemoryResult = formatCortexForAssembly(
@@ -6236,7 +6251,7 @@ export async function populateMemoryMacroContext({
   // Graph-only Cortex context can accompany ordinary cached chunk recall.
   if (!memoryResult || cortexResult?.memories.length === 0) {
     const basicRecall = await safeCollectChatVectorMemory(
-      userId, chat.id, messages, chatMemSettings, perChatOverrides, excludeMessageId,
+      userId, chat.id, messages, chatMemSettings, perChatOverrides, excludeMessageId, historyPlan?.replacedMessageIds,
     );
     memoryResult = memoryResult
       ? {
@@ -6248,9 +6263,10 @@ export async function populateMemoryMacroContext({
   }
 
   // Merge linked cortex data (vaults + interlinks) if available
-  const linkedCortexResult = cortexEnabledForChat
+  const cachedLinkedCortexResult = cortexEnabledForChat
     ? memoryCortex.getCachedLinkedCortexResult(chat.id, cortexCache)
     : null;
+  const linkedCortexResult = cachedLinkedCortexResult ? filterLinkedCortexByDistance(cachedLinkedCortexResult, maxDistance) : null;
   let linkedMemoryText = "";
   if (
     linkedCortexResult &&
@@ -6441,6 +6457,7 @@ export async function collectChatVectorMemory(
     | import("./embeddings.service").PerChatMemoryOverrides
     | null,
   excludeMessageId?: string,
+  additionalExcludedMessageIds?: ReadonlySet<string>,
 ): Promise<MemoryRetrievalResult> {
   const result = await readCachedChatMemory(
     userId,
@@ -6455,11 +6472,13 @@ export async function collectChatVectorMemory(
     const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
     const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
     const excludedIds = new Set(buildMemoryExcludeMessageIds(messages, settings, perChatOverrides, excludeMessageId));
+    for (const id of additionalExcludedMessageIds ?? []) excludedIds.add(id);
     const filteredChunks = result.chunks.filter((chunk) => {
       const messageIds = Array.isArray(chunk.metadata?.messageIds)
         ? (chunk.metadata.messageIds as string[])
         : null;
-      return !messageIds?.some((id) => excludedIds.has(id));
+      return passesMemoryDistanceThreshold(chunk.score, settings.similarityThreshold) &&
+        !messageIds?.some((id) => excludedIds.has(id));
     });
 
     if (filteredChunks.length !== result.chunks.length) {
@@ -6670,7 +6689,8 @@ function mergeConsecutiveUserMessages(
   let remaining = count;
   let i = startIdx;
   while (i < startIdx + remaining - 1) {
-    if (result[i].role === "user" && result[i + 1]?.role === "user") {
+    if (result[i].role === "user" && result[i + 1]?.role === "user" &&
+        !(result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY] && !(result[i + 1] as any)[CORTEX_HISTORY_SUMMARY_KEY]) {
       const a = result[i].content;
       const b = result[i + 1].content;
 
@@ -6791,6 +6811,7 @@ function stripReasoningFromChatHistory(
   let reasoningBlocksSeen = 0;
 
   for (let i = endIdx - 1; i >= firstChatIdx; i--) {
+    if ((result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     if (result[i].role !== "assistant") continue;
     const content = result[i].content;
     const stripped =
@@ -6974,6 +6995,7 @@ function applyContextFilters(
   const endIdx = firstChatIdx + historyCount;
 
   for (let i = firstChatIdx; i < endIdx; i++) {
+    if ((result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     const content = result[i].content;
     if (typeof content !== "string") continue;
 
@@ -8089,6 +8111,9 @@ async function onelinerImpersonation(
       )?.index_in_chat
     : undefined;
 
+  const cortexConfig = memoryCortex.getCortexConfig(ctx.userId);
+  const historyPlan = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata)
+    ? buildCortexHistoryPlan(chat.id, messages, cortexConfig, contextAnchorIndex) : null;
   // Chat history
   let messageCount = 0;
   let impHistYieldCounter = 0;
@@ -8100,6 +8125,14 @@ async function onelinerImpersonation(
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+    const replacement = historyPlan?.replacements.get(msg.id);
+    if (replacement) {
+      result.push(markAsChatHistory({ role, content: replacement.content,
+        [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: msg.id, index_in_chat: msg.index_in_chat }));
+      messageCount++;
+      continue;
+    }
+    if (historyPlan?.replacedMessageIds.has(msg.id)) continue;
     const visibleResolvedContent = await withJsonBlocksProtected(shieldMessageLiterals(msg.content, msg), macroEnv, async (protectedContent) =>
       healFormattingArtifacts((await evaluate(protectedContent, macroEnv, registry)).text),
     );
@@ -8280,6 +8313,10 @@ async function legacyAssembly(
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
+  const cortexConfig = userId ? memoryCortex.getCortexConfig(userId) : null;
+  const anchorIndex = messages.find((m) => m.id === chat?.metadata?.context_history_anchor_message_id && m.extra?.hidden !== true)?.index_in_chat;
+  const historyPlan = chat && cortexConfig && memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata)
+    ? buildCortexHistoryPlan(chat.id, messages, cortexConfig, anchorIndex) : null;
 
   // Initialize macros for legacy path too
   initMacros();
@@ -8428,6 +8465,7 @@ async function legacyAssembly(
       userId,
       chat.id,
       messages,
+      undefined, undefined, undefined, historyPlan?.replacedMessageIds,
     );
     if (legacyMemoryResult.count > 0) {
       const memoryContent = legacyMemoryResult.formatted;
@@ -8451,6 +8489,7 @@ async function legacyAssembly(
   const legacyAttachmentSources = new Map<string, MessageAttachment>();
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
+    if (historyPlan?.replacedMessageIds.has(m.id)) continue;
     const atts = attachmentsForContext(m, legacyGeneratedImageContextPolicy);
     for (const att of atts) {
       if (att.image_id) legacyAttachmentSources.set(attachmentCacheKey(att), att);
@@ -8471,6 +8510,14 @@ async function legacyAssembly(
   let legacyHistYieldCounter = 0;
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
+    const replacement = historyPlan?.replacements.get(m.id);
+    if (replacement) {
+      llmMessages.push(markAsChatHistory({ role: m.is_user ? "user" : "assistant", content: replacement.content,
+        [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: m.id, index_in_chat: m.index_in_chat }));
+      legacyHistoryCount++;
+      continue;
+    }
+    if (historyPlan?.replacedMessageIds.has(m.id)) continue;
     if ((legacyHistYieldCounter++ & 15) === 0) {
       await yieldAndCheckAbort(signal);
     } else if (signal?.aborted) {

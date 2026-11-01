@@ -34,6 +34,8 @@ const config = {
   },
   formatterMode: "shadow" as const,
   useChatMemoryFormatting: true,
+  replaceConsolidatedMessagesInContext: false,
+  replaceArcSummariesInContext: false,
   contextTokenBudget: 600,
   retrievalTimeoutMs: 60000,
   sidecarTimeoutMs: 60000,
@@ -343,6 +345,24 @@ describe("MemoryCortexSettings secondary fallback", () => {
       enabled: true, chunkThreshold: 12, chunksPerConsolidation: 6, arcThreshold: 3,
     });
     expect(h.textContent).toContain("memoryCortex.consolidationIntervalHint");
+  });
+
+  test("history replacement toggles persist independently of consolidation generation", async () => {
+    const h = await mount();
+    const scene = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.replaceConsolidatedMessagesInContext"]');
+    const arc = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.replaceArcSummariesInContext"]');
+    expect(scene?.checked).toBe(false);
+    expect(arc?.checked).toBe(false);
+    await click(scene);
+    expect(patches.at(-1)).toEqual({ replaceConsolidatedMessagesInContext: true });
+    await click(arc);
+    expect(patches.at(-1)).toEqual({ replaceArcSummariesInContext: true });
+    expect(persistedConfig.replaceConsolidatedMessagesInContext).toBe(true);
+    expect(persistedConfig.replaceArcSummariesInContext).toBe(true);
+    expect(persistedConfig.consolidation.enabled).toBe(false);
+    await click(scene);
+    expect(persistedConfig.replaceConsolidatedMessagesInContext).toBe(false);
+    expect(persistedConfig.replaceArcSummariesInContext).toBe(true);
   });
 
   test("candidate review cannot be enabled without a Decision connection", async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
 import { join } from "node:path";
 
@@ -18,6 +18,7 @@ import { recordColorAttribution } from "./memory-cortex/font-attribution";
 import { createPreset } from "./presets.service";
 import { assemblePrompt, normalizePromptBlockText } from "./prompt-assembly.service";
 import { putSetting } from "./settings.service";
+import * as embeddingsSvc from "./embeddings.service";
 
 const userId = "memory-macro-user";
 const liveContent = "LIVE_USER_MESSAGE";
@@ -456,6 +457,60 @@ describe("basic recall regeneration", () => {
 });
 
 describe("memory macro previews", () => {
+  test("Cortex uses measured distance for the cutoff, independently of rank, in previews and assembly", async () => {
+    const base = cortexResult().memories[0];
+    const memories = [
+      { ...base, content: "CLOSE_DISTANCE_LOW_RANK", vectorDistance: 0.35, finalScore: 0.2 },
+      { ...base, sourceId: "far", content: "FAR_DISTANCE_HIGH_RANK", vectorDistance: 0.61, finalScore: 0.99 },
+      { ...base, sourceId: "unknown", content: "UNMEASURED_CORTEX_HIT" },
+    ];
+    enableCortex(cortexResult({ memories }));
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.6 });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toContain("CLOSE_DISTANCE_LOW_RANK");
+    expect(text).not.toContain("FAR_DISTANCE_HIGH_RANK");
+    expect(text).not.toContain("UNMEASURED_CORTEX_HIT");
+    // Filtering a prompt must not mutate the cached snapshot. Tightening and
+    // relaxing the cutoff can safely reuse its original measured results.
+    expect(getCachedCortexResult(chat.id)?.memories).toHaveLength(3);
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.3 });
+    expect(await expectPreviewMatchesAssembly()).not.toContain("CLOSE_DISTANCE_LOW_RANK");
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0 });
+    expect(await expectPreviewMatchesAssembly()).toContain("FAR_DISTANCE_HIGH_RANK");
+  });
+
+  test("an active distance cutoff excludes unmeasured recency fallback", async () => {
+    await enableBasicRecall();
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0.6 });
+    await refreshChatMemoryCache(userId, chat.id);
+    expect(await expectPreviewMatchesAssembly()).not.toContain("BASIC_MEMORY");
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0 });
+    await refreshChatMemoryCache(userId, chat.id);
+    expect(await expectPreviewMatchesAssembly()).toContain("BASIC_MEMORY");
+  });
+
+  test.each([0.35, 0.61])("partially indexed chats still search measured memories at distance %s", async (distance) => {
+    await enableBasicRecall();
+    getDb().query("UPDATE chat_chunks SET vectorized_at = 1 WHERE id = 'basic-memory'").run();
+    getDb().query(`INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content,
+      token_count, message_count, created_at, updated_at)
+      VALUES ('pending', ?, 'unused', 'unused', '["unused"]', 'UNMEASURED_PENDING', 4, 1, 0, 0)`).run(chat.id);
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0.6 });
+    const embedSpy = spyOn(embeddingsSvc, "embedQuery").mockResolvedValue([1, 0]);
+    const searchSpy = spyOn(embeddingsSvc, "searchChatChunks").mockResolvedValue([
+      { chunk_id: "basic-memory", content: "BASIC_MEMORY", score: distance, metadata: { messageIds: [message.id] } },
+    ] as any);
+    try {
+      await refreshChatMemoryCache(userId, chat.id);
+      const text = await expectPreviewMatchesAssembly();
+      expect(searchSpy).toHaveBeenCalled();
+      expect(text.includes("BASIC_MEMORY")).toBe(distance <= 0.6);
+      expect(text).not.toContain("UNMEASURED_PENDING");
+    } finally {
+      embedSpy.mockRestore(); searchSpy.mockRestore();
+    }
+  });
+
   test("a new turn retains usable Cortex context in previews and the assembled prompt", async () => {
     enableCortex(cortexResult({ memories: [] }));
     createMessage(chat.id, { is_user: false, name: "Character", content: "A reply" }, userId);

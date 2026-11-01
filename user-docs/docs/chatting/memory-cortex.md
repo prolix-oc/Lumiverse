@@ -49,6 +49,21 @@ Choosing a sidecar connection can switch extraction/scoring to sidecar mode and 
 
 In **Settings → Memory Cortex → Advanced → Advanced settings**, enable consolidation and adjust **Chunks before consolidation**, **Chunks per scene summary**, and **Scene summaries per arc**. These count memory chunks and saved scene summaries, not chat messages. The defaults start consolidation at 40 unconsolidated chunks, summarize 10 chunks at a time, and combine 5 scenes into an arc. After ingestion or a rebuild, Cortex processes due batches and retries pending arcs; it keeps recent chunks below the trigger for later. Lower the trigger for earlier scenes. A chat with 36 messages may still be below the default trigger.
 
+### Replace history with summaries
+
+Under **Settings → Memory Cortex → History replacement**, two independent options control automatic prompt compression. Both are off by default.
+
+| Option | History sent to the model |
+| --- | --- |
+| **Replace With Consolidated Messages in Context** | Complete source scenes become their saved consolidation summaries. |
+| **Replace With Arc Summaries in Context** | Complete source arcs become their saved arc summaries. Other history stays verbatim. |
+| **Both on** | Arcs replace their covered scenes; remaining scenes use consolidation summaries; unsummarized messages remain verbatim. |
+| **Both off** | No history replacement. Your standard macro/fallback insertion strategy continues unchanged. |
+
+Each replacement occupies the end of its original source span and uses that span’s final user or assistant role. Clear recap boundaries identify completed events as background rather than a new request. Covered scene summaries and raw chunks are not repeated through local recall, and overlapping arc context is suppressed. Entity, relationship, color, and linked-chat context can still be supplied separately.
+
+This changes only the outgoing prompt: saved messages remain intact, and synthetic recaps never feed back into Cortex ingestion. Recap text is literal, without macro expansion or copied reasoning/attachments. The current turn and any explicitly anchored context remain verbatim. Message limits apply before replacement; token-budget clipping can still remove older summaries afterward. Missing, hidden, excluded, noncontiguous, or partially selected sources cause the summary to be skipped. Enable consolidation to create summaries; existing saved summaries can be used even if further consolidation is disabled. Inspect the assembled prompt to see the resulting history.
+
 **Prompt assembly reads cached Cortex memory passages and saved graph context**, rather than waiting for a fresh vector query on every send. When the conversation advances, it rechecks cached passages against the recent-message exclusion window and regeneration target. Saved entities, relationships, arcs, and character colors can be used even with a cold vector cache. Basic Chat Memory can supply passages alongside graph context while Cortex retrieval warms in the background. Enabling Cortex alone does not create context: the chat still needs relevant saved records and the corresponding injection settings enabled.
 
 ## Sidecar LLM
@@ -201,6 +216,8 @@ Macro presence is detected in applicable block source before conditions finish r
 | **Minimal** | Memory passages only; omits the formatter's entity/relationship/arc sections |
 
 **Context Token Budget** controls Cortex formatting. Choose **Advanced** mode and expand detailed settings to tune emotional resonance, diversity, entity/relationship/arc injection, consolidation thresholds, decay/core-memory protection, and pruning. Pruning can archive stale single-mention entities; protected terms help retain fantasy names extraction might filter.
+
+Chat Memory's **Maximum vector distance** also gates Cortex, vault, and interlink recall before ranking. Lower distances are closer; a 0.35 distance passes a 0.6 maximum. Cortex's displayed **Score** is its separate combined ranking score, not the distance or a similarity percentage. See [retrieval controls](memory.md#retrieval-and-query) for the distinction. This gate does not affect automatic history replacement or saved entity/relationship context.
 
 ## Troubleshooting Cortex
 

@@ -374,6 +374,8 @@ export interface CortexQuery {
   emotionalContext?: EmotionalTag[];
   generationType: string;
   topK: number;
+  /** Maximum cosine distance; 0 disables filtering. Resolved before retrieval. */
+  maxDistance?: number;
   includeConsolidations: boolean;
   includeRelationships: boolean;
   /** Message IDs to exclude from retrieval (e.g., regeneration target) */
@@ -385,6 +387,8 @@ export interface CortexMemory {
   sourceId: string;
   content: string;
   finalScore: number;
+  /** Raw measured cosine distance, distinct from the fused ranking score. */
+  vectorDistance?: number;
   components: {
     semantic: number;
     salience: number;

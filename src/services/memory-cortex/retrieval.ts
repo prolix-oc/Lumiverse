@@ -14,6 +14,7 @@
 
 import { getDb } from "../../db/connection";
 import * as embeddingsSvc from "../embeddings.service";
+import { passesMemoryDistanceThreshold } from "../chat-memory-distance";
 import * as entityContext from "./entity-context";
 import * as entityGraph from "./entity-graph";
 import * as consolidation from "./consolidation";
@@ -136,6 +137,9 @@ export async function queryCortex(
     return emptyResult(startTime);
   }
 
+  // Apply semantic eligibility before salience/ranking can boost weak matches.
+  vectorResults = vectorResults.filter((vr) => Number.isFinite(vr.distance) && vr.distance >= 0 &&
+    passesMemoryDistanceThreshold(vr.distance, query.maxDistance ?? 0));
   if (vectorResults.length === 0) {
     return emptyResult(startTime);
   }
@@ -218,6 +222,7 @@ export async function queryCortex(
       sourceId: vr.chunkId,
       content: vr.content,
       finalScore,
+      vectorDistance: vr.distance,
       components: {
         semantic: semanticScore,
         salience: salienceScore,
@@ -513,9 +518,8 @@ async function searchChatChunksScoped(
     chunkId: h.chunk_id,
     content: h.content,
     // LanceDB returns distance as score. Cortex uses pure-vector search (no
-    // FTS leg), so score is always a real distance here; coerce defensively
-    // since searchChatChunks returns null for keyword-only hits elsewhere.
-    distance: h.score ?? 1,
+    // FTS leg). Missing measurements must never masquerade as distance 1.
+    distance: h.score ?? Number.NaN,
   }));
 }
 
@@ -666,6 +670,7 @@ function replaceSelectedChunksWithConsolidations(
       sourceId: consolidationId,
       content: row.title ? `${row.title}: ${row.summary}` : row.summary,
       finalScore: bestHit.finalScore,
+      vectorDistance: bestHit.vectorDistance,
       components: {
         ...bestHit.components,
         salience: Math.max(bestHit.components.salience, row.salience_avg ?? 0),
@@ -785,6 +790,7 @@ export interface VaultCortexQuery {
   vaultId: string;
   queryText: string;
   topK: number;
+  maxDistance?: number;
   emotionalContext?: EmotionalTag[];
   includeRelationships?: boolean;
   signal?: AbortSignal;
@@ -898,6 +904,8 @@ export async function queryVaultCortex(
     return emptyResult(startTime);
   }
 
+  vectorResults = vectorResults.filter((vr) => Number.isFinite(vr.distance) && vr.distance >= 0 &&
+    passesMemoryDistanceThreshold(vr.distance, query.maxDistance ?? 0));
   if (vectorResults.length === 0) return emptyResult(startTime);
 
   // ── Phase 3: Score fusion ──
@@ -940,6 +948,7 @@ export async function queryVaultCortex(
       sourceId: vr.chunkId,
       content: vr.content,
       finalScore,
+      vectorDistance: vr.distance,
       components: {
         semantic: semanticScore,
         salience: salienceScore,

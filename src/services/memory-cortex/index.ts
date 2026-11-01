@@ -51,6 +51,8 @@ import * as consolidation from "./consolidation";
 import { buildEmotionalContext } from "./emotional-context";
 import { assembleCortexGraphContext, queryCortex as queryCortexImpl, queryVaultCortex as queryVaultCortexImpl } from "./retrieval";
 import { filterCortexMemoriesForPrompt } from "./prompt-memory-filter";
+import { filterCortexMemoriesByDistance } from "../chat-memory-distance";
+import { getChatMemoryDistanceThreshold } from "../embeddings.service";
 import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from "./shadow-formatter";
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution, stripFontTags, stripThoughtDelimiters, mergeColorAttributions, FONT_ATTRIBUTION_VERSION } from "./font-attribution";
@@ -533,6 +535,7 @@ function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): st
     emotionalContext: query.emotionalContext ?? [],
     generationType: query.generationType,
     topK: query.topK,
+    maxDistance: query.maxDistance ?? 0,
     includeConsolidations: query.includeConsolidations,
     includeRelationships: query.includeRelationships,
     excludeMessageIds: [...(query.excludeMessageIds ?? [])].sort(),
@@ -596,11 +599,13 @@ export function readCortexPromptContext(
   config: MemoryCortexConfig,
   excludedMessageIds: string[],
   snapshot?: CortexCacheSnapshot,
+  maxDistance = 0,
 ): CortexResult | null {
   if (!config.enabled) return null;
   const trusted = getCachedCortexResult(query.chatId, excludedMessageIds, snapshot);
   const cached = trusted ?? getCachedCortexResult(query.chatId, undefined, snapshot);
-  const memories = trusted?.memories ?? filterCortexMemoriesForPrompt(query.chatId, cached?.memories ?? [], excludedMessageIds);
+  const eligibleMemories = filterCortexMemoriesByDistance(cached?.memories ?? [], maxDistance);
+  const memories = trusted ? eligibleMemories : filterCortexMemoriesForPrompt(query.chatId, eligibleMemories, excludedMessageIds);
   const graph = cached && (cached.entityContext.length || cached.activeRelationships.length || cached.arcContext)
     ? cached
     : assembleCortexGraphContext(query, config);
@@ -972,6 +977,7 @@ export async function queryLinkedCortex(
   const linked = getLinkedCortexData(userId, chatId);
   const topK = cfg.retrieval?.maxEntitySnapshots ?? 10;
   const includeRelationships = cfg.retrieval?.relationshipInjection ?? true;
+  const maxDistance = await getChatMemoryDistanceThreshold(userId);
 
   // Fire all linked queries in parallel (vault self-contained retrieval + interlinks)
   const promises: Promise<void>[] = [];
@@ -1005,6 +1011,7 @@ export async function queryLinkedCortex(
               queryText,
               topK,
               includeRelationships,
+              maxDistance,
               signal,
             }, cfg);
             vault.memories = result.memories;
@@ -1038,6 +1045,7 @@ export async function queryLinkedCortex(
               topK,
               includeConsolidations: false,
               includeRelationships,
+              maxDistance,
             }, cfg, signal);
             interlinkResults.push({ targetChatId: target.chatId, targetChatName: target.chatName, result });
           } catch (err) {
@@ -1079,6 +1087,9 @@ export async function queryCortex(
 ): Promise<CortexResult> {
   const cfg = config ?? getCortexConfig(query.userId);
   if (!cfg.enabled) return EMPTY_CORTEX_RESULT;
+  if (signal?.aborted) return EMPTY_CORTEX_RESULT;
+
+  query = { ...query, maxDistance: query.maxDistance ?? await getChatMemoryDistanceThreshold(query.userId) };
   if (signal?.aborted) return EMPTY_CORTEX_RESULT;
 
   const queryKey = buildCortexQueryKey(query, cfg);
