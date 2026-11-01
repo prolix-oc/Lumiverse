@@ -616,7 +616,7 @@ afterEach(async () => {
   listTags.mockReset()
   getHomepagePreview.mockReset()
   listRecentGrouped.mockReset()
-  deleteTemporary.mockReset()
+  deleteTemporary.mockReset().mockResolvedValue({ deleted: 0 })
   deleteChat.mockReset()
   deleteCharacterChats.mockReset()
   patchMetadata.mockReset()
@@ -643,6 +643,27 @@ afterEach(async () => {
 })
 
 describe('LandingPage character library', () => {
+  for (const platform of ['ios', 'android']) {
+    test(`uses native ${platform} motion with a fine pointer attached`, async () => {
+      motionSupported = true
+      Object.assign(domWindow, { __LUMIVERSE_MOBILE__: true, __LUMIVERSE_PLATFORM__: platform })
+      domWindow.matchMedia = ((query: string) => ({ ...defaultMatchMedia(query), matches: false })) as typeof window.matchMedia
+      storeState = { ...createStoreState(false), landingPageLayoutMode: 'cards' }
+      const layeredChat = { ...recentChat('native-layered', 'Ava'), character_perspective_layers: [
+        { id: 'back', image_id: 'back', intensity: 0.6 }, { id: 'front', image_id: 'front', intensity: 0.6 },
+      ] }
+      listRecentGrouped.mockResolvedValue(page([layeredChat]))
+      try {
+        await mountLanding()
+        await flush()
+        expect(subscribeMotion).toHaveBeenCalledTimes(1)
+      } finally {
+        Reflect.deleteProperty(domWindow, '__LUMIVERSE_MOBILE__')
+        Reflect.deleteProperty(domWindow, '__LUMIVERSE_PLATFORM__')
+      }
+    })
+  }
+
   test('applies both motion axes to layered cards and stops immediately for Reduce Motion', async () => {
     motionSupported = true
     let reduced = false

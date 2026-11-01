@@ -86,8 +86,7 @@ import {
   type LandingPageSnapshot,
 } from '@/lib/landingPageSnapshot'
 import { preloadChatNavigationSnapshot } from '@/lib/chatNavigationSnapshot'
-import { isMacTauriWebView, isTauriDesktop } from '@/lib/desktopWebView'
-import { isNativeIOS } from '@/lib/ios-native'
+import { isMacTauriWebView, isTauriDesktop, isTauriMobile } from '@/lib/desktopWebView'
 import { createRelativeDeviceTilt, deviceScreenAngle } from '@/lib/relativeDeviceTilt'
 import { getPerspectiveLayerStyle } from '@/lib/perspectiveLayerStyle'
 
@@ -436,7 +435,7 @@ function shouldUseMobileMotionParallax(): boolean {
   if (typeof window === 'undefined') return false
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false
   return Boolean(
-    isNativeIOS() ||
+    isTauriMobile() ||
     window.matchMedia?.('(hover: none)').matches ||
     window.matchMedia?.('(pointer: coarse)').matches
   )

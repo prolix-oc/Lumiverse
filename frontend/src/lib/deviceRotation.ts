@@ -74,12 +74,32 @@ let absoluteListenerCount = 0
 let quaternion: DeviceAttitudeQuaternion | null = null
 let reference = 0
 let nativeID: string | null = null
+let nativeTransport: NativeMotionTransport | null = null
 let nativeUnavailable = false
 let streamID = 0
 
+interface NativeMotionTransport {
+  event: string
+  request<T>(action: string, payload: Record<string, unknown>): Promise<T>
+}
+
+function getNativeMotionTransport(): NativeMotionTransport | null {
+  if (!hasWindow() || nativeUnavailable) return null
+  if (hasIOSNativeBridge() &&
+    (window as Window & { __LUMIVERSE_IOS_NATIVE__?: { deviceMotion?: number } }).__LUMIVERSE_IOS_NATIVE__?.deviceMotion === 1) {
+    return { event: 'lumiverse:ios-device-motion', request: iosNativeRequest }
+  }
+  const android = (window as Window & { __LUMIVERSE_ANDROID_MOTION__?: {
+    version: number
+    request<T>(action: string, payload: Record<string, unknown>): Promise<T>
+  } }).__LUMIVERSE_ANDROID_MOTION__
+  return android?.version === 1 && typeof android.request === 'function'
+    ? { event: 'lumiverse:android-device-motion', request: (action, payload) => android.request(action, payload) }
+    : null
+}
+
 function supportsNativeMotion(): boolean {
-  return !nativeUnavailable && hasIOSNativeBridge() &&
-    (window as Window & { __LUMIVERSE_IOS_NATIVE__?: { deviceMotion?: number } }).__LUMIVERSE_IOS_NATIVE__?.deviceMotion === 1
+  return getNativeMotionTransport() !== null
 }
 
 function hasWindow(): boolean {
@@ -205,11 +225,13 @@ function handleNativeMotion(event: Event): void {
 function startTransport(): void {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
   clearReading()
-  if (supportsNativeMotion()) {
+  const transport = getNativeMotionTransport()
+  if (transport) {
     const id = `rotation-${Date.now()}-${++streamID}`
     nativeID = id
-    window.addEventListener('lumiverse:ios-device-motion', handleNativeMotion)
-    void iosNativeRequest<{ available: boolean }>('motion.start', { id }).then(result => {
+    nativeTransport = transport
+    window.addEventListener(transport.event, handleNativeMotion)
+    void transport.request<{ available: boolean }>('motion.start', { id }).then(result => {
       if (!result?.available) nativeFailed(id)
     }).catch(() => nativeFailed(id))
     return
@@ -221,9 +243,13 @@ function startTransport(): void {
 
 function stopTransport(): void {
   const id = nativeID
+  const transport = nativeTransport
   nativeID = null
-  if (id) void iosNativeRequest('motion.stop', { id }).catch(() => {})
-  window.removeEventListener('lumiverse:ios-device-motion', handleNativeMotion)
+  nativeTransport = null
+  if (transport) {
+    if (id) void transport.request('motion.stop', { id }).catch(() => {})
+    window.removeEventListener(transport.event, handleNativeMotion)
+  }
   window.removeEventListener('deviceorientation', handleOrientation)
   window.removeEventListener('devicemotion', handleMotion)
   window.removeEventListener('deviceorientationabsolute', handleAbsoluteOrientation)
@@ -249,6 +275,7 @@ function stopListening(): void {
   if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', handleVisibility)
   listening = false
   absoluteListenerCount = 0
+  nativeUnavailable = false
 }
 
 function updateAbsoluteListener(): void {
