@@ -16,7 +16,7 @@ import {
 } from "../spindle/message-content-processor";
 import { preprocessDisplayMessage } from "../services/display-message-preprocess.service";
 import { createDisplayRenderContext, type DisplayRenderContext } from "../services/chat-macro-render.service";
-import type { Message } from "../types/message";
+import type { DisplayMessageSource, Message } from "../types/message";
 import { computeMessageTokenCount } from "../services/message-token-count";
 import { resolveRegexActionEffects, getMessageDisplayScripts } from "../services/associative-regex-effects.service";
 import {
@@ -124,7 +124,7 @@ async function runDisplayPreprocessItem(
   chatId: string,
   item: DisplayPreprocessItem,
   signal?: AbortSignal,
-  sources?: Map<string, Message>,
+  sources?: Map<string, DisplayMessageSource>,
   context?: DisplayRenderContext,
 ) {
   const savedMessage = item.messageId
@@ -421,7 +421,7 @@ app.get("/:id", async (c) => {
 /** Bounded first-page data; legacy metadata and message routes remain available. */
 app.get("/:id/open", async (c) => {
   const userId = c.get("userId");
-  const chat = await svc.getChatAsync(userId, c.req.param("id"));
+  const chat = await svc.getChatAsync(userId, c.req.param("id"), { priority: "interactive" });
   if (!chat) return c.json({ error: "Not found" }, 404);
   const limit = Math.min(parsePagination(c.req.query("limit"), undefined).limit, 1000);
   const memberIds = chat.metadata?.group === true && Array.isArray(chat.metadata.character_ids)
@@ -429,7 +429,9 @@ app.get("/:id/open", async (c) => {
     : [];
   const ids = [...new Set([...(chat.character_id ? [chat.character_id] : []), ...memberIds])];
   // Member lists originate in metadata. Bound both the response and SQL bindings.
-  const characterMap = await charactersSvc.getCharactersByIdsAsync(userId, ids.slice(0, 100)).catch((error) => {
+  const characterMap = await charactersSvc.getCharactersByIdsAsync(userId, ids.slice(0, 100), {
+    priority: "interactive",
+  }).catch((error) => {
     console.warn("[chats] Open character snapshot unavailable:", error);
     return new Map();
   });
@@ -1246,7 +1248,7 @@ app.post("/:chatId/display-preprocess", async (c) => {
     // A processor can synchronously edit a later source before its turn starts.
     // Preserve those per-item reads for extension-controlled batches.
     const sources = messageContentProcessorChain.hasForUser(userId) ? undefined
-      : await svc.getMessagesByIds(userId, chatId,
+      : await svc.getDisplayMessageSourcesByIds(userId, chatId,
         (items as DisplayPreprocessItem[]).flatMap((item) => item.messageId ? [item.messageId] : []));
     const context = createDisplayRenderContext(userId, chatId);
     const processed = await Promise.all(

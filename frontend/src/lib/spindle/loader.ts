@@ -1346,19 +1346,12 @@ async function doLoadFrontendExtension(
     const pendingConfirmCleanups = new Set<() => void>()
 
     let mountSyncActive = true
-    let mountRetryTimer: ReturnType<typeof setTimeout> | null = null
     const registeredDecoratorAnchors = new Set<Element>()
     const attachMountRoots = () => {
       if (!mountSyncActive) return
-      if (document.body.hasAttribute('data-chat-chrome-entering')) {
-        if (mountRetryTimer === null) {
-          mountRetryTimer = setTimeout(() => {
-            mountRetryTimer = null
-            attachMountRoots()
-          }, 50)
-        }
-        return
-      }
+      // Prepare roots and decorator anchors during the hidden chat load.
+      // Waiting for the entrance flag to clear would move their mount/layout
+      // work into the composer and message-list animation itself.
       for (const [point, root] of mountRoots) {
         const selector = `[data-spindle-mount="${point}"]`
         const target = document.querySelector(selector)
@@ -1401,10 +1394,6 @@ async function doLoadFrontendExtension(
 
     const cleanupMountInfra = () => {
       mountSyncActive = false
-      if (mountRetryTimer !== null) {
-        clearTimeout(mountRetryTimer)
-        mountRetryTimer = null
-      }
       mountObserver.disconnect()
       unloadDomDecorators()
       registeredDecoratorAnchors.clear()

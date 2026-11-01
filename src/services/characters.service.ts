@@ -1,5 +1,5 @@
 import { getDb } from "../db/connection";
-import { executeDatabaseOperation } from "../db/execution";
+import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
 import { readDatabaseRow, readDatabaseRows } from "../db/queries";
 import { mutateChatWithDb } from "../db/chat-operations";
 import {
@@ -870,10 +870,10 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
   return result;
 }
 
-export async function getCharactersByIdsAsync(userId: string, ids: string[], options: { excludeDeleting?: boolean } = {}): Promise<Map<string, Character>> {
+export async function getCharactersByIdsAsync(userId: string, ids: string[], options: { excludeDeleting?: boolean } & DatabaseExecutionOptions = {}): Promise<Map<string, Character>> {
   if (ids.length === 0) return new Map();
   const rows = await readDatabaseRows<any>(
-    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?${options.excludeDeleting ? ' AND deleting = 0' : ''}`, [...ids, userId],
+    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?${options.excludeDeleting ? ' AND deleting = 0' : ''}`, [...ids, userId], options,
   );
   return new Map(rows.map((row) => [row.id, rowToCharacter(row)]));
 }

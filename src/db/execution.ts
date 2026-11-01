@@ -36,10 +36,13 @@ interface PendingOperation {
   timer: ReturnType<typeof setTimeout>;
   attempts: number;
   dispatched: boolean;
+  interactiveRead?: boolean;
 }
 export interface DatabaseExecutionOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Promote SELECT reads within a read-only queue segment, never across writes. */
+  priority?: "interactive";
 }
 export interface DatabaseExecutorOptions {
   maxPending?: number;
@@ -48,6 +51,14 @@ export interface DatabaseExecutorOptions {
   transport?: "ipc" | "stdio" | "socket";
   /** Bootstrap requests may start the child before synchronous initialization ends. */
   deferBackgroundWork?: boolean;
+}
+
+// Be conservative: PRAGMAs, transactions, mutations and unrecognized SQL
+// remain ordering barriers even when they happen to return rows.
+function isReorderableRead(operation: DatabaseOperation): boolean {
+  return operation.kind === "read"
+    && (operation.statement.mode === "get" || operation.statement.mode === "all")
+    && /^\s*SELECT\b/i.test(operation.statement.sql);
 }
 
 /** One bounded queue and one native operation at a time per backend database. */
@@ -61,6 +72,7 @@ export class DatabaseExecutor {
   private closed = false;
   private queue: PendingOperation[] = [];
   private active: PendingOperation | null = null;
+  private interactiveReadStreak = 0;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping: Promise<unknown> | null = null;
@@ -101,6 +113,7 @@ export class DatabaseExecutor {
         requestId: crypto.randomUUID(), operation, deadline: Date.now() + timeoutMs,
         resolve: resolve as (result: unknown) => void, reject, attempts: 0, dispatched: false,
         timer: setTimeout(() => this.expire(item), timeoutMs),
+        interactiveRead: options.priority === "interactive" && isReorderableRead(operation),
       };
       const abort = () => this.expire(item, options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
       options.signal?.addEventListener("abort", abort, { once: true });
@@ -307,10 +320,23 @@ export class DatabaseExecutor {
   }
 
   private pump(): void {
-    if (this.closed || this.active || this.stopping || this.queue.length === 0) return;
+    if (this.closed || this.active || this.stopping) return;
+    if (this.queue.length === 0) { this.interactiveReadStreak = 0; return; }
     if (!this.process) { this.spawn(); return; }
     if (!this.ready) return;
-    const item = this.queue.shift()!;
+    let nextIndex = 0;
+    if (this.interactiveReadStreak < 4) {
+      // Only overtake SELECTs before the first ordering barrier. Earlier
+      // writes must commit before an interactive read can observe their state.
+      for (let index = 0; index < this.queue.length; index++) {
+        const candidate = this.queue[index];
+        if (!isReorderableRead(candidate.operation)) break;
+        if (candidate.interactiveRead) { nextIndex = index; break; }
+      }
+    }
+    const [item] = this.queue.splice(nextIndex, 1);
+    // After four interactive reads, give the oldest queued operation a turn.
+    this.interactiveReadStreak = item.interactiveRead ? this.interactiveReadStreak + 1 : 0;
     this.active = item;
     item.dispatched = true;
     try {

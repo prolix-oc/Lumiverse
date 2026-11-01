@@ -1,7 +1,7 @@
 import { cloneEnv, evaluate, initMacros, registry, type MacroEnv } from "../macros";
 import { withJsonBlocksProtected } from "../macros/json-blocks";
 import { captureMessageLiterals, shieldMessageLiterals, withMessageLiteralExtra } from "../macros/message-literals";
-import type { Message } from "../types/message";
+import type { DisplayMessageSource, Message } from "../types/message";
 import { healFormattingArtifacts } from "../utils/format-healing";
 import * as chatsSvc from "./chats.service";
 import { contentHasMacroHints } from "./vectorization-content.service";
@@ -41,7 +41,7 @@ export async function resolveDisplayMessageBody(
   userId: string,
   chatId: string,
   content: string,
-  message?: Message,
+  message?: DisplayMessageSource,
   swipeIndex = message?.swipe_id ?? 0,
   signal?: AbortSignal,
   presetContextOverride?: MessagePresetContext,

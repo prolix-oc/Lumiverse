@@ -503,7 +503,7 @@ const freshLandingInitial = { opacity: 0 }
 const freshLandingAnimate = { opacity: 1 }
 const freshLandingTransition = { duration: 0.5 }
 
-const CHAT_NAV_FADE_MS = 220
+const CHAT_NAV_COMPLETION_TIMEOUT_MS = 1500
 
 interface ChatCardProps {
   item: GroupedRecentChat
@@ -1107,6 +1107,7 @@ function LandingPageNative() {
   const tempChatMenuRef = useRef<HTMLDivElement>(null)
   const tempChatMenuOpenedAt = useRef(0)
   const chatNavigationTimerRef = useRef<number | null>(null)
+  const pendingChatNavigationRef = useRef<string | null>(null)
   const fetchSequenceRef = useRef(0)
   const loadingMoreRef = useRef(false)
   const chatPageSizeRef = useRef(restoredSnapshot?.pageSize ?? landingPageChatsDisplayed)
@@ -1194,6 +1195,7 @@ function LandingPageNative() {
 
   useEffect(() => {
     return () => {
+      pendingChatNavigationRef.current = null
       if (chatNavigationTimerRef.current !== null) {
         window.clearTimeout(chatNavigationTimerRef.current)
       }
@@ -1571,8 +1573,19 @@ function LandingPageNative() {
     return () => root.removeEventListener('scroll', onScroll)
   }, [activeLandingTab, chatsSurfaceReady, items.length, loading, loadMore, total])
 
+  const finishChatNavigation = useCallback(() => {
+    const chatId = pendingChatNavigationRef.current
+    if (!chatId) return
+    pendingChatNavigationRef.current = null
+    if (chatNavigationTimerRef.current !== null) {
+      window.clearTimeout(chatNavigationTimerRef.current)
+      chatNavigationTimerRef.current = null
+    }
+    navigate(`/chat/${chatId}`)
+  }, [navigate])
+
   const navigateToChat = useCallback((chatId: string) => {
-    if (chatNavigationTimerRef.current !== null) return
+    if (pendingChatNavigationRef.current !== null) return
 
     if (authUser?.id) {
       const virtualState = virtualSnapshotRef.current?.capture()
@@ -1603,19 +1616,19 @@ function LandingPageNative() {
       })
     }
 
+    pendingChatNavigationRef.current = chatId
     setNavigatingToChat(true)
 
     const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     if (prefersReducedMotion) {
-      navigate(`/chat/${chatId}`)
+      finishChatNavigation()
       return
     }
 
-    chatNavigationTimerRef.current = window.setTimeout(() => {
-      chatNavigationTimerRef.current = null
-      navigate(`/chat/${chatId}`)
-    }, CHAT_NAV_FADE_MS)
-  }, [activeLandingTab, authUser?.id, chatViewportHeight, effectiveGalleryWidth, items, mainWidth, navigate, searchQuery, sortDirection, sortField, total, virtualLayout])
+    // Wait for Motion's actual completion; the old 220ms click timer could
+    // unmount this surface before WebKit presented its first animated frame.
+    chatNavigationTimerRef.current = window.setTimeout(finishChatNavigation, CHAT_NAV_COMPLETION_TIMEOUT_MS)
+  }, [activeLandingTab, authUser?.id, chatViewportHeight, effectiveGalleryWidth, finishChatNavigation, items, mainWidth, searchQuery, sortDirection, sortField, total, virtualLayout])
 
   const handleChatClick = useCallback(
     (item: GroupedRecentChat) => {
@@ -1947,7 +1960,8 @@ function LandingPageNative() {
         transition={navigatingToChat || hasRestoredChatReturn
           ? chatReturnTransition
           : freshLandingTransition}
-        onAnimationComplete={() => {
+        onAnimationComplete={(definition) => {
+          if (definition === chatReturnInitial) finishChatNavigation()
           if (landingEntryAnimating) setLandingEntryAnimating(false)
         }}
       >

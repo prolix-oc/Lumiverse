@@ -1,4 +1,4 @@
-import type { Message } from "../types/message";
+import type { DisplayMessageSource } from "../types/message";
 import type { MessagePresetContext } from "../types/preset-context";
 import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { resolveDisplayMessageBody, type DisplayRenderContext } from "./chat-macro-render.service";
@@ -8,7 +8,7 @@ export async function preprocessDisplayMessage(input: {
   userId: string;
   chatId: string;
   content: string;
-  message?: Message;
+  message?: DisplayMessageSource;
   messageId?: string;
   messageIndex?: number;
   role?: string;

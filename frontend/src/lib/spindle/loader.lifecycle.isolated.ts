@@ -5,6 +5,7 @@ import type { SpindleManifest } from 'lumiverse-spindle-types'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { DecoratorOptions } from './dom-decorator-service'
 
 type FakeRoot = {
   parentElement: object | null
@@ -454,6 +455,7 @@ globalThis.fetch = (async () => new Response(lifecycleModuleSource)) as unknown 
 
 
 const { getLoadedExtensions, loadFrontendExtension, unloadFrontendExtension, unloadAllFrontendExtensions, routeBackendMessage, routeFrontendProcessEvent } = await import('./loader')
+const { flushDomDecoratorWork } = await import('./dom-decorator-service')
 mock.restore()
 trackWindowHandlers = true
 
@@ -471,6 +473,7 @@ type LifecycleContext = {
   ready(): void
   ui: {
     mount(point: string): FakeRoot
+    registerDomDecorator(options: Omit<DecoratorOptions, 'owner' | 'generation'>): () => void
     presetEditor: {
       extension: {
         getState(): unknown
@@ -647,6 +650,54 @@ afterAll(async () => {
 })
 
 describe('loader lifecycle orchestration', () => {
+  test('prepares extension roots and decorators before chat reveal and cleans up during entry', async () => {
+    const extensionId = 'chat_entry_mounts'
+    const createChat = (chatId: string) => {
+      const chat = documentMock.createElement('section')
+      chat.innerHTML = `<div data-spindle-mount="chat_top_dock"></div>
+        <div data-spindle-mount="chat_composer_above" data-spindle-scope="chat:${chatId}:composer-above"></div>`
+      return chat
+    }
+    let chat = createChat('first')
+    let root: FakeRoot | undefined
+    documentMock.body.setAttribute('data-chat-chrome-entering', 'true')
+    documentMock.body.append(chat)
+    lifecycleGlobals.__lifecycleExerciseSetup = (context: LifecycleContext) => {
+      root = context.ui.mount('chat_top_dock')
+      context.ui.registerDomDecorator({
+        mount: 'chat_composer_above',
+        html: '<span data-entry-decorator>Ready before reveal</span>',
+      })
+    }
+    try {
+      await loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
+      flushDomDecoratorWork()
+      expect(documentMock.body.hasAttribute('data-chat-chrome-entering')).toBe(true)
+      expect(root?.parentElement === chat.firstElementChild).toBe(true)
+      expect(chat.querySelector('[data-entry-decorator]')?.textContent).toBe('Ready before reveal')
+
+      // A second chat can replace the first before either entrance finishes.
+      const nextChat = createChat('second')
+      chat.replaceWith(nextChat)
+      chat = nextChat
+      await flushLifecycleTasks()
+      flushDomDecoratorWork()
+      expect(root?.parentElement === chat.firstElementChild).toBe(true)
+      expect(chat.querySelectorAll('[data-entry-decorator]').length).toBe(1)
+
+      await unloadFrontendExtension(extensionId)
+      chat.append(documentMock.createElement('div'))
+      await flushLifecycleTasks()
+      flushDomDecoratorWork()
+      expect(root?.parentElement === null).toBe(true)
+      expect(chat.querySelectorAll('[data-spindle-extension-root]').length).toBe(0)
+    } finally {
+      await unloadFrontendExtension(extensionId)
+      chat.remove()
+      documentMock.body.removeAttribute('data-chat-chrome-entering')
+    }
+  })
+
   test('unload purges retained UI registrations without a live loader record', async () => {
     await unloadFrontendExtension('disabled_without_loaded_record')
 

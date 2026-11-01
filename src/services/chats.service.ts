@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
-import { executeDatabaseOperation } from "../db/execution";
+import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
 import { createHash } from "node:crypto";
 import { shieldMessageLiterals, withMessageLiteralExtra, type MessageLiteralContent } from "../macros/message-literals";
 import type { VariableValues } from "../utils/variable-checkpoint";
@@ -15,6 +15,7 @@ import type { Chat, ChatAppearanceAction, ConditionalChatMetadataInput, CreateCh
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
+  DisplayMessageSource,
   CreateMessageInput,
   UpdateMessageInput,
   ChatMessageSearchResult,
@@ -1194,8 +1195,8 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
 let _stmtChatById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtChatByIdGen = -1;
 
-export async function getChatAsync(userId: string, id: string): Promise<Chat | null> {
-  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } });
+export async function getChatAsync(userId: string, id: string, options?: DatabaseExecutionOptions): Promise<Chat | null> {
+  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } }, options);
   return row ? rowToChat(row) : null;
 }
 
@@ -2147,16 +2148,34 @@ export function getMessages(userId: string, chatId: string, opts?: { light?: boo
   return rows.map(opts?.light ? rowToMessageLight : rowToMessage);
 }
 
-/** Bounded, owner- and chat-scoped source lookup for one display batch. */
-export async function getMessagesByIds(userId: string, chatId: string, ids: string[]): Promise<Map<string, Message>> {
+/** Only display provenance crosses the database subprocess boundary. Message
+ * bodies, other swipe text and unrelated extras are not inputs to this stage. */
+export async function getDisplayMessageSourcesByIds(
+  userId: string, chatId: string, ids: string[],
+): Promise<Map<string, DisplayMessageSource>> {
   const uniqueIds = [...new Set(ids)];
   if (uniqueIds.length === 0) return new Map();
   const rows = await executeDatabaseOperation<any[]>({ kind: "read", statement: {
-    sql: `SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id
+    sql: `SELECT m.id, m.chat_id, m.swipe_id,
+       CASE WHEN json_valid(m.swipes) THEN
+         CASE WHEN json_type(m.swipes) = 'array' THEN json_array_length(m.swipes) ELSE 1 END
+         ELSE 1 END AS swipe_count,
+       CASE WHEN json_valid(m.extra) THEN json_object(
+         'macro_literal_braces', json_extract(m.extra, '$.macro_literal_braces'),
+         'spindle_metadata', json_object(
+           'preset_contexts', json_extract(m.extra, '$.spindle_metadata.preset_contexts')
+         )
+       ) ELSE '{}' END AS extra
+     FROM messages m JOIN chats c ON m.chat_id = c.id
      WHERE c.user_id = ? AND m.chat_id = ? AND m.id IN (${uniqueIds.map(() => "?").join(",")})`,
     bindings: [userId, chatId, ...uniqueIds], mode: "all",
-  } });
-  return new Map(rows.map((row) => [row.id, rowToMessage(row)]));
+  } }, { priority: "interactive" });
+  return new Map(rows.map((row): [string, DisplayMessageSource] => {
+    const extra = JSON.parse(row.extra) as Record<string, unknown>;
+    // Preserve the full-message reader's bounds for saved swipe contexts.
+    extra.spindle_metadata = normalizeSpindleMessageMetadata(extra.spindle_metadata, row.swipe_count);
+    return [row.id, { id: row.id, chat_id: row.chat_id, swipe_id: row.swipe_id, extra }];
+  }));
 }
 
 /**

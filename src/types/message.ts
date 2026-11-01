@@ -35,6 +35,9 @@ export interface Message {
   created_at: number;
 }
 
+/** Stored provenance needed to preprocess a supplied display body. */
+export type DisplayMessageSource = Pick<Message, "id" | "chat_id" | "swipe_id" | "extra">;
+
 /** A persisted, currently-visible message that matched a chat find query. */
 export interface ChatMessageSearchMatch {
   id: string;

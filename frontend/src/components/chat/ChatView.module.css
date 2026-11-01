@@ -221,11 +221,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chatColumnInner[data-chat-chrome-entering] .chatToolbar,
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='ChatFindBar']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='InputArea']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageSelectBar']) {
+  /* Keep transitions disabled after the entry flag clears too: transitions
+     use the destination style's duration when the hidden state is removed. */
+  .chatColumnInner .chatToolbar,
+  .chatColumnInner :global([data-component='ChatFindBar']),
+  .chatColumnInner :global([data-component='MessageList']),
+  .chatColumnInner :global([data-component='InputArea']),
+  .chatColumnInner :global([data-component='MessageSelectBar']) {
     transform: none;
     transition: none;
   }

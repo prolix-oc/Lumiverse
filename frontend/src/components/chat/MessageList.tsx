@@ -67,11 +67,6 @@ const INITIAL_LOAD_DOM_WATCH_MS = 6500
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
 const MOBILE_RANGE_WARM_MS = 1200
-// How long after the first rows render before the mounted range widens from
-// the cold-start window to the full warm range. Long enough for the initial
-// frame to paint on slow devices, short enough that early scrolling still
-// finds rows mounted.
-const INITIAL_RANGE_WARM_DELAY_MS = 300
 // A zero pending count is only a point-in-time observation: resolving
 // preprocessing can enqueue regex work, and tag delivery can enqueue a widget
 // mount in the following React commit. Require a short quiet window after the
@@ -273,11 +268,10 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   )
   const [mobileRangeWarm, setMobileRangeWarm] = useState(true)
   // Initial mount staging: the first paint of a freshly opened chat mounts
-  // only the viewport plus a tight overscan. The wide warm range (which can
-  // mount the entire loaded page on touch devices) flips on shortly after, so
-  // the per-message render pipeline doesn't block the first visible frame.
+  // only the viewport plus a tight overscan. Prepare the wider warm range as
+  // a transition while ChatView still hides the chat, before its reveal gate
+  // waits for the mounted display pipeline to settle.
   const [initialRangeWarm, setInitialRangeWarm] = useState(false)
-  const initialWarmTimerRef = useRef<number | null>(null)
   // Fade the message list in once TanStack has populated virtual rows on
   // chat load. Reset on every chat switch so the next chat can fade in too.
   const hasFadedInRef = useRef(false)
@@ -657,33 +651,20 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
 
   useEffect(() => {
     setInitialRangeWarm(false)
-    if (initialWarmTimerRef.current != null) {
-      window.clearTimeout(initialWarmTimerRef.current)
-      initialWarmTimerRef.current = null
-    }
   }, [chatId])
 
-  // Widen to the warm range once the first rows have painted. The flip mounts
-  // the remaining offscreen rows in one go, so run it as a transition to keep
-  // scrolling responsive while React renders them. The chat_id check matters
-  // on chat switch: the previous chat's rows linger in the store until the new
-  // tail arrives, and they must not start the warm timer early.
+  // The reveal already waits for this range and its display work. A fixed
+  // warm-up timer would keep a ready chat invisible before its entrance can
+  // even start. Queue the wider range after the first commit instead, using
+  // a transition so React can yield while preparing the offscreen rows.
+  // Old rows from the previous chat must not warm the new chat's range.
   const hasRows = visibleMessages.length > 0 && visibleMessages[0]?.chat_id === chatId
   useEffect(() => {
     if (!hasRows || initialRangeWarm) return
-    initialWarmTimerRef.current = window.setTimeout(() => {
-      initialWarmTimerRef.current = null
-      startTransition(() => {
-        setInitialRangeWarm(true)
-        warmMobileRange()
-      })
-    }, INITIAL_RANGE_WARM_DELAY_MS)
-    return () => {
-      if (initialWarmTimerRef.current != null) {
-        window.clearTimeout(initialWarmTimerRef.current)
-        initialWarmTimerRef.current = null
-      }
-    }
+    startTransition(() => {
+      setInitialRangeWarm(true)
+      warmMobileRange()
+    })
   }, [hasRows, initialRangeWarm, warmMobileRange])
 
   useEffect(() => {
@@ -730,9 +711,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     return () => {
       if (rangeWarmTimerRef.current != null) {
         window.clearTimeout(rangeWarmTimerRef.current)
-      }
-      if (initialWarmTimerRef.current != null) {
-        window.clearTimeout(initialWarmTimerRef.current)
       }
       if (initialScrollRafRef.current != null) {
         cancelAnimationFrame(initialScrollRafRef.current)
@@ -1323,7 +1301,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const virtualItems = rowVirtualizer.getVirtualItems()
 
   // Trigger the chat-load fade-in once the virtualizer has real rows AND the
-  // display pipeline has settled. The delayed warm-range commit is part of
+  // display pipeline has settled. The warm-range commit is part of
   // that pipeline: it mounts the neighboring rows whose regex/interceptor
   // work otherwise used to begin just after the cold range had revealed.
   // Require one quiet interval and re-check after the final two layout frames

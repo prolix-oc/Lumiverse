@@ -27,6 +27,7 @@ import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } f
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import { CHAT_REVEAL_SETTLE_CAP_MS, getChatDisplaySettleDiagnostics } from '@/lib/chatDisplaySettle'
+import { playChatChromeMotion } from '@/lib/chatChromeMotion'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -81,7 +82,6 @@ const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
 const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
 const WALLPAPER_TRANSITION_HALF_MS = 260
 const WALLPAPER_READY_FALLBACK_MS = 5000
-const CHAT_CHROME_LEAVE_MS = 220
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
@@ -231,7 +231,10 @@ export default function ChatView() {
   const chatComposerAboveRef = useRef<HTMLSpanElement>(null)
   const wallpaperTransitionTimeouts = useRef<number[]>([])
   const chromeEnterTimerRef = useRef<number | null>(null)
-  const chromeLeaveTimerRef = useRef<number | null>(null)
+  const chromeLoadChatRef = useRef<string | null>(null)
+  const chromeReadyChatRef = useRef<string | null>(null)
+  const chromeLeaveRequestedRef = useRef(false)
+  const chromeWasHiddenRef = useRef(true)
   // Stabilization is independent of animation preference: reduced-motion
   // users should still never see raw extension payloads before interceptors
   // attach. CSS makes the eventual reveal instantaneous for them.
@@ -330,16 +333,29 @@ export default function ChatView() {
   useLayoutEffect(() => {
     if (!chatId) return
 
+    const newChat = chromeLoadChatRef.current !== chatId
+    chromeLoadChatRef.current = chatId
+
     if (chromeEnterTimerRef.current !== null) {
       window.clearTimeout(chromeEnterTimerRef.current)
       chromeEnterTimerRef.current = null
     }
 
-    setChatChromeEntering(true)
-    document.body.setAttribute('data-chat-chrome-entering', 'true')
+    // Suspense disconnects and reconnects layout effects without replacing
+    // this chat. Keep its readiness and any pending Home navigation intact.
+    if (newChat) {
+      chromeReadyChatRef.current = null
+      setChatChromeEntering(true)
+      setChatChromeLeaving(false)
+      chromeLeaveRequestedRef.current = false
+    }
+    if (chromeReadyChatRef.current !== chatId) {
+      document.body.setAttribute('data-chat-chrome-entering', 'true')
+    }
     const handlePopulated = (event: Event) => {
       const populatedChatId = (event as CustomEvent<{ chatId?: string }>).detail?.chatId
       if (populatedChatId !== chatId) return
+      chromeReadyChatRef.current = chatId
       setChatChromeEntering(false)
       document.body.removeAttribute('data-chat-chrome-entering')
       if (chromeEnterTimerRef.current !== null) {
@@ -353,13 +369,14 @@ export default function ChatView() {
     // MessageList settle gate (CHAT_REVEAL_SETTLE_CAP_MS) so a chat whose
     // content is still resolving does not get revealed mid-pipeline by this
     // timer racing the populated dispatch.
-    chromeEnterTimerRef.current = window.setTimeout(() => {
+    if (chromeReadyChatRef.current !== chatId) chromeEnterTimerRef.current = window.setTimeout(() => {
       chromeEnterTimerRef.current = null
       const detail = {
         elapsedMs: CHAT_REVEAL_SETTLE_CAP_MS + 1500,
         ...getChatDisplaySettleDiagnostics(chatId),
       }
       console.warn('[ChatDisplaySettle] ChatView fallback reveal', detail)
+      chromeReadyChatRef.current = chatId
       window.dispatchEvent(new CustomEvent('lumiverse:chat-display-fallback-timeout', { detail }))
       setChatChromeEntering(false)
       document.body.removeAttribute('data-chat-chrome-entering')
@@ -374,15 +391,6 @@ export default function ChatView() {
       document.body.removeAttribute('data-chat-chrome-entering')
     }
   }, [chatId])
-
-  useEffect(() => {
-    return () => {
-      if (chromeLeaveTimerRef.current !== null) {
-        window.clearTimeout(chromeLeaveTimerRef.current)
-        chromeLeaveTimerRef.current = null
-      }
-    }
-  }, [])
 
   const completeNavigateHome = useCallback(() => {
     // Detach the visible chat before committing the route. In particular this
@@ -399,7 +407,8 @@ export default function ChatView() {
   }, [chatId, navigate])
 
   const handleNavigateHome = useCallback(() => {
-    if (chromeLeaveTimerRef.current !== null) return
+    if (chromeLeaveRequestedRef.current) return
+    chromeLeaveRequestedRef.current = true
 
     const landingImageUrls = peekLandingPageSnapshot()?.imageUrls ?? []
     if (landingImageUrls.length > 0) holdImagesForTransition(landingImageUrls)
@@ -418,11 +427,12 @@ export default function ChatView() {
     }
 
     setChatChromeLeaving(true)
-    chromeLeaveTimerRef.current = window.setTimeout(() => {
-      chromeLeaveTimerRef.current = null
-      completeNavigateHome()
-    }, CHAT_CHROME_LEAVE_MS)
   }, [chatId, completeNavigateHome])
+
+  useLayoutEffect(() => {
+    if (!chatChromeLeaving) return
+    return playChatChromeMotion(chatColumnInnerRef.current, 'leave', completeNavigateHome)
+  }, [chatId, chatChromeLeaving, completeNavigateHome])
 
   const cortexActive = !!cortexRequestedAt || !!cortexActivity?.runs.some((run) => run.status === 'processing')
   useEffect(() => {
@@ -1059,6 +1069,21 @@ export default function ChatView() {
     const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
     wallpaperTransitionTimeouts.current.push(revealTimer)
   }, [clearWallpaperTransitionTimers])
+
+  useLayoutEffect(() => {
+    const hidden = chatChromeEntering || wallpaperTransitioning || chatChromeLeaving
+    const wasHidden = chromeWasHiddenRef.current
+    chromeWasHiddenRef.current = hidden
+    if (hidden || !wasHidden) return
+    let completed = false
+    const cancel = playChatChromeMotion(chatColumnInnerRef.current, 'enter', () => { completed = true })
+    return () => {
+      cancel()
+      // A layout-effect reconnect must resume an interrupted entrance. Only
+      // consume the hidden→visible edge after playback actually completes.
+      if (!completed) chromeWasHiddenRef.current = true
+    }
+  }, [chatId, chatChromeEntering, wallpaperTransitioning, chatChromeLeaving])
 
   // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
   // when the background is a solid color (blur on solid = pure GPU waste).

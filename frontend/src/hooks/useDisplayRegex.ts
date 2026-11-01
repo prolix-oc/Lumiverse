@@ -743,8 +743,6 @@ export function useDisplayRegexState(
     isStreaming,
     (isStreaming || !!presetContext) && !displayOwned,
   )
-  // Every saved message runs the body stage once before regex, including unowned chats.
-  const regexGated = (!!preprocessOpts?.messageId && !preprocessReady) || !presetScripts.ready
   const needsPreviousContent = useMemo(
     () => displayScripts.some(
       (script) =>
@@ -814,6 +812,13 @@ export function useDisplayRegexState(
   const resolvedTemplates = cachedTemplates
     ?? (resolvedTemplatesState?.key === templateCacheKey ? resolvedTemplatesState.value : undefined)
     ?? EMPTY_RESOLVED_TEMPLATES
+  const templatesPending = templateCacheKey !== null && !cachedTemplates
+    && resolvedTemplatesState?.key !== templateCacheKey
+  // Body preprocessing and template resolution load in parallel. Wait for
+  // both before applying regexes: otherwise a fast body response starts a
+  // provisional pass with empty templates, then repeats it when they arrive.
+  const regexGated = (!!preprocessOpts?.messageId && !preprocessReady)
+    || !presetScripts.ready || templatesPending
 
   const [resolvedContentState, setResolvedContentState] = useState<ResolvedContentState | null>(null)
 
@@ -1017,9 +1022,7 @@ export function useDisplayRegexState(
   const live = normalizedContent ?? (passthrough || (skipEmptyFinalization && preprocessSettled) ? content : cachedResolvedContent)
     ?? (resolvedContentState?.key === contentCacheKey && resolvedContentState.version === version
       ? resolvedContentState.value : undefined)
-  const pending = !presetScripts.ready || !preprocessSettled || (
-    templateCacheKey !== null && !cachedTemplates && resolvedTemplatesState?.key !== templateCacheKey
-  )
+  const pending = !presetScripts.ready || !preprocessSettled || templatesPending
   const resolutionPending = pending || (contentCacheKey !== null && live === undefined)
   // Appending messages changes the depth of every mounted row and restarts
   // preprocessing. Its provisional raw output can differ from both the prior
