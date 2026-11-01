@@ -49,7 +49,7 @@ Choosing a sidecar connection can switch extraction/scoring to sidecar mode and 
 
 In **Settings → Memory Cortex → Advanced → Advanced settings**, enable consolidation and adjust **Chunks before consolidation**, **Chunks per scene summary**, and **Scene summaries per arc**. These count memory chunks and saved scene summaries, not chat messages. The defaults start consolidation at 40 unconsolidated chunks, summarize 10 chunks at a time, and combine 5 scenes into an arc. After ingestion or a rebuild, Cortex processes due batches and retries pending arcs; it keeps recent chunks below the trigger for later. Lower the trigger for earlier scenes. A chat with 36 messages may still be below the default trigger.
 
-**Prompt assembly reads usable cached Cortex results**, rather than waiting for a fresh query on every send. On a cold cache or an unusable result, it falls back to basic Chat Memory while Cortex work runs in the background. Basic Chat Memory also uses a cache, so a cold start can initially have no recall. Enabling Cortex does not guarantee entities or arcs in the very next prompt.
+**Prompt assembly reads cached Cortex memory passages and saved graph context**, rather than waiting for a fresh vector query on every send. When the conversation advances, it rechecks cached passages against the recent-message exclusion window and regeneration target. Saved entities, relationships, arcs, and character colors can be used even with a cold vector cache. Basic Chat Memory can supply passages alongside graph context while Cortex retrieval warms in the background. Enabling Cortex alone does not create context: the chat still needs relevant saved records and the corresponding injection settings enabled.
 
 ## Sidecar LLM
 
@@ -207,8 +207,8 @@ Macro presence is detected in applicable block source before conditions finish r
 | Symptom | What to check |
 |---------|---------------|
 | `{{memories}}` works with Cortex off | Expected: basic recall is independent. Check Cortex preparation/cache separately. |
-| `{{cortexActive}}` says `no` while enabled | Check global/per-chat switches, recompile, and wait for background processing. Cold-cache prompts can use basic recall while Cortex warms. |
-| Stored entities exist but `{{entities}}` is empty | The macro uses this prompt's selected cached context. Check entity injection and resolved output. |
+| `{{cortexActive}}` says `no` while enabled | The macro checks available Cortex content. Check global/per-chat switches, saved records, and entity/relationship/arc injection settings. A cold vector cache alone does not hide saved graph context. |
+| Stored entities exist but `{{entities}}` is empty | The macro uses entities selected for this prompt's recent conversation. Check entity tracking, entity injection, and whether the conversation mentions their names or aliases. |
 | `{{arc}}` is empty | Check consolidation/arc injection and whether enough history exists for an arc. A saved Loom Summary does not populate this macro. |
 | Everything is heuristic after adding a sidecar | Check extraction/scoring modes, credentials/model, failure policy, and rebuild status. Heuristic fallback can legitimately write heuristic records. |
 | No old passages | Check embeddings, **Vectorise chat messages**, chunk/vector counts, exclusion window, and shared Injection Strategy. |

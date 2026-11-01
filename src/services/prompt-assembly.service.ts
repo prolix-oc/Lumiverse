@@ -2042,8 +2042,8 @@ export async function assemblePrompt(
   // linked retrieval) never interleaves with the cooperatively-yielding
   // assembly loop on this single thread — where it would otherwise be charged
   // to the assembly-loop phase. Prompt assembly only ever consumes warm-cache
-  // hits from the prefetch on this request path; on a cold miss we fall back
-  // immediately so cortex never blocks generation or dry-run rendering.
+  // hits on this request path; on a cold miss we use saved graph context and
+  // available basic recall so vector retrieval never blocks generation.
   const cortexConfig =
     pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(
@@ -6176,7 +6176,8 @@ function formatMemoryOutput(
 /**
  * Populate combined memory and Cortex macros from the same cached retrieval
  * context for prompt assembly and macro previews. This does not start Cortex
- * warming, extraction, or rebuilds; cold Cortex caches use basic recall.
+ * warming, extraction, or rebuilds. Persisted graph context is available even
+ * with a cold vector cache, alongside available basic recall.
  */
 export async function populateMemoryMacroContext({
   userId,
@@ -6203,17 +6204,19 @@ export async function populateMemoryMacroContext({
   cortexCache?: import("./memory-cortex/types").CortexCacheSnapshot;
 }) {
   const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata);
-  // A warm result must have excluded the live-context tail (and regen target)
-  // so recent messages cannot be re-injected as long-term memories.
+  const memorySettings = chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+  // Revalidate retrieved sources against this turn's tail; read saved graph
+  // context locally when no usable vector result is cached.
   const cortexResult = cortexEnabledForChat
-    ? memoryCortex.getCachedCortexResult(
-        chat.id,
-        buildMemoryExcludeMessageIds(
-          messages,
-          chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-          perChatOverrides,
-          excludeMessageId,
-        ),
+    ? memoryCortex.readCortexPromptContext(
+        {
+          chatId: chat.id,
+          queryText: await buildQueryText(
+            messages, memorySettings, buildMacroEnvForChat(userId, chat.id), getReasoningStripOptions(userId),
+          ),
+        },
+        cortexConfig,
+        buildMemoryExcludeMessageIds(messages, memorySettings, perChatOverrides, excludeMessageId),
         cortexCache,
       )
     : null;
@@ -6230,15 +6233,19 @@ export async function populateMemoryMacroContext({
     if (hasCortexContent(cortexResult, macroEnv)) memoryResult = cortexMemoryResult;
   }
 
-  // Cold or empty Cortex results use the ordinary cached recall path.
-  memoryResult ??= await safeCollectChatVectorMemory(
-    userId,
-    chat.id,
-    messages,
-    chatMemSettings,
-    perChatOverrides,
-    excludeMessageId,
-  );
+  // Graph-only Cortex context can accompany ordinary cached chunk recall.
+  if (!memoryResult || cortexResult?.memories.length === 0) {
+    const basicRecall = await safeCollectChatVectorMemory(
+      userId, chat.id, messages, chatMemSettings, perChatOverrides, excludeMessageId,
+    );
+    memoryResult = memoryResult
+      ? {
+          ...basicRecall,
+          enabled: true,
+          formatted: [basicRecall.formatted, memoryResult.formatted].filter(Boolean).join("\n\n"),
+        }
+      : basicRecall;
+  }
 
   // Merge linked cortex data (vaults + interlinks) if available
   const linkedCortexResult = cortexEnabledForChat

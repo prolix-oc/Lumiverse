@@ -49,7 +49,8 @@ import * as entityGraph from "./entity-graph";
 import * as entityContext from "./entity-context";
 import * as consolidation from "./consolidation";
 import { buildEmotionalContext } from "./emotional-context";
-import { queryCortex as queryCortexImpl, queryVaultCortex as queryVaultCortexImpl } from "./retrieval";
+import { assembleCortexGraphContext, queryCortex as queryCortexImpl, queryVaultCortex as queryVaultCortexImpl } from "./retrieval";
+import { filterCortexMemoriesForPrompt } from "./prompt-memory-filter";
 import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from "./shadow-formatter";
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution, stripFontTags, stripThoughtDelimiters, mergeColorAttributions, FONT_ATTRIBUTION_VERSION } from "./font-attribution";
@@ -550,8 +551,8 @@ function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): st
  * When `requiredExcludedMessageIds` is provided, the cached entry is only
  * returned if every required message was excluded when the entry was warmed.
  * Otherwise it could contain the regen target or current live-context tail and
- * re-inject it as "memory". On a reject the caller falls through to
- * exclusion-aware vector retrieval.
+ * re-inject it as "memory". Prompt assembly uses readCortexPromptContext to
+ * revalidate individual sources when this strict lookup rejects an entry.
  */
 export function getCachedCortexResult(
   chatId: string,
@@ -585,6 +586,32 @@ export function getCachedCortexResult(
 /** Invalidate cached cortex result for a chat (e.g. on rebuild or delete). */
 export function invalidateCortexCache(chatId: string): void {
   cortexResultCache.delete(chatId);
+}
+
+/** Read usable prompt context even on a new turn or a cold vector cache.
+ * Retrieval exclusions protect source memories; they must not discard the
+ * entire graph whenever a new message arrives. No provider calls run here. */
+export function readCortexPromptContext(
+  query: Pick<CortexQuery, "chatId" | "queryText">,
+  config: MemoryCortexConfig,
+  excludedMessageIds: string[],
+  snapshot?: CortexCacheSnapshot,
+): CortexResult | null {
+  if (!config.enabled) return null;
+  const trusted = getCachedCortexResult(query.chatId, excludedMessageIds, snapshot);
+  const cached = trusted ?? getCachedCortexResult(query.chatId, undefined, snapshot);
+  const memories = trusted?.memories ?? filterCortexMemoriesForPrompt(query.chatId, cached?.memories ?? [], excludedMessageIds);
+  const graph = cached && (cached.entityContext.length || cached.activeRelationships.length || cached.arcContext)
+    ? cached
+    : assembleCortexGraphContext(query, config);
+  return {
+    ...(cached ?? EMPTY_CORTEX_RESULT),
+    memories,
+    entityContext: graph.entityContext,
+    activeRelationships: graph.activeRelationships,
+    arcContext: graph.arcContext,
+    stats: { ...(cached ?? EMPTY_CORTEX_RESULT).stats, topScore: memories[0]?.finalScore ?? 0 },
+  };
 }
 
 /**

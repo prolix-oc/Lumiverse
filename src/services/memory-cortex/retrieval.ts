@@ -276,6 +276,37 @@ export async function queryCortex(
   // PHASE 5: Entity Context Assembly
   // ────────────────────────────────────────────
 
+  const { entityContext: entitySnapshots, activeRelationships, arcContext: arcCtx } =
+    assembleCortexGraphContext(query, config, activeEntityIds);
+
+  // Update retrieval stats on selected chunks
+  batchUpdateRetrievalStats(db, selectedChunkIds);
+
+  return {
+    memories: selected,
+    entityContext: entitySnapshots,
+    activeRelationships,
+    arcContext: arcCtx,
+    stats: {
+      candidatePoolSize: candidateChunkIds.size,
+      vectorSearchResults: vectorResults.length,
+      entitiesMatched: activeEntityIds.length,
+      scoreFusionApplied: config.retrieval.useFusedScoring,
+      topScore: selected[0]?.finalScore ?? 0,
+      retrievalTimeMs: Date.now() - startTime,
+    },
+  };
+}
+
+/** Read the persisted graph without depending on vector retrieval or its cache. */
+export function assembleCortexGraphContext(
+  query: Pick<CortexQuery, "chatId" | "queryText" | "entityFilter">,
+  config: MemoryCortexConfig,
+  resolvedEntityIds?: string[],
+): Pick<CortexResult, "entityContext" | "activeRelationships" | "arcContext"> {
+  const activeEntityIds = resolvedEntityIds ?? (query.entityFilter?.length
+    ? entityContext.resolveEntityIdsByNames(query.chatId, query.entityFilter)
+    : config.entityTracking ? entityContext.resolveActiveEntityIds(query.chatId, query.queryText) : []);
   let entitySnapshots: EntitySnapshot[] = [];
   let activeRelationships: RelationEdge[] = [];
   let arcCtx: string | null = null;
@@ -319,23 +350,7 @@ export async function queryCortex(
     }
   }
 
-  // Update retrieval stats on selected chunks
-  batchUpdateRetrievalStats(db, selectedChunkIds);
-
-  return {
-    memories: selected,
-    entityContext: entitySnapshots,
-    activeRelationships,
-    arcContext: arcCtx,
-    stats: {
-      candidatePoolSize: candidateChunkIds.size,
-      vectorSearchResults: vectorResults.length,
-      entitiesMatched: activeEntityIds.length,
-      scoreFusionApplied: config.retrieval.useFusedScoring,
-      topScore: selected[0]?.finalScore ?? 0,
-      retrievalTimeMs: Date.now() - startTime,
-    },
-  };
+  return { entityContext: entitySnapshots, activeRelationships, arcContext: arcCtx };
 }
 
 // ─── Phase 1 Helpers ───────────────────────────────────────────

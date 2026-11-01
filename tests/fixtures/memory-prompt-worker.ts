@@ -31,7 +31,7 @@ db.run("PRAGMA foreign_keys = OFF");
 db.run(await Bun.file(`${root}/src/db/baseline.sql`).text());
 const userId = "memory-worker-repro";
 const chat = createChat(userId, { name: "Worker reproduction" });
-const message = createMessage(chat.id, { is_user: true, name: "User", content: "What was the secret?" }, userId);
+const message = createMessage(chat.id, { is_user: true, name: "User", content: "What was Kael's secret?" }, userId);
 putSetting(userId, "embeddingConfig", { enabled: true, vectorize_chat_messages: true });
 putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5 });
 putCortexConfig(userId, { enabled: true, useChatMemoryFormatting: true });
@@ -69,6 +69,18 @@ try {
   assert.equal(warmJobs.length, 1);
   assert.deepEqual(warmJobs[0].mainQuery.excludeMessageIds, [message.id]);
 
+  // Exercise the actual next-turn transition, rather than only reassembling an
+  // unchanged conversation with the same exclusion set.
+  const replyId = crypto.randomUUID();
+  const nextUserId = crypto.randomUUID();
+  const appendTurn = getDb().query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, ?, ?, ?)");
+  appendTurn.run(replyId, chat.id, 1, 0, "Kael", "A reply");
+  appendTurn.run(nextUserId, chat.id, 2, 1, "User", "And then?");
+  const nextTurn = await assemblePromptInWorker(ctx);
+  assert.match(content(nextTurn), /ACTIVE=yes CORTEX=yes/);
+  assert.match(content(nextTurn), /CORTEX_SECRET/);
+  getDb().query("DELETE FROM messages WHERE id IN (?, ?)").run(replyId, nextUserId);
+
   // A reused worker must consume the new empty snapshot, then return warm work
   // to the host so the following assembly can read the newly populated cache.
   clearCortexResultCaches();
@@ -87,11 +99,30 @@ try {
   assert.doesNotMatch(content(optedOut), /CORTEX_SECRET|LINKED_SECRET/);
   updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: true } } });
 
-  // Warm-cache exclusion checks survive transfer, including an explicit target.
+  // Graph context survives a changed exclusion set; source memories are checked
+  // separately against their chunk provenance before they can be reused.
   primeCortexCache(chat.id, result, []);
   const unsafe = await assemblePromptInWorker(ctx);
-  assert.doesNotMatch(content(unsafe), /CORTEX_SECRET/);
+  assert.match(content(unsafe), /CORTEX_SECRET/);
   clearCortexResultCaches();
+
+  // Saved entities are available in a cold worker prompt without any vector
+  // retrieval succeeding first. The host mock returns no retrieval results.
+  getDb().query("INSERT INTO memory_entities (id, chat_id, name, facts, created_at, updated_at) VALUES ('saved', ?, 'Kael', ?, 0, 0)")
+    .run(chat.id, JSON.stringify(["SAVED_CORTEX_FACT"]));
+  const savedGraph = await assemblePromptInWorker(ctx);
+  assert.match(content(savedGraph), /ACTIVE=yes CORTEX=yes/);
+  assert.match(content(savedGraph), /SAVED_CORTEX_FACT/);
+  const flagOnlyPreset = createPreset(userId, { name: "Only Cortex flag", provider: "openai", prompt_order: [
+    block("flag", "{{cortexActive}}"),
+  ] });
+  const flagOnly = await assemblePromptInWorker({ ...ctx, presetOverride: flagOnlyPreset });
+  assert.ok(flagOnly.messages.some((message) => message.content === "yes"));
+  const flagWithMemories = await assemblePromptInWorker({ ...ctx, presetOverride: {
+    ...flagOnlyPreset, prompt_order: [block("flag-and-memory", "{{cortexActive}}\n{{memories}}")],
+  } });
+  assert.match(content(flagWithMemories), /SAVED_CORTEX_FACT/);
+  getDb().query("DELETE FROM memory_entities WHERE id = 'saved'").run();
 
   putCortexConfig(userId, { enabled: false });
   const insertMessage = getDb().query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, 1, 'User', ?)");

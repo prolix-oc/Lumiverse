@@ -456,6 +456,43 @@ describe("basic recall regeneration", () => {
 });
 
 describe("memory macro previews", () => {
+  test("a new turn retains usable Cortex context in previews and the assembled prompt", async () => {
+    enableCortex(cortexResult({ memories: [] }));
+    createMessage(chat.id, { is_user: false, name: "Character", content: "A reply" }, userId);
+    createMessage(chat.id, { is_user: true, name: "User", content: "And what happened next?" }, userId);
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("ENTITY_FACT");
+    const probe = await assemble([block("{{cortexActive}}")]);
+    expect(probe.breakdown.find(({ type }) => type === "block")?.content).toBe("yes");
+    expect(probe.messages.map(({ content }) => content).join("\n")).toContain("ENTITY_FACT");
+  });
+
+  test("saved Cortex graph data is available on a cold cache without a vector query", async () => {
+    putCortexConfig(userId, { enabled: true });
+    getDb().query("INSERT INTO memory_entities (id, chat_id, name, facts, created_at, updated_at) VALUES (?, ?, 'Kael', ?, 0, 0)")
+      .run("saved-entity", chat.id, JSON.stringify(["PERSISTED_FACT"]));
+    createMessage(chat.id, { is_user: true, name: "User", content: "What does Kael remember?" }, userId);
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("PERSISTED_FACT");
+  });
+
+  test.each(["global", "chat", "injection"])("cold graph reads respect the %s opt-out", async (scope) => {
+    putCortexConfig(userId, { enabled: true });
+    getDb().query("INSERT INTO memory_entities (id, chat_id, name, facts, created_at, updated_at) VALUES (?, ?, 'Kael', ?, 0, 0)")
+      .run("saved-entity", chat.id, JSON.stringify(["PERSISTED_FACT"]));
+    createMessage(chat.id, { is_user: true, name: "User", content: "What does Kael remember?" }, userId);
+    if (scope === "global") putCortexConfig(userId, { enabled: false });
+    if (scope === "chat") updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: false } } });
+    if (scope === "injection") putCortexConfig(userId, { retrieval: {
+      ...DEFAULT_CORTEX_CONFIG.retrieval, entityContextInjection: false, relationshipInjection: false, arcInjection: false,
+    } });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nno\nno\n0\n");
+    expect(text).not.toContain("PERSISTED_FACT");
+  });
+
   test("single and batch previews include basic recall with Cortex off", async () => {
     await enableBasicRecall();
     const text = await expectPreviewMatchesAssembly();
@@ -530,12 +567,13 @@ describe("memory macro previews", () => {
     expect(text).not.toContain("CORTEX_MEMORY");
   });
 
-  test("previews reject Cortex caches that did not exclude recent messages", async () => {
+  test("previews omit unverified cached chunks while retaining graph context and basic recall", async () => {
     await enableBasicRecall();
     enableCortex();
     const text = await expectPreviewMatchesAssembly();
-    expect(text).toStartWith("BEGIN\nyes\nno\n1\n");
+    expect(text).toStartWith("BEGIN\nyes\nyes\n1\n");
     expect(text).toContain("BASIC_MEMORY");
+    expect(text).toContain("ENTITY_FACT");
     expect(text).not.toContain("CORTEX_MEMORY");
   });
 

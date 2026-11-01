@@ -7,7 +7,7 @@
  *   {{relationships}}     — Active relationship edges between entities
  *   {{arc}}               — Current narrative arc summary
  *   {{memorySalience}}    — Highest-salience memory in retrieved set
- *   {{cortexActive}}      — "yes" if cortex is enabled and produced results
+ *   {{cortexActive}}      — "yes" if this prompt has Cortex content
  *   {{entityCount}}       — Number of entities in the current context
  *   {{characterColors}}   — Font color attributions per character (speech, thoughts, narration)
  */
@@ -142,7 +142,7 @@ export function registerCortexMacros(): void {
   registry.registerMacro({
     name: "cortexActive",
     category: "memory",
-    description: "Returns 'yes' if the Memory Cortex is enabled and produced results, 'no' otherwise.",
+    description: "Returns 'yes' when this prompt has Memory Cortex content, 'no' otherwise. Checks available context, not the master toggle.",
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const cortex = getCortex(ctx);
