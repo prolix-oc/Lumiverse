@@ -11,7 +11,7 @@
   gap: 8px;
   width: 100%;
   padding: 8px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--lumiverse-text);
@@ -19,12 +19,12 @@
   cursor: pointer;
 }
 
-.row:hover, .active {
+.row:hover:not(.active) {
   background: var(--lumiverse-fill-subtle);
 }
 
 .active {
-  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
 }
 
 .name {
