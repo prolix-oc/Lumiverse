@@ -2840,120 +2840,22 @@ export async function assemblePrompt(
       | undefined) ??
     null;
 
-  // Memory Cortex: use warm cache hits only. On a cold miss, fall back
-  // immediately to vector retrieval so background cortex work never stalls the
-  // generation path.
-  let cortexResult: memoryCortex.CortexResult | null = null;
-
-  let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
-
-  if (cortexEnabledForChat) {
-    // Fast path: warm cache from a previous generation (synchronous, no I/O).
-    // Require the cached entry to have excluded the current live-context tail
-    // (and regen target, if any), otherwise it may re-inject recent messages as
-    // long-term memory.
-    cortexResult = memoryCortex.getCachedCortexResult(
-      ctx.chatId,
-      buildMemoryExcludeMessageIds(
-        messages,
-        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-        perChatOverrides,
-        ctx.excludeMessageId,
-      ),
-    );
-
-    if (cortexResult) {
-      const cortexMemoryResult = formatCortexForAssembly(
-        cortexResult,
-        cortexConfig,
-        character,
-        macroEnv,
-        ctx.chatId,
-        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-      );
-      if (hasCortexContent(cortexResult, macroEnv)) {
-        memoryResult = cortexMemoryResult;
-      } else {
-        // Genuinely no cortex context (new chat, no chunks, etc.) - fall back to vector retrieval.
-        memoryResult = await safeCollectChatVectorMemory(
-          ctx.userId,
-          ctx.chatId,
-          messages,
-          chatMemSettings,
-          perChatOverrides,
-          ctx.excludeMessageId,
-        );
-      }
-    } else {
-      // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
-      memoryResult = await safeCollectChatVectorMemory(
-        ctx.userId,
-        ctx.chatId,
-        messages,
-        chatMemSettings,
-        perChatOverrides,
-        ctx.excludeMessageId,
-      );
-    }
-  } else {
-    // Existing path: pure vector retrieval
-    memoryResult = await safeCollectChatVectorMemory(
-      ctx.userId,
-      ctx.chatId,
-      messages,
-      chatMemSettings,
-      perChatOverrides,
-      ctx.excludeMessageId,
-    );
-  }
-
-  // Merge linked cortex data (vaults + interlinks) if available
-  const linkedCortexResult = cortexEnabledForChat
-    ? memoryCortex.getCachedLinkedCortexResult(ctx.chatId)
-    : null;
-  let linkedMemoryText = "";
-  if (
-    linkedCortexResult &&
-    (linkedCortexResult.vaults.length > 0 ||
-      linkedCortexResult.interlinks.length > 0)
-  ) {
-    const linkedBudget = Math.floor(cortexConfig.contextTokenBudget * 0.3);
-    const linkedFormatted = memoryCortex.formatLinkedCortexSection(
-      linkedCortexResult.vaults,
-      linkedCortexResult.interlinks,
-      {
-        mode: cortexConfig.formatterMode,
-        tokenBudget: linkedBudget,
-        currentSpeakerName: character?.name,
-      },
-    );
-    linkedMemoryText = linkedFormatted.text;
-  }
-
-  // Store in macroEnv for {{memories}} macro access
-  const combinedFormatted = linkedMemoryText
-    ? memoryResult.formatted
-      ? memoryResult.formatted + "\n\n" + linkedMemoryText
-      : linkedMemoryText
-    : memoryResult.formatted;
-
-  const memoryInjectionStrategy =
-    chatMemSettings?.injectionStrategy ??
-    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
-  const effectiveMemoryEnabled =
-    (memoryResult.enabled || !!linkedMemoryText) && memoryInjectionStrategy !== "disabled";
-  const memoryFallbackAllowed =
-    memoryInjectionStrategy === "fallback" ||
-    !!macroEnv.extra.cortex?.formatted ||
-    !!linkedMemoryText;
-
-  macroEnv.extra.memory = {
-    chunks: memoryResult.chunks,
-    formatted: combinedFormatted,
-    count: memoryResult.count,
-    enabled: effectiveMemoryEnabled,
-    settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-  };
+  const {
+    memoryResult,
+    combinedFormatted,
+    effectiveMemoryEnabled,
+    memoryFallbackAllowed,
+  } = await populateMemoryMacroContext({
+    userId: ctx.userId,
+    chat,
+    character,
+    messages,
+    macroEnv,
+    chatMemorySettings: chatMemSettings,
+    perChatOverrides,
+    cortexConfig,
+    excludeMessageId: ctx.excludeMessageId,
+  });
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
 
   // ---- Databank retrieval ----
@@ -6342,8 +6244,123 @@ function formatMemoryOutput(
 }
 
 /**
+ * Populate combined memory and Cortex macros from the same cached retrieval
+ * context for prompt assembly and macro previews. This does not start Cortex
+ * warming, extraction, or rebuilds; cold Cortex caches use basic recall.
+ */
+export async function populateMemoryMacroContext({
+  userId,
+  chat,
+  character,
+  messages,
+  macroEnv,
+  chatMemorySettings: chatMemSettings,
+  perChatOverrides = (chat.metadata?.memory_settings as
+    import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null,
+  cortexConfig = memoryCortex.getCortexConfig(userId),
+  excludeMessageId,
+}: {
+  userId: string;
+  chat: Chat;
+  character: Character | null;
+  messages: Message[];
+  macroEnv: MacroEnv;
+  chatMemorySettings: import("./embeddings.service").ChatMemorySettings | null;
+  perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null;
+  cortexConfig?: memoryCortex.MemoryCortexConfig;
+  excludeMessageId?: string;
+}) {
+  const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata);
+  // A warm result must have excluded the live-context tail (and regen target)
+  // so recent messages cannot be re-injected as long-term memories.
+  const cortexResult = cortexEnabledForChat
+    ? memoryCortex.getCachedCortexResult(
+        chat.id,
+        buildMemoryExcludeMessageIds(
+          messages,
+          chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+          perChatOverrides,
+          excludeMessageId,
+        ),
+      )
+    : null;
+  let memoryResult: MemoryRetrievalResult | null = null;
+  if (cortexResult) {
+    const cortexMemoryResult = formatCortexForAssembly(
+      cortexResult,
+      cortexConfig,
+      character,
+      macroEnv,
+      chat.id,
+      chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+    );
+    if (hasCortexContent(cortexResult, macroEnv)) memoryResult = cortexMemoryResult;
+  }
+
+  // Cold or empty Cortex results use the ordinary cached recall path.
+  memoryResult ??= await safeCollectChatVectorMemory(
+    userId,
+    chat.id,
+    messages,
+    chatMemSettings,
+    perChatOverrides,
+    excludeMessageId,
+  );
+
+  // Merge linked cortex data (vaults + interlinks) if available
+  const linkedCortexResult = cortexEnabledForChat
+    ? memoryCortex.getCachedLinkedCortexResult(chat.id)
+    : null;
+  let linkedMemoryText = "";
+  if (
+    linkedCortexResult &&
+    (linkedCortexResult.vaults.length > 0 ||
+      linkedCortexResult.interlinks.length > 0)
+  ) {
+    const linkedBudget = Math.floor(cortexConfig.contextTokenBudget * 0.3);
+    const linkedFormatted = memoryCortex.formatLinkedCortexSection(
+      linkedCortexResult.vaults,
+      linkedCortexResult.interlinks,
+      {
+        mode: cortexConfig.formatterMode,
+        tokenBudget: linkedBudget,
+        currentSpeakerName: character?.name,
+      },
+    );
+    linkedMemoryText = linkedFormatted.text;
+  }
+
+  // Store in macroEnv for {{memories}} macro access
+  const combinedFormatted = linkedMemoryText
+    ? memoryResult.formatted
+      ? memoryResult.formatted + "\n\n" + linkedMemoryText
+      : linkedMemoryText
+    : memoryResult.formatted;
+
+  const memoryInjectionStrategy =
+    chatMemSettings?.injectionStrategy ??
+    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
+  const effectiveMemoryEnabled =
+    (memoryResult.enabled || !!linkedMemoryText) && memoryInjectionStrategy !== "disabled";
+  const memoryFallbackAllowed =
+    memoryInjectionStrategy === "fallback" ||
+    !!macroEnv.extra.cortex?.formatted ||
+    !!linkedMemoryText;
+
+  macroEnv.extra.memory = {
+    chunks: memoryResult.chunks,
+    formatted: combinedFormatted,
+    count: memoryResult.count,
+    enabled: effectiveMemoryEnabled,
+    settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+  };
+
+  return { memoryResult, combinedFormatted, effectiveMemoryEnabled, memoryFallbackAllowed };
+}
+
+/**
  * Format a CortexResult into a MemoryRetrievalResult and populate the macro
- * environment. Used by both the warm-cache and await-cortex branches.
+ * environment for the shared memory context setup.
  */
 function formatCortexForAssembly(
   cortexResult: memoryCortex.CortexResult,

@@ -12,11 +12,12 @@ import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
 import { resolvePersonaForChatMacros } from "../services/persona-addon-states";
 import * as connectionsSvc from "../services/connections.service";
-import * as memoryCortex from "../services/memory-cortex";
+import * as embeddingsSvc from "../services/embeddings.service";
 import {
   normalizePromptBlockText,
   resolvePromptBlockPlacements,
   populateLumiaLoomContext,
+  populateMemoryMacroContext,
   resolvePromptVariables,
 } from "../services/prompt-assembly.service";
 
@@ -234,7 +235,14 @@ async function buildEnvFromIds(userId: string, body: {
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
         populateLumiaLoomContext(env, userId, chat);
-        seedCortexPreviewContext(userId, chat.id, env);
+        await populateMemoryMacroContext({
+          userId,
+          chat,
+          character,
+          messages,
+          macroEnv: env,
+          chatMemorySettings: embeddingsSvc.loadChatMemorySettings(userId),
+        });
         return env;
       }
     }
@@ -300,121 +308,6 @@ async function buildEnvFromIds(userId: string, body: {
     dynamicMacros: body.dynamic_macros,
     userInput: body.user_input,
   });
-}
-
-function seedCortexPreviewContext(
-  userId: string,
-  chatId: string,
-  env: MacroEnv,
-): void {
-  const config = memoryCortex.getCortexConfig(userId);
-  const chat = chatsSvc.getChat(userId, chatId);
-  if (!memoryCortex.isCortexEnabledForChat(config, chat?.metadata)) return;
-
-  const cached = memoryCortex.getCachedCortexResult(chatId);
-  const colorMap = memoryCortex.formatColorMapForPrompt(chatId);
-  if (
-    cached &&
-    (
-      cached.memories.length > 0 ||
-      cached.entityContext.length > 0 ||
-      cached.activeRelationships.length > 0 ||
-      !!cached.arcContext ||
-      !!colorMap
-    )
-  ) {
-    env.extra.cortex = {
-      memories: cached.memories,
-      entityContext: cached.entityContext,
-      activeRelationships: cached.activeRelationships,
-      arcContext: cached.arcContext,
-      colorMap,
-    };
-    return;
-  }
-
-  const maxEntities = Math.max(1, config.retrieval.maxEntitySnapshots);
-  const maxRelations = Math.max(1, config.retrieval.maxRelationships);
-  const allEntities = memoryCortex.getEntities(chatId);
-  const entities = allEntities
-    .filter((entity) => entity.status !== "inactive")
-    .slice(0, maxEntities);
-  const entityIds = new Set(entities.map((entity) => entity.id));
-  const relations = memoryCortex
-    .getRelations(chatId)
-    .filter((relation) =>
-      entityIds.has(relation.sourceEntityId) ||
-      entityIds.has(relation.targetEntityId)
-    )
-    .slice(0, Math.max(maxRelations, maxEntities * 5));
-  const entityById = new Map(allEntities.map((entity) => [entity.id, entity]));
-
-  const entityContext = entities.map((entity) => {
-    const entityRelations = relations
-      .filter((relation) =>
-        relation.sourceEntityId === entity.id ||
-        relation.targetEntityId === entity.id
-      )
-      .slice(0, 5)
-      .map((relation) => {
-        const targetId = relation.sourceEntityId === entity.id
-          ? relation.targetEntityId
-          : relation.sourceEntityId;
-        return {
-          targetName: entityById.get(targetId)?.name ?? "unknown",
-          type: relation.relationType,
-          label: relation.relationLabel,
-          strength: relation.strength,
-          sentiment: relation.sentiment,
-        };
-      });
-    return {
-      id: entity.id,
-      name: entity.name,
-      type: entity.entityType,
-      status: entity.status,
-      description: entity.description,
-      lastSeenAt: entity.lastSeenAt,
-      mentionCount: entity.mentionCount,
-      topFacts: entity.facts.slice(-6),
-      emotionalProfile: entity.emotionalValence,
-      relationships: entityRelations,
-    };
-  });
-
-  const activeRelationships = relations.slice(0, maxRelations).map((relation) => ({
-    sourceName: entityById.get(relation.sourceEntityId)?.name ?? "unknown",
-    targetName: entityById.get(relation.targetEntityId)?.name ?? "unknown",
-    type: relation.relationType,
-    label: relation.relationLabel,
-    strength: relation.strength,
-    sentiment: relation.sentiment,
-  }));
-
-  const latestArc = memoryCortex
-    .getConsolidations(chatId, 2)
-    .reduce<ReturnType<typeof memoryCortex.getConsolidations>[number] | null>(
-      (latest, current) => {
-        if (!latest) return current;
-        return (current.messageRangeEnd ?? 0) > (latest.messageRangeEnd ?? 0)
-          ? current
-          : latest;
-      },
-      null,
-    );
-  const arcContext = latestArc
-    ? latestArc.title
-      ? `[${latestArc.title}] ${latestArc.summary}`
-      : latestArc.summary
-    : null;
-
-  env.extra.cortex = {
-    memories: [],
-    entityContext,
-    activeRelationships,
-    arcContext,
-    colorMap,
-  };
 }
 
 function seedPromptVariablesForPreview(env: MacroEnv, body: {

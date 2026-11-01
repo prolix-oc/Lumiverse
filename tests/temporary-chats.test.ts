@@ -375,7 +375,7 @@ describe("temporary character-less chats", () => {
     expect(serialized).not.toContain("{{entities}}");
   });
 
-  test("macro resolve API seeds Memory Cortex context for input-bar previews", async () => {
+  test("macro previews omit stored Cortex records when retrieval context is cold", async () => {
     const character = charactersSvc.createCharacter(USER_ID, { name: "Aerith" });
     const chat = chatsSvc.createChat(USER_ID, { character_id: character.id });
     chatsSvc.createMessage(chat.id, { is_user: true, name: "User", content: "What do we know?" }, USER_ID);
@@ -472,12 +472,7 @@ describe("temporary character-less chats", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.text).toContain("yes");
-    expect(body.text).toContain("[KNOWN ENTITIES]");
-    expect(body.text).toContain("Kael guards the silver bridge");
-    expect(body.text).toContain("[ACTIVE RELATIONSHIPS]");
-    expect(body.text).toContain("Kael -> Aerith: ally");
-    expect(body.text).not.toContain("{{entities}}");
+    expect(body.text).toBe("no\n\n");
   });
 
   test("no_preset temp chats ignore presets even when one is requested", async () => {
