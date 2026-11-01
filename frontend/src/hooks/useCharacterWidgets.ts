@@ -1,8 +1,7 @@
 import { useEffect } from 'react'
 import { post } from '@/api/client'
 import { useStore } from '@/store'
-import { hasIOSNativeBridge, iosNativeRequest } from '@/lib/ios-native'
-import { createIOSForegroundSync } from '@/lib/ios-foreground-sync'
+import { characterWidgetNative } from '@/lib/character-widget-native'
 import { hasUnsavedSettings } from '@/store/slices/settings'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -19,16 +18,17 @@ function palette() {
 }
 
 /** Mounted outside AuthGuard so logout and session loss clear native data too. */
-export function useIOSWidgets(userId: string | null | undefined) {
+export function useCharacterWidgets(userId: string | null | undefined) {
   useEffect(() => {
-    if (!hasIOSNativeBridge() || userId === undefined) return
-    const configure = (enrollment?: Record<string, unknown>) => iosNativeRequest<WidgetStatus>('widgets.configure', {
+    const native = characterWidgetNative()
+    if (!native || userId === undefined) return
+    const configure = (enrollment?: Record<string, unknown>) => native.request<WidgetStatus>('widgets.configure', {
       accountId: userId, serverOrigin: window.location.origin, palette: palette(), ...(enrollment ? { enrollment } : {}),
     })
     if (!userId) { void configure().catch(() => {}); return }
-    const recovery = createIOSForegroundSync(async signal => {
+    const recovery = native.sync(async signal => {
       // Older native wrappers don't expose widgets. Don't turn that into retries.
-      const support = await iosNativeRequest<WidgetStatus>('widgets.status').catch(() => null)
+      const support = await native.request<WidgetStatus>('widgets.status').catch(() => null)
       if (signal.aborted || !support?.available) return
       const status = await configure()
       if (signal.aborted) return
@@ -38,10 +38,10 @@ export function useIOSWidgets(userId: string | null | undefined) {
         await configure(enrollment)
       }
       if (signal.aborted || hasUnsavedSettings()) return
-      await iosNativeRequest('widgets.refresh')
+      await native.request('widgets.refresh')
     }, 60_000)
     const invalidate = () => {
-      void iosNativeRequest('widgets.invalidate').catch(() => {})
+      void native.request('widgets.invalidate').catch(() => {})
       recovery.request()
     }
     const unsubscribe = useStore.subscribe((state, previous) => {

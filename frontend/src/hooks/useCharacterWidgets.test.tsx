@@ -7,23 +7,28 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, getComputedStyle: dom.window.getComputedStyle, IS_REACT_ACT_ENVIRONMENT: true })
 const calls: { action: string; payload: any }[] = []
 let needsEnrollment = true, available = true, unsaved = false, appState = 'active'
+let platform: 'ios' | 'android' = 'ios'
 let pendingEnrollment: (() => Promise<Record<string, unknown>>) | undefined
 let storeListener: ((state: any, previous: any) => void) | undefined
 const events = new Map<string, () => void>()
 mock.module('@/api/client', () => ({ post: async () => pendingEnrollment ? pendingEnrollment() : { registrationId: 'registration-1', credential: 'secret', accountId: 'owner' } }))
-mock.module('@/lib/ios-native', () => ({ hasIOSNativeBridge: () => true, iosNativeRequest: async (action: string, payload: any) => {
+async function nativeRequest(action: string, payload: any) {
   calls.push({ action, payload })
   if (action === 'widgets.configure' && payload.enrollment) needsEnrollment = false
   return { available, needsEnrollment, deviceId: 'installation-12345678' }
-} }))
+}
+mock.module('@/lib/ios-native', () => ({ hasIOSNativeBridge: () => platform === 'ios', iosNativeRequest: nativeRequest }))
+mock.module('@/lib/android-native', () => ({ hasAndroidNativeBridge: () => platform === 'android', androidNativeRequest: nativeRequest }))
 mock.module('@/store', () => ({ useStore: { subscribe: (listener: typeof storeListener) => { storeListener = listener; return () => { storeListener = undefined } } } }))
 mock.module('@/store/slices/settings', () => ({ hasUnsavedSettings: () => unsaved }))
 mock.module('@/ws/client', () => ({ wsClient: { on: (event: string, callback: () => void) => { events.set(event, callback); return () => { events.delete(event) } } } }))
 mock.module('@/lib/ios-app-state', () => ({ getIOSAppState: () => appState, subscribeIOSAppState: () => () => {} }))
-let root: Root, hook: typeof import('./useIOSWidgets').useIOSWidgets
-beforeAll(async () => { hook = (await import('./useIOSWidgets')).useIOSWidgets })
+let root: Root, hook: typeof import('./useCharacterWidgets').useCharacterWidgets
+beforeAll(async () => { hook = (await import('./useCharacterWidgets')).useCharacterWidgets })
 beforeEach(async () => {
   calls.length = 0; events.clear(); needsEnrollment = true; available = true; unsaved = false; appState = 'active'; pendingEnrollment = undefined
+  platform = 'ios'
+  Reflect.deleteProperty(window, '__LUMIVERSE_ANDROID_ACTIVE__')
   document.documentElement.style.setProperty('--lumiverse-primary', 'rgb(120, 80, 200)')
   root = (await import('react-dom/client')).createRoot(document.body.appendChild(document.createElement('div')))
 })
@@ -72,3 +77,33 @@ test('visibility changes invalidate immediately and wait for settings persistenc
   unsaved = false; events.get('SETTINGS_UPDATED')?.(); await settle()
   expect(calls.filter(c => c.action === 'widgets.refresh')).toHaveLength(1)
 });
+
+test('Android enrolls against the selected server origin and syncs on native resume', async () => {
+  platform = 'android'
+  Object.assign(window, { __LUMIVERSE_ANDROID_ACTIVE__: false })
+  await render('owner'); await settle()
+  expect(calls).toHaveLength(0)
+  Object.assign(window, { __LUMIVERSE_ANDROID_ACTIVE__: true })
+  window.dispatchEvent(new dom.window.Event('lumiverse:android-resume'))
+  await settle()
+  expect(calls.map(c => c.action)).toEqual(['widgets.status', 'widgets.configure', 'widgets.configure', 'widgets.refresh'])
+  expect(calls.find(c => c.payload?.enrollment)?.payload.serverOrigin).toBe(window.location.origin)
+  calls.length = 0
+  Object.assign(window, { __LUMIVERSE_ANDROID_ACTIVE__: false })
+  window.dispatchEvent(new dom.window.Event('lumiverse:android-app-state'))
+  await render(null)
+  expect(calls).toEqual([{ action: 'widgets.configure', payload: expect.objectContaining({ accountId: null }) }])
+})
+
+test('Android suspension retires an enrollment that replies after logout', async () => {
+  platform = 'android'
+  let resolve!: (value: Record<string, unknown>) => void
+  pendingEnrollment = () => new Promise(done => { resolve = done })
+  await render('owner'); await settle()
+  Object.assign(window, { __LUMIVERSE_ANDROID_ACTIVE__: false })
+  window.dispatchEvent(new dom.window.Event('lumiverse:android-app-state'))
+  await render(null)
+  await act(async () => { resolve({ registrationId: 'late', accountId: 'owner' }) }); await settle()
+  expect(calls.some(c => c.payload?.enrollment)).toBe(false)
+  expect(calls.some(c => c.action === 'widgets.refresh')).toBe(false)
+})

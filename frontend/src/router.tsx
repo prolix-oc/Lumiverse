@@ -5,7 +5,7 @@ import App from './App'
 import DesktopPwaTitlebar from './components/shared/DesktopPwaTitlebar'
 import { isDesktopFloatingWidgetWindow } from './lib/desktop-floating-widget'
 import { useStore } from './store'
-import { useIOSWidgets } from './hooks/useIOSWidgets'
+import { useCharacterWidgets } from './hooks/useCharacterWidgets'
 
 const LandingPage = lazy(() => import('./components/landing/LandingPage'))
 const ChatView = lazy(() => import('./components/chat/ChatView'))
@@ -18,7 +18,7 @@ const StreamDeckHandoffPage = lazy(() => import('./components/StreamDeckHandoffP
 const WidgetCharacterPage = lazy(() => import('./components/WidgetCharacterPage'))
 
 function WindowShell() {
-  useIOSWidgets(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
+  useCharacterWidgets(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
   return (
     <>
       {!isDesktopFloatingWidgetWindow() && <DesktopPwaTitlebar />}
