@@ -184,6 +184,40 @@ test("each review question directly states its subject and uses distinct outcome
   expect(String(batch!.questions.r0!.instructions)).not.toContain("For lover");
 });
 
+test("relationship reviews use broad conceptual guidance across all types without examples or a formal-bond requirement", () => {
+  for (const kind of ["relationship", "reactivation"] as const) {
+    const candidates = ["ally", "mentor", "lover", "enemy", "rival", "parent", "child", "sibling", "owns", "member_of", "located_in", "fears", "serves", "custom"].map((type, index) => ({
+      id: `r${index}`, kind, source: "Mara", target: "Prolix", type,
+    }));
+    const [batch] = buildArbitrationBatches({ passage: 'At Silver Inn, Mara carries Dawnblade. "I trust you to watch my back, Prolix."',
+      canonicals: [], participants: [{ name: "Mara", role: "character" }, { name: "Prolix", role: "user" }], candidates });
+    for (const question of Object.values(batch!.questions)) {
+      expect(question.instructions).toContain("One clear interaction, agreement or commitment is sufficient");
+      expect(question.instructions).toContain("an established bond reaffirmed here");
+      expect(question.instructions).toContain("The named user persona is an in-story character");
+      expect(question.instructions).toContain("Judge this claim independently of item/location links and importance");
+      expect(question.instructions).toContain("meaning in context, not a fixed set of words or behaviors");
+      expect(question.instructions).toContain("all other types are equally eligible");
+      expect(question.instructions).toContain("these overlap and are not exhaustive");
+      expect(question.instructions).toContain("Custom admits supported connections outside the standard categories");
+      expect(question.instructions).not.toContain("I trust you to watch my back");
+      expect(question.instructions).not.toContain("I will train you");
+      expect(question.instructions).toContain("Co-presence, routine conversation");
+      expect(question.instructions).toContain("Negated or hypothetical claims");
+      expect(question.instructions).toContain("Leave ambiguous references unresolved");
+      if (question.type !== "choice") throw new Error("Expected a Choice question");
+      expect(question.criteria.keep).toContain("even without a formal relationship declaration");
+      expect(question.criteria.reject).toContain("about a different pair");
+      expect(question.criteria.reject).not.toContain("third-party evidence");
+    }
+    expect(batch!.questions.r0!.instructions).toContain("Friendship falls within ally");
+    expect(batch!.questions.r0!.instructions).not.toContain("A supported love interest is sufficient");
+    expect(batch!.questions.r1!.instructions).not.toContain("A supported love interest is sufficient");
+    expect(batch!.questions.r2!.instructions).toContain("Do not require marriage, sex, exclusivity or reciprocity");
+    expect(batch!.questions.r3!.instructions).toContain("antagonistic bonds within enemy");
+  }
+});
+
 test("co-presence alone does not turn unrelated entities into identity choices", () => {
   const names = ["Darran", "Mara", "Tovin", "New Eridu", "Triple Tiara", "Arima Kinen"];
   const plan = buildCortexArbitrationPlan({ passage: names.join(" met "), characterNames: ["Darran", "Mara"],

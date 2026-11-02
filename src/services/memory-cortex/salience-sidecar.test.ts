@@ -171,6 +171,54 @@ test("live and batch extraction retain configured participants alongside known e
   }
 });
 
+test("live and batch requests check interpersonal coverage before accepting item/location-only results", async () => {
+  const requests: Array<Parameters<Parameters<typeof extractWithSidecar>[1]>[0]> = [];
+  const entry = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
+    relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] };
+  const generate: Parameters<typeof extractWithSidecar>[1] = async (request) => {
+    requests.push(request);
+    return { content: JSON.stringify(request.requestPurpose === "batch extraction"
+      ? { results: [{ ...entry, index: 0 }, { ...entry, index: 1 }] } : entry) };
+  };
+  const passage = '[CHARACTER | Mara]: At Silver Inn, I carry Dawnblade. "I trust you to watch my back, Prolix."';
+  const options = { participants: [{ name: "Mara", role: "character" as const }, { name: "Prolix", role: "user" as const }] };
+  await extractWithSidecar(passage, generate, "fixture", options);
+  await extractBatchWithSidecar([{ index: 0, content: passage }, { index: 1, content: "Quiet weather." }], generate, "fixture", options);
+  expect(requests).toHaveLength(2);
+  const relationshipSections = requests.map((request) => request.messages[0]!.content.split("RELATIONSHIPS\n")[1]!.split("\nFACTS AND IMPORTANCE")[0]);
+  expect(relationshipSections[0]).toBe(relationshipSections[1]);
+  for (const request of requests) {
+    const system = request.messages[0]!.content;
+    expect(system).not.toContain("Missing data is acceptable");
+    expect(system).toContain("still extract every clearly supported claim");
+    expect(system).toContain("First check person-to-person connections");
+    expect(system).toContain("The user persona is an in-story character");
+    expect(system).toContain("including established bonds reaffirmed in this passage");
+    expect(system).toContain("Ownership or location links do not replace person-to-person connections");
+    expect(system).toContain("no supported interpersonal connection was omitted or recorded only in key_facts");
+    expect(system).toContain("overlapping dimensions, not an exhaustive checklist");
+    expect(system).toContain("without requiring particular words or behaviors");
+    expect(system).toContain("Use the full relationship type vocabulary as broad categories");
+    expect(system).toContain("Use custom with a precise label when no standard type fits");
+    expect(system).toContain("Co-presence and routine conversation alone establish no interpersonal bond");
+    expect(system).not.toContain("RELATIONSHIP EXAMPLES");
+    expect(system).not.toContain("Silver Inn");
+    expect(system).not.toContain("I trust you to watch my back");
+    const tool = request.tools![0]!;
+    const relationshipSchema = request.requestPurpose === "batch extraction"
+      ? (tool.parameters as any).properties.results.items.properties.relationships_shown
+      : (request.tools!.find((tool) => tool.name === "extract_relationships")!.parameters as any).properties.relationships;
+    expect(relationshipSchema.description).toContain("Do not omit a supported person-to-person connection");
+    expect(relationshipSchema.items.properties.type.enum).toEqual([
+      "ally", "enemy", "lover", "parent", "child", "sibling", "mentor", "rival", "owns", "member_of", "located_in", "fears", "serves", "custom",
+    ]);
+    expect(relationshipSchema.items.properties.type.description).toContain("Categories describe broad connections, not fixed behaviors or required wording");
+    expect(relationshipSchema.items.properties.type.description).toContain("ally includes friendship");
+    expect(relationshipSchema.items.properties.type.description).toContain("All other standard types are equally eligible");
+    expect(relationshipSchema.items.properties.label.description).not.toContain("e.g.");
+  }
+});
+
 test("generative extraction cannot request or return candidate-review verdicts", async () => {
   const requests: Array<Parameters<Parameters<typeof extractWithSidecar>[1]>[0]> = [];
   const extraction = { importance: 2, emotional_tones: [], narrative_flags: [], key_facts: [], entities_present: [],
