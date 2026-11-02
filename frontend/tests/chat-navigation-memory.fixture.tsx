@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { BrowserRouter } from 'react-router'
 import MessageList from '@/components/chat/MessageList'
 import { useStore } from '@/store'
@@ -126,8 +126,10 @@ Object.assign(window, { memoryFixture: api })
 function Fixture() {
   const [route, setRoute] = useState<'home' | 'chat'>('home')
   const [leaving, setLeaving] = useState(false)
-  changeRoute = setRoute
-  changeLeaving = setLeaving
+  useLayoutEffect(() => {
+    changeRoute = setRoute
+    changeLeaving = setLeaving
+  }, [])
   const messages = useStore(state => state.messages)
   const streaming = useStore(state => state.isStreaming)
   return <BrowserRouter>{route === 'chat'

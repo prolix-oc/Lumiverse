@@ -1,10 +1,50 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { decisionEvaluationUrl, fetchDecisionModels, evaluateProviderDecision, listProviders, validateDecisionParameters } from "./providers";
-import type { DecisionEvaluationInput } from "./contract";
+import type { DecisionEvaluationInput, DecisionResult } from "./contract";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 describe("Decision provider adapters", () => {
+  test("discovers Inception decisions by endpoint support, not text output modality", async () => {
+    globalThis.fetch = (async (url: any, init: any) => {
+      expect(String(url)).toBe("https://api.inceptionlabs.ai/v1/models");
+      expect(init.headers.Authorization).toBe("Bearer inception-key");
+      return Response.json({ data: [
+        { id: "mercury-decide", name: "Inception: Mercury Decide", description: "Typed decisions", supported_endpoints: ["decisions"], input_modalities: ["text"], output_modalities: ["text"], context_length: 65536, pricing: { prompt: "0.00000002", completion: "0" } },
+        { id: "mercury-3", supported_endpoints: ["chat.completions"], output_modalities: ["text"] },
+        { id: "unknown", output_modalities: ["decisions"] },
+      ] });
+    }) as unknown as typeof fetch;
+    expect(await fetchDecisionModels({ provider: "inception" }, "inception-key")).toEqual([{
+      id: "mercury-decide", label: "Inception: Mercury Decide", description: "Typed decisions", input_modalities: ["text"], output_modalities: ["text"],
+      context_length: 65536, pricing: { prompt: "0.00000002", completion: "0" }, protocol: "supported",
+    }]);
+  });
+  test("Inception posts typed questions and preserves native answers and usage", async () => {
+    const input: DecisionEvaluationInput = { state: { message: "Billing request" }, questions: {
+      billing: { type: "noul", instructions: "Is this about billing?" },
+      team: { type: "choice", instructions: "Pick a team", criteria: { billing: "Payments", support: "Technical" } },
+      urgency: { type: "score", instructions: "Urgency", criteria: ["Routine", "Urgent"] },
+    }, userId: "private-owner", connection_id: "private-profile" };
+    const answers: DecisionResult["answers"] = {
+      billing: { type: "noul", noul: 0.97 },
+      team: { type: "choice", choice: "billing", confidence: 0.9, probabilities: { billing: 0.9, support: 0.1 } },
+      urgency: { type: "score", score: 0.25, confidence: 0.75, probabilities: { "0": 0.75, "1": 0.25 }, legend: { "0": "Routine", "1": "Urgent" } },
+    };
+    globalThis.fetch = (async (url: any, init: any) => {
+      expect(String(url)).toBe("https://api.inceptionlabs.ai/v1/decisions");
+      expect(init.method).toBe("POST");
+      expect(init.headers.Authorization).toBe("Bearer inception-key");
+      expect(init.headers["HTTP-Referer"]).toBeUndefined();
+      expect(JSON.parse(init.body)).toEqual({ model: "mercury-decide", state: input.state, questions: input.questions });
+      return Response.json({ model: "mercury-decide", answers, usage: { input_tokens: 48, output_tokens: 3 }, arbitrary: "not relayed" });
+    }) as unknown as typeof fetch;
+    expect(await evaluateProviderDecision({ provider: "inception", model: "mercury-decide", default_parameters: {} }, "inception-key", input)).toEqual({
+      model: "mercury-decide", answers, usage: { input_tokens: 48, output_tokens: 3 },
+    });
+  });
   test("resolves provider endpoints and proxy prefixes without duplicating v1", () => {
+    expect(decisionEvaluationUrl({ provider: "inception" })).toBe("https://api.inceptionlabs.ai/v1/decisions");
+    expect(decisionEvaluationUrl({ provider: "inception", api_url: "https://proxy.test/root/v1/" })).toBe("https://proxy.test/root/v1/decisions");
     expect(decisionEvaluationUrl({ provider: "typesafe" })).toBe("https://api.typesafe.ai/v1/systemone");
     expect(decisionEvaluationUrl({ provider: "openrouter" })).toBe("https://openrouter.ai/api/alpha/decisions");
     expect(decisionEvaluationUrl({ provider: "openrouter", api_url: "https://proxy.test/root/v1/" })).toBe("https://proxy.test/root/alpha/decisions");
@@ -13,7 +53,7 @@ describe("Decision provider adapters", () => {
     expect(() => decisionEvaluationUrl({ provider: "typesafe", api_url: "https://key@provider.test/v1" })).toThrow();
   });
   test("lists the built-in Decision providers", () => {
-    expect(listProviders().map((provider) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt"]);
+    expect(listProviders().map((provider) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception"]);
     expect(listProviders().find((provider) => provider.id === "nanogpt")?.capabilities).toEqual({
       apiKeyRequired: true, defaultUrl: "https://nano-gpt.com/api/v1", suggestedModel: "typesafe/jev-latest", modelListStyle: "dynamic",
     });

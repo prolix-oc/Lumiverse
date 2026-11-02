@@ -7,6 +7,7 @@ const PROVIDERS: DecisionProviderDTO[] = [
   { id: "openrouter", name: "OpenRouter", capabilities: { apiKeyRequired: true, defaultUrl: "https://openrouter.ai/api/v1", suggestedModel: "~typesafe/jev-latest", modelListStyle: "dynamic" } },
   { id: "typesafe", name: "TypeSafe", capabilities: { apiKeyRequired: true, defaultUrl: "https://api.typesafe.ai/v1", suggestedModel: "jev-latest", modelListStyle: "dynamic" } },
   { id: "nanogpt", name: "NanoGPT", capabilities: { apiKeyRequired: true, defaultUrl: "https://nano-gpt.com/api/v1", suggestedModel: "typesafe/jev-latest", modelListStyle: "dynamic" } },
+  { id: "inception", name: "Inception", capabilities: { apiKeyRequired: true, defaultUrl: "https://api.inceptionlabs.ai/v1", suggestedModel: "mercury-decide", modelListStyle: "dynamic" } },
 ];
 export function listProviders(): DecisionProviderDTO[] { return structuredClone(PROVIDERS); }
 export function getProvider(id: string): DecisionProviderDTO {
@@ -28,7 +29,7 @@ export function decisionEvaluationUrl(profile: { provider: string; api_url?: str
   const url = new URL(resolveDecisionApiUrl(profile));
   url.pathname = profile.provider === "openrouter"
     ? `${url.pathname.slice(0, -3)}/alpha/decisions`
-    : profile.provider === "nanogpt"
+    : (profile.provider === "nanogpt" || profile.provider === "inception")
       ? `${url.pathname}/decisions`
       : `${url.pathname}/systemone`;
   return url.toString();
@@ -66,16 +67,18 @@ export async function fetchDecisionModels(profile: { provider: string; api_url?:
     if (!isRecord(item)) continue;
     const id = profile.provider === "typesafe" ? item.name : item.id;
     if (typeof id !== "string" || !id.trim()) continue;
-    const architecture = isRecord(item.architecture) ? item.architecture : {};
+    // Inception advertises modalities at the top level and mixes chat and decision models.
+    const architecture = profile.provider === "inception" ? item : isRecord(item.architecture) ? item.architecture : {};
+    if (profile.provider === "inception" && (!Array.isArray(item.supported_endpoints) || !item.supported_endpoints.includes("decisions"))) continue;
     const inputModalities = Array.isArray(architecture.input_modalities) ? architecture.input_modalities.filter((v): v is string => typeof v === "string") : [];
     const outputModalities = Array.isArray(architecture.output_modalities) ? architecture.output_modalities.filter((v): v is string => typeof v === "string") : [];
     if (profile.provider === "openrouter" && Array.isArray(architecture.output_modalities) && !architecture.output_modalities.includes("decisions")) continue;
     // NanoGPT mixes chat and decision models in one detailed catalog; keep only Decision models.
     if (profile.provider === "nanogpt" && !outputModalities.includes("decisions")) continue;
-    const supported = profile.provider === "typesafe" || profile.provider === "nanogpt" || /^~?typesafe\/jev-|^(cloudflare\/clef|perplexity\/pplx-decider|upstage\/solar-decide|inception\/mercury-decide|liquid\/d1|openai\/gpt-6-luna-decisions)/.test(id);
+    const supported = profile.provider === "inception" || profile.provider === "typesafe" || profile.provider === "nanogpt" || /^~?typesafe\/jev-|^(cloudflare\/clef|perplexity\/pplx-decider|upstage\/solar-decide|inception\/mercury-decide|liquid\/d1|openai\/gpt-6-luna-decisions)/.test(id);
     const pricing = decisionModelPricing(item.pricing);
     models.set(id, {
-      id, label: (profile.provider === "openrouter" || profile.provider === "nanogpt") && typeof item.name === "string" ? item.name : id,
+      id, label: (profile.provider === "openrouter" || profile.provider === "nanogpt" || profile.provider === "inception") && typeof item.name === "string" ? item.name : id,
       ...(typeof item.description === "string" ? { description: item.description } : {}),
       ...(profile.provider === "typesafe" ? { input_modalities: ["text", "image"] } : inputModalities.length ? { input_modalities: inputModalities } : {}),
       ...(outputModalities.length ? { output_modalities: outputModalities } : {}),
