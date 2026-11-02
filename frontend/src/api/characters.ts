@@ -276,7 +276,17 @@ export const charactersApi = {
    * Ask a Decision model with image input which folder each card belongs in.
    * Returns suggestions only — the client reviews them before bulk-moving.
    */
-  autoAssignFolders(input: { ids: string[]; folders: string[]; connection_id?: string }) {
+  autoAssignFolders(input: {
+    ids: string[]
+    folders: string[]
+    connection_id?: string
+    /** Extra new-folder names to offer the model, beyond its own proposals. */
+    new_folder_candidates?: string[]
+    /** LLM connection used to propose new folder names; the active one if omitted. */
+    llm_connection_id?: string
+    /** Set false to skip the LLM proposal pass. */
+    propose_new_folders?: boolean
+  }) {
     return post<AutoFolderResult>('/characters/folders/auto-assign', input, { timeout: 10 * 60 * 1000 })
   },
 

@@ -643,7 +643,10 @@ app.post("/folders/delete", async (c) => {
 // through /bulk-update so nothing moves without confirmation.
 app.post("/folders/auto-assign", async (c) => {
   const userId = c.get("userId");
-  const body: { ids?: unknown; folders?: unknown; connection_id?: unknown } = await c.req.json().catch(() => ({}));
+  const body: {
+    ids?: unknown; folders?: unknown; connection_id?: unknown;
+    new_folder_candidates?: unknown; llm_connection_id?: unknown; propose_new_folders?: unknown;
+  } = await c.req.json().catch(() => ({}));
   if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 500) {
     return c.json({ error: "ids must be a non-empty array with at most 500 items" }, 400);
   }
@@ -654,12 +657,21 @@ app.post("/folders/auto-assign", async (c) => {
   const connectionId = typeof body.connection_id === "string" && body.connection_id.trim()
     ? body.connection_id.trim()
     : undefined;
+  const llmConnectionId = typeof body.llm_connection_id === "string" && body.llm_connection_id.trim()
+    ? body.llm_connection_id.trim()
+    : undefined;
+  const newFolderCandidates = Array.isArray(body.new_folder_candidates)
+    ? body.new_folder_candidates.filter((name): name is string => typeof name === "string").slice(0, 10)
+    : undefined;
 
   try {
     return c.json(await autoAssignFolders(userId, {
       ids,
       folders,
       ...(connectionId ? { connection_id: connectionId } : {}),
+      ...(llmConnectionId ? { llm_connection_id: llmConnectionId } : {}),
+      ...(newFolderCandidates ? { new_folder_candidates: newFolderCandidates } : {}),
+      ...(typeof body.propose_new_folders === "boolean" ? { propose_new_folders: body.propose_new_folders } : {}),
     }));
   } catch (err) {
     if (isDatabaseUnavailable(err)) throw err;

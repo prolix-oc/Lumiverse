@@ -16,7 +16,6 @@ import CharacterToolbar from './character-browser/CharacterToolbar'
 import ChubExpressionBackfillBanner from './character-browser/ChubExpressionBackfillBanner'
 import TagFilter from './character-browser/TagFilter'
 import BatchBar from './character-browser/BatchBar'
-import FolderOrganizeModal from './character-browser/FolderOrganizeModal'
 import FavoritesSlider from './character-browser/FavoritesSlider'
 import CharacterGrid from './character-browser/CharacterGrid'
 import CharacterList from './character-browser/CharacterList'
@@ -83,6 +82,7 @@ export default function CharacterBrowser() {
   const openModal = useStore((s) => s.openModal)
   const favoritesBarCollapsed = useStore((s) => s.favoritesBarCollapsed)
   const setSetting = useStore((s) => s.setSetting)
+  const openDrawer = useStore((s) => s.openDrawer)
   const {
     folders,
     createFolder,
@@ -244,7 +244,6 @@ export default function CharacterBrowser() {
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false)
-  const [organizeOpen, setOrganizeOpen] = useState(false)
   const [randomChatBusy, setRandomChatBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
@@ -379,7 +378,7 @@ export default function CharacterBrowser() {
         importLoading={browser.importLoading}
         tagLibraryImporting={tagLibraryImporting}
         onGroupChat={() => openModal('groupChatCreator')}
-        onOrganizeFolders={() => setOrganizeOpen(true)}
+        onOrganizeFolders={() => openDrawer('folders')}
         onRandomChat={() => void handleRandomChat()}
         randomChatBusy={randomChatBusy}
       />
@@ -596,17 +595,6 @@ export default function CharacterBrowser() {
         onClose={() => setBulkTagsOpen(false)}
         onApplied={() => { setBulkTagsOpen(false); browser.refreshBrowser() }}
       />
-
-      {organizeOpen && (
-        <FolderOrganizeModal
-          characters={browser.characters}
-          initialSelectedIds={browser.batchSelected}
-          folders={folders}
-          onCreateFolder={createFolder}
-          onBulkMove={browser.bulkUpdateFolder}
-          onClose={() => setOrganizeOpen(false)}
-        />
-      )}
 
       <ConfirmationModal
         isOpen={!!browser.pendingLorebookImport}

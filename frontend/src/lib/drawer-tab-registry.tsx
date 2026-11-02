@@ -7,6 +7,7 @@ import {
   Users, Drama, PenTool, MessageCircle, FileText, Brain, ScrollText,
   MessageSquareReply, Image, Palette, Puzzle, Terminal,
   GitBranch, Globe, Wallpaper, Replace, Library, Feather, Database,
+  FolderTree,
 } from 'lucide-react'
 import { IconUsersGroup } from '@tabler/icons-react'
 import { useStore } from '@/store'
@@ -28,6 +29,7 @@ import { hasEnabledFrontendExtensionId } from '@/lib/spindle/frontend-extension-
 const ConnectionsPanel = lazyWithPreload(() => import('@/components/panels/ConnectionsPanel'))
 const CharacterProfile = lazyWithPreload(() => import('@/components/panels/CharacterProfile'))
 const CharacterBrowser = lazyWithPreload(() => import('@/components/panels/CharacterBrowser'))
+const FoldersPanel = lazyWithPreload(() => import('@/components/panels/folders/FoldersPanel'))
 const PersonaManager = lazyWithPreload(() => import('@/components/panels/PersonaManager'))
 const PresetManager = lazyWithPreload(() => import('@/components/panels/PresetManager'))
 const LoomBuilder = lazyWithPreload(() => import('@/components/panels/LoomBuilder'))
@@ -227,6 +229,15 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     keywords: ['character', 'list', 'import', 'card', 'browse', 'export', 'png', 'charx', 'gallery', 'switch', 'select'],
     preload: CharacterBrowser.preload,
     mount: (root) => mountReactComponent(root, <CharacterBrowser />),
+  },
+  {
+    id: 'folders',
+    shortName: 'Folders',
+    tabName: 'Folders',
+    tabDescription: 'Organize your character cards into folders',
+    tabIcon: FolderTree,
+    keywords: ['folders', 'folder', 'organize', 'sort', 'categorize', 'move', 'cards', 'library', 'batch', 'ai'],
+    mount: (root) => mountReactComponent(root, <FoldersPanel />),
   },
   {
     id: 'personas',

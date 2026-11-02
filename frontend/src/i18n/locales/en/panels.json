@@ -103,6 +103,12 @@
       "tabDescription": "Browse and manage your character cards",
       "tabHeaderTitle": "Characters"
     },
+    "folders": {
+      "shortName": "Folders",
+      "tabName": "Folders",
+      "tabDescription": "Organize your character cards into folders",
+      "tabHeaderTitle": "Folders"
+    },
     "personas": {
       "shortName": "Personas",
       "tabName": "Personas",
@@ -1608,6 +1614,10 @@
     "organizeConnection": "Decision model",
     "organizeDefaultConnection": "default",
     "organizeNeedsFolders": "Create a folder first",
+    "organizeSuggestNew": "Suggest new folders",
+    "organizeNewFolderOption": "{{folder}} (new)",
+    "organizeAutoNewFolders": "{{count}} new folder(s) suggested — they are created when you apply.",
+    "organizeAutoNoImages": "The model would not take images, so folders were suggested from names, tags and descriptions.",
     "randomChatFailed": "Could not start a random chat",
     "dismiss": "Dismiss",
     "uploading": "Uploading… {{percent}}%",
@@ -4097,5 +4107,11 @@
     "skipTitle": "Skip",
     "kickTitle": "Kick",
     "banTitle": "Ban"
+  },
+  "foldersPanel": {
+    "allCards": "All cards",
+    "cardCount": "{{count}} card(s)",
+    "emptyFolder": "No cards in this folder yet",
+    "noCharacters": "No characters in your library yet"
   }
 }

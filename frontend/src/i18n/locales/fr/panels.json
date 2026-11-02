@@ -42,6 +42,12 @@
       "tabDescription": "Parcourir et gérez vos cartes de personnage",
       "tabHeaderTitle": "Personnages"
     },
+    "folders": {
+      "shortName": "Dossiers",
+      "tabName": "Dossiers",
+      "tabDescription": "Classez vos cartes de personnages dans des dossiers",
+      "tabHeaderTitle": "Dossiers"
+    },
     "personas": {
       "shortName": "Personnages",
       "tabName": "Personnages",
@@ -1369,6 +1375,10 @@
     "organizeConnection": "Modèle de décision",
     "organizeDefaultConnection": "par défaut",
     "organizeNeedsFolders": "Créez d'abord un dossier",
+    "organizeSuggestNew": "Suggérer de nouveaux dossiers",
+    "organizeNewFolderOption": "{{folder}} (nouveau)",
+    "organizeAutoNewFolders": "{{count}} nouveau(x) dossier(s) suggéré(s) — ils sont créés à l'application.",
+    "organizeAutoNoImages": "Le modèle n'a pas accepté les images, les dossiers ont donc été suggérés à partir des noms, des tags et des descriptions.",
     "randomChatFailed": "Impossible de lancer un chat aléatoire",
     "dismiss": "Rejeter",
     "uploading": "Téléchargement… {{percent}}%",
@@ -3659,5 +3669,11 @@
     "deleteTitle": "Supprimer la connexion Decision",
     "deleteMessage": "Supprimer « {{name}} » ? Cette action est irréversible.",
     "deleteConfirm": "Supprimer"
+  },
+  "foldersPanel": {
+    "allCards": "Toutes les cartes",
+    "cardCount": "{{count}} carte(s)",
+    "emptyFolder": "Aucune carte dans ce dossier pour l'instant",
+    "noCharacters": "Aucun personnage dans votre bibliothèque pour l'instant"
   }
 }

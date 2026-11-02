@@ -14,6 +14,7 @@ const REQUIRED_DRAWER_TAB_IDS = [
   'connections',
   'browser',
   'characters',
+  'folders',
   'personas',
   'multiplayer',
   'lorebook',

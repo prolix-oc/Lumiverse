@@ -42,6 +42,12 @@
       "tabDescription": "Esplora e gestisci le tue schede personaggio",
       "tabHeaderTitle": "Personaggi"
     },
+    "folders": {
+      "shortName": "Cartelle",
+      "tabName": "Cartelle",
+      "tabDescription": "Organizza le tue schede personaggio nelle cartelle",
+      "tabHeaderTitle": "Cartelle"
+    },
     "personas": {
       "shortName": "Persone",
       "tabName": "Persone",
@@ -1368,6 +1374,10 @@
     "organizeConnection": "Modello di decisione",
     "organizeDefaultConnection": "predefinito",
     "organizeNeedsFolders": "Crea prima una cartella",
+    "organizeSuggestNew": "Suggerisci nuove cartelle",
+    "organizeNewFolderOption": "{{folder}} (nuova)",
+    "organizeAutoNewFolders": "{{count}} nuova/e cartella/e suggerita/e — verranno create all'applicazione.",
+    "organizeAutoNoImages": "Il modello non ha accettato immagini, quindi le cartelle sono state suggerite da nomi, tag e descrizioni.",
     "randomChatFailed": "Impossibile avviare una chat casuale",
     "dismiss": "Scarta",
     "uploading": "Caricamento… {{percent}}%",
@@ -3663,5 +3673,11 @@
     "deleteTitle": "Elimina connessione Decision",
     "deleteMessage": "Eliminare \"{{name}}\"? Questa azione è irreversibile.",
     "deleteConfirm": "Elimina"
+  },
+  "foldersPanel": {
+    "allCards": "Tutte le schede",
+    "cardCount": "{{count}} scheda/e",
+    "emptyFolder": "Nessuna scheda in questa cartella",
+    "noCharacters": "Nessun personaggio nella tua libreria"
   }
 }

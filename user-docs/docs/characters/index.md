@@ -61,7 +61,7 @@ From the **Character Browser** panel, you can:
 - **Duplicate** — Create a copy of any character
 - **Delete** — Remove characters you no longer need
 - **Export** — Save characters as JSON, PNG, or CHARX files
-- **Organize** — Multiselect cards with the folder button and file them into folders yourself, or let a Decision model with image input suggest a folder from each card's art (review the suggestions, then apply)
+- **Folders tab** — Create, rename and delete folders, then multiselect cards and file them yourself, or let a Decision model with image input suggest a folder from each card's art. It can propose brand-new folder names (from your tags and, if you use an LLM connection, from the cards themselves) and even works when you have no folders yet — review the suggestions, then apply
 - **Random chat** — The dice button asks a Decision model which character to play, using each card's tags, what it roleplays, and your favorites, then starts the chat
 
 Switch between **grid**, **list**, and **single** view modes depending on how you like to browse.

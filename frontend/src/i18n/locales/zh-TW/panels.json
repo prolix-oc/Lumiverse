@@ -42,6 +42,12 @@
       "tabDescription": "瀏覽並管理角色卡",
       "tabHeaderTitle": "角色"
     },
+    "folders": {
+      "shortName": "資料夾",
+      "tabName": "資料夾",
+      "tabDescription": "將角色卡片整理到資料夾中",
+      "tabHeaderTitle": "資料夾"
+    },
     "personas": {
       "shortName": "人設",
       "tabName": "人設",
@@ -1369,6 +1375,10 @@
     "organizeConnection": "決策模型",
     "organizeDefaultConnection": "預設",
     "organizeNeedsFolders": "請先建立一個資料夾",
+    "organizeSuggestNew": "建議新資料夾",
+    "organizeNewFolderOption": "{{folder}}（新增）",
+    "organizeAutoNewFolders": "已建議 {{count}} 個新資料夾 — 套用時建立。",
+    "organizeAutoNoImages": "模型不接受圖片，因此根據名稱、標籤與描述建議了資料夾。",
     "randomChatFailed": "無法開始隨機聊天",
     "dismiss": "關閉",
     "uploading": "上傳中… {{percent}}%",
@@ -3655,5 +3665,11 @@
     "deleteTitle": "刪除 Decision 連線",
     "deleteMessage": "刪除「{{name}}」？此操作無法復原。",
     "deleteConfirm": "刪除"
+  },
+  "foldersPanel": {
+    "allCards": "全部卡片",
+    "cardCount": "{{count}} 張卡片",
+    "emptyFolder": "這個資料夾裡還沒有卡片",
+    "noCharacters": "你的資料庫裡還沒有角色"
   }
 }

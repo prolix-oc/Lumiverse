@@ -42,6 +42,12 @@
       "tabDescription": "キャラクターカードの閲覧と管理",
       "tabHeaderTitle": "登場&#12040;物"
     },
+    "folders": {
+      "shortName": "フォルダー",
+      "tabName": "フォルダー",
+      "tabDescription": "キャラクターカードをフォルダーに整理する",
+      "tabHeaderTitle": "フォルダー"
+    },
     "personas": {
       "shortName": "ペルソナ",
       "tabName": "ペルソナ",
@@ -1369,6 +1375,10 @@
     "organizeConnection": "ディシジョンモデル",
     "organizeDefaultConnection": "デフォルト",
     "organizeNeedsFolders": "先にフォルダーを作成してください",
+    "organizeSuggestNew": "新しいフォルダーを提案",
+    "organizeNewFolderOption": "{{folder}}（新規）",
+    "organizeAutoNewFolders": "{{count}} 件の新しいフォルダーが提案されました — 適用時に作成されます。",
+    "organizeAutoNoImages": "モデルが画像を受け付けなかったため、名前・タグ・説明文からフォルダーを提案しました。",
     "randomChatFailed": "ランダムチャットを開始できませんでした",
     "dismiss": "却下する",
     "uploading": "アップロード中… {{percent}}%",
@@ -3655,5 +3665,11 @@
     "deleteTitle": "Decision接続を削除",
     "deleteMessage": "「{{name}}」を削除しますか？この操作は元に戻せません。",
     "deleteConfirm": "削除"
+  },
+  "foldersPanel": {
+    "allCards": "すべてのカード",
+    "cardCount": "{{count}} 枚のカード",
+    "emptyFolder": "このフォルダーにはまだカードがありません",
+    "noCharacters": "ライブラリにまだキャラクターがありません"
   }
 }

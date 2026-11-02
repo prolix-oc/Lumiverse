@@ -96,6 +96,10 @@ export interface AutoFolderAssignment {
 export interface AutoFolderResult {
   assignments: AutoFolderAssignment[];
   skipped: Array<{ id: string; reason: string }>;
+  /** Folder names that do not exist yet; applying the suggestions creates them. */
+  newFolders: string[];
+  /** True when avatars were dropped after the provider refused image input. */
+  imagesSkipped: boolean;
   model: string;
   usage?: Record<string, any>;
 }

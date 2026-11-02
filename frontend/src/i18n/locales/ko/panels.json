@@ -103,6 +103,12 @@
       "tabDescription": "캐릭터 카드를 둘러보고 관리합니다.",
       "tabHeaderTitle": "캐릭터"
     },
+    "folders": {
+      "shortName": "폴더",
+      "tabName": "폴더",
+      "tabDescription": "캐릭터 카드를 폴더로 정리합니다",
+      "tabHeaderTitle": "폴더"
+    },
     "personas": {
       "shortName": "페르소나",
       "tabName": "페르소나",
@@ -1608,6 +1614,10 @@
     "organizeConnection": "결정 모델",
     "organizeDefaultConnection": "기본",
     "organizeNeedsFolders": "먼저 폴더를 만드세요",
+    "organizeSuggestNew": "새 폴더 제안",
+    "organizeNewFolderOption": "{{folder}} (새로 만들기)",
+    "organizeAutoNewFolders": "{{count}}개의 새 폴더가 제안되었습니다 — 적용할 때 만들어집니다.",
+    "organizeAutoNoImages": "모델이 이미지를 받아들이지 못해 이름, 태그, 설명을 기준으로 폴더를 제안했습니다.",
     "randomChatFailed": "랜덤 채팅을 시작하지 못했습니다",
     "dismiss": "닫기",
     "uploading": "업로드 중… {{percent}}%",
@@ -4097,5 +4107,11 @@
     "skipTitle": "건너뛰기",
     "kickTitle": "추방",
     "banTitle": "차단"
+  },
+  "foldersPanel": {
+    "allCards": "모든 카드",
+    "cardCount": "{{count}}장의 카드",
+    "emptyFolder": "이 폴더에 아직 카드가 없습니다",
+    "noCharacters": "아직 라이브러리에 캐릭터가 없습니다"
   }
 }

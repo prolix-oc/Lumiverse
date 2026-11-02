@@ -103,6 +103,12 @@
       "tabDescription": "Deine Charakterkarten durchsuchen und verwalten",
       "tabHeaderTitle": "Charaktere"
     },
+    "folders": {
+      "shortName": "Ordner",
+      "tabName": "Ordner",
+      "tabDescription": "Organisiere deine Charakterkarten in Ordnern",
+      "tabHeaderTitle": "Ordner"
+    },
     "personas": {
       "shortName": "Personas",
       "tabName": "Personas",
@@ -1608,6 +1614,10 @@
     "organizeConnection": "Decision-Modell",
     "organizeDefaultConnection": "Standard",
     "organizeNeedsFolders": "Zuerst einen Ordner anlegen",
+    "organizeSuggestNew": "Neue Ordner vorschlagen",
+    "organizeNewFolderOption": "{{folder}} (neu)",
+    "organizeAutoNewFolders": "{{count}} neue(r) Ordner vorgeschlagen — sie werden beim Anwenden erstellt.",
+    "organizeAutoNoImages": "Das Modell akzeptierte keine Bilder, daher wurden Ordner anhand von Namen, Tags und Beschreibungen vorgeschlagen.",
     "randomChatFailed": "Zufälliger Chat konnte nicht gestartet werden",
     "dismiss": "Schließen",
     "uploading": "Lade hoch\u2026 {{percent}}%",
@@ -4097,5 +4107,11 @@
     "skipTitle": "Überspringen",
     "kickTitle": "Kicken",
     "banTitle": "Sperren"
+  },
+  "foldersPanel": {
+    "allCards": "Alle Karten",
+    "cardCount": "{{count}} Karte(n)",
+    "emptyFolder": "Noch keine Karten in diesem Ordner",
+    "noCharacters": "Noch keine Charaktere in deiner Bibliothek"
   }
 }

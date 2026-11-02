@@ -42,6 +42,12 @@
       "tabDescription": "浏览并管理角色卡",
       "tabHeaderTitle": "角色"
     },
+    "folders": {
+      "shortName": "文件夹",
+      "tabName": "文件夹",
+      "tabDescription": "将角色卡片整理到文件夹中",
+      "tabHeaderTitle": "文件夹"
+    },
     "personas": {
       "shortName": "人设",
       "tabName": "人设",
@@ -1369,6 +1375,10 @@
     "organizeConnection": "决策模型",
     "organizeDefaultConnection": "默认",
     "organizeNeedsFolders": "请先创建一个文件夹",
+    "organizeSuggestNew": "建议新文件夹",
+    "organizeNewFolderOption": "{{folder}}（新建）",
+    "organizeAutoNewFolders": "已建议 {{count}} 个新文件夹 — 应用时创建。",
+    "organizeAutoNoImages": "模型不接受图片，因此根据名称、标签和描述建议了文件夹。",
     "randomChatFailed": "无法开始随机聊天",
     "dismiss": "关闭",
     "uploading": "上传中… {{percent}}%",
@@ -3655,5 +3665,11 @@
     "deleteTitle": "删除 Decision 连接",
     "deleteMessage": "删除“{{name}}”？此操作无法撤销。",
     "deleteConfirm": "删除"
+  },
+  "foldersPanel": {
+    "allCards": "全部卡片",
+    "cardCount": "{{count}} 张卡片",
+    "emptyFolder": "这个文件夹里还没有卡片",
+    "noCharacters": "你的资料库里还没有角色"
   }
 }
