@@ -181,6 +181,61 @@ export default function FoldersPanel() {
     }
   }
 
+  const handleSuggestAll = async () => {
+    if (busy || visibleCards.length === 0) return
+    setBusy('ai')
+    try {
+      const connectionIdArg = connectionId || undefined
+      const chunk = (items: string[], size: number): string[][] => {
+        const out: string[][] = []
+        for (let start = 0; start < items.length; start += size) out.push(items.slice(start, start + size))
+        return out
+      }
+      const targetsMerge = (assignments: Array<{ id: string; folder: string }>) => {
+        setTargets((previous) => {
+          const next = { ...previous }
+          for (const assignment of assignments) next[assignment.id] = assignment.folder
+          return next
+        })
+      }
+      const allIds = visibleCards.map((card) => card.id)
+      const accumulatedFolders = [...folders]
+      // First pass in compact groups so labels and new folders fan out.
+      for (const batch of chunk(allIds, 5)) {
+        const result = await charactersApi.autoAssignFolders({
+          ids: batch,
+          folders: accumulatedFolders,
+          propose_new_folders: true,
+          ...(connectionIdArg ? { connection_id: connectionIdArg } : {}),
+        })
+        if (result.newFolders?.length) {
+          setSuggestedFolders((previous) => [...previous, ...result.newFolders.filter((folder) => !previous.includes(folder))])
+          for (const folder of result.newFolders) if (!accumulatedFolders.includes(folder)) accumulatedFolders.push(folder)
+        }
+        targetsMerge(result.assignments)
+      }
+      // Second pass once-over in bigger groups, with the full label set available.
+      for (const batch of chunk(allIds, 10)) {
+        const result = await charactersApi.autoAssignFolders({
+          ids: batch,
+          folders: accumulatedFolders,
+          propose_new_folders: false,
+          ...(connectionIdArg ? { connection_id: connectionIdArg } : {}),
+        })
+        if (result.newFolders?.length) {
+          setSuggestedFolders((previous) => [...previous, ...result.newFolders.filter((folder) => !previous.includes(folder))])
+          for (const folder of result.newFolders) if (!accumulatedFolders.includes(folder)) accumulatedFolders.push(folder)
+        }
+        targetsMerge(result.assignments)
+      }
+      toast.success(`Suggested folders for ${allIds.length} cards`)
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || t('characterBrowser.organizeAutoFailed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const handleAutoAssign = async () => {
     if (busy || visibleCards.length === 0) return
     setBusy('ai')
@@ -341,6 +396,15 @@ export default function FoldersPanel() {
           >
             {busy === 'ai' ? <Spinner size={14} /> : <Sparkles size={14} />}
             {busy === 'ai' ? t('characterBrowser.organizeAutoBusy') : t('characterBrowser.organizeAutoAssign')}
+          </button>
+          <button
+            type="button"
+            className={styles.autoBtn}
+            onClick={() => void handleSuggestAll()}
+            disabled={!!busy || visibleCards.length === 0 || (connections.length > 0 && !connectionId)}
+          >
+            {busy === 'ai' ? <Spinner size={14} /> : <Sparkles size={14} />}
+            {busy === 'ai' ? t('characterBrowser.organizeAutoBusy') : 'Suggest all'}
           </button>
         </div>
 

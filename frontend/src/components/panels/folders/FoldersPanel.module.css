@@ -229,10 +229,10 @@
 .list {
   flex: 1;
   min-height: 96px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+  padding: 8px;
   overflow-y: auto;
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;
@@ -247,11 +247,13 @@
 
 .row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  padding: 5px 8px;
-  border-radius: 8px;
-  border: 1px solid transparent;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg-base, var(--lumiverse-fill-subtle));
 }
 
 .rowSelected {
@@ -276,25 +278,27 @@
 }
 
 .thumb {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
   background: var(--lumiverse-fill-subtle);
+  align-self: center;
 }
 
 .thumbFallback {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text-dim);
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  align-self: center;
 }
 
 .meta {
@@ -321,7 +325,8 @@
 }
 
 .folderSelect {
-  max-width: 42%;
+  width: 100%;
+  max-width: none;
   padding: 4px 6px;
   border-radius: 6px;
   background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
