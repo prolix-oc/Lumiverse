@@ -18,6 +18,12 @@ export class CustomOpenAiImageProvider extends OpenAiCompatibleImageProvider {
   readonly name = "custom_openai";
   readonly displayName = "Custom (OpenAI-compatible image)";
 
+  // Reference images ride the OpenAI multipart /images/edits surface, so any
+  // gateway implementing that route gets img2img for arbitrary custom models.
+  constructor() {
+    super({ supportsEdits: true });
+  }
+
   readonly capabilities: ImageProviderCapabilities = {
     parameters: {
       size: {

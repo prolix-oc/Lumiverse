@@ -184,4 +184,48 @@ describe("OpenAI-compatible image providers", () => {
     expect(fetchStub.calls[0].body.model).toBe("safe-model");
     expect(fetchStub.calls[0].body.size).toBe("512x512");
   });
+
+  test("Custom OpenAI-compatible sends a single reference as multipart /images/edits", async () => {
+    fetchStub = stubFetch([{ json: { data: [{ b64_json: "aGVsbG8=" }] } }]);
+    const provider = new CustomOpenAiImageProvider();
+    await provider.generate("key", "https://proxy.example/v1", req("my-model", {
+      resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }],
+    }));
+
+    const call = fetchStub.calls[0];
+    expect(call.url).toBe("https://proxy.example/v1/images/edits");
+    expect(call.body).toBeInstanceOf(FormData);
+    expect(call.body.get("prompt")).toBe("a fox");
+    expect(call.body.get("model")).toBe("my-model");
+    expect(call.body.get("image")).toBeInstanceOf(Blob);
+    // fetch sets the multipart boundary itself; a JSON content type would break it.
+    expect(call.headers["Content-Type"]).toBeUndefined();
+    expect(call.headers.Authorization).toBe("Bearer key");
+  });
+
+  test("Custom OpenAI-compatible uses the OpenAI image[] convention for multiple references", async () => {
+    fetchStub = stubFetch([{ json: { data: [{ b64_json: "aGVsbG8=" }] } }]);
+    const provider = new CustomOpenAiImageProvider();
+    await provider.generate("key", "https://proxy.example/v1", req("my-model", {
+      resolvedSourceImages: [
+        { data: "QUJD", mimeType: "image/png" },
+        { data: "ZGVm", mimeType: "image/png" },
+      ],
+    }));
+
+    const call = fetchStub.calls[0];
+    expect(call.url).toBe("https://proxy.example/v1/images/edits");
+    expect(call.body).toBeInstanceOf(FormData);
+    expect(call.body.get("image")).toBeNull();
+    expect(call.body.getAll("image[]")).toHaveLength(2);
+  });
+
+  test("Custom OpenAI-compatible still posts plain JSON when no references are given", async () => {
+    fetchStub = stubFetch([{ json: { data: [{ b64_json: "aGVsbG8=" }] } }]);
+    const provider = new CustomOpenAiImageProvider();
+    await provider.generate("key", "https://proxy.example/v1", req("my-model"));
+    expect(fetchStub.calls[0].url).toBe("https://proxy.example/v1/images/generations");
+    expect(fetchStub.calls[0].body).toBeInstanceOf(Object);
+    expect(fetchStub.calls[0].body.model).toBe("my-model");
+  });
 });

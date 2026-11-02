@@ -44,6 +44,7 @@ function applySourceImage(
     case "bfl":
     case "fal":
     case "together":
+    case "custom_openai":
       parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
       return;
     case "stability":

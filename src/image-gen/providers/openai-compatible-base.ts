@@ -131,10 +131,13 @@ export abstract class OpenAiCompatibleImageProvider implements ImageProvider {
       if (value === null || value === undefined || key === "image" || key === "image[]") continue;
       form.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
     }
+    // A single reference uses the plain `image` field; multiple follow the
+    // OpenAI array convention (`image[]`), matching the native OpenAI provider.
+    const fieldName = sources.length > 1 ? "image[]" : "image";
     sources.forEach((src, i) => {
       const { bytes, mimeType } = decodeImage(src);
       const ext = mimeType.split("/")[1] || "png";
-      form.append("image", new Blob([bytes], { type: mimeType }), `source-${i}.${ext}`);
+      form.append(fieldName, new Blob([bytes], { type: mimeType }), `source-${i}.${ext}`);
     });
 
     const { "Content-Type": _ct, ...headers } = this.headers(apiKey);

@@ -8,4 +8,5 @@ test("source-image support respects model restrictions and unknown providers", (
   expect(imageInputMechanism("stability", "ultra")).toBe("edit");
   expect(imageInputMechanism("ideogram", "ideogram-4-5")).toBe("edit");
   expect(imageInputMechanism("fal", "fal-ai/flux/dev/image-to-image")).toBe("edit");
+  expect(imageInputMechanism("custom_openai")).toBe("edit");
 });

@@ -3,7 +3,7 @@ const IMAGE_INPUT: Record<string, "edit" | "init" | "reference"> = {
   comfyui: "init", swarmui: "init", google_gemini: "edit", openrouter: "edit",
   openai: "edit", sdapi: "init", xai: "edit", ideogram: "edit", bfl: "edit",
   fal: "edit", together: "edit", stability: "edit", runware: "init",
-  novelai: "reference", nanogpt: "edit",
+  novelai: "reference", nanogpt: "edit", custom_openai: "edit",
 };
 
 export function imageInputMechanism(provider: string, model = ""): "edit" | "init" | "reference" | null {

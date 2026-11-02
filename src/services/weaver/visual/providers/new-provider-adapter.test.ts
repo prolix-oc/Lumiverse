@@ -35,7 +35,7 @@ function asset(provider: WeaverVisualProvider, extra: Partial<WeaverVisualAsset>
   };
 }
 
-const EDIT_PROVIDERS: WeaverVisualProvider[] = ["openai", "xai", "ideogram", "bfl", "fal", "together", "stability", "runware"];
+const EDIT_PROVIDERS: WeaverVisualProvider[] = ["openai", "xai", "ideogram", "bfl", "fal", "together", "stability", "runware", "custom_openai"];
 const NON_IMAGE_PROVIDERS: WeaverVisualProvider[] = [
   "pollinations",
   "deepinfra",
@@ -48,7 +48,6 @@ const NON_IMAGE_PROVIDERS: WeaverVisualProvider[] = [
   "civitai",
   "civitai_chat",
   "huggingface",
-  "custom_openai",
 ];
 
 describe("New provider visual adapters", () => {
@@ -119,5 +118,11 @@ describe("New provider visual adapters", () => {
     const adapter = getVisualProviderAdapter("bfl")!;
     const result = await adapter.build(asset("bfl", { source_image: { data: "QUJD", mimeType: "image/png" } }), connection("bfl", "flux-pro-1.1"));
     expect((result.settingsSnapshot.parameters as Record<string, unknown>).resolvedSourceImages).toBe("[source image]");
+  });
+
+  test("custom_openai forwards the source image as resolvedSourceImages", async () => {
+    const adapter = getVisualProviderAdapter("custom_openai")!;
+    const result = await adapter.build(asset("custom_openai", { source_image: { data: "QUJD", mimeType: "image/png" } }), connection("custom_openai", "my-model"));
+    expect(result.request.parameters.resolvedSourceImages).toEqual([{ data: "QUJD", mimeType: "image/png" }]);
   });
 });
