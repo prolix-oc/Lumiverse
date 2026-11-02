@@ -7,7 +7,7 @@ import {
   Users, Drama, PenTool, MessageCircle, FileText, Brain, ScrollText,
   MessageSquareReply, Image, Palette, Puzzle, Terminal,
   GitBranch, Globe, Wallpaper, Replace, Library, Feather, Database,
-  FolderTree,
+  FolderTree, Aperture,
 } from 'lucide-react'
 import { IconUsersGroup } from '@tabler/icons-react'
 import { useStore } from '@/store'
@@ -44,6 +44,7 @@ const PromptPanel = lazyWithPreload(() => import('@/components/panels/PromptPane
 const CouncilWorkspace = lazyWithPreload(() => import('@/components/panels/CouncilWorkspace'))
 const WorldInfoFeedback = lazyWithPreload(() => import('@/components/panels/WorldInfoFeedback'))
 const ImageGenPanel = lazyWithPreload(() => import('@/components/panels/ImageGenPanel'))
+const ImageStudioPanel = lazyWithPreload(() => import('@/components/panels/image-studio/ImageStudioPanel'))
 const WallpaperPanel = lazyWithPreload(() => import('@/components/panels/WallpaperPanel'))
 const BranchTreePanel = lazyWithPreload(() => import('@/components/panels/BranchTreePanel'))
 const RegexPanel = lazyWithPreload(() => import('@/components/panels/RegexPanel'))
@@ -388,6 +389,15 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     keywords: ['image', 'generation', 'scene', 'art', 'picture', 'ai', 'background', 'novelai', 'nai', 'dalle', 'illustration'],
     preload: ImageGenPanel.preload,
     mount: (root) => mountReactComponent(root, <ImageGenPanel />),
+  },
+  {
+    id: 'imagestudio',
+    shortName: 'Studio',
+    tabName: 'Image Studio',
+    tabDescription: 'Edit, crop and generate avatars, greeting images and gallery art',
+    tabIcon: Aperture,
+    keywords: ['studio', 'avatar', 'greeting', 'gallery', 'crop', 'generate', 'art', 'portrait', 'reference', 'img2img'],
+    mount: (root) => mountReactComponent(root, <ImageStudioPanel />),
   },
   {
     id: 'wallpaper',

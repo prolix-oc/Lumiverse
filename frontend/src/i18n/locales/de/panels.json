@@ -181,6 +181,12 @@
       "tabDescription": "KI-Szenengenerierung konfigurieren und steuern",
       "tabHeaderTitle": "Bildgen."
     },
+    "imagestudio": {
+      "shortName": "Studio",
+      "tabName": "Image Studio",
+      "tabDescription": "Avatare, Begrüßungsbilder und Galeriebilder bearbeiten, zuschneiden und generieren",
+      "tabHeaderTitle": "Image Studio"
+    },
     "wallpaper": {
       "shortName": "Hintergr.",
       "tabName": "Hintergrundbild",
@@ -4113,5 +4119,39 @@
     "cardCount": "{{count}} Karte(n)",
     "emptyFolder": "Noch keine Karten in diesem Ordner",
     "noCharacters": "Noch keine Charaktere in deiner Bibliothek"
+  },
+  "imageStudio": {
+    "character": "Charakter",
+    "targetAvatar": "Avatar",
+    "targetGreeting": "Begrüßungsbild",
+    "targetGallery": "Galerie",
+    "currentAsset": "Aktuell",
+    "greetingIndex": "Begrüßung {{index}}",
+    "noGreeting": "Dieses Begrüßungsbild hat noch kein Bild",
+    "galleryEmpty": "Noch keine Galeriebilder",
+    "promptPlaceholder": "Beschreibe das Bild, das erstellt werden soll",
+    "negativePrompt": "Negativprompt",
+    "references": "Referenzbilder",
+    "referenceHint": "Bis zu 8 Bilder, die das Modell beibehält",
+    "noReferences": "Keine Referenzbilder",
+    "addReference": "Referenz hinzufügen",
+    "uploadImage": "Bild hochladen",
+    "generate": "Generieren",
+    "generating": "Wird generiert…",
+    "generated": "{{model}} ist bereit — wähle, wie du es verwendest",
+    "generationFailed": "Bildgenerierung fehlgeschlagen",
+    "resultEmpty": "Generiere oder lade ein Bild, um hier Aktionen zu sehen",
+    "cropResult": "Zuschneiden",
+    "cropped": "Zugeschnittenes Bild bereit",
+    "setAsAvatar": "Als Avatar festlegen",
+    "addToGallery": "Zur Galerie hinzufügen",
+    "useAsGreeting": "Als Begrüßungsbild verwenden",
+    "avatarApplied": "Avatar aktualisiert",
+    "galleryAdded": "Zur Galerie hinzugefügt",
+    "greetingApplied": "Begrüßungsbild gesetzt",
+    "greetingRemoved": "Begrüßungsbild entfernt",
+    "removeGreeting": "Bild entfernen",
+    "removeGreetingConfirm": "Bild aus dieser Begrüßung entfernen? Der Text bleibt erhalten.",
+    "cropCurrentAvatar": "Aktuellen Avatar zuschneiden"
   }
 }

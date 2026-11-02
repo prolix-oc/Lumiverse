@@ -181,6 +181,12 @@
       "tabDescription": "Configure and control AI scene generation",
       "tabHeaderTitle": "Image Gen"
     },
+    "imagestudio": {
+      "shortName": "Studio",
+      "tabName": "Image Studio",
+      "tabDescription": "Edit, crop and generate avatars, greeting images and gallery art",
+      "tabHeaderTitle": "Image Studio"
+    },
     "wallpaper": {
       "shortName": "Wallppr",
       "tabName": "Wallpaper",
@@ -4113,5 +4119,39 @@
     "cardCount": "{{count}} card(s)",
     "emptyFolder": "No cards in this folder yet",
     "noCharacters": "No characters in your library yet"
+  },
+  "imageStudio": {
+    "character": "Character",
+    "targetAvatar": "Avatar",
+    "targetGreeting": "Greeting image",
+    "targetGallery": "Gallery",
+    "currentAsset": "Current",
+    "greetingIndex": "Greeting {{index}}",
+    "noGreeting": "No image on this greeting yet",
+    "galleryEmpty": "No gallery images yet",
+    "promptPlaceholder": "Describe the image to create",
+    "negativePrompt": "Negative prompt",
+    "references": "Reference images",
+    "referenceHint": "Up to 8 images the model keeps consistent",
+    "noReferences": "No reference images",
+    "addReference": "Add reference",
+    "uploadImage": "Upload image",
+    "generate": "Generate",
+    "generating": "Generating…",
+    "generated": "{{model}} is ready — choose how to use it",
+    "generationFailed": "Image generation failed",
+    "resultEmpty": "Generate or upload an image to see actions here",
+    "cropResult": "Crop",
+    "cropped": "Cropped image ready",
+    "setAsAvatar": "Set as avatar",
+    "addToGallery": "Add to gallery",
+    "useAsGreeting": "Use as greeting image",
+    "avatarApplied": "Avatar updated",
+    "galleryAdded": "Added to gallery",
+    "greetingApplied": "Greeting image set",
+    "greetingRemoved": "Greeting image removed",
+    "removeGreeting": "Remove image",
+    "removeGreetingConfirm": "Remove the image from this greeting? The text stays.",
+    "cropCurrentAvatar": "Crop current avatar"
   }
 }

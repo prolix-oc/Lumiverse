@@ -26,6 +26,7 @@ const REQUIRED_DRAWER_TAB_IDS = [
   'summary',
   'worldinfo',
   'imagegen',
+  'imagestudio',
   'wallpaper',
   'regex',
   'branches',

@@ -55,7 +55,7 @@ const SELECTOR_ROWS: readonly AuthorityRow[] = [
 const DRAWER_TAB_IDS = [
   'profile', 'presets', 'loom', 'weaver', 'connections', 'browser', 'characters',
   'folders', 'personas', 'multiplayer', 'lorebook', 'cortex', 'databank', 'create', 'ooc',
-  'prompt', 'council', 'summary', 'feedback', 'worldinfo', 'imagegen', 'wallpaper',
+  'prompt', 'council', 'summary', 'feedback', 'worldinfo', 'imagegen', 'imagestudio', 'wallpaper',
   'regex', 'branches', 'theme', 'spindle',
 ] as const
 

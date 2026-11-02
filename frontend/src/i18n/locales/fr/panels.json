@@ -120,6 +120,12 @@
       "tabDescription": "Configurer et contrôler la génération de scènes d'IA",
       "tabHeaderTitle": "Génération d'images"
     },
+    "imagestudio": {
+      "shortName": "Studio",
+      "tabName": "Image Studio",
+      "tabDescription": "Modifier, rogner et générer avatars, images d'accueil et images de galerie",
+      "tabHeaderTitle": "Image Studio"
+    },
     "wallpaper": {
       "shortName": "Fond d'écran",
       "tabName": "Fond d'écran",
@@ -3675,5 +3681,39 @@
     "cardCount": "{{count}} carte(s)",
     "emptyFolder": "Aucune carte dans ce dossier pour l'instant",
     "noCharacters": "Aucun personnage dans votre bibliothèque pour l'instant"
+  },
+  "imageStudio": {
+    "character": "Personnage",
+    "targetAvatar": "Avatar",
+    "targetGreeting": "Image d'accueil",
+    "targetGallery": "Galerie",
+    "currentAsset": "Actuel",
+    "greetingIndex": "Accueil {{index}}",
+    "noGreeting": "Pas encore d'image sur cet accueil",
+    "galleryEmpty": "Aucune image de galerie pour l'instant",
+    "promptPlaceholder": "Décrivez l'image à créer",
+    "negativePrompt": "Prompt négatif",
+    "references": "Images de référence",
+    "referenceHint": "Jusqu'à 8 images que le modèle conserve",
+    "noReferences": "Aucune image de référence",
+    "addReference": "Ajouter une référence",
+    "uploadImage": "Téléverser une image",
+    "generate": "Générer",
+    "generating": "Génération…",
+    "generated": "{{model}} est prêt — choisissez comment l'utiliser",
+    "generationFailed": "Échec de la génération d'image",
+    "resultEmpty": "Générez ou téléversez une image pour voir les actions ici",
+    "cropResult": "Rogner",
+    "cropped": "Image rognée prête",
+    "setAsAvatar": "Définir comme avatar",
+    "addToGallery": "Ajouter à la galerie",
+    "useAsGreeting": "Utiliser comme image d'accueil",
+    "avatarApplied": "Avatar mis à jour",
+    "galleryAdded": "Ajouté à la galerie",
+    "greetingApplied": "Image d'accueil définie",
+    "greetingRemoved": "Image d'accueil retirée",
+    "removeGreeting": "Retirer l'image",
+    "removeGreetingConfirm": "Retirer l'image de cet accueil ? Le texte reste.",
+    "cropCurrentAvatar": "Rogner l'avatar actuel"
   }
 }

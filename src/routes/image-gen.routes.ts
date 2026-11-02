@@ -36,6 +36,43 @@ app.post("/generate", async (c) => {
   }
 });
 
+// Image Studio: one standalone image for an avatar, greeting or gallery slot.
+// No chat is involved — the prompt is sent verbatim and reference images are
+// resolved from stored ids, so the tab can generate without an open chat.
+app.post("/studio", async (c) => {
+  const userId = c.get("userId");
+  const body: {
+    prompt?: unknown; negativePrompt?: unknown; referenceImageIds?: unknown;
+    connectionId?: unknown; parameters?: unknown;
+  } = await c.req.json().catch(() => ({}));
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt) return c.json({ error: "prompt is required" }, 400);
+  const referenceImageIds = Array.isArray(body.referenceImageIds)
+    ? body.referenceImageIds.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, 8)
+    : [];
+
+  try {
+    const result = await svc.generateStudioImage(userId, {
+      prompt,
+      ...(typeof body.negativePrompt === "string" && body.negativePrompt.trim()
+        ? { negativePrompt: body.negativePrompt }
+        : {}),
+      ...(referenceImageIds.length ? { referenceImageIds } : {}),
+      ...(typeof body.connectionId === "string" && body.connectionId.trim()
+        ? { connectionId: body.connectionId.trim() }
+        : {}),
+      ...(body.parameters && typeof body.parameters === "object" && !Array.isArray(body.parameters)
+        ? { parameters: body.parameters as Record<string, unknown> }
+        : {}),
+    });
+    return c.json(result);
+  } catch (err: any) {
+    const msg = clampErrorMessage(describeProviderError(err, "Image generation failed"));
+    const status = /required|not found|unsupported|No API key|missing|connection/i.test(msg) ? 400 : 502;
+    return c.json({ error: msg }, status);
+  }
+});
+
 app.post("/preview-prompt", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();

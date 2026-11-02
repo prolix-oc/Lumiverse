@@ -56,6 +56,14 @@ export interface ImageGenResponse {
   jobId?: string
 }
 
+export interface StudioImageResult {
+  imageId: string
+  imageUrl: string
+  provider: string
+  model: string
+  prompt: string
+}
+
 export interface ImageGenPromptPreviewResponse {
   prompt: string
   negativePrompt?: string
@@ -125,6 +133,21 @@ export const imageGenApi = {
   }) {
     return post<ImageGenResponse>('/image-gen/generate', input, {
       timeout: resolveClientTimeoutMs(input.promptGenerationTimeoutSeconds, input.generationTimeoutSeconds),
+    })
+  },
+
+  /**
+   * Generate one standalone image for the Image Studio tab — no chat needed.
+   * Reference images are stored ids the server resolves for the provider.
+   */
+  studio(input: {
+    prompt: string
+    negativePrompt?: string
+    referenceImageIds?: string[]
+    connectionId?: string
+  }) {
+    return post<StudioImageResult>('/image-gen/studio', input, {
+      timeout: resolveClientTimeoutMs(undefined, undefined),
     })
   },
 

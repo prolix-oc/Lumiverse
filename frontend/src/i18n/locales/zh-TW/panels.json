@@ -120,6 +120,12 @@
       "tabDescription": "配置並控制 AI 場景生成",
       "tabHeaderTitle": "圖像生成"
     },
+    "imagestudio": {
+      "shortName": "工作室",
+      "tabName": "圖像工作室",
+      "tabDescription": "編輯、裁切並產生頭像、開場白圖片與藝廊圖片",
+      "tabHeaderTitle": "圖像工作室"
+    },
     "wallpaper": {
       "shortName": "壁紙",
       "tabName": "壁紙",
@@ -3671,5 +3677,39 @@
     "cardCount": "{{count}} 張卡片",
     "emptyFolder": "這個資料夾裡還沒有卡片",
     "noCharacters": "你的資料庫裡還沒有角色"
+  },
+  "imageStudio": {
+    "character": "角色",
+    "targetAvatar": "頭像",
+    "targetGreeting": "開場白圖片",
+    "targetGallery": "藝廊",
+    "currentAsset": "目前",
+    "greetingIndex": "開場白 {{index}}",
+    "noGreeting": "這則開場白還沒有圖片",
+    "galleryEmpty": "還沒有藝廊圖片",
+    "promptPlaceholder": "描述要產生的圖片",
+    "negativePrompt": "負面提示",
+    "references": "參考圖片",
+    "referenceHint": "模型會保持一致的最多 8 張圖片",
+    "noReferences": "沒有參考圖片",
+    "addReference": "新增參考圖片",
+    "uploadImage": "上傳圖片",
+    "generate": "產生",
+    "generating": "產生中…",
+    "generated": "{{model}} 已完成 — 選擇如何使用",
+    "generationFailed": "圖片產生失敗",
+    "resultEmpty": "產生或上傳圖片後，這裡會顯示可用操作",
+    "cropResult": "裁切",
+    "cropped": "裁切完成",
+    "setAsAvatar": "設為頭像",
+    "addToGallery": "加入藝廊",
+    "useAsGreeting": "用作開場白圖片",
+    "avatarApplied": "頭像已更新",
+    "galleryAdded": "已加入藝廊",
+    "greetingApplied": "開場白圖片已設定",
+    "greetingRemoved": "開場白圖片已移除",
+    "removeGreeting": "移除圖片",
+    "removeGreetingConfirm": "從這則開場白移除圖片？ 文字會保留。",
+    "cropCurrentAvatar": "裁切目前頭像"
   }
 }

@@ -731,6 +731,132 @@ export async function generateSceneBackground(
   }
 }
 
+/** Reference images a single studio request may carry (liquid/d1 ceiling). */
+const MAX_STUDIO_REFERENCES = 8;
+
+export interface GenerateStudioImageInput {
+  prompt: string;
+  negativePrompt?: string;
+  /** Stored image ids (avatar, gallery, uploads) resolved into provider source images. */
+  referenceImageIds?: string[];
+  /** Request-local connection; omitted uses the active Image Gen connection. */
+  connectionId?: string;
+  /** Provider parameters merged over the connection defaults. */
+  parameters?: Record<string, unknown>;
+  generationTimeoutSeconds?: number;
+}
+
+export interface GenerateStudioImageResult {
+  imageId: string;
+  imageUrl: string;
+  provider: string;
+  model: string;
+  prompt: string;
+}
+
+/**
+ * Generate one image for the Image Studio drawer tab — avatars, greeting
+ * images and gallery art — without a chat in the way. The prompt is sent
+ * verbatim (there is no scene parser to rewrite it), the connection resolves
+ * exactly as scene generation does, and reference images are resolved into
+ * `resolvedSourceImages` for providers whose model accepts image input. The
+ * result is stored like any other image and returned by id.
+ */
+export async function generateStudioImage(
+  userId: string,
+  input: GenerateStudioImageInput,
+): Promise<GenerateStudioImageResult> {
+  const prompt = String(input.prompt ?? "").trim();
+  if (!prompt) throw new Error("prompt is required");
+
+  const settings = getImageGenSettings(userId, !input.connectionId);
+  const connectionId = input.connectionId || settings.activeImageGenConnectionId;
+  if (!connectionId) {
+    throw new Error("No image generation connection selected. Create one in Settings → Image Gen Connections.");
+  }
+  const connection = imageGenConnSvc.getConnection(userId, connectionId);
+  if (!connection) throw new Error("Image generation connection not found");
+
+  const provider = getImageProvider(connection.provider);
+  if (!provider) throw new Error(`Unknown image generation provider: ${connection.provider}`);
+
+  const apiKey = await secretsSvc.getSecret(userId, imageGenConnectionSecretKey(connection.id));
+  if (!apiKey && provider.capabilities.apiKeyRequired) {
+    throw new Error(`No API key for image generation connection "${connection.name}"`);
+  }
+
+  const params = normalizeGenerationParameters(
+    { ...connection.default_parameters, ...(input.parameters ?? {}) },
+    provider.capabilities.parameters,
+  );
+  normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
+  resolveProviderRandomSeed(params, connection.provider);
+
+  const referenceIds = [...new Set(
+    (input.referenceImageIds ?? []).filter((id) => typeof id === "string" && id.trim()),
+  )].slice(0, MAX_STUDIO_REFERENCES);
+  if (referenceIds.length > 0) {
+    if (!imageInputMechanism(connection.provider, connection.model)) {
+      throw new Error(
+        `The ${connection.provider} connection cannot take reference images. Pick a connection whose provider supports image input.`,
+      );
+    }
+    const sources: Array<{ data: string; mimeType: string }> = [];
+    for (const id of referenceIds) {
+      const image = await imagesSvc.getImageAsync(userId, id);
+      const path = await imagesSvc.getImageFilePath(userId, id);
+      if (!image || !path) throw new Error("Reference image not found");
+      if (!image.mime_type.startsWith("image/")) throw new Error("Reference images must be still images");
+      const bytes = Buffer.from(await Bun.file(path).arrayBuffer());
+      if (bytes.length === 0) throw new Error("Reference image has no readable data");
+      sources.push({ data: bytes.toString("base64"), mimeType: image.mime_type });
+    }
+    params.resolvedSourceImages = sources;
+  }
+
+  const generationTimeoutSecs = resolveTimeoutSeconds(
+    input.generationTimeoutSeconds,
+    getImageGenSettings(userId).generationTimeoutSeconds ?? 300,
+  );
+  const generationSignal = createPhaseTimeoutSignal(
+    new AbortController().signal,
+    generationTimeoutSecs,
+    `Image generation timed out after ${generationTimeoutSecs}s`,
+  );
+  const jobId = crypto.randomUUID();
+  const request: ImageGenRequest = {
+    prompt,
+    negativePrompt: input.negativePrompt,
+    model: connection.model,
+    parameters: params,
+    connectionOptions: connection.metadata,
+    signal: generationSignal.signal,
+  };
+
+  let response: Awaited<ReturnType<typeof provider.generate>>;
+  try {
+    response = await runProviderGeneration(provider, apiKey || "", connection.api_url || "", request, {
+      jobId,
+      chatId: "",
+      userId,
+    });
+  } catch (err) {
+    throw resolveAbortReason(generationSignal.signal) ?? err;
+  } finally {
+    generationSignal.cleanup();
+  }
+
+  if (!response.imageDataUrl) throw new Error("The image provider returned no image data");
+  const image = await imagesSvc.saveImageFromDataUrl(userId, response.imageDataUrl);
+  return {
+    imageId: image.id,
+    imageUrl: `/api/v1/images/${image.id}`,
+    provider: connection.provider,
+    model: response.model || connection.model,
+    prompt,
+  };
+}
+
 /**
  * Runs a provider generation, preferring its streaming generator (Comfy/Swarm)
  * so we can broadcast IMAGE_GEN_PROGRESS events as steps and previews arrive.

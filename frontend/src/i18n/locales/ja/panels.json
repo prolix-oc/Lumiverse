@@ -120,6 +120,12 @@
       "tabDescription": "AIシーン生成の設定と制御",
       "tabHeaderTitle": "画像生成"
     },
+    "imagestudio": {
+      "shortName": "スタジオ",
+      "tabName": "画像スタジオ",
+      "tabDescription": "アバター・挨拶画像・ギャラリー画像を編集・切り抜き・生成する",
+      "tabHeaderTitle": "画像スタジオ"
+    },
     "wallpaper": {
       "shortName": "ウォールプロ",
       "tabName": "壁紙",
@@ -3671,5 +3677,39 @@
     "cardCount": "{{count}} 枚のカード",
     "emptyFolder": "このフォルダーにはまだカードがありません",
     "noCharacters": "ライブラリにまだキャラクターがありません"
+  },
+  "imageStudio": {
+    "character": "キャラクター",
+    "targetAvatar": "アバター",
+    "targetGreeting": "挨拶画像",
+    "targetGallery": "ギャラリー",
+    "currentAsset": "現在",
+    "greetingIndex": "挨拶 {{index}}",
+    "noGreeting": "この挨拶にはまだ画像がありません",
+    "galleryEmpty": "ギャラリー画像はまだありません",
+    "promptPlaceholder": "作成したい画像を説明してください",
+    "negativePrompt": "ネガティブプロンプト",
+    "references": "参照画像",
+    "referenceHint": "モデルが維持する最大8枚の画像",
+    "noReferences": "参照画像がありません",
+    "addReference": "参照画像を追加",
+    "uploadImage": "画像をアップロード",
+    "generate": "生成",
+    "generating": "生成中…",
+    "generated": "{{model}} が完成しました — 使用方法を選んでください",
+    "generationFailed": "画像の生成に失敗しました",
+    "resultEmpty": "画像を生成またはアップロードすると、ここに操作が表示されます",
+    "cropResult": "切り抜く",
+    "cropped": "切り抜いた画像を保存しました",
+    "setAsAvatar": "アバターに設定",
+    "addToGallery": "ギャラリーに追加",
+    "useAsGreeting": "挨拶画像として使う",
+    "avatarApplied": "アバターを更新しました",
+    "galleryAdded": "ギャラリーに追加しました",
+    "greetingApplied": "挨拶画像を設定しました",
+    "greetingRemoved": "挨拶画像を削除しました",
+    "removeGreeting": "画像を削除",
+    "removeGreetingConfirm": "この挨拶から画像を削除しますか？ テキストは残ります。",
+    "cropCurrentAvatar": "現在のアバターを切り抜く"
   }
 }

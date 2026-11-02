@@ -120,6 +120,12 @@
       "tabDescription": "Configura e controlla la generazione di scene con IA",
       "tabHeaderTitle": "Generazione immagini"
     },
+    "imagestudio": {
+      "shortName": "Studio",
+      "tabName": "Image Studio",
+      "tabDescription": "Modifica, ritaglia e genera avatar, immagini di saluto e immagini di galleria",
+      "tabHeaderTitle": "Image Studio"
+    },
     "wallpaper": {
       "shortName": "Sfondo",
       "tabName": "Sfondo",
@@ -3679,5 +3685,39 @@
     "cardCount": "{{count}} scheda/e",
     "emptyFolder": "Nessuna scheda in questa cartella",
     "noCharacters": "Nessun personaggio nella tua libreria"
+  },
+  "imageStudio": {
+    "character": "Personaggio",
+    "targetAvatar": "Avatar",
+    "targetGreeting": "Immagine di saluto",
+    "targetGallery": "Galleria",
+    "currentAsset": "Attuale",
+    "greetingIndex": "Saluto {{index}}",
+    "noGreeting": "Nessuna immagine su questo saluto",
+    "galleryEmpty": "Nessuna immagine in galleria",
+    "promptPlaceholder": "Descrivi l'immagine da creare",
+    "negativePrompt": "Prompt negativo",
+    "references": "Immagini di riferimento",
+    "referenceHint": "Fino a 8 immagini che il modello mantiene",
+    "noReferences": "Nessuna immagine di riferimento",
+    "addReference": "Aggiungi riferimento",
+    "uploadImage": "Carica immagine",
+    "generate": "Genera",
+    "generating": "Generazione…",
+    "generated": "{{model}} è pronto — scegli come usarlo",
+    "generationFailed": "Generazione immagine non riuscita",
+    "resultEmpty": "Genera o carica un'immagine per vedere le azioni qui",
+    "cropResult": "Ritaglia",
+    "cropped": "Immagine ritagliata pronta",
+    "setAsAvatar": "Imposta come avatar",
+    "addToGallery": "Aggiungi alla galleria",
+    "useAsGreeting": "Usa come immagine di saluto",
+    "avatarApplied": "Avatar aggiornato",
+    "galleryAdded": "Aggiunta alla galleria",
+    "greetingApplied": "Immagine di saluto impostata",
+    "greetingRemoved": "Immagine di saluto rimossa",
+    "removeGreeting": "Rimuovi immagine",
+    "removeGreetingConfirm": "Rimuovere l'immagine da questo saluto? Il testo resta.",
+    "cropCurrentAvatar": "Ritaglia avatar attuale"
   }
 }

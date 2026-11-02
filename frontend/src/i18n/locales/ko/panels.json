@@ -181,6 +181,12 @@
       "tabDescription": "AI 장면 생성을 구성하고 제어합니다.",
       "tabHeaderTitle": "이미지 생성"
     },
+    "imagestudio": {
+      "shortName": "스튜디오",
+      "tabName": "이미지 스튜디오",
+      "tabDescription": "아바타, 인사 이미지, 갤러리 이미지를 편집·자르기·생성",
+      "tabHeaderTitle": "이미지 스튜디오"
+    },
     "wallpaper": {
       "shortName": "배경화면",
       "tabName": "배경화면",
@@ -4113,5 +4119,39 @@
     "cardCount": "{{count}}장의 카드",
     "emptyFolder": "이 폴더에 아직 카드가 없습니다",
     "noCharacters": "아직 라이브러리에 캐릭터가 없습니다"
+  },
+  "imageStudio": {
+    "character": "캐릭터",
+    "targetAvatar": "아바타",
+    "targetGreeting": "인사 이미지",
+    "targetGallery": "갤러리",
+    "currentAsset": "현재",
+    "greetingIndex": "인사말 {{index}}",
+    "noGreeting": "이 인사말에는 아직 이미지가 없습니다",
+    "galleryEmpty": "아직 갤러리 이미지가 없습니다",
+    "promptPlaceholder": " 만들 이미지를 설명하세요",
+    "negativePrompt": "네거티브 프롬프트",
+    "references": "참조 이미지",
+    "referenceHint": "모델이 일관성을 유지할 최대 8장의 이미지",
+    "noReferences": "참조 이미지가 없습니다",
+    "addReference": "참조 이미지 추가",
+    "uploadImage": "이미지 업로드",
+    "generate": "생성",
+    "generating": "생성 중…",
+    "generated": "{{model}} 완료 — 사용 방법을 선택하세요",
+    "generationFailed": "이미지 생성에 실패했습니다",
+    "resultEmpty": "이미지를 생성하거나 업로드하면 여기에 작업이 표시됩니다",
+    "cropResult": "자르기",
+    "cropped": "이미지를 자랐습니다",
+    "setAsAvatar": "아바타로 설정",
+    "addToGallery": "갤러리에 추가",
+    "useAsGreeting": "인사 이미지로 사용",
+    "avatarApplied": "아바타가 업데이트되었습니다",
+    "galleryAdded": "갤러리에 추가되었습니다",
+    "greetingApplied": "인사 이미지가 설정되었습니다",
+    "greetingRemoved": "인사 이미지가 제거되었습니다",
+    "removeGreeting": "이미지 제거",
+    "removeGreetingConfirm": "이 인사말에서 이미지를 제거할까요? 텍스트는 유지됩니다.",
+    "cropCurrentAvatar": "현재 아바타 자르기"
   }
 }
