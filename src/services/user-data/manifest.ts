@@ -7,12 +7,13 @@
 // queue re-vectorization.
 
 /**
+ * Schema 4 adds optional per-user files/extension-storage/ entries.
  * Schema 3 moves large settings values to settings-values/*.json entries,
  * referenced by valueFile in database/settings.ndjson (with value: null).
- * Schema 2 introduced the explicit per-record NDJSON limit. Both older
- * schemas remain readable; older servers must reject schema 3.
+ * Schema 2 introduced the explicit per-record NDJSON limit. Older schemas
+ * remain readable; older servers reject newer schemas.
  */
-export const ARCHIVE_SCHEMA_VERSION = 3;
+export const ARCHIVE_SCHEMA_VERSION = 4;
 
 export const ARCHIVE_PRODUCER = "lumiverse";
 
@@ -55,6 +56,8 @@ export interface ArchiveManifest {
   ndjsonMaxRecordBytes?: number;
   /** Did the export include LanceDB vectors? */
   includeVectors: boolean;
+  /** Whether the user opted into persistent per-account extension files. */
+  includeExtensionData?: boolean;
   /**
    * Embedding config at the moment of export. The importer compares against
    * the importer's current config; mismatch means vectors are dropped and
@@ -78,6 +81,7 @@ export interface ArchiveManifest {
 export function createManifest(input: {
   archiveId: string;
   includeVectors: boolean;
+  includeExtensionData?: boolean;
   embeddingConfig: ArchiveEmbeddingConfig;
   producerVersion: string | null;
   counts: Record<string, number>;
@@ -94,6 +98,7 @@ export function createManifest(input: {
     ndjsonFormatVersion: NDJSON_FORMAT_VERSION,
     ndjsonMaxRecordBytes: NDJSON_MAX_RECORD_BYTES,
     includeVectors: input.includeVectors,
+    includeExtensionData: input.includeExtensionData === true,
     embeddingConfig: input.embeddingConfig,
     counts: input.counts,
     missingFiles: input.missingFiles,
@@ -168,6 +173,7 @@ export function parseManifest(raw: unknown): ArchiveManifest {
     ndjsonFormatVersion,
     ndjsonMaxRecordBytes,
     includeVectors,
+    includeExtensionData: m.includeExtensionData === true,
     embeddingConfig,
     counts,
     missingFiles,

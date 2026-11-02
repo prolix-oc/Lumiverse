@@ -37,6 +37,7 @@ export default function DataPortability() {
   // ── Export state ──────────────────────────────────────────────────────
   const [includeVectors, setIncludeVectors] = useState(true)
   const [includeSecrets, setIncludeSecrets] = useState(false)
+  const [includeExtensionData, setIncludeExtensionData] = useState(false)
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportWarnings, setExportWarnings] = useState<string[]>([])
@@ -210,14 +211,14 @@ export default function DataPortability() {
 
     if (!includeSecrets) {
       // Single-step path: browser handles a streaming GET as a native download.
-      a.href = userDataApi.exportUrl(includeVectors)
+      a.href = userDataApi.exportUrl(includeVectors, includeExtensionData)
       a.click()
       return
     }
 
     // Two-step path: prepare → fetch ticket + URL → trigger ticket save → kick the archive download.
     try {
-      const resp = await userDataApi.prepareSecretsExport(includeVectors)
+      const resp = await userDataApi.prepareSecretsExport(includeVectors, includeExtensionData)
       if (resp.unreachableSecrets?.length) {
         setExportWarnings(resp.unreachableSecrets)
       }
@@ -437,6 +438,15 @@ export default function DataPortability() {
             disabled={exporting}
           />
           <span>{t('dataPortability.includeVectors')}</span>
+        </label>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={includeExtensionData}
+            onChange={(e) => setIncludeExtensionData(e.target.checked)}
+            disabled={exporting}
+          />
+          <span>{t('dataPortability.includeExtensionData')}</span>
         </label>
         <label className={styles.checkboxRow}>
           <input

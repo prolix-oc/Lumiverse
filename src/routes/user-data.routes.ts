@@ -86,11 +86,13 @@ function streamingResponse(stream: ReadableStream<Uint8Array>, filename: string)
 app.get("/export", (c) => {
   const userId = c.get("userId");
   const includeVectors = c.req.query("includeVectors") !== "0";
+  const includeExtensionData = c.req.query("includeExtensionData") === "1";
   const slug = lookupUserSlug(userId);
   const filename = `lumiverse-${slug}-${exportTimestamp()}.lvbak`;
   const stream = buildExportStream({
     userId,
     includeVectors,
+    includeExtensionData,
     signal: c.req.raw.signal,
     producerVersion: null,
   });
@@ -110,7 +112,7 @@ app.get("/export", (c) => {
 // blobs it into a download alongside the archive.
 app.post("/export/prepare", async (c) => {
   const userId = c.get("userId");
-  let body: { includeVectors?: boolean; includeSecrets?: boolean } = {};
+  let body: { includeVectors?: boolean; includeSecrets?: boolean; includeExtensionData?: boolean } = {};
   try {
     body = (await c.req.json()) ?? {};
   } catch {
@@ -118,6 +120,7 @@ app.post("/export/prepare", async (c) => {
   }
   const includeVectors = !!body.includeVectors;
   const includeSecrets = !!body.includeSecrets;
+  const includeExtensionData = body.includeExtensionData === true;
   const archiveId = crypto.randomUUID();
 
   let ticket: ReturnType<typeof createTicket> extends Promise<infer R>
@@ -174,6 +177,7 @@ app.post("/export/prepare", async (c) => {
   stashPrepareEntry(archiveId, {
     userId,
     includeVectors,
+    includeExtensionData,
     includeSecrets,
     smk,
     secretKeys,
@@ -214,6 +218,7 @@ app.get("/export/archive/:archiveId", (c) => {
   const stream = buildExportStream({
     userId: entry.userId,
     includeVectors: entry.includeVectors,
+    includeExtensionData: entry.includeExtensionData === true,
     signal: c.req.raw.signal,
     producerVersion: null,
     archiveId,

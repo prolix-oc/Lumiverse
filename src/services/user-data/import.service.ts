@@ -58,6 +58,7 @@ import {
 } from "./table-registry";
 import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./sanitize";
 import { markConnectionSecretRestored } from "./connection-secret-restore";
+import { assertExtensionRestoreTemporaryFile, extensionStorageDestination } from "./extension-storage";
 import { MAX_ACCOUNT_ARCHIVE_BYTES, MAX_SETTING_VALUE_FILE_BYTES } from "./archive-limits";
 import { loadImportJob, recentImportJobIds, saveImportJob } from "./import-job-store";
 import { listenForAndroidImportCancellation, notifyAndroidImport } from "../../runtime/android-import";
@@ -1617,6 +1618,12 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     // unsafe aggregate sizes before decompression begins. Account archives
     // use available disk space rather than a fixed total-byte quota.
     const descriptor = sanitizeEntry(entry.name);
+    if (descriptor.bucket === "extension-storage" && verifiedManifest.schemaVersion < 4) {
+      throw new Error("extension storage requires archive schema 4");
+    }
+    if (descriptor.bucket === "extension-storage" && !verifiedManifest.includeExtensionData) {
+      throw new Error("extension storage is not declared in the archive manifest");
+    }
     if (descriptor.kind === "setting-value") {
       if (verifiedManifest.schemaVersion < 3) throw new Error("settings-values/ requires archive schema 3");
       if (entry.uncompressedSize > MAX_SETTING_VALUE_FILE_BYTES) {
@@ -2333,6 +2340,8 @@ async function applyBinary(
         return safeJoin(join(env.dataDir, "theme-assets", ctx.userId), entry.inner);
       case "notification-sounds":
         return safeJoin(join(env.dataDir, "notification-sounds", ctx.userId), entry.inner);
+      case "extension-storage":
+        return extensionStorageDestination(ctx.userId, entry.inner);
     }
   })();
   if (!dest) return false;
@@ -2366,6 +2375,7 @@ async function applyBinary(
     // which resume overwrites. Android forbids hard links in app storage.
     const temporary = join(dirname(dest), `.lv-restore-${ctx.job.jobId}.tmp`);
     try {
+      if (entry.bucket === "extension-storage") assertExtensionRestoreTemporaryFile(temporary);
       copyFileSync(entry.stagingPath, temporary);
       // Imports hold the single writer slot. Keep the existence check and
       // rename synchronous so another application request cannot interleave.

@@ -3,6 +3,20 @@ import { sanitizeEntry } from "./sanitize";
 
 const IMAGE_ID = "123e4567-e89b-12d3-a456-426614174000";
 
+describe("user-data extension storage paths", () => {
+  test.each(["my_addon/config.json", "my_addon/nested/preferences.json", "shared_addon/notes/日本語 notes.txt", "my_addon/.hidden", "my_addon/data.bin"])("accepts %s", inner => {
+    expect(sanitizeEntry(`files/extension-storage/${inner}`)).toMatchObject({ kind: "files", bucket: "extension-storage", inner });
+  });
+  test.each([
+    "config.json", "addon/../outside", "addon/./config", "addon//config", "/addon/config", "addon/config/",
+    "addon/.ephemeral/cache", "addon/nested/.ephemeral/.index.json", "addon/config:secret", "addon/NUL.json",
+    "addon/file.", "addon/file ", "addon/path\0", "addon/.lv-restore-job.tmp", "bad:identifier/config",
+    "addon\\config.json", "addon/.EPHEMERAL/cache",
+  ])("rejects %s", inner => {
+    expect(() => sanitizeEntry(`files/extension-storage/${inner}`)).toThrow();
+  });
+});
+
 describe("user-data settings value paths", () => {
   test("accepts a separate JSON payload with a UUID filename", () => {
     expect(sanitizeEntry(`settings-values/${IMAGE_ID}.json`)).toMatchObject({

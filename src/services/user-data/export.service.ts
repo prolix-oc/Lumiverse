@@ -49,6 +49,7 @@ import { getCompletionSound } from "../notification-sounds.service";
 import { getSecret as getSecretValue } from "../secrets.service";
 import { encryptSecret } from "./secret-ticket.service";
 import { MAX_SETTING_VALUE_FILE_BYTES } from "./archive-limits";
+import { extensionStorageFiles } from "./extension-storage";
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -134,6 +135,8 @@ export interface ExportSecretsContext {
 export interface ExportOptions {
   userId: string;
   includeVectors: boolean;
+  /** Persistent extension files for this account; excluded by default. */
+  includeExtensionData?: boolean;
   signal?: AbortSignal;
   /** Optional Lumiverse server version stamped into the manifest. */
   producerVersion?: string | null;
@@ -646,6 +649,7 @@ async function runExport(
   const manifest = createManifest({
     archiveId,
     includeVectors,
+    includeExtensionData: opts.includeExtensionData === true,
     embeddingConfig,
     producerVersion: opts.producerVersion ?? null,
     counts: {},          // populated in trailer
@@ -842,7 +846,13 @@ async function runExport(
     /* sound optional */
   }
 
-  // ---- 4) Binary files (images, thumbnails, avatars, databank, theme assets) --
+  if (opts.includeExtensionData === true) {
+    for await (const file of extensionStorageFiles(userId, path => missingFiles.push(path), signal)) {
+      fileQueue.push(file);
+    }
+  }
+
+  // ---- 4) Binary files (including optional extension storage) -------
   // Dedupe by archive path so the same image/thumb isn't packed twice.
   const seen = new Set<string>();
   const deduped = fileQueue.filter((f) => {

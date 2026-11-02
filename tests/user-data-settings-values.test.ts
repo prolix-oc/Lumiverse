@@ -10,7 +10,7 @@ import { putSetting } from "../src/services/settings.service";
 import { MAX_SETTING_VALUE_FILE_BYTES } from "../src/services/user-data/archive-limits";
 import { buildExportStream } from "../src/services/user-data/export.service";
 import { startImport, verifyArchiveFast, type ImportJob } from "../src/services/user-data/import.service";
-import { createManifest, NDJSON_MAX_RECORD_BYTES, parseManifest } from "../src/services/user-data/manifest";
+import { ARCHIVE_SCHEMA_VERSION, createManifest, NDJSON_MAX_RECORD_BYTES, parseManifest } from "../src/services/user-data/manifest";
 
 const SOURCE = "settings-source";
 const TARGET = "settings-target";
@@ -100,7 +100,7 @@ describe("large settings backup values", () => {
     const archivePath = join(firstDir, "export.lvbak");
     const secondPath = join(secondDir, "export.lvbak");
     await Bun.write(archivePath, new Response(buildExportStream({ userId: SOURCE, includeVectors: false })));
-    expect((await verifyArchiveFast(archivePath)).schemaVersion).toBe(3);
+    expect((await verifyArchiveFast(archivePath)).schemaVersion).toBe(ARCHIVE_SCHEMA_VERSION);
     // Reading embedding configuration during export can persist defaults.
     const settingCount = (getDb().query("SELECT COUNT(*) AS n FROM settings WHERE user_id = ?").get(SOURCE) as { n: number }).n;
     copyFileSync(archivePath, secondPath);
@@ -218,6 +218,6 @@ describe("large settings backup values", () => {
       expect(job.status).toBe("complete");
       expect(valueFor(TARGET, `legacy${schemaVersion}`)).toBe("true");
     }
-    expect(() => parseManifest(manifest(4))).toThrow("newer than this server supports");
+    expect(() => parseManifest(manifest(ARCHIVE_SCHEMA_VERSION + 1))).toThrow("newer than this server supports");
   });
 });

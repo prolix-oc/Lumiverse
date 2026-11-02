@@ -3,7 +3,7 @@
 // write outside the prescribed buckets or escape via "../" traversal.
 
 const PREFIX_RE =
-  /^(?:database\/|settings-values\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
+  /^(?:database\/|settings-values\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds|extension-storage)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
 
 // Some existing image rows reference a saved original such as
 // UUID.bak_20260808_pre_calligraphy (optionally after the original extension).
@@ -27,7 +27,7 @@ const SETTING_VALUE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 export interface SanitizedEntry {
   kind: "database" | "files" | "lancedb" | "manifest" | "secrets" | "setting-value";
   /** For files/: the bucket name. */
-  bucket?: "images" | "thumbnails" | "avatars" | "databank" | "theme-assets" | "notification-sounds";
+  bucket?: "images" | "thumbnails" | "avatars" | "databank" | "theme-assets" | "notification-sounds" | "extension-storage";
   /** For database/ and lancedb/: the table name (without .ndjson). */
   table?: string;
   /** Path inside the bucket (basename for images/thumbs, subpath for theme-assets/databank). */
@@ -165,6 +165,23 @@ export function sanitizeEntry(rawPath: string): SanitizedEntry {
         throw new SanitizeError("files/notification-sounds entry must be completion.{ext}", rawPath);
       }
       break;
+    case "extension-storage": {
+      if (rawPath.includes("\\")) {
+        throw new SanitizeError("extension storage paths must use forward slashes", rawPath);
+      }
+      const parts = inner.split("/");
+      if (parts.length < 2 || !/^[A-Za-z0-9._-]{1,128}$/.test(parts[0])) {
+        throw new SanitizeError("extension storage requires an identifier and file path", rawPath);
+      }
+      // Keep names portable to Windows as well as Unix, and never restore
+      // runtime caches or private files left by an interrupted restore.
+      if (parts.some(part => !part || /[<>:"|?*\x00-\x1f\x7f]/.test(part) || /[. ]$/.test(part)
+        || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
+        || part.toLowerCase() === ".ephemeral" || /^\.lv-restore-.+\.tmp$/i.test(part))) {
+        throw new SanitizeError("extension storage file path is not portable or is reserved", rawPath);
+      }
+      break;
+    }
     default:
       throw new SanitizeError("files/ entry uses an unknown bucket", rawPath);
   }

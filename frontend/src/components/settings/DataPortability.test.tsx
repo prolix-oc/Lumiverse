@@ -9,12 +9,14 @@ const getImportJobs = mock(async () => ({ jobs: [] as { jobId: string; status: s
 const resumeImport = mock(async () => ({ jobId: 'restore-job' }))
 const skipTicket = mock(async () => ({}))
 const refresh = mock(async () => {})
+const exportUrl = mock((_vectors: boolean, _extensions: boolean) => 'about:blank')
+const prepareSecretsExport = mock(async (_vectors: boolean, _extensions: boolean) => { throw new Error('prepare failed') })
 const t = (key: string, args?: Record<string, unknown>) => args ? `${key} ${JSON.stringify(args)}` : key
 mock.module('@/store', () => ({ useStore: { getState: () => ({ user: { id: 'owner' } }) } }))
 mock.module('@/lib/import-recovery', () => ({ pendingImportJob: () => null, trackImportJob() {} }))
 mock.module('react-i18next', () => ({ useTranslation: () => ({ t }) }))
 mock.module('@/ws/client', () => ({ wsClient: { on: () => () => {} } }))
-mock.module('@/api/user-data', () => ({ userDataApi: { startImport, getImportStatus, skipTicket, getImportJobs, resumeImport } }))
+mock.module('@/api/user-data', () => ({ userDataApi: { startImport, getImportStatus, skipTicket, getImportJobs, resumeImport, exportUrl, prepareSecretsExport } }))
 mock.module('@/hooks/useAppInit', () => ({ refreshAppDataAfterImport: refresh }))
 mock.module('@/store/slices/settings', () => ({ flushSettingsNow: async () => {} }))
 mock.module('@/components/shared/FormComponents', () => ({
@@ -41,6 +43,8 @@ beforeEach(() => {
   getImportStatus.mockReset()
   getImportJobs.mockReset().mockResolvedValue({ jobs: [] })
   resumeImport.mockClear()
+  exportUrl.mockClear()
+  prepareSecretsExport.mockClear()
 })
 afterEach(() => {
   act(() => root.unmount())
@@ -64,6 +68,31 @@ async function tick() {
   await act(async () => { jest.advanceTimersByTime(1000) })
 }
 const status = (state: string) => ({ jobId: 'restore-job', status: state, summary: { characters: { imported: 1, skipped: 0 } }, fileSummary: {}, manifest: { secretsCount: 1 } })
+
+function checkbox(key: string): HTMLInputElement {
+  return Array.from(host.querySelectorAll('label')).find(node => node.textContent?.includes(`dataPortability.${key}`))!
+    .querySelector('input[type=checkbox]')!
+}
+
+test.each([false, true])('extension files default off and selection %s reaches the streaming export', async selected => {
+  await act(async () => { root.render(<DataPortability />) })
+  const input = checkbox('includeExtensionData')
+  expect(input.checked).toBe(false)
+  if (selected) await act(async () => { input.click() })
+  host.querySelector('a')!.click = () => {}
+  await click('dataPortability.downloadArchive')
+  expect(exportUrl).toHaveBeenCalledWith(true, selected)
+  expect(prepareSecretsExport).not.toHaveBeenCalled()
+})
+
+test.each([false, true])('extension files selection %s also reaches the secrets export', async selected => {
+  await act(async () => { root.render(<DataPortability />) })
+  if (selected) await act(async () => { checkbox('includeExtensionData').click() })
+  await act(async () => { checkbox('includeSecrets').click() })
+  await click('dataPortability.downloadArchive')
+  expect(prepareSecretsExport).toHaveBeenCalledWith(true, selected)
+  expect(exportUrl).not.toHaveBeenCalled()
+})
 
 test('polls beyond the old one-shot delay and refreshes imported data without WebSocket events', async () => {
   getImportStatus.mockRejectedValueOnce(new Error('offline'))

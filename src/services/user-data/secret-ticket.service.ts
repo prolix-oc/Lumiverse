@@ -320,6 +320,7 @@ export function recordConsumedTicket(archiveId: string, userId: string): Consume
 export interface ExportPrepareEntry {
   userId: string;
   includeVectors: boolean;
+  includeExtensionData?: boolean;
   includeSecrets: boolean;
   smk: Uint8Array | null;
   secretKeys: readonly string[];
