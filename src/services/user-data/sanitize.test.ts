@@ -3,6 +3,21 @@ import { sanitizeEntry } from "./sanitize";
 
 const IMAGE_ID = "123e4567-e89b-12d3-a456-426614174000";
 
+describe("user-data settings value paths", () => {
+  test("accepts a separate JSON payload with a UUID filename", () => {
+    expect(sanitizeEntry(`settings-values/${IMAGE_ID}.json`)).toMatchObject({
+      kind: "setting-value", inner: `${IMAGE_ID}.json`,
+    });
+  });
+
+  test.each([
+    "../outside.json", "nested/value.json", "savedThemes.json", `${IMAGE_ID}.ndjson`,
+    `${IMAGE_ID}.json/extra`, `${IMAGE_ID}.json\0`,
+  ])("rejects unsafe or unsupported settings value path %s", (filename) => {
+    expect(() => sanitizeEntry(`settings-values/${filename}`)).toThrow();
+  });
+});
+
 describe("user-data image archive paths", () => {
   test.each([
     IMAGE_ID,

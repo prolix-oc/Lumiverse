@@ -18,7 +18,7 @@
 // over 4 GB produce a broken file with no recovery path on import.
 
 import { ZipArchive, type ArchiverError, type ZipEntryData } from "archiver";
-import { PassThrough, Writable, type Readable } from "stream";
+import { PassThrough, Readable, Writable } from "stream";
 import { join, basename } from "path";
 import { existsSync } from "fs";
 import { eventBus } from "../../ws/bus";
@@ -48,6 +48,7 @@ import {
 import { getCompletionSound } from "../notification-sounds.service";
 import { getSecret as getSecretValue } from "../secrets.service";
 import { encryptSecret } from "./secret-ticket.service";
+import { MAX_SETTING_VALUE_FILE_BYTES } from "./archive-limits";
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -76,6 +77,43 @@ const NDJSON_COMPRESSION = 3;
  * dramatically reduces overhead on high-row-count tables.
  */
 const NDJSON_FLUSH_BYTES = 256 * 1024;
+
+// A stored setting is already JSON. Keep large values out of the outer row's
+// JSON string escaping (up to 6x expansion), and avoid a second huge string.
+const INLINE_SETTING_VALUE_CHARS = 8 * 1024 * 1024;
+
+function externalizeSettingValue(
+  archive: ZipArchive,
+  row: Record<string, any>,
+  signal?: AbortSignal,
+): Record<string, any> {
+  const value = row.value;
+  if (typeof value !== "string" || value.length <= INLINE_SETTING_VALUE_CHARS) return row;
+  if (Buffer.byteLength(value, "utf8") > MAX_SETTING_VALUE_FILE_BYTES) {
+    throw new Error(`Setting ${JSON.stringify(row.key)} exceeds the portable settings value limit`);
+  }
+  const valueFile = `settings-values/${crypto.randomUUID()}.json`;
+  const source = Readable.from((async function* () {
+    let yieldedBytes = 0;
+    for (let start = 0; start < value.length;) {
+      signal?.throwIfAborted();
+      let end = Math.min(start + 64 * 1024, value.length);
+      // Encoding each chunk independently must not split a surrogate pair.
+      if (end < value.length && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff) end--;
+      const chunk = Buffer.from(value.slice(start, end), "utf8");
+      start = end;
+      yield chunk;
+      yieldedBytes += chunk.byteLength;
+      if (yieldedBytes >= YIELD_BINARY_BYTES) {
+        yieldedBytes = 0;
+        await yieldAndCheck(signal);
+      }
+    }
+  })());
+  source.on("error", (err) => archive.emit("error", err));
+  archive.append(source, { name: valueFile });
+  return { ...row, value: null, valueFile };
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -644,7 +682,8 @@ async function runExport(
         // Drop secret-looking settings rows defensively.
         if (spec.table === "settings" && isSecretSettingKey(String(raw.key ?? ""))) continue;
 
-        const scrubbed = scrubRow(raw, spec.scrubColumns);
+        let scrubbed = scrubRow(raw, spec.scrubColumns);
+        if (spec.table === "settings") scrubbed = externalizeSettingValue(archive, scrubbed, signal);
         entry.write(scrubbed);
         rowsOut++;
 

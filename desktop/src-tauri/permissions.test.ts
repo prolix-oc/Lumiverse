@@ -167,6 +167,26 @@ describe("capability origins", () => {
       } else expect(capability.json.local).toBe(true);
     }
   });
+  test("network access settings belong only to the local tray host", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("bundled-server-controls"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["main"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://127.0.0.1:1430", "http://localhost:1430",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+    const source = readSource("bundled_server.rs");
+    const build = readFileSync(join(HERE, "build.rs"), "utf8");
+    for (const command of ["bundled_server_network_access", "bundled_server_set_network_access"]) {
+      expect(build).toContain(`"${command}"`);
+      const body = source.slice(source.indexOf(`pub async fn ${command}`)).split("#[tauri::command]")[0];
+      expect(body).toContain('require_window(&window, "main")?');
+    }
+  });
   /**
    * Labels of windows the Rust side builds from a bundled page. A capability
    * covering one of these must apply to local origins, or it matches the

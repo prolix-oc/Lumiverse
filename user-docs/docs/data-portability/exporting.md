@@ -46,6 +46,7 @@ Inside the `.lvbak` (it's a ZIP file — you can open it with any zip utility to
 ```
 manifest.json              Producer + version + embedding config + archive id
 database/                  One NDJSON per user-owned table
+settings-values/           Large settings, including saved themes with embedded assets
 files/
   images/                  Original uploaded images
   thumbnails/              Pre-generated 300px and 700px WebP thumbnails
@@ -59,6 +60,8 @@ manifest-stats.json        Trailing row counts and skipped-file report
 ```
 
 Thumbnails are included **as-is**, so character galleries appear instantly on the target instance instead of waiting for Sharp to regenerate them.
+
+Large saved-theme libraries are included automatically. Import new backups into an up-to-date Lumiverse instance; older versions may report that the backup schema is newer than they support. Existing backups remain importable.
 
 ---
 

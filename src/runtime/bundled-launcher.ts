@@ -4,7 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { defaultBundleDirectories, parseBundleOptions, validatePort, validateSettings, type ServerBundleManifest } from "./bundle";
 import { extractServerBundle } from "./bundle-cache";
-import { configureBundleOwner, hasConfiguredOwner, openBundleBrowser, startBundleSetup, type BundleSetup } from "./bundle-setup";
+import { configureBundleOwner, hasConfiguredOwner, openBundleBrowser, startBundleSetup, writeBundleSettings, type BundleSetup } from "./bundle-setup";
 import { BundleDesktopChannel } from "./bundle-desktop";
 
 const USAGE = `Lumiverse Server (experimental bundled distribution)
@@ -23,6 +23,7 @@ Launch with no arguments to configure and open Lumiverse in your browser.
   --check               Check native libraries, database subprocesses, and workers
   --reset-password      Reset the owner password interactively
   --print-data-dir      Print the configured data path as JSON without starting
+  --network-access MODE Read (status) or save (on/off) access from other devices
   --version             Print build information
   --help                Show this help
 
@@ -56,6 +57,21 @@ export async function runBundledServer(archive: string, manifest: ServerBundleMa
   // The desktop can open the correct folder before first launch or while the
   // server is stopped. Resolve settings without unpacking or touching the data.
   if (options.command === "data-dir") { console.log(JSON.stringify(settings.dataDir)); return; }
+  if (options.command === "network-access") {
+    const overridden = Boolean(options.host || process.env.LUMIVERSE_HOST);
+    if (options.networkAccess !== "status") {
+      if (!saved) throw new Error("Set up the built-in server before changing network access.");
+      if (overridden) throw new Error("Network access is controlled by --host or LUMIVERSE_HOST. Remove that override before changing the saved setting.");
+      // Only change the saved listener. Environment/CLI data and port overrides
+      // must never be persisted as a side effect, or initialize another account.
+      settings = { ...saved, host: options.networkAccess === "on" ? "::" : "127.0.0.1" };
+      writeBundleSettings(settingsPath, settings);
+    }
+    const host = settings.host.toLowerCase();
+    console.log(JSON.stringify({ configured: Boolean(saved), host: settings.host, overridden,
+      enabled: !["localhost", "::1", "[::1]"].includes(host) && !/^127\./.test(host) }));
+    return;
+  }
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   const root = await extractServerBundle(archive, manifest, cacheDir);
   let setup: BundleSetup | undefined;

@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { LocalServerClient, resolveLocalServerSource } from "./local-server";
+import { changeNetworkAccess, type BundledNetworkAccess } from "./network-access";
 import { Image } from "@tauri-apps/api/image";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
@@ -87,6 +88,9 @@ let desktopShellNoticeShown = false;
 let instanceConnection: InstanceConnection = LOCAL_INSTANCE_CONNECTION;
 let remoteSnapshot: RemoteInstanceSnapshot | null = null;
 let openIntegratedBrowserWhenReady = false;
+let bundledNetworkAccess: BundledNetworkAccess | null = null;
+let changingNetworkAccess = false;
+let networkAccessRequest = 0;
 
 // ─── Discord Rich Presence ──────────────────────────────────────────────────
 // The tray fetches the active-chat snapshot on chat switches and polls the
@@ -136,6 +140,7 @@ let statsPidItem: MenuItem;
 let statsUptimeItem: MenuItem;
 let statsBranchItem: MenuItem;
 let statsVersionItem: MenuItem;
+let remoteAccessItem: CheckMenuItem;
 let checkUpdatesItem: MenuItem;
 let applyUpdateItem: MenuItem;
 let rebuildDesktopItem: MenuItem;
@@ -267,7 +272,7 @@ function frontendUrl(): string {
 
 async function updateMenu(): Promise<void> {
   const running = serverState === "running";
-  const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null || installingDesktopUpdate;
+  const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null || installingDesktopUpdate || changingNetworkAccess;
   const remote = isRemoteMode();
 
   await statusItem.setText(statusText());
@@ -314,6 +319,10 @@ async function updateMenu(): Promise<void> {
     : (running ? formatUptime(lastStatus?.startedAt ?? null) : "—")}`);
   await statsBranchItem.setText(`Branch: ${remote ? (remoteSnapshot?.status?.branch ?? "—") : (lastStatus?.branch ?? "—")}`);
   await statsVersionItem.setText(`Version: ${remote ? (remoteSnapshot?.status?.version ?? "—") : (lastStatus?.version ?? "—")}`);
+  const access = !remote && usesBundledServer() ? bundledNetworkAccess : null;
+  await remoteAccessItem.setChecked(access?.enabled ?? false);
+  await remoteAccessItem.setText(access?.overridden ? "Allow Remote Access (set by launch override)" : "Allow Remote Access");
+  await remoteAccessItem.setEnabled(Boolean(access?.configured && !access.overridden && !transitioning && !externalRunning));
 
   await checkUpdatesItem.setEnabled(!usesBundledServer() && !remote && !busyMessage && !externalRunning);
   // The rebuild compiles from the configured checkout, so it needs one — but
@@ -386,6 +395,7 @@ async function ensureRunner(): Promise<void> {
 }
 
 async function refreshStatus(): Promise<void> {
+  if (!changingNetworkAccess) await refreshNetworkAccess();
   if (!(await client.alive())) return;
   try {
     const source = client.source;
@@ -403,6 +413,52 @@ async function refreshStatus(): Promise<void> {
   } catch {
     // Runner busy or mid-restart — keep last known state.
   }
+}
+
+async function refreshNetworkAccess(): Promise<void> {
+  const request = ++networkAccessRequest;
+  if (isRemoteMode() || !usesBundledServer()) { bundledNetworkAccess = null; return; }
+  try {
+    const access = await invoke<BundledNetworkAccess>("bundled_server_network_access");
+    if (request === networkAccessRequest && !isRemoteMode() && usesBundledServer()) bundledNetworkAccess = access;
+  } catch {
+    // An unavailable or invalid configuration cannot be represented by a toggle.
+    if (request === networkAccessRequest) bundledNetworkAccess = null;
+  }
+}
+
+function toggleRemoteAccess(): Promise<void> {
+  // Use the same queue as instance selection so a late restart cannot start a
+  // local server after the owner has switched to a remote instance or checkout.
+  const task = connectionChange.then(async () => {
+    if (isRemoteMode() || !usesBundledServer() || busyMessage || installingDesktopUpdate || externalRunning
+      || serverState === "starting" || serverState === "stopping"
+      || !bundledNetworkAccess?.configured || bundledNetworkAccess.overridden) {
+      await updateMenu();
+      return;
+    }
+    const enabled = !bundledNetworkAccess.enabled;
+    const running = serverState === "running";
+    changingNetworkAccess = true;
+    networkAccessRequest++;
+    busyMessage = "Saving remote access…";
+    try {
+      await updateMenu();
+      bundledNetworkAccess = await changeNetworkAccess({
+        enabled, running,
+        save: (enabled) => invoke<BundledNetworkAccess>("bundled_server_set_network_access", { enabled }),
+        stop: stopServer,
+        start: () => startServer(false),
+      });
+    } finally {
+      changingNetworkAccess = false;
+      busyMessage = null;
+      await refreshStatus();
+      await updateMenu();
+    }
+  });
+  connectionChange = task.catch(() => {});
+  return task;
 }
 
 async function startServer(reopenFrontend = true): Promise<void> {
@@ -1167,9 +1223,14 @@ async function buildTray(): Promise<void> {
   statsUptimeItem = await MenuItem.new({ text: "Uptime: —", enabled: false });
   statsBranchItem = await MenuItem.new({ text: "Branch: —", enabled: false });
   statsVersionItem = await MenuItem.new({ text: "Version: —", enabled: false });
+  remoteAccessItem = await CheckMenuItem.new({
+    text: "Allow Remote Access", checked: false, enabled: false,
+    action: action(toggleRemoteAccess),
+  });
   const statsSubmenu = await Submenu.new({
     text: "Serving Stats",
-    items: [statsPortItem, statsPidItem, statsUptimeItem, statsBranchItem, statsVersionItem],
+    items: [statsPortItem, statsPidItem, statsUptimeItem, statsBranchItem, statsVersionItem,
+      await PredefinedMenuItem.new({ item: "Separator" }), remoteAccessItem],
   });
 
   checkUpdatesItem = await MenuItem.new({
@@ -1372,6 +1433,7 @@ async function applyInstanceConnection(selection: InstanceConnectionChange): Pro
 }
 
 async function tick(): Promise<void> {
+  if (changingNetworkAccess) { await updateMenu(); return; }
   if (!settings.instanceConnectionConfigured) { await updateMenu(); return; }
   // Presence rides the shared tick; its polling handles its own errors.
   void refreshDiscordPresence();
@@ -1386,6 +1448,7 @@ async function tick(): Promise<void> {
       await detectExternalServer();
     }
   } else {
+    await refreshNetworkAccess();
     await detectExternalServer();
   }
   await updateMenu();
@@ -1485,7 +1548,7 @@ async function boot(): Promise<void> {
       // rather than waiting for the next tick.
       void refreshDiscordPresence();
     }
-    if (!installingDesktopUpdate && (state === "running" || state === "stopped" || state === "crashed")) {
+    if (!installingDesktopUpdate && !changingNetworkAccess && (state === "running" || state === "stopped" || state === "crashed")) {
       busyMessage = null;
     }
     // Re-check on every start, not just the first. The checkout can move
@@ -1507,7 +1570,7 @@ async function boot(): Promise<void> {
   client.onExit = () => {
     serverState = "stopped";
     lastStatus = null;
-    if (!installingDesktopUpdate) busyMessage = null;
+    if (!installingDesktopUpdate && !changingNetworkAccess) busyMessage = null;
     void refreshDiscordPresence();
     void updateMenu();
   };
@@ -1525,6 +1588,7 @@ async function boot(): Promise<void> {
   if (repoDir) settings.instanceConnectionConfigured = true;
   if (!usesBundledServer() && !repoDir && !isRemoteMode()) settings.instanceConnectionConfigured = false;
 
+  await refreshNetworkAccess();
   await buildTray();
   await updateMenu();
   void checkDesktopUpdates();

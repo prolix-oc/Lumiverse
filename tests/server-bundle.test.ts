@@ -71,6 +71,10 @@ describe("server bundle runtime", () => {
     expect(() => parseBundleOptions(["--data-dir", "--check"])).toThrow();
     expect(() => parseBundleOptions(["--watch"])).toThrow();
     expect(() => validateSettings({ format: 1, dataDir: "/data", port: 7860, host: "" })).toThrow();
+    for (const args of [["--network-access"], ["--network-access", "yes"], ["--check", "--network-access", "on"],
+      ["--network-access", "off", "--print-data-dir"], ["--desktop", "--network-access", "status"]]) {
+      expect(() => parseBundleOptions(args)).toThrow();
+    }
   });
 
   test("reports the configured data folder without extracting, initializing, or starting the server", async () => {
@@ -105,6 +109,60 @@ describe("server bundle runtime", () => {
     expect(await query(["--data-dir", "cli-data"], { DATA_DIR: "environment-data" })).toBe(join(base, "cli-data"));
     expect(readFileSync(join(config, "server.json"), "utf8")).toBe(saved);
     expect(existsSync(selected)).toBe(false);
+  });
+
+  test("changes saved network access without extracting a runtime or touching an existing account", async () => {
+    const base = realpathSync(directory());
+    const config = join(base, "config");
+    const cache = join(base, "cache");
+    const dataDir = join(base, "existing-data");
+    const settingsPath = join(config, "server.json");
+    const launcher = join(base, "network.ts");
+    const manifest: ServerBundleManifest = { format: 1, version: "test", bunVersion: Bun.version,
+      platform: process.platform, arch: process.arch, branch: "staging", commit: "test",
+      payloadSha256: "0".repeat(64), executableFiles: [], requiredFiles: [], ffmpeg: false };
+    writeFileSync(launcher, `import { runBundledServer } from ${JSON.stringify(resolve(import.meta.dir, "../src/runtime/bundled-launcher.ts"))};\nawait runBundledServer("missing-archive", ${JSON.stringify(manifest)});\n`);
+    const env = { ...process.env };
+    for (const key of ["DATA_DIR", "PORT", "LUMIVERSE_HOST", "BUN_OPTIONS", "LUMIVERSE_CONFIG_DIR", "LUMIVERSE_CACHE_DIR"]) delete env[key];
+    const run = async (mode: string, extra: string[] = [], overrides: Record<string, string> = {}) => {
+      const child = Bun.spawn([process.execPath, "--no-env-file", launcher, "--config-dir", config, "--cache-dir", cache,
+        "--network-access", mode, ...extra], { cwd: base, env: { ...env, ...overrides }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      return { stdout, stderr, exitCode };
+    };
+    expect(JSON.parse((await run("status")).stdout)).toEqual({ configured: false, enabled: false, host: "127.0.0.1", overridden: false });
+    expect((await run("on")).exitCode).toBe(1);
+    expect(existsSync(config)).toBe(false);
+    mkdirSync(config);
+    mkdirSync(dataDir);
+    writeFileSync(join(dataDir, "owner.credentials"), "existing owner");
+    writeFileSync(join(dataDir, "lumiverse.db"), "existing database");
+    const saved = { format: 1, dataDir, port: 17860, host: "127.0.0.1" };
+    writeFileSync(settingsPath, JSON.stringify(saved));
+    const enabled = await run("on", ["--data-dir", join(base, "override-data"), "--port", "27860"]);
+    expect(enabled.exitCode).toBe(0);
+    expect(JSON.parse(enabled.stdout)).toEqual({ configured: true, enabled: true, host: "::", overridden: false });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({ ...saved, host: "::" });
+    expect(JSON.parse((await run("status")).stdout).enabled).toBe(true);
+    const beforeOverride = readFileSync(settingsPath, "utf8");
+    const overrides: Array<{ extra: string[]; env: Record<string, string> }> = [
+      { extra: ["--host", "127.0.0.1"], env: {} }, { extra: [], env: { LUMIVERSE_HOST: "127.0.0.1" } },
+    ];
+    for (const override of overrides) {
+      expect(JSON.parse((await run("status", override.extra, override.env)).stdout))
+        .toEqual({ configured: true, enabled: false, host: "127.0.0.1", overridden: true });
+      const rejected = await run("off", override.extra, override.env);
+      expect(rejected.exitCode).toBe(1);
+      expect(rejected.stderr).toContain("Remove that override");
+      expect(readFileSync(settingsPath, "utf8")).toBe(beforeOverride);
+    }
+    expect((await run("off")).exitCode).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual(saved);
+    expect(JSON.parse((await run("status")).stdout).enabled).toBe(false);
+    expect(readFileSync(join(dataDir, "owner.credentials"), "utf8")).toBe("existing owner");
+    expect(readFileSync(join(dataDir, "lumiverse.db"), "utf8")).toBe("existing database");
+    expect(existsSync(cache)).toBe(false);
+    expect(existsSync(join(base, "override-data"))).toBe(false);
   });
 
   test("publishes a complete cache under concurrent extraction and rejects damaged archives", async () => {

@@ -137,6 +137,11 @@ are disabled while a remote instance is selected.
 - **Browser** opens, closes or reloads the integrated browser, opens the system
   browser, changes the connection and manages desktop authorization.
 - **Serving Stats** reports the port, PID, uptime, branch and version when allowed.
+- **Serving Stats → Allow Remote Access** lets other devices connect directly
+  to the built-in server. Changing it restarts a running server; a stopped
+  server stays stopped. The choice persists without repeating setup or changing
+  your account, storage or data. It is available after built-in setup and is
+  disabled for checkout and remote connections or a launch-time host override.
 - **Check for Updates / Apply Update** updates an existing checkout through Git.
 - **Desktop Updates** installs a signed update of the entire bundled app after
   you choose **Update and restart**.
@@ -149,6 +154,17 @@ to find it. Uninstalling the app does not transfer or automatically erase this
 data. Disable **Launch at Login**, quit, and remove the app using your platform's
 normal uninstall process. Bun and Rust installed for checkout/source work are
 shared tools and can be kept for other projects.
+
+With remote access enabled, open `http://<this-computer-LAN-IP>:7860` from
+another device on the same network, substituting your server's port. Allow
+incoming connections through the host firewall if prompted. Detected LAN IPs
+are already trusted; for a custom address, add its exact origin under
+**Settings → Operator → Trusted Hostnames** and restart. The Operator panel's
+**Remote Mode** changes origin restrictions and is separate from this listener
+setting. HTTPS is required when connecting another Lumiverse Desktop client
+and for installing a mobile PWA; see [Connect to a remote instance](#connect-to-a-remote-instance).
+Turning this toggle off limits direct connections to this computer; a separately
+configured reverse proxy or Tailscale Serve can still forward to its local port.
 
 ## Linux graphics and browser troubleshooting
 

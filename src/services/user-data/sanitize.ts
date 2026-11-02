@@ -3,7 +3,7 @@
 // write outside the prescribed buckets or escape via "../" traversal.
 
 const PREFIX_RE =
-  /^(?:database\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
+  /^(?:database\/|settings-values\/|files\/(?:images|thumbnails|avatars|databank|theme-assets|notification-sounds)\/|lancedb\/|secrets\/(?:encrypted\.ndjson|index\.json)$|manifest\.json$|manifest-stats\.json$)/;
 
 // Some existing image rows reference a saved original such as
 // UUID.bak_20260808_pre_calligraphy (optionally after the original extension).
@@ -22,10 +22,10 @@ const DATABANK_FILE_RE = /^[A-Za-z0-9._-]+$/;
 const SOUND_FILE_RE = /^completion\.(mp3|wav|ogg|aac|m4a)$/;
 
 const NDJSON_RE = /^[a-z_]+\.ndjson$/;
+const SETTING_VALUE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
 
 export interface SanitizedEntry {
-  /** "database" | "files" | "lancedb" | "manifest" | "secrets" */
-  kind: "database" | "files" | "lancedb" | "manifest" | "secrets";
+  kind: "database" | "files" | "lancedb" | "manifest" | "secrets" | "setting-value";
   /** For files/: the bucket name. */
   bucket?: "images" | "thumbnails" | "avatars" | "databank" | "theme-assets" | "notification-sounds";
   /** For database/ and lancedb/: the table name (without .ndjson). */
@@ -95,6 +95,14 @@ export function sanitizeEntry(rawPath: string): SanitizedEntry {
       inner: file,
       raw: rawPath,
     };
+  }
+
+  if (path.startsWith("settings-values/")) {
+    const file = path.slice("settings-values/".length);
+    if (!SETTING_VALUE_RE.test(file)) {
+      throw new SanitizeError("settings-values/ entry must be UUID.json", rawPath);
+    }
+    return { kind: "setting-value", inner: file, raw: rawPath };
   }
 
   if (path.startsWith("lancedb/")) {

@@ -7,10 +7,12 @@
 // queue re-vectorization.
 
 /**
- * Schema 2 makes the per-record NDJSON limit an explicit archive capability.
- * Schema 1 archives remain readable through the bounded compatibility path.
+ * Schema 3 moves large settings values to settings-values/*.json entries,
+ * referenced by valueFile in database/settings.ndjson (with value: null).
+ * Schema 2 introduced the explicit per-record NDJSON limit. Both older
+ * schemas remain readable; older servers must reject schema 3.
  */
-export const ARCHIVE_SCHEMA_VERSION = 2;
+export const ARCHIVE_SCHEMA_VERSION = 3;
 
 export const ARCHIVE_PRODUCER = "lumiverse";
 

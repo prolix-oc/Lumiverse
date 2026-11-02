@@ -165,6 +165,8 @@ fn main() {
             "bundled_server_stop",
             "bundled_server_status",
             "bundled_server_alive",
+            "bundled_server_network_access",
+            "bundled_server_set_network_access",
             "bundled_setup_defaults",
             "bundled_setup_save",
             "bundled_setup_status",

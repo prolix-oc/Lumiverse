@@ -1,7 +1,7 @@
 [[permission]]
 identifier = "bundled-server-controls"
 description = "Allows the local tray to own the included server process."
-commands.allow = ["bundled_server_available", "bundled_server_start", "bundled_server_stop", "bundled_server_status", "bundled_server_alive"]
+commands.allow = ["bundled_server_available", "bundled_server_start", "bundled_server_stop", "bundled_server_status", "bundled_server_alive", "bundled_server_network_access", "bundled_server_set_network_access"]
 
 [[permission]]
 identifier = "bundled-server-setup"

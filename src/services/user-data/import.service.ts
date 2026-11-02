@@ -58,7 +58,7 @@ import {
 } from "./table-registry";
 import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./sanitize";
 import { markConnectionSecretRestored } from "./connection-secret-restore";
-import { MAX_ACCOUNT_ARCHIVE_BYTES } from "./archive-limits";
+import { MAX_ACCOUNT_ARCHIVE_BYTES, MAX_SETTING_VALUE_FILE_BYTES } from "./archive-limits";
 import { loadImportJob, recentImportJobIds, saveImportJob } from "./import-job-store";
 import { listenForAndroidImportCancellation, notifyAndroidImport } from "../../runtime/android-import";
 
@@ -1027,7 +1027,7 @@ function ensureDir(dir: string): void {
 interface BufferedTextEntry {
   kind: "text";
   table: string;
-  origin: "database" | "lancedb";
+  origin: "database" | "lancedb" | "setting-value";
   // Stored on disk to keep memory bounded.
   stagingPath: string;
   byteSize: number;
@@ -1220,6 +1220,7 @@ function readCappedTextFile(path: string, maxBytes: number, label: string): stri
 }
 
 function entryTextLimit(entry: BufferedTextEntry): number | null {
+  if (entry.origin === "setting-value") return MAX_SETTING_VALUE_FILE_BYTES;
   switch (entry.table) {
     case "__manifest__":
       return MAX_MANIFEST_BYTES;
@@ -1616,6 +1617,12 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     // unsafe aggregate sizes before decompression begins. Account archives
     // use available disk space rather than a fixed total-byte quota.
     const descriptor = sanitizeEntry(entry.name);
+    if (descriptor.kind === "setting-value") {
+      if (verifiedManifest.schemaVersion < 3) throw new Error("settings-values/ requires archive schema 3");
+      if (entry.uncompressedSize > MAX_SETTING_VALUE_FILE_BYTES) {
+        throw new Error(`${entry.name} exceeds ${MAX_SETTING_VALUE_FILE_BYTES} bytes`);
+      }
+    }
     if (entry.uncompressedSize > MAX_ACCOUNT_ARCHIVE_BYTES - declaredDecompressedBytes) {
       throw new Error("archive expansion exceeds the supported integer range");
     }
@@ -1643,6 +1650,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   const archiveFd = openSync(job.archivePath, "r");
   const journalFd = openSync(binaryJournalPath, "w");
   const encoder = new TextEncoder();
+  const settingValueNames = new Set<string>();
 
   try {
     for await (const centralEntry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
@@ -1679,6 +1687,19 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
             kind: "text",
             table: descriptor.inner === "encrypted.ndjson" ? "__secrets_encrypted__" : "__secrets_index__",
             origin: "database",
+            stagingPath,
+            byteSize: 0,
+          };
+          break;
+        case "setting-value":
+          if (settingValueNames.has(descriptor.inner)) {
+            throw new Error(`duplicate settings value entry: ${centralEntry.name}`);
+          }
+          settingValueNames.add(descriptor.inner);
+          entry = {
+            kind: "text",
+            table: descriptor.inner,
+            origin: "setting-value",
             stagingPath,
             byteSize: 0,
           };
@@ -1843,6 +1864,8 @@ interface ApplyContext {
   job: ImportJob;
   /** Per-record cap selected from the archive manifest after extraction. */
   ndjsonLineBytes: number;
+  /** Only validated, extracted setting payloads may be referenced by a row. */
+  settingValueEntries: Map<string, BufferedTextEntry>;
 }
 
 /**
@@ -2038,7 +2061,24 @@ async function applySettingsTable(
       continue;
     }
 
-    const importedValueText = typeof raw.value === "string" ? raw.value : JSON.stringify(raw.value);
+    let importedValueText: string;
+    if (raw.valueFile !== undefined) {
+      if ((ctx.job.manifest?.schemaVersion ?? 0) < 3 || typeof raw.valueFile !== "string" || raw.value !== null) {
+        throw new Error(`Invalid external value reference for setting ${JSON.stringify(key)}`);
+      }
+      const descriptor = sanitizeEntry(raw.valueFile);
+      if (descriptor.kind !== "setting-value" || raw.valueFile !== `settings-values/${descriptor.inner}`) {
+        throw new Error(`Invalid external value path for setting ${JSON.stringify(key)}`);
+      }
+      const entry = ctx.settingValueEntries.get(raw.valueFile);
+      if (!entry) throw new Error(`Missing external value for setting ${JSON.stringify(key)}: ${raw.valueFile}`);
+      // Extraction has already checked the byte cap and CRC. Read directly to
+      // text without retaining a second, full-size UTF-8 byte buffer in JS.
+      importedValueText = await Bun.file(entry.stagingPath).text();
+      ctx.signal.throwIfAborted();
+    } else {
+      importedValueText = typeof raw.value === "string" ? raw.value : JSON.stringify(raw.value);
+    }
     const updatedAt = Math.floor(Date.now() / 1000);
 
     const outcome = await retryImportWrite(() => db.transaction(() => {
@@ -2047,6 +2087,7 @@ async function applySettingsTable(
         insertStmt.run(key, importedValueText, ctx.userId, updatedAt);
         return "imported";
       } else {
+        if (existing.value === importedValueText) return "skipped";
         // Both rows present — attempt a deep merge.
         let importedValue: unknown;
         let existingValue: unknown;
@@ -2077,7 +2118,7 @@ async function applySettingsTable(
     else skipped++;
 
     lineCount++;
-    if (lineCount % ROW_BATCH === 0) {
+    if (lineCount % ROW_BATCH === 0 || raw.valueFile !== undefined) {
       emit(ctx.job, EventType.USER_IMPORT_PROGRESS, {
         phase: "table",
         table: "settings",
@@ -2701,6 +2742,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     signal: job.abort.signal,
     job,
     ndjsonLineBytes: NDJSON_MAX_RECORD_BYTES,
+    settingValueEntries: new Map(),
   };
   emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "start" });
 
@@ -2716,6 +2758,9 @@ async function runImportJob(job: ImportJob): Promise<void> {
     const buf = await extractArchive(job);
     job.manifest = buf.manifest;
     ctx.ndjsonLineBytes = ndjsonLineLimitForManifest(job.manifest);
+    for (const entry of buf.entries) {
+      if (entry.origin === "setting-value") ctx.settingValueEntries.set(`settings-values/${entry.table}`, entry);
+    }
     emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "extracted", entries: buf.entryCount });
 
     // Surface the list of secret keys the archive carries (read from

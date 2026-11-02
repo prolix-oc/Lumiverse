@@ -262,6 +262,8 @@ pub fn run() {
             bundled_server::bundled_server_stop,
             bundled_server::bundled_server_status,
             bundled_server::bundled_server_alive,
+            bundled_server::bundled_server_network_access,
+            bundled_server::bundled_server_set_network_access,
             bundled_server::bundled_setup_defaults,
             bundled_server::bundled_setup_save,
             bundled_server::bundled_setup_status,
