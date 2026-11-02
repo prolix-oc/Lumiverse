@@ -4020,6 +4020,8 @@
     "deleteConfirm": "Löschen"
   },
   "decisionConnectionForm": {
+    "imageUnderstanding": "Bildverständnis",
+    "imageUnderstandingHint": "Bilder und Box-Fragen an TypeSafe senden. Die Bild-Freigabe von TypeSafe ist experimentell und daher standardmäßig deaktiviert.",
     "name": "Name",
     "connectionName": "Meine Decision-Verbindung",
     "provider": "Anbieter",
