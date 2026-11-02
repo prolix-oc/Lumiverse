@@ -6,8 +6,8 @@ Decision models answer structured questions about text or JSON: choose an option
 
 1. Open **Connections → Decision Models**.
 2. Select **New Connection** and give it a name.
-3. Choose **OpenRouter**, **NanoGPT**, **TypeSafe**, or **Inception**. You can enter that provider's API key or use **Sign in with OpenRouter** / **Sign in with NanoGPT** with the provider's default API URL.
-4. Select a model from the model picker or enter its exact ID. OpenRouter suggests `~typesafe/jev-latest`; NanoGPT suggests `typesafe/jev-latest`; TypeSafe suggests `jev-latest`; Inception suggests `mercury-decide`.
+3. Choose **OpenRouter**, **NanoGPT**, **TypeSafe**, **Inception**, or **Custom**. You can enter that provider's API key or use **Sign in with OpenRouter** / **Sign in with NanoGPT** with the provider's default API URL. **Custom** talks to any TypeSafe-compatible endpoint — a proxy, a gateway, or a self-hosted server: enter the versioned base URL (for example `https://proxy.example.com/v1`) and Lumiverse appends `/systemone` for evaluations and `/models` for the model picker.
+4. Select a model from the model picker or enter its exact ID. OpenRouter suggests `~typesafe/jev-latest`; NanoGPT suggests `typesafe/jev-latest`; TypeSafe suggests `jev-latest`; Inception suggests `mercury-decide`. Custom models are listed as unverified, since only the endpoint itself knows what it serves.
 5. Enable **Set as default** if extensions should use this connection when they do not select one explicitly, then save or sign in. Sign-in creates the connection after you authorize it and stores the key securely. Cancelling before authorization creates no connection.
 
 To replace a key on an existing OpenRouter or NanoGPT connection, edit it and use **Sign in**. Save any provider or API URL changes first. After signing in, save any other edits you made to the connection.
@@ -23,6 +23,16 @@ Inception uses its native `/v1/decisions` endpoint with your Inception API key. 
 **Test connection** checks access to the provider's model catalog and does not run a decision. NanoGPT returns its public catalog even for an invalid key, so use **Run sample decision** to verify that credential.
 
 **Run sample decision (uses provider credits)** sends a small evaluation to the saved model. This checks that the selected model accepts the Decision protocol. Models that require another protocol, including Together's Tev1, are excluded from the picker.
+
+## Image input
+
+Some Decision models read pictures as well as text. That is what powers **auto-foldering cards**: Lumiverse sends each card's avatar along with its name, tags, and description, and the model picks the folder it belongs in.
+
+- **TypeSafe** — Jev accepts images; the connection sends TypeSafe's images opt-in flag automatically. Box questions need Jev 1.14.
+- **OpenRouter** — `liquid/d1`, `liquid/d1-ultra`, and `~typesafe/jev-latest` all accept image input. Liquid's models cap a request at 8 images, so card art is sent in batches of 8.
+- **NanoGPT** and **Custom** — image support depends on the endpoint and model you point at.
+
+Images are experimental on TypeSafe (formats and accuracy can change), and a model without image input rejects the request instead of ignoring the picture. Check the model's input modalities before building anything that depends on images.
 
 ## Memory Cortex candidate review
 

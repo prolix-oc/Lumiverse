@@ -7,6 +7,9 @@ import {
   CheckSquare,
   Layers,
   UsersRound,
+  Dices,
+  FolderInput,
+  Loader2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import ImportMenu from './ImportMenu'
@@ -15,6 +18,7 @@ import styles from './CharacterToolbar.module.css'
 import clsx from 'clsx'
 import { SortControl } from '@/components/shared/SortControl'
 import SearchField from '@/components/shared/SearchField'
+import { spinClass } from '@/components/shared/Spinner'
 
 interface CharacterToolbarProps {
   searchQuery: string
@@ -37,6 +41,9 @@ interface CharacterToolbarProps {
   importLoading: boolean
   tagLibraryImporting?: boolean
   onGroupChat?: () => void
+  onOrganizeFolders?: () => void
+  onRandomChat?: () => void
+  randomChatBusy?: boolean
 }
 
 const SORT_OPTIONS: { value: CharacterSortField; label: string }[] = [
@@ -68,6 +75,9 @@ export default function CharacterToolbar({
   importLoading,
   tagLibraryImporting = false,
   onGroupChat,
+  onOrganizeFolders,
+  onRandomChat,
+  randomChatBusy = false,
 }: CharacterToolbarProps) {
   const { t } = useTranslation('panels')
   const isGroupsTab = filterTab === 'groups'
@@ -182,6 +192,29 @@ export default function CharacterToolbar({
             title={t('characterToolbar.newGroupChat')}
           >
             <UsersRound size={14} />
+          </button>
+        )}
+
+        {onOrganizeFolders && (
+          <button
+            type="button"
+            className={styles.iconBtn}
+            onClick={onOrganizeFolders}
+            title={t('characterToolbar.organizeFolders')}
+          >
+            <FolderInput size={14} />
+          </button>
+        )}
+
+        {onRandomChat && (
+          <button
+            type="button"
+            className={styles.iconBtn}
+            onClick={onRandomChat}
+            disabled={randomChatBusy}
+            title={randomChatBusy ? t('characterToolbar.randomChatBusy') : t('characterToolbar.randomChat')}
+          >
+            {randomChatBusy ? <Loader2 size={14} className={spinClass} /> : <Dices size={14} />}
           </button>
         )}
 

@@ -8,6 +8,10 @@ const PROVIDERS: DecisionProviderDTO[] = [
   { id: "typesafe", name: "TypeSafe", capabilities: { apiKeyRequired: true, defaultUrl: "https://api.typesafe.ai/v1", suggestedModel: "jev-latest", modelListStyle: "dynamic" } },
   { id: "nanogpt", name: "NanoGPT", capabilities: { apiKeyRequired: true, defaultUrl: "https://nano-gpt.com/api/v1", suggestedModel: "typesafe/jev-latest", modelListStyle: "dynamic" } },
   { id: "inception", name: "Inception", capabilities: { apiKeyRequired: true, defaultUrl: "https://api.inceptionlabs.ai/v1", suggestedModel: "mercury-decide", modelListStyle: "dynamic" } },
+  // Any TypeSafe-compatible deployment (proxy, gateway, self-hosted server): the
+  // base URL is entered by the user and the `/v1/systemone` + `/v1/models`
+  // routes are appended, exactly like TypeSafe's own endpoint.
+  { id: "custom", name: "Custom", capabilities: { apiKeyRequired: true, defaultUrl: "", suggestedModel: "", modelListStyle: "dynamic" } },
 ];
 export function listProviders(): DecisionProviderDTO[] { return structuredClone(PROVIDERS); }
 export function getProvider(id: string): DecisionProviderDTO {
@@ -17,8 +21,10 @@ export function getProvider(id: string): DecisionProviderDTO {
 }
 export function resolveDecisionApiUrl(profile: { provider: string; api_url?: string }): string {
   const provider = getProvider(profile.provider);
+  const requested = profile.api_url?.trim() || provider.capabilities.defaultUrl;
+  if (!requested) throw new DecisionValidationError("Custom Decision providers need an API URL, such as https://proxy.example.com/v1");
   let url: URL;
-  try { url = new URL(profile.api_url?.trim() || provider.capabilities.defaultUrl); }
+  try { url = new URL(requested); }
   catch { throw new DecisionValidationError("API URL must be an absolute HTTP or HTTPS base URL"); }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new DecisionValidationError("API URL must have no credentials, query, or fragment");
   url.pathname = url.pathname.replace(/\/+$/, "");
@@ -59,13 +65,19 @@ export async function fetchDecisionModels(profile: { provider: string; api_url?:
   const data = await fetchProviderJson<unknown>(provider.name, "model listing", url, {
     headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error",
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
-  });
-  const raw = isRecord(data) ? (profile.provider === "typesafe" ? data.models : data.data) : undefined;
-  if (!Array.isArray(raw)) throw new Error("Provider returned an invalid model catalog");
-  const models = new Map<string, DecisionModelDTO>();
-  for (const item of raw) {
-    if (!isRecord(item)) continue;
-    const id = profile.provider === "typesafe" ? item.name : item.id;
+  });    // TypeSafe and TypeSafe-compatible custom endpoints answer `{ models: [...] }`;
+    // OpenRouter and NanoGPT answer the OpenAI `{ data: [...] }` catalog.
+    const raw = isRecord(data)
+      ? profile.provider === "typesafe" || profile.provider === "custom"
+        ? (Array.isArray(data.models) ? data.models : data.data)
+        : data.data
+      : undefined;
+    if (!Array.isArray(raw)) throw new Error("Provider returned an invalid model catalog");
+    const models = new Map<string, DecisionModelDTO>();
+    for (const item of raw) {
+      if (!isRecord(item)) continue;
+      const id = profile.provider === "typesafe" ? item.name
+        : typeof item.id === "string" && item.id.trim() ? item.id : item.name;
     if (typeof id !== "string" || !id.trim()) continue;
     // Inception advertises modalities at the top level and mixes chat and decision models.
     const architecture = profile.provider === "inception" ? item : isRecord(item.architecture) ? item.architecture : {};
@@ -76,15 +88,19 @@ export async function fetchDecisionModels(profile: { provider: string; api_url?:
     // NanoGPT mixes chat and decision models in one detailed catalog; keep only Decision models.
     if (profile.provider === "nanogpt" && !outputModalities.includes("decisions")) continue;
     const supported = profile.provider === "inception" || profile.provider === "typesafe" || profile.provider === "nanogpt" || /^~?typesafe\/jev-|^(cloudflare\/clef|perplexity\/pplx-decider|upstage\/solar-decide|inception\/mercury-decide|liquid\/d1|openai\/gpt-6-luna-decisions)/.test(id);
+    // A custom endpoint is reachable but its catalog cannot be verified here, so
+    // its models stay selectable and are reported as unverified rather than
+    // silently claimed to be Decision models.
+    const protocol = profile.provider === "custom" ? "unverified" : supported ? "supported" : "unverified";
     const pricing = decisionModelPricing(item.pricing);
     models.set(id, {
       id, label: (profile.provider === "openrouter" || profile.provider === "nanogpt" || profile.provider === "inception") && typeof item.name === "string" ? item.name : id,
       ...(typeof item.description === "string" ? { description: item.description } : {}),
-      ...(profile.provider === "typesafe" ? { input_modalities: ["text", "image"] } : inputModalities.length ? { input_modalities: inputModalities } : {}),
+      ...(profile.provider === "typesafe" || profile.provider === "custom" ? { input_modalities: ["text", "image"] } : inputModalities.length ? { input_modalities: inputModalities } : {}),
       ...(outputModalities.length ? { output_modalities: outputModalities } : {}),
       ...(typeof item.context_length === "number" ? { context_length: item.context_length } : {}),
       ...(pricing ? { pricing } : {}),
-      protocol: isUnsupportedDecisionModel(profile.provider, id) ? "unsupported" : supported ? "supported" : "unverified",
+      protocol: isUnsupportedDecisionModel(profile.provider, id) ? "unsupported" : protocol,
     });
   }
   return [...models.values()].sort((a, b) => a.label.localeCompare(b.label));
@@ -115,7 +131,10 @@ async function requestProviderDecision(profile: DecisionProviderProfile, apiKey:
   if (!model) throw new DecisionValidationError("Select a Decision model for this connection");
   if (isUnsupportedDecisionModel(profile.provider, model)) throw new DecisionValidationError("This model uses chat completions and does not support the Decision API");
   const images = usesDecisionImages(input);
-  if (images && profile.provider !== "typesafe") throw new DecisionValidationError("Images and Box questions need a TypeSafe Decision connection");
+  // Image and Box input travels as an `assets` map on every provider: OpenRouter
+  // (liquid/d1, liquid/d1-ultra, ~typesafe/jev-latest) and NanoGPT accept it
+  // natively, while TypeSafe-compatible endpoints require their opt-in header.
+  const dangerZoneImages = profile.provider === "typesafe" || profile.provider === "custom";
   const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions, ...(input.assets ? { assets: input.assets } : {}) };
   signal?.throwIfAborted();
   onDispatch?.();
@@ -123,7 +142,7 @@ async function requestProviderDecision(profile: DecisionProviderProfile, apiKey:
     method: "POST", headers: {
       Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json",
       ...(profile.provider === "openrouter" ? { "HTTP-Referer": "https://lumiverse.chat", "X-Title": "Lumiverse" } : {}),
-      ...(images ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
+      ...(images && dangerZoneImages ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
     },
     body: JSON.stringify(body), redirect: "error", signal,
   });

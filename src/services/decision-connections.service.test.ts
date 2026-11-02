@@ -180,7 +180,7 @@ test("worker bridge enforces live permission and account scope on every call", a
   await api.handle({ type: "decisions_providers", requestId: "1" });
   expect(responses.pop().error).toContain("decisions");
   allowed = true; await api.handle({ type: "decisions_providers", requestId: "2" });
-  expect(responses.pop().result.map((provider: { id: string }) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception"]);
+  expect(responses.pop().result.map((provider: { id: string }) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception", "custom"]);
   await api.handle({ type: "decisions_connections_list", requestId: "3", userId: "bob" });
   expect(responses.pop().error).toContain("scope denied");
   allowed = false; await api.handle({ type: "decisions_connections_list", requestId: "4" });

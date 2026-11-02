@@ -744,6 +744,9 @@
     "noModelsStatic": "이 프로바이더에서 사용할 수 있는 모델이 없습니다."
   },
   "characterToolbar": {
+    "organizeFolders": "폴더 정리",
+    "randomChat": "랜덤 채팅",
+    "randomChatBusy": "캐릭터 선택 중…",
     "searchGroupChats": "그룹 채팅 검색...",
     "searchCharacters": "캐릭터 검색...",
     "characters": "캐릭터",
@@ -1589,6 +1592,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "카드를 폴더에 넣기",
+    "organizeHint": "카드를 선택해 폴더를 지정하거나, 이미지 입력을 지원하는 결정 모델에게 제안을 받으세요. 적용하기 전에는 아무것도 이동되지 않습니다.",
+    "organizeEmpty": "정리할 캐릭터가 없습니다",
+    "organizeNoFolder": "폴더 없음",
+    "organizeApply": "적용",
+    "organizeNoChanges": "폴더 변경 사항이 없습니다",
+    "organizePending": "{{count}}건의 변경 대기",
+    "organizeAutoAssign": "AI로 폴더 제안",
+    "organizeAutoBusy": "결정 모델에 묻는 중…",
+    "organizeAutoDone": "{{model}}이(가) {{count}}장의 카드에 폴더를 제안했습니다 — 검토 후 적용하세요",
+    "organizeAutoSkipped": "{{count}}장의 카드는 제안이 없습니다",
+    "organizeAutoFailed": "폴더를 제안하지 못했습니다",
+    "organizeApplyFailed": "카드를 이동하지 못했습니다",
+    "organizeConnection": "결정 모델",
+    "organizeDefaultConnection": "기본",
+    "organizeNeedsFolders": "먼저 폴더를 만드세요",
+    "randomChatFailed": "랜덤 채팅을 시작하지 못했습니다",
     "dismiss": "닫기",
     "uploading": "업로드 중… {{percent}}%",
     "addingToGallery": "갤러리에 추가 중… {{current}}/{{total}}",

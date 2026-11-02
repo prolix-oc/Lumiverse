@@ -563,6 +563,9 @@
     "noModelsStatic": "このプロバイダにはモデルがありません。"
   },
   "characterToolbar": {
+    "organizeFolders": "フォルダーを整理",
+    "randomChat": "ランダムチャット",
+    "randomChatBusy": "キャラクターを選択中…",
     "searchGroupChats": "グループ チャットを検索...",
     "searchCharacters": "検索文字",
     "characters": "登場&#12040;物",
@@ -1350,6 +1353,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "カードをフォルダーにまとめる",
+    "organizeHint": "カードを選択してフォルダーを指定するか、画像入力に対応したディシジョンモデルに提案させましょう。適用するまで何も移動しません。",
+    "organizeEmpty": "整理するキャラクターがありません",
+    "organizeNoFolder": "フォルダーなし",
+    "organizeApply": "適用",
+    "organizeNoChanges": "フォルダーの変更はまだありません",
+    "organizePending": "{{count}} 件の変更が未適用",
+    "organizeAutoAssign": "AIでフォルダーを提案",
+    "organizeAutoBusy": "ディシジョンモデルに問い合わせ中…",
+    "organizeAutoDone": "{{model}} が {{count}} 枚のカードにフォルダーを提案しました — 確認して適用してください",
+    "organizeAutoSkipped": "{{count}} 枚のカードは提案がありません",
+    "organizeAutoFailed": "フォルダーを提案できませんでした",
+    "organizeApplyFailed": "カードを移動できませんでした",
+    "organizeConnection": "ディシジョンモデル",
+    "organizeDefaultConnection": "デフォルト",
+    "organizeNeedsFolders": "先にフォルダーを作成してください",
+    "randomChatFailed": "ランダムチャットを開始できませんでした",
     "dismiss": "却下する",
     "uploading": "アップロード中… {{percent}}%",
     "addingToGallery": "ギャラリーに追加中… {{current}}/{{total}}",

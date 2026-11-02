@@ -25,6 +25,7 @@ import type {
   BulkTagResult,
   TagLibraryImportResult,
   CharacterFolderMutationResponse,
+  AutoFolderResult,
 } from '@/types/api'
 
 export interface SummaryParams {
@@ -269,6 +270,14 @@ export const charactersApi = {
 
   bulkUpdateFolder(ids: string[], folder: string) {
     return post<CharacterFolderMutationResponse>('/characters/bulk-update', { ids, folder })
+  },
+
+  /**
+   * Ask a Decision model with image input which folder each card belongs in.
+   * Returns suggestions only — the client reviews them before bulk-moving.
+   */
+  autoAssignFolders(input: { ids: string[]; folders: string[]; connection_id?: string }) {
+    return post<AutoFolderResult>('/characters/folders/auto-assign', input, { timeout: 10 * 60 * 1000 })
   },
 
   async exportCharacter(id: string, format: 'json' | 'png' | 'charx', characterName?: string) {

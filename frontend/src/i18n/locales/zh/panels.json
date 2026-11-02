@@ -563,6 +563,9 @@
     "noModelsStatic": "该提供商无可用模型。"
   },
   "characterToolbar": {
+    "organizeFolders": "整理文件夹",
+    "randomChat": "随机聊天",
+    "randomChatBusy": "正在挑选角色…",
     "searchGroupChats": "搜索群聊...",
     "searchCharacters": "搜索角色...",
     "characters": "角色",
@@ -1350,6 +1353,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "把卡片放入文件夹",
+    "organizeHint": "勾选要归类的卡片，为每张设置文件夹，或让支持图像输入的决策模型提供建议。在你应用之前不会移动任何卡片。",
+    "organizeEmpty": "没有可整理的角色",
+    "organizeNoFolder": "无文件夹",
+    "organizeApply": "应用",
+    "organizeNoChanges": "尚无文件夹改动",
+    "organizePending": "{{count}} 项改动待应用",
+    "organizeAutoAssign": "用 AI 推荐文件夹",
+    "organizeAutoBusy": "决策模型思考中…",
+    "organizeAutoDone": "{{model}} 为 {{count}} 张卡片推荐了文件夹 — 请查看后应用",
+    "organizeAutoSkipped": "{{count}} 张卡片没有推荐结果",
+    "organizeAutoFailed": "无法推荐文件夹",
+    "organizeApplyFailed": "移动卡片失败",
+    "organizeConnection": "决策模型",
+    "organizeDefaultConnection": "默认",
+    "organizeNeedsFolders": "请先创建一个文件夹",
+    "randomChatFailed": "无法开始随机聊天",
     "dismiss": "关闭",
     "uploading": "上传中… {{percent}}%",
     "addingToGallery": "加入图库中… {{current}}/{{total}}",

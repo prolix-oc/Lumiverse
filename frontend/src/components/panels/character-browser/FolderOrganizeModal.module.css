@@ -1,0 +1,305 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 10002;
+}
+
+:global([data-glass]) .overlay {
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
+}
+
+.modal {
+  width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), 720px);
+  max-height: calc(92vh / var(--lumiverse-ui-scale, 1));
+  display: flex;
+  flex-direction: column;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  padding: 16px 18px;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.title {
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+  margin: 0;
+}
+
+.hint {
+  margin: 0 0 10px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  line-height: 1.5;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.count {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.linkBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.linkBtn:hover:not(:disabled) {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary);
+}
+
+.linkBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.folderInput {
+  width: 148px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+}
+
+.folderInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 120px;
+  max-height: min(48vh, 420px);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+.rowSelected {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-fill-hover, var(--lumiverse-fill-subtle));
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.check:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.thumb {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.thumbFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.name {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tags {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderSelect {
+  max-width: 42%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.folderSelect:disabled {
+  opacity: 0.5;
+}
+
+.aiRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.connectionSelect {
+  flex: 1;
+  min-width: 170px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.autoBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.autoBtn:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.autoBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.status {
+  margin-right: auto;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.cancelBtn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.cancelBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.cancelBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.applyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--lumiverse-primary);
+  border: 1px solid var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.applyBtn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.applyBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

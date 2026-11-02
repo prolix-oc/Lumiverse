@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router'
 import { Check, ChevronRight, Pencil, Trash2, X } from 'lucide-react'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
 import { useFolders } from '@/hooks/useFolders'
 import { charactersApi } from '@/api/characters'
+import { chatsApi } from '@/api/chats'
 import { worldBooksApi } from '@/api/world-books'
 import { toast } from '@/lib/toast'
 import { formatTagLibraryImportToastMessage } from '@/lib/tagLibraryImportToast'
@@ -14,6 +16,7 @@ import CharacterToolbar from './character-browser/CharacterToolbar'
 import ChubExpressionBackfillBanner from './character-browser/ChubExpressionBackfillBanner'
 import TagFilter from './character-browser/TagFilter'
 import BatchBar from './character-browser/BatchBar'
+import FolderOrganizeModal from './character-browser/FolderOrganizeModal'
 import FavoritesSlider from './character-browser/FavoritesSlider'
 import CharacterGrid from './character-browser/CharacterGrid'
 import CharacterList from './character-browser/CharacterList'
@@ -75,6 +78,7 @@ export default function CharacterBrowser() {
   const { t: ts } = useTranslation('settings')
   const { t } = useTranslation('panels')
   const browser = useCharacterBrowser()
+  const navigate = useNavigate()
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
   const openModal = useStore((s) => s.openModal)
   const favoritesBarCollapsed = useStore((s) => s.favoritesBarCollapsed)
@@ -240,6 +244,8 @@ export default function CharacterBrowser() {
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false)
+  const [organizeOpen, setOrganizeOpen] = useState(false)
+  const [randomChatBusy, setRandomChatBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
   const dragCounterRef = useRef(0)
@@ -308,6 +314,19 @@ export default function CharacterBrowser() {
     setConfirmDelete(false)
   }, [browser])
 
+  const handleRandomChat = useCallback(async () => {
+    if (randomChatBusy) return
+    setRandomChatBusy(true)
+    try {
+      const result = await chatsApi.random()
+      navigate(`/chat/${result.chat.id}`)
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || t('characterBrowser.randomChatFailed'))
+    } finally {
+      setRandomChatBusy(false)
+    }
+  }, [navigate, randomChatBusy, t])
+
   const pagination: ReactNode = useMemo(
     () => (
       <Pagination
@@ -360,6 +379,9 @@ export default function CharacterBrowser() {
         importLoading={browser.importLoading}
         tagLibraryImporting={tagLibraryImporting}
         onGroupChat={() => openModal('groupChatCreator')}
+        onOrganizeFolders={() => setOrganizeOpen(true)}
+        onRandomChat={() => void handleRandomChat()}
+        randomChatBusy={randomChatBusy}
       />
 
       <TagFilter
@@ -574,6 +596,17 @@ export default function CharacterBrowser() {
         onClose={() => setBulkTagsOpen(false)}
         onApplied={() => { setBulkTagsOpen(false); browser.refreshBrowser() }}
       />
+
+      {organizeOpen && (
+        <FolderOrganizeModal
+          characters={browser.characters}
+          initialSelectedIds={browser.batchSelected}
+          folders={folders}
+          onCreateFolder={createFolder}
+          onBulkMove={browser.bulkUpdateFolder}
+          onClose={() => setOrganizeOpen(false)}
+        />
+      )}
 
       <ConfirmationModal
         isOpen={!!browser.pendingLorebookImport}

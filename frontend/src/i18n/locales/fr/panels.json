@@ -563,6 +563,9 @@
     "noModelsStatic": "Aucun modèle pour ce fournisseur."
   },
   "characterToolbar": {
+    "organizeFolders": "Organiser les dossiers",
+    "randomChat": "Chat aléatoire",
+    "randomChatBusy": "Choix d'un personnage…",
     "searchGroupChats": "Rechercher des discussions de groupe...",
     "searchCharacters": "Rechercher des caractères...",
     "characters": "Personnages",
@@ -1350,6 +1353,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "Classer les cartes dans des dossiers",
+    "organizeHint": "Sélectionnez des cartes, définissez un dossier pour chacune, ou laissez un modèle de décision avec entrée image en proposer un. Rien n'est déplacé tant que vous n'appliquez pas.",
+    "organizeEmpty": "Aucun personnage à organiser",
+    "organizeNoFolder": "Aucun dossier",
+    "organizeApply": "Appliquer",
+    "organizeNoChanges": "Aucun changement de dossier",
+    "organizePending": "{{count}} modification(s) en attente",
+    "organizeAutoAssign": "Proposer des dossiers avec l'IA",
+    "organizeAutoBusy": "Le modèle de décision réfléchit…",
+    "organizeAutoDone": "Dossiers proposés pour {{count}} carte(s) avec {{model}} — vérifiez, puis appliquez",
+    "organizeAutoSkipped": "{{count}} carte(s) sans proposition",
+    "organizeAutoFailed": "Impossible de proposer des dossiers",
+    "organizeApplyFailed": "Impossible de déplacer les cartes",
+    "organizeConnection": "Modèle de décision",
+    "organizeDefaultConnection": "par défaut",
+    "organizeNeedsFolders": "Créez d'abord un dossier",
+    "randomChatFailed": "Impossible de lancer un chat aléatoire",
     "dismiss": "Rejeter",
     "uploading": "Téléchargement… {{percent}}%",
     "addingToGallery": "Ajout à la galerie… {{current}}/{{total}}",

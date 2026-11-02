@@ -87,6 +87,28 @@ export interface CharacterFolderMutationResponse {
   count: number;
 }
 
+/** Folder suggestions produced by a Decision model reading the card avatars. */
+export interface AutoFolderAssignment {
+  id: string;
+  folder: string;
+}
+
+export interface AutoFolderResult {
+  assignments: AutoFolderAssignment[];
+  skipped: Array<{ id: string; reason: string }>;
+  model: string;
+  usage?: Record<string, any>;
+}
+
+/** A Decision model picked the character; the chat is already created. */
+export interface RandomChatResult {
+  chat: Chat;
+  character_id: string;
+  character_name: string;
+  model: string;
+  usage?: Record<string, any>;
+}
+
 export interface TagCount {
   tag: string;
   count: number;

@@ -2,7 +2,8 @@ import { get, post, put, patch, del, upload, type RequestOptions } from './clien
 import type {
   Chat, Character, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
+  GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult,
+  RandomChatResult
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
@@ -105,6 +106,15 @@ export const chatsApi = {
    * Pass noPreset to test the model raw — generation skips preset blocks,
    * preset parameters, and the active/connection preset fallbacks.
    */
+  /**
+   * Ask a Decision model which of your characters to play and start that chat
+   * in one call. The pick is based on each card's tags, description and the
+   * user's favorites; `hint` steers it ("something cozy", "more sci-fi").
+   */
+  random(input: { connection_id?: string; hint?: string } = {}) {
+    return post<RandomChatResult>('/chats/random', input, { timeout: 60_000 })
+  },
+
   createTemporary(opts?: { noPreset?: boolean }) {
     return post<Chat>('/chats/temporary', opts?.noPreset ? { no_preset: true } : {})
   },

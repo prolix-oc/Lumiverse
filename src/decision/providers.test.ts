@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { decisionEvaluationUrl, fetchDecisionModels, evaluateProviderDecision, listProviders, validateDecisionParameters } from "./providers";
+import { decisionEvaluationUrl, fetchDecisionModels, evaluateProviderDecision, listProviders, resolveDecisionApiUrl, validateDecisionParameters } from "./providers";
 import type { DecisionEvaluationInput, DecisionResult } from "./contract";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -50,13 +50,33 @@ describe("Decision provider adapters", () => {
     expect(decisionEvaluationUrl({ provider: "openrouter", api_url: "https://proxy.test/root/v1/" })).toBe("https://proxy.test/root/alpha/decisions");
     expect(decisionEvaluationUrl({ provider: "nanogpt" })).toBe("https://nano-gpt.com/api/v1/decisions");
     expect(decisionEvaluationUrl({ provider: "nanogpt", api_url: "https://proxy.test/root/v1/" })).toBe("https://proxy.test/root/v1/decisions");
+    expect(decisionEvaluationUrl({ provider: "custom", api_url: "https://proxy.test/root/v1/" })).toBe("https://proxy.test/root/v1/systemone");
     expect(() => decisionEvaluationUrl({ provider: "typesafe", api_url: "https://key@provider.test/v1" })).toThrow();
   });
   test("lists the built-in Decision providers", () => {
-    expect(listProviders().map((provider) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception"]);
+    expect(listProviders().map((provider) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception", "custom"]);
     expect(listProviders().find((provider) => provider.id === "nanogpt")?.capabilities).toEqual({
       apiKeyRequired: true, defaultUrl: "https://nano-gpt.com/api/v1", suggestedModel: "typesafe/jev-latest", modelListStyle: "dynamic",
     });
+    expect(listProviders().find((provider) => provider.id === "custom")?.capabilities).toEqual({
+      apiKeyRequired: true, defaultUrl: "", suggestedModel: "", modelListStyle: "dynamic",
+    });
+  });
+  test("requires an explicit endpoint for a custom provider", () => {
+    expect(() => resolveDecisionApiUrl({ provider: "custom" })).toThrow("API URL");
+    expect(resolveDecisionApiUrl({ provider: "custom", api_url: "https://proxy.test/root" })).toBe("https://proxy.test/root/v1");
+    expect(resolveDecisionApiUrl({ provider: "custom", api_url: "https://proxy.test/root/v1" })).toBe("https://proxy.test/root/v1");
+  });
+  test("reads a TypeSafe-compatible custom model catalog", async () => {
+    globalThis.fetch = (async (url: any, init: any) => {
+      expect(String(url)).toBe("https://proxy.test/v1/models");
+      expect(init.headers.Authorization).toBe("Bearer custom-key");
+      return Response.json({ models: [{ name: "jev-latest" }, { name: "d1-ultra" }] });
+    }) as unknown as typeof fetch;
+    const models = await fetchDecisionModels({ provider: "custom", api_url: "https://proxy.test/v1" }, "custom-key");
+    expect(models.map((m) => m.id)).toEqual(["d1-ultra", "jev-latest"]);
+    expect(models.every((m) => m.input_modalities?.includes("image"))).toBe(true);
+    expect(models.every((m) => m.protocol === "unverified")).toBe(true);
   });
   test("normalizes TypeSafe model names without synthesizing versioned IDs", async () => {
     globalThis.fetch = (async (url: any, init: any) => {
@@ -154,11 +174,22 @@ describe("Decision provider adapters", () => {
     }) as unknown as typeof fetch;
     const result = await evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {} }, "key", input);
     expect(result.answers.face).toEqual({ type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 });
-    let calls = 0;
-    globalThis.fetch = (async () => { calls++; return Response.json({}); }) as unknown as typeof fetch;
-    await expect(evaluateProviderDecision({ provider: "openrouter", model: "~typesafe/jev-latest", default_parameters: {} }, "key", input)).rejects.toThrow("TypeSafe Decision connection");
-    await expect(evaluateProviderDecision({ provider: "nanogpt", model: "cloudflare/clef", default_parameters: {} }, "key", input)).rejects.toThrow("TypeSafe Decision connection");
-    expect(calls).toBe(0);
+    // Vision decision models on OpenRouter take the same assets map without the
+    // TypeSafe opt-in header.
+    const sent: Array<{ url: string; headers: Record<string, string>; body: any }> = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      sent.push({ url: String(url), headers: init.headers as Record<string, string>, body: JSON.parse(init.body) });
+      return Response.json({ model: "liquid/d1", answers: { face: { type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 } } });
+    }) as unknown as typeof fetch;
+    await evaluateProviderDecision({ provider: "openrouter", model: "liquid/d1-ultra", default_parameters: {} }, "key", input);
+    expect(sent[0].url).toBe("https://openrouter.ai/api/alpha/decisions");
+    expect(sent[0].headers).not.toHaveProperty("TypeSafe-Danger-Zone-Images");
+    expect(sent[0].body.assets).toEqual(input.assets);
+    // A TypeSafe-compatible custom endpoint still needs the opt-in header.
+    await evaluateProviderDecision({ provider: "custom", api_url: "https://proxy.test/v1", model: "jev-latest", default_parameters: {} }, "key", input);
+    expect(sent[1].url).toBe("https://proxy.test/v1/systemone");
+    expect(sent[1].headers["TypeSafe-Danger-Zone-Images"]).toBe("true");
+    expect(sent[1].body.assets).toEqual(input.assets);
   });
   test("rejects arbitrary defaults and preserves permitted routing", () => {
     expect(() => validateDecisionParameters("openrouter", { model: "override" })).toThrow();

@@ -563,6 +563,9 @@
     "noModelsStatic": "Nessun modello per questo provider."
   },
   "characterToolbar": {
+    "organizeFolders": "Organizza cartelle",
+    "randomChat": "Chat casuale",
+    "randomChatBusy": "Scelta del personaggio…",
     "searchGroupChats": "Cerca chat di gruppo...",
     "searchCharacters": "Cerca personaggi...",
     "characters": "Personaggi",
@@ -1349,6 +1352,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "Metti le carte nelle cartelle",
+    "organizeHint": "Seleziona le carte, imposta una cartella per ciascuna o lascia che un modello di decisione con input immagine ne suggerisca una. Nulla viene spostato finché non applichi.",
+    "organizeEmpty": "Nessun personaggio da organizzare",
+    "organizeNoFolder": "Nessuna cartella",
+    "organizeApply": "Applica",
+    "organizeNoChanges": "Nessuna modifica alle cartelle",
+    "organizePending": "{{count}} modifica/e in sospeso",
+    "organizeAutoAssign": "Suggerisci cartelle con l'AI",
+    "organizeAutoBusy": "Il modello di decisione risponde…",
+    "organizeAutoDone": "Cartelle suggerite per {{count}} carta/e con {{model}} — controlla, poi applica",
+    "organizeAutoSkipped": "{{count}} carta/e senza suggerimento",
+    "organizeAutoFailed": "Impossibile suggerire le cartelle",
+    "organizeApplyFailed": "Impossibile spostare le carte",
+    "organizeConnection": "Modello di decisione",
+    "organizeDefaultConnection": "predefinito",
+    "organizeNeedsFolders": "Crea prima una cartella",
+    "randomChatFailed": "Impossibile avviare una chat casuale",
     "dismiss": "Scarta",
     "uploading": "Caricamento… {{percent}}%",
     "addingToGallery": "Aggiunta alla galleria… {{current}}/{{total}}",

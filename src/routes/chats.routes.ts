@@ -27,6 +27,10 @@ import type { RegexActionEffect } from "../types/regex-script";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
 import { getMessagePresetContext } from "../services/message-preset-context.service";
 import { isValidRegexActionSignature } from "../utils/regex-action-signature";
+import { pickRandomCharacter } from "../services/random-chat.service";
+import { DecisionValidationError } from "../decision/validation";
+import { DecisionConnectionNotFoundError, DecisionTimeoutError } from "../services/decisions.service";
+import { ProviderRequestError, clampErrorMessage } from "../utils/provider-errors";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -277,6 +281,38 @@ app.post("/group", async (c) => {
   const chat = svc.createGroupChat(userId, body);
   await processChatGreeting(userId, chat);
   return c.json(chat, 201);
+});
+
+// Ask a Decision model which character to play and start the chat in one step.
+app.post("/random", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const connectionId = typeof body?.connection_id === "string" && body.connection_id.trim()
+    ? body.connection_id.trim()
+    : undefined;
+  const hint = typeof body?.hint === "string" && body.hint.trim() ? body.hint.trim().slice(0, 400) : undefined;
+
+  try {
+    const pick = await pickRandomCharacter(userId, {
+      ...(connectionId ? { connection_id: connectionId } : {}),
+      ...(hint ? { hint } : {}),
+    });
+    const chat = svc.createChat(userId, { character_id: pick.character_id });
+    await processChatGreeting(userId, chat);
+    return c.json({
+      chat,
+      character_id: pick.character_id,
+      character_name: pick.character_name,
+      model: pick.model,
+      ...(pick.usage ? { usage: pick.usage } : {}),
+    }, 201);
+  } catch (err) {
+    const status = err instanceof DecisionValidationError ? 400
+      : err instanceof DecisionConnectionNotFoundError ? 404
+      : err instanceof DecisionTimeoutError ? 504
+      : err instanceof ProviderRequestError ? 502 : 400;
+    return c.json({ error: clampErrorMessage(err instanceof Error ? err.message : "Random chat failed") }, status);
+  }
 });
 
 app.post("/:id/convert-to-group", (c) => {

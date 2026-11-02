@@ -744,6 +744,9 @@
     "noModelsStatic": "Keine Modelle für diesen Anbieter."
   },
   "characterToolbar": {
+    "organizeFolders": "Ordner organisieren",
+    "randomChat": "Zufälliger Chat",
+    "randomChatBusy": "Figur wird ausgewählt…",
     "searchGroupChats": "Gruppenchats durchsuchen...",
     "searchCharacters": "Charaktere durchsuchen...",
     "characters": "Charaktere",
@@ -1589,6 +1592,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "Karten in Ordner sortieren",
+    "organizeHint": "Wähle Karten aus, ordne ihnen einen Ordner zu oder lass ein Decision-Modell mit Bildingabe einen vorschlagen. Nichts wird verschoben, bis du übernimmst.",
+    "organizeEmpty": "Keine Figuren zum Sortieren",
+    "organizeNoFolder": "Kein Ordner",
+    "organizeApply": "Übernehmen",
+    "organizeNoChanges": "Noch keine Ordneränderungen",
+    "organizePending": "{{count}} Änderung(en) ausstehend",
+    "organizeAutoAssign": "Ordner per KI vorschlagen",
+    "organizeAutoBusy": "Das Decision-Modell wird gefragt…",
+    "organizeAutoDone": "Ordner für {{count}} Karte(n) vorgeschlagen mit {{model}} — prüfen und übernehmen",
+    "organizeAutoSkipped": "{{count}} Karte(n) ohne Vorschlag",
+    "organizeAutoFailed": "Ordner konnten nicht vorgeschlagen werden",
+    "organizeApplyFailed": "Karten konnten nicht verschoben werden",
+    "organizeConnection": "Decision-Modell",
+    "organizeDefaultConnection": "Standard",
+    "organizeNeedsFolders": "Zuerst einen Ordner anlegen",
+    "randomChatFailed": "Zufälliger Chat konnte nicht gestartet werden",
     "dismiss": "Schließen",
     "uploading": "Lade hoch\u2026 {{percent}}%",
     "addingToGallery": "Füge zur Galerie hinzu\u2026 {{current}}/{{total}}",

@@ -744,6 +744,9 @@
     "noModelsStatic": "No models for this provider."
   },
   "characterToolbar": {
+    "organizeFolders": "Organize folders",
+    "randomChat": "Random chat",
+    "randomChatBusy": "Picking a character…",
     "searchGroupChats": "Search group chats...",
     "searchCharacters": "Search characters...",
     "characters": "Characters",
@@ -1589,6 +1592,23 @@
     }
   },
   "characterBrowser": {
+    "organizeTitle": "Put cards in folders",
+    "organizeHint": "Select cards, set a folder for each, or let a decision model with image input suggest one. Nothing moves until you apply.",
+    "organizeEmpty": "No characters to organize",
+    "organizeNoFolder": "No folder",
+    "organizeApply": "Apply",
+    "organizeNoChanges": "No folder changes yet",
+    "organizePending": "{{count}} change(s) pending",
+    "organizeAutoAssign": "Suggest folders with AI",
+    "organizeAutoBusy": "Asking the decision model…",
+    "organizeAutoDone": "Suggested folders for {{count}} card(s) with {{model}} — review, then apply",
+    "organizeAutoSkipped": "{{count}} card(s) got no suggestion",
+    "organizeAutoFailed": "Could not suggest folders",
+    "organizeApplyFailed": "Failed to move cards",
+    "organizeConnection": "Decision model",
+    "organizeDefaultConnection": "default",
+    "organizeNeedsFolders": "Create a folder first",
+    "randomChatFailed": "Could not start a random chat",
     "dismiss": "Dismiss",
     "uploading": "Uploading… {{percent}}%",
     "addingToGallery": "Adding to gallery… {{current}}/{{total}}",

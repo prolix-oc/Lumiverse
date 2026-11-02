@@ -1,6 +1,6 @@
 # Decision models
 
-`spindle.decisions` evaluates named questions against text or JSON using the user's saved Decision connections. Built-in providers are OpenRouter, NanoGPT, TypeSafe, and Inception. Inception uses its native `/v1/decisions` endpoint and suggests `mercury-decide`. Declare the `decisions` permission in `spindle.json` and obtain the user's grant. The host advertises `decisions-v1: 1` in `spindle.host.capabilities`; check this before calling the API on older hosts.
+`spindle.decisions` evaluates named questions against text or JSON using the user's saved Decision connections. Built-in providers are OpenRouter, NanoGPT, TypeSafe, Inception (native `/v1/decisions` endpoint, suggests `mercury-decide`), and Custom (any TypeSafe-compatible endpoint the user points at). Declare the `decisions` permission in `spindle.json` and obtain the user's grant. The host advertises `decisions-v1: 1` in `spindle.host.capabilities`; check this before calling the API on older hosts.
 
 Use `lumiverse-spindle-types` version **0.6.45** or newer for `SpindleDecisionsAPI`, the `Decision*` types, and the `decisions` permission.
 
@@ -47,7 +47,7 @@ Evaluations have a 30-second deadline. Passing an `AbortSignal` cancels provider
 
 ## Images and Box questions
 
-Hosts with the `decision-images-v1` capability accept images and Box questions on TypeSafe connections (Jev 1.13 and newer accept images; Box needs Jev 1.14, for example `model: 'jev-preview'`). TypeSafe calls these features experimental; formats and accuracy can change. Other providers reject requests with images or Box questions.
+Hosts with the `decision-images-v1` capability accept images and Box questions. Image input travels as an `assets` map on every provider: OpenRouter's vision Decision models (`liquid/d1`, `liquid/d1-ultra`, `~typesafe/jev-latest`) take it natively, while TypeSafe and TypeSafe-compatible Custom endpoints opt in through the `TypeSafe-Danger-Zone-Images: true` header the host adds for you. Jev 1.13 and newer accept images; Box needs Jev 1.14, for example `model: 'jev-preview'`. TypeSafe calls these features experimental; formats and accuracy can change. A model without image input rejects the request, so check the connection's `input_modalities` before relying on images.
 
 ```ts
 const result = await spindle.decisions.evaluate({
@@ -78,6 +78,6 @@ const models = await spindle.decisions.getModels(connectionId)
 
 Each inspection method accepts an optional `{ userId }` argument for operator extensions. Profiles include model, default status, and readable API-key status, without credentials. Model entries include `id`, `label`, optional catalog metadata, and a `protocol` value of `supported`, `unsupported`, or `unverified`. Preserve exact model IDs, including `~typesafe/jev-latest`. Unknown models can be entered manually. Together's Tev1 uses a different protocol and is rejected by this adapter.
 
-OpenRouter uses its native `/api/alpha/decisions` route and discovers Decision models through `/api/v1/models?output_modalities=decisions`. NanoGPT uses its native `/api/v1/decisions` route and discovers Decision models through the detailed `/api/v1/models?detailed=true` catalog, keeping entries whose architecture advertises the `decisions` output modality. TypeSafe uses `/v1/systemone` and `/v1/models`. Custom API URLs are versioned base URLs; proxy deployments must expose the corresponding evaluation and model routes. Only supported OpenRouter `provider` routing options are accepted in `default_parameters`.
+OpenRouter uses its native `/api/alpha/decisions` route and discovers Decision models through `/api/v1/models?output_modalities=decisions`. NanoGPT uses its native `/api/v1/decisions` route and discovers Decision models through the detailed `/api/v1/models?detailed=true` catalog, keeping entries whose architecture advertises the `decisions` output modality. TypeSafe uses `/v1/systemone` and `/v1/models`. Custom appends those same TypeSafe routes to the versioned base URL the user enters, and reports its catalog as `unverified` because an arbitrary endpoint cannot be verified here. Custom API URLs are versioned base URLs; proxy deployments must expose the corresponding evaluation and model routes. Only supported OpenRouter `provider` routing options are accepted in `default_parameters`.
 
 See [Decision connection setup](https://lumiverse.chat/guides/connections/decisions/) and the [REST reference](../rest-api.md#decision-connections).

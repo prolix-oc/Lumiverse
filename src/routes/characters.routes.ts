@@ -28,6 +28,10 @@ import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
 import { importCharacterFile } from "../services/character-import.service";
+import { autoAssignFolders } from "../services/character-auto-folder.service";
+import { DecisionValidationError } from "../decision/validation";
+import { DecisionConnectionNotFoundError, DecisionTimeoutError } from "../services/decisions.service";
+import { ProviderRequestError, clampErrorMessage } from "../utils/provider-errors";
 import {
   characterImportJobs,
   CharacterImportJobError,
@@ -632,6 +636,39 @@ app.post("/folders/delete", async (c) => {
 
   const updated = await svc.deleteCharacterFolderAsync(userId, name);
   return c.json({ updated, count: updated.length });
+});
+
+// Suggest a folder for each selected card with a Decision model that reads the
+// card avatars. Returns suggestions only; the client reviews and applies them
+// through /bulk-update so nothing moves without confirmation.
+app.post("/folders/auto-assign", async (c) => {
+  const userId = c.get("userId");
+  const body: { ids?: unknown; folders?: unknown; connection_id?: unknown } = await c.req.json().catch(() => ({}));
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 500) {
+    return c.json({ error: "ids must be a non-empty array with at most 500 items" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return c.json({ error: "ids must contain character ids" }, 400);
+  if (!Array.isArray(body.folders)) return c.json({ error: "folders must be an array" }, 400);
+  const folders = body.folders.filter((folder): folder is string => typeof folder === "string");
+  const connectionId = typeof body.connection_id === "string" && body.connection_id.trim()
+    ? body.connection_id.trim()
+    : undefined;
+
+  try {
+    return c.json(await autoAssignFolders(userId, {
+      ids,
+      folders,
+      ...(connectionId ? { connection_id: connectionId } : {}),
+    }));
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    const status = err instanceof DecisionValidationError ? 400
+      : err instanceof DecisionConnectionNotFoundError ? 404
+      : err instanceof DecisionTimeoutError ? 504
+      : err instanceof ProviderRequestError ? 502 : 400;
+    return c.json({ error: clampErrorMessage(err instanceof Error ? err.message : "Auto-assign failed") }, status);
+  }
 });
 
 app.post("/bulk-update", async (c) => {
