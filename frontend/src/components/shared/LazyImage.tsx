@@ -57,6 +57,8 @@ export default function LazyImage({
   const imageRef = useRef<HTMLImageElement>(null)
   const nativeImage = useIOSMediaImage(src, imageRef, loading)
   const presentation = useImageDecodeReveal(nativeImage.src, imageRef)
+  const { reveal, cancel } = presentation
+  const { retryOriginal } = nativeImage
   const currentSrcRef = useRef(src)
   currentSrcRef.current = src
 
@@ -112,16 +114,16 @@ export default function LazyImage({
       finishLoad(image)
       return
     }
-    presentation.reveal(image, () => finishLoad(image))
-  }, [finishLoad, onLoad, androidWebView, presentation.reveal])
+    reveal(image, () => finishLoad(image))
+  }, [finishLoad, onLoad, androidWebView, reveal])
   const handleError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
-    presentation.cancel()
-    if (nativeImage.retryOriginal()) return
+    cancel()
+    if (retryOriginal()) return
     setIsLoading(false)
     setShowLoadingIndicator(false)
     setHasError(true)
     onError?.(event)
-  }, [onError, nativeImage.retryOriginal, presentation.cancel])
+  }, [onError, retryOriginal, cancel])
 
   if (hasError || !src) return <>{fallback}</>
 
