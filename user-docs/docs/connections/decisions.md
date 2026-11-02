@@ -28,7 +28,7 @@ Inception uses its native `/v1/decisions` endpoint with your Inception API key. 
 
 Some Decision models read pictures as well as text. That is what powers **auto-foldering cards**: Lumiverse sends each card's avatar along with its name, tags, and description, and the model picks the folder it belongs in.
 
-- **TypeSafe** — Jev accepts images; the connection sends TypeSafe's images opt-in flag automatically. Box questions need Jev 1.14.
+- **TypeSafe** — Jev accepts images, but TypeSafe's image opt-in is experimental, so it is off by default. Turn on **Image understanding** in the TypeSafe connection to send images and the images opt-in flag. Without it, images are not sent, and Box questions fail with an error. Box questions need Jev 1.14.
 - **OpenRouter** — `liquid/d1`, `liquid/d1-ultra`, and `~typesafe/jev-latest` all accept image input. Liquid's models cap a request at 8 images, so card art is sent in batches of 8.
 - **NanoGPT** and **Custom** — image support depends on the endpoint and model you point at.
 

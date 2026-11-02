@@ -123,7 +123,7 @@ export function validateDecisionParameters(provider: string, parameters: unknown
   }
   return { provider: routing };
 }
-type DecisionProviderProfile = { provider: string; api_url?: string; model: string; default_parameters: Record<string, unknown> };
+type DecisionProviderProfile = { provider: string; api_url?: string; model: string; default_parameters: Record<string, unknown>; metadata?: Record<string, unknown> };
 
 async function requestProviderDecision(profile: DecisionProviderProfile, apiKey: string, input: DecisionEvaluationInput, signal?: AbortSignal, onDispatch?: () => void): Promise<unknown> {
   const provider = getProvider(profile.provider);
@@ -131,18 +131,25 @@ async function requestProviderDecision(profile: DecisionProviderProfile, apiKey:
   if (!model) throw new DecisionValidationError("Select a Decision model for this connection");
   if (isUnsupportedDecisionModel(profile.provider, model)) throw new DecisionValidationError("This model uses chat completions and does not support the Decision API");
   const images = usesDecisionImages(input);
+  // TypeSafe image understanding is opt-in per connection (metadata.image_understanding).
+  // Without it, TypeSafe requests carry no images and no Danger Zone header.
+  const imageOptIn = profile.provider === "typesafe" ? profile.metadata?.image_understanding === true : true;
+  if (images && !imageOptIn && Object.values(input.questions).some((q) => q.type === "box")) {
+    throw new DecisionValidationError("Box questions need image understanding enabled on this TypeSafe connection");
+  }
   // Image and Box input travels as an `assets` map on every provider: OpenRouter
   // (liquid/d1, liquid/d1-ultra, ~typesafe/jev-latest) and NanoGPT accept it
   // natively, while TypeSafe-compatible endpoints require their opt-in header.
   const dangerZoneImages = profile.provider === "typesafe" || profile.provider === "custom";
-  const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions, ...(input.assets ? { assets: input.assets } : {}) };
+  const sendImages = imageOptIn && images;
+  const body = { ...validateDecisionParameters(profile.provider, profile.default_parameters), model, state: input.state, questions: input.questions, ...(input.assets && imageOptIn ? { assets: input.assets } : {}) };
   signal?.throwIfAborted();
   onDispatch?.();
   return fetchProviderJson<unknown>(provider.name, "decision evaluation", decisionEvaluationUrl(profile), {
     method: "POST", headers: {
       Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json",
       ...(profile.provider === "openrouter" ? { "HTTP-Referer": "https://lumiverse.chat", "X-Title": "Lumiverse" } : {}),
-      ...(images && dangerZoneImages ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
+      ...(sendImages && dangerZoneImages ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
     },
     body: JSON.stringify(body), redirect: "error", signal,
   });

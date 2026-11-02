@@ -30,6 +30,7 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
   const [apiUrl, setApiUrl] = useState(profile?.api_url || '')
   const [model, setModel] = useState(profile ? profile.model : providers[0]?.capabilities.suggestedModel || '~typesafe/jev-latest')
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
+  const [imageUnderstanding, setImageUnderstanding] = useState(profile?.metadata?.image_understanding === true)
   const [models, setModels] = useState<DecisionModelInfo[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -146,6 +147,7 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
       await onSave({
         name: name.trim(), provider, api_key: clearKey ? '' : apiKey.trim() || undefined,
         api_url: apiUrl.trim(), model: model.trim(), is_default: isDefault,
+        metadata: { ...(profile?.metadata ?? {}), ...(provider === 'typesafe' ? { image_understanding: imageUnderstanding } : {}) },
       }, folder.value)
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('decisionConnectionForm.saveFailed'))
@@ -186,6 +188,11 @@ export default function DecisionConnectionForm({ providers, profile, onSave, onC
             onRefresh={fetchModels} autoRefreshOnFocus refreshKey={provider + ':' + apiUrl + ':' + (profile?.id || '')}
             appearance="standard" placeholder={t('decisionConnectionForm.modelPlaceholder')} emptyMessage={t('decisionConnectionForm.noModels')} />
         </FormField>
+        {provider === 'typesafe' && (
+          <FormField label="" hint={t('decisionConnectionForm.imageUnderstandingHint')}>
+            <Toggle.Checkbox checked={imageUnderstanding} onChange={setImageUnderstanding} label={t('decisionConnectionForm.imageUnderstanding')} />
+          </FormField>
+        )}
         {unsupported && <p role="alert">{t('decisionConnectionForm.unsupportedModel')}</p>}
         {error && <p role="alert">{error}</p>}
         <FormField label="">

@@ -172,7 +172,7 @@ describe("Decision provider adapters", () => {
       expect(JSON.parse(init.body)).toEqual({ model: "jev-preview", state: input.state, questions: input.questions, assets: input.assets });
       return Response.json({ model: "jev-1.14.0", answers: { face: { type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 } } });
     }) as unknown as typeof fetch;
-    const result = await evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {} }, "key", input);
+    const result = await evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {}, metadata: { image_understanding: true } }, "key", input);
     expect(result.answers.face).toEqual({ type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2, right: 0.4 }, confidence: 0.66 });
     // Vision decision models on OpenRouter take the same assets map without the
     // TypeSafe opt-in header.
@@ -190,6 +190,18 @@ describe("Decision provider adapters", () => {
     expect(sent[1].url).toBe("https://proxy.test/v1/systemone");
     expect(sent[1].headers["TypeSafe-Danger-Zone-Images"]).toBe("true");
     expect(sent[1].body.assets).toEqual(input.assets);
+    // TypeSafe image understanding is off by default: no images, no header.
+    globalThis.fetch = (async (url: any, init: any) => {
+      sent.push({ url: String(url), headers: init.headers as Record<string, string>, body: JSON.parse(init.body) });
+      return Response.json({ model: "jev-preview", answers: { check: { type: "noul", noul: 0.5 } } });
+    }) as unknown as typeof fetch;
+    const noulInput: DecisionEvaluationInput = { state: { page: "ref-page" }, assets: input.assets, questions: { check: { type: "noul", instructions: "Is it a page?" } } };
+    await evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {} }, "key", noulInput);
+    expect(sent[2].url).toBe("https://api.typesafe.ai/v1/systemone");
+    expect(sent[2].headers).not.toHaveProperty("TypeSafe-Danger-Zone-Images");
+    expect(sent[2].body).not.toHaveProperty("assets");
+    await expect(evaluateProviderDecision({ provider: "typesafe", model: "jev-preview", default_parameters: {} }, "key", input)).rejects.toThrow("image understanding");
+    expect(sent.length).toBe(3);
   });
   test("rejects arbitrary defaults and preserves permitted routing", () => {
     expect(() => validateDecisionParameters("openrouter", { model: "override" })).toThrow();

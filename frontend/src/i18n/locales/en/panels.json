@@ -4042,6 +4042,8 @@
     "modelPlaceholder": "Select or enter a Decision model",
     "noModels": "No compatible Decision models found",
     "setDefault": "Set as default Decision connection",
+    "imageUnderstanding": "Image understanding",
+    "imageUnderstandingHint": "Send images and Box questions to TypeSafe. TypeSafe's image opt-in is experimental, so this is off by default.",
     "cancel": "Cancel",
     "save": "Save",
     "create": "Create",

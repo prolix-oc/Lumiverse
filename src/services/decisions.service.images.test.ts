@@ -18,7 +18,7 @@ afterEach(() => {
   for (const spy of spies.splice(0)) spy.mockRestore();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
-const profile = { id: "decision", name: "Decision", provider: "typesafe", api_url: "", model: "jev-preview", default_parameters: {} } as unknown as DecisionConnectionProfileDTO;
+const profile = { id: "decision", name: "Decision", provider: "typesafe", api_url: "", model: "jev-preview", default_parameters: {}, metadata: { image_understanding: true } } as unknown as DecisionConnectionProfileDTO;
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const input = { state: { page: "ref-page" }, assets: { "ref-page": { image_id: "stored" } }, questions: { face: { type: "box" as const, instructions: "the face in `page`" } } };
 
