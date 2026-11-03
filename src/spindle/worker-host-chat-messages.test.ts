@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtensionInfo, SpindleManifest } from "lumiverse-spindle-types";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import * as chats from "../services/chats.service";
+import * as characters from "../services/characters.service";
 import { WorkerHost } from "./worker-host";
 
 type ReadMessage = {
@@ -79,6 +80,30 @@ function createHost(identifier: string, permitted = true) {
 }
 
 const storedMetadata = (messageId: string) => chats.getMessage(owner, messageId)!.extra.spindle_metadata;
+
+test("backend message append preserves explicit identity and legacy defaults", async () => {
+  const character = characters.createCharacter(owner, { name: "Character" });
+  const host = createHost("ext_alpha");
+  const response = await host.call({ type: "chat_append_message", message: {
+    role: "assistant", content: "", name: character.name, characterId: character.id, metadata: { run: "run" },
+  } });
+  expect(response.error).toBeUndefined();
+  const message = chats.getMessage(owner, (response.result as { id: string }).id)!;
+  expect(message.name).toBe(character.name);
+  expect(message.extra.character_id).toBe(character.id);
+  expect(message.extra.spindle_metadata).toEqual({ run: "run" });
+  const legacy = await host.call({ type: "chat_append_message", message: { role: "assistant", content: "reply" } });
+  expect(chats.getMessage(owner, (legacy.result as { id: string }).id)!.name).toBe("Assistant");
+});
+
+test("backend message identity cannot refer to another user's character or bypass chat permissions", async () => {
+  const other = characters.createCharacter("other-user", { name: "Private character" });
+  const message = { role: "assistant", content: "", name: "Character", characterId: other.id };
+  const count = chats.getMessages(owner, chatId).length;
+  expect((await createHost("ext_alpha").call({ type: "chat_append_message", message })).error).toContain("Invalid message character");
+  expect((await createHost("ext_alpha", false).call({ type: "chat_append_message", message })).error).toContain("permission");
+  expect(chats.getMessages(owner, chatId)).toHaveLength(count);
+});
 
 test("default read keeps every swipe, the full extra bag and every extension's metadata", async () => {
   const messages = await createHost("ext_alpha").read();

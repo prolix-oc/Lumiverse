@@ -109,7 +109,7 @@ const isHidden = await spindle.chat.isMessageHidden(chatId, messageId)
 | Method | Returns | Description |
 |---|---|---|
 | `getMessages(chatId, options?)` | `Promise<ChatMessage[]>` | Get the messages in a chat, all of them by default. See [Lean Reads](#lean-reads). |
-| `appendMessage(chatId, message, options?)` | `Promise<{ id: string; generationId?: string }>` | Add a new message. Fields: `{ role, content, metadata? }`. Pass `true` or `{ triggerGeneration: true }` as `options` to start a normal reply. |
+| `appendMessage(chatId, message, options?)` | `Promise<{ id: string; generationId?: string }>` | Add a new message. Fields: `{ role, content, metadata?, name?, characterId? }`. See [Role Mapping](#role-mapping) for identity fields. Pass `true` or `{ triggerGeneration: true }` as `options` to start a normal reply. |
 | `updateMessage(chatId, messageId, patch)` | `Promise<void>` | Edit a message. See [Update Patch Shape](#update-patch-shape). |
 | `deleteMessage(chatId, messageId)` | `Promise<void>` | Remove a message |
 | `setMessageHidden(chatId, messageId, hidden)` | `Promise<void>` | Toggle the `hidden` flag on one message |
@@ -300,13 +300,15 @@ The bulk variant cap of 500 IDs per call mirrors the underlying service limit an
 
 ## Role Mapping
 
-Messages created via `appendMessage` use the `role` field to set `is_user` and `name`:
+Messages created via `appendMessage` use `role` to set `is_user` and the default saved `name`:
 
-| Role | `is_user` | `name` |
+| Role | `is_user` | `name` when omitted |
 |------|-----------|--------|
-| `"user"` | `true` | From active persona |
-| `"assistant"` | `false` | From chat's character |
+| `"user"` | `true` | `"User"` |
+| `"assistant"` | `false` | `"Assistant"` |
 | `"system"` | `false` | `"System"` |
+
+Optional `name` and `characterId` require host capability `chat-append-identity-v1`. `name` overrides the saved name. `characterId` is stored in `extra.character_id` and is allowed only for assistant messages referencing a character owned by the chat's user. The destination chat is still selected by `chatId`.
 
 Extension metadata is stored in the message's `extra.spindle_metadata` field. An extension's own entry is `extra.spindle_metadata[<manifest identifier>]`; write it with the `ownMetadata` patch key so concurrent writes from other extensions are preserved. Host-owned keys such as `preset_contexts` cannot be used as an own entry.
 

@@ -5,6 +5,8 @@ import type { OrganizationWorkerMessage, OrganizationHostMessage } from './conne
 import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../shared/connection-organization';
 import type {
   SpindleManifest,
+  ChatAppendMessageDTO,
+  ChatAppendMessageOptionsDTO,
   ChatGetMessagesOptionsDTO,
   WorkerToHost,
   ImageGenNativeControlWorkerMessage,
@@ -146,23 +148,6 @@ type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
 type RuntimeSpindlePermission = ManagedSpindlePermission | "mcp_servers" | "mcp_servers.create" | "screen_capture" | "screen_recording";
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
-type ChatAppendGenerationOptions = {
-  connection_id?: string;
-  persona_id?: string;
-  persona_addon_states?: Record<string, boolean>;
-  preset_id?: string;
-  force_preset_id?: boolean;
-  parameters?: Record<string, unknown>;
-  target_character_id?: string;
-  retain_council?: boolean;
-};
-
-type ChatAppendMessageOptions =
-  | boolean
-  | {
-      triggerGeneration?: boolean;
-      generation?: ChatAppendGenerationOptions;
-    };
 
 /** Host-owned `extra.spindle_metadata` keys; an extension whose identifier matches one has no own entry. */
 const HOST_OWNED_SPINDLE_METADATA_KEYS = new Set(["preset_contexts"]);
@@ -4135,12 +4120,8 @@ export class WorkerHost {
   private async handleChatAppendMessage(
     requestId: string,
     chatId: string,
-    message: {
-      role: "system" | "user" | "assistant";
-      content: string;
-      metadata?: Record<string, unknown>;
-    },
-    options?: ChatAppendMessageOptions,
+    message: ChatAppendMessageDTO,
+    options?: ChatAppendMessageOptionsDTO,
   ): Promise<void> {
     try {
       if (!this.hasPermission("chat_mutation")) {
@@ -4158,8 +4139,15 @@ export class WorkerHost {
       if (!userId) throw new Error("Chat not found");
       this.enforceScopedUser(userId);
 
+      if (message.name !== undefined && typeof message.name !== "string") throw new Error("Invalid message name");
+      if (message.characterId !== undefined) {
+        const { getCharacter } = await import("../services/characters.service");
+        if (message.role !== "assistant" || typeof message.characterId !== "string" || !getCharacter(userId, message.characterId))
+          throw new Error("Invalid message character");
+      }
       const extra: Record<string, unknown> = {
         spindle_role: message.role,
+        ...(message.characterId ? { character_id: message.characterId } : {}),
       };
       if (message.metadata) extra.spindle_metadata = message.metadata;
 
@@ -4167,12 +4155,12 @@ export class WorkerHost {
         chatId,
         {
           is_user: message.role === "user",
-          name:
+          name: message.name ?? (
             message.role === "system"
               ? "System"
               : message.role === "assistant"
                 ? "Assistant"
-                : "User",
+                : "User"),
           content: message.content,
           extra,
         },
