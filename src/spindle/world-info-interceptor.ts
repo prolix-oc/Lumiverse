@@ -88,6 +88,8 @@ export interface WorldInfoInterceptorMutationDTO {
 }
 
 export interface WorldInfoInterceptorResultDTO {
+  /** Non-persistent candidates, scoped to this extension and chat by the host. */
+  readonly additionalEntries?: readonly WorldInfoInterceptorEntryDTO[];
   readonly disabled?: readonly string[];
   readonly enabled?: readonly string[];
   readonly forced?: readonly string[];
@@ -97,6 +99,8 @@ export interface WorldInfoInterceptorResultDTO {
 }
 
 export interface WorldInfoInterceptorChainResult {
+  readonly additionalEntries?: readonly WorldBookEntry[];
+  readonly additionalBookSources?: ReadonlyMap<string, BookSource>;
   readonly entries: WorldBookEntry[];
   readonly captureRequests: Map<string, Set<string>>;
   readonly activationOverrides: WorldInfoActivationOverridesDTO;
@@ -106,6 +110,42 @@ export interface WorldInfoInterceptorChainResult {
     WorldInfoInterceptorPlacementDTO
   >;
   readonly insertionOrderByEntryId: ReadonlyMap<string, string>;
+}
+
+export class WorldInfoCandidateError extends Error {
+  constructor(field: string) { super(`Invalid prompt-local world info field: ${field}`); this.name = 'WorldInfoCandidateError'; }
+}
+
+function promptLocalEntry(value: WorldInfoInterceptorEntryDTO, extensionId: string, chatId: string): WorldBookEntry {
+  if (!value || typeof value.id !== 'string' || !value.id) throw new WorldInfoCandidateError('id');
+  for (const key of ['content', 'comment', 'group_name'] as const) if (typeof value[key] !== 'string') throw new WorldInfoCandidateError(key);
+  for (const key of ['key', 'keysecondary'] as const) if (!Array.isArray(value[key]) || value[key].some(item => typeof item !== 'string')) throw new WorldInfoCandidateError(key);
+  for (const key of ['position', 'depth', 'priority', 'probability', 'selective_logic', 'group_weight', 'order_value', 'sticky', 'cooldown', 'delay'] as const) {
+    if (!Number.isFinite(value[key])) throw new WorldInfoCandidateError(key);
+  }
+  if (value.role !== null && !['system', 'user', 'assistant'].includes(value.role)) throw new WorldInfoCandidateError('role');
+  if (value.scan_depth !== null && (!Number.isFinite(value.scan_depth) || value.scan_depth < 0)) throw new WorldInfoCandidateError('scan_depth');
+  for (const key of ['disabled', 'constant', 'use_probability', 'selective', 'group_override', 'match_whole_words', 'case_sensitive', 'use_regex', 'prevent_recursion', 'exclude_recursion', 'delay_until_recursion', 'exclude_greeting'] as const) {
+    if (typeof value[key] !== 'boolean') throw new WorldInfoCandidateError(key);
+  }
+  const id = JSON.stringify(['spindle', extensionId, chatId, value.id]);
+  return {
+    id, uid: id, world_book_id: JSON.stringify(['spindle', extensionId, chatId]),
+    folder: '', tags: [], outlet_name: null, wi_marker: null, wi_marker_side: null,
+    content: value.content, comment: value.comment, key: [...value.key], keysecondary: [...value.keysecondary],
+    position: value.position, depth: value.depth, role: value.role, priority: value.priority,
+    order_value: value.order_value, disabled: value.disabled, constant: value.constant,
+    probability: value.probability, use_probability: value.use_probability,
+    selective: value.selective, selective_logic: value.selective_logic,
+    group_name: value.group_name, group_override: value.group_override, group_weight: value.group_weight,
+    match_whole_words: value.match_whole_words, case_sensitive: value.case_sensitive, use_regex: value.use_regex,
+    prevent_recursion: value.prevent_recursion, exclude_recursion: value.exclude_recursion,
+    delay_until_recursion: value.delay_until_recursion, exclude_greeting: value.exclude_greeting,
+    scan_depth: value.scan_depth, sticky: value.sticky, cooldown: value.cooldown, delay: value.delay,
+    automation_id: value.automation_id, extensions: { ...value.extensions },
+    vectorized: false, vector_index_status: 'not_enabled', vector_indexed_at: null, vector_index_error: null,
+    revision: 0, created_at: 0, updated_at: 0,
+  };
 }
 
 function normalizePlacement(
@@ -183,6 +223,8 @@ export class WorldInfoInterceptorChain {
       WorldInfoInterceptorPlacementDTO
     >();
     const insertionOrderByEntryId = new Map<string, string>();
+    const additionalBookSources = new Map<string, BookSource>();
+    const sourceEntries = [...entries];
     const buildDto = (
       src: readonly WorldBookEntry[]
     ): WorldInfoInterceptorEntryDTO[] =>
@@ -226,7 +268,7 @@ export class WorldInfoInterceptorChain {
         ...(insertionOrderByEntryId.has(e.id)
           ? { outputOrder: "insertion" as const }
           : {}),
-        book_source: bookSourceMap?.get(e.world_book_id),
+        book_source: additionalBookSources.get(e.world_book_id) ?? bookSourceMap?.get(e.world_book_id),
       }));
 
     const disabledByChain = new Set<string>();
@@ -241,7 +283,7 @@ export class WorldInfoInterceptorChain {
     let working: WorldBookEntry[] = [...entries];
 
     const rebuildWorking = (): WorldBookEntry[] =>
-      entries.map((e) => {
+      sourceEntries.map((e) => {
         const isDisabled = disabledByChain.has(e.id);
         const wantsEnable = !isDisabled && enabledByChain.has(e.id) && e.disabled;
         const wantsForce = !isDisabled && forcedByChain.has(e.id);
@@ -271,11 +313,24 @@ export class WorldInfoInterceptorChain {
               : ctx.activationSettings.maxRecursionPasses,
           },
         });
-        const disabledList = result?.disabled ?? [];
-        const enabledList = result?.enabled ?? [];
-        const forcedList = result?.forced ?? [];
-        const mutatedList = result?.mutated ?? [];
-        const capturedList = result?.captured;
+        const supplied = result?.additionalEntries ?? [];
+        const additional = supplied.map(entry => promptLocalEntry(entry, handler.extensionId, ctx.chatId));
+        const localIds = new Map(supplied.map((entry, index) => [entry.id, additional[index]!.id]));
+        if (supplied.some(entry => candidateIds.has(entry.id))) throw new WorldInfoCandidateError('ambiguous id');
+        const resolveId = (id: string) => localIds.get(id) ?? id;
+        const addedIds = new Set<string>();
+        for (const entry of additional) {
+          if (candidateIds.has(entry.id) || addedIds.has(entry.id)) throw new WorldInfoCandidateError('duplicate id');
+          addedIds.add(entry.id);
+        }
+        for (const entry of additional) {
+          candidateIds.add(entry.id); sourceEntries.push(entry); additionalBookSources.set(entry.world_book_id, 'chat');
+        }
+        const disabledList = (result?.disabled ?? []).map(resolveId);
+        const enabledList = (result?.enabled ?? []).map(resolveId);
+        const forcedList = (result?.forced ?? []).map(resolveId);
+        const mutatedList = (result?.mutated ?? []).map(mutation => ({ ...mutation, id: resolveId(mutation.id) }));
+        const capturedList = result?.captured?.map(resolveId);
         if (capturedList !== undefined) {
           const requested = captureRequests.get(handler.extensionId) ?? new Set<string>();
           for (const id of capturedList) {
@@ -290,6 +345,7 @@ export class WorldInfoInterceptorChain {
           enabledList.length === 0 &&
           forcedList.length === 0 &&
           mutatedList.length === 0 &&
+          additional.length === 0 &&
           !disablesRecursion
         ) {
           continue;
@@ -319,10 +375,12 @@ export class WorldInfoInterceptorChain {
           enabledList.length > 0 ||
           forcedList.length > 0 ||
           mutatedList.length > 0
+          || additional.length > 0
         ) {
           working = rebuildWorking();
         }
       } catch (err) {
+        if (err instanceof WorldInfoCandidateError) throw err;
         console.error(
           `[Spindle] World-info interceptor error from ${handler.extensionId}: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -333,6 +391,8 @@ export class WorldInfoInterceptorChain {
     }
 
     return {
+      additionalBookSources,
+      additionalEntries: sourceEntries.slice(entries.length),
       entries: working,
       captureRequests,
       activationOverrides: {

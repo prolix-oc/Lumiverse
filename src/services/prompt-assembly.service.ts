@@ -2295,6 +2295,7 @@ export async function assemblePrompt(
     ctx.userId,
     wiSources.bookSourceMap
   );
+  for (const [bookId, source] of interception.additionalBookSources ?? []) wiSources.bookSourceMap.set(bookId, source);
   const worldInfoSettings: WorldInfoSettings = {
     ...normalizedWorldInfoSettings,
     maxRecursionPasses:
@@ -2303,6 +2304,7 @@ export async function assemblePrompt(
         : normalizedWorldInfoSettings.maxRecursionPasses,
   };
   const intercepted = interception.entries;
+  const rawWiEntries = [...wiEntries, ...(interception.additionalEntries ?? [])];
   const hasCaptureRequests = interception.captureRequests.size > 0;
   const hasCapturedIds = [...interception.captureRequests.values()].some(
     (ids) => ids.size > 0,
@@ -2314,7 +2316,7 @@ export async function assemblePrompt(
   if (activationScanCache) {
     primeWorldInfoActivationScanCache(
       activationScanCache,
-      [intercepted, wiEntries],
+      [intercepted, rawWiEntries],
       worldInfoSettings,
     );
   }
@@ -2347,7 +2349,7 @@ export async function assemblePrompt(
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
   let captureVectorQuery: PreparedWorldInfoVectorQuery | undefined;
   const vectorViewsEquivalent = areWorldInfoVectorViewsEquivalent(
-    wiEntries,
+    rawWiEntries,
     intercepted,
   );
   const captureVectorViewCanShareNative =
@@ -2393,7 +2395,7 @@ export async function assemblePrompt(
       if (captureVectorViewCanShareNative) {
         rawVectorActivated = projectVectorActivatedEntries(
           detailed.entries,
-          wiEntries,
+          rawWiEntries,
         );
       }
 
@@ -2483,7 +2485,7 @@ export async function assemblePrompt(
     const captureKeywordResult = profiler.measureSync(
       "world-info-capture-keyword",
       () => activateWorldInfo({
-        entries: wiEntries,
+        entries: rawWiEntries,
         messages,
         chatTurn: messages.length,
         wiState: captureWiState,
@@ -2501,7 +2503,7 @@ export async function assemblePrompt(
               ctx.userId,
               ctx.chatId,
               wiSources.worldBookIds,
-              wiEntries,
+              rawWiEntries,
               messages,
               ctx.signal,
               worldInfoSettings,
