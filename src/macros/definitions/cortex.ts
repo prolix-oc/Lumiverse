@@ -2,7 +2,7 @@
  * Memory Cortex — Macro definitions.
  *
  * Provides prompt-injectable macros for cortex-enhanced memory data:
- *   {{entities}}          — Active entity snapshots with facts and relationships
+ *   {{entities}}          — Active entity snapshots with descriptions and facts
  *   {{entityFacts}}       — Facts about a specific entity: {{entityFacts::Kael}}
  *   {{relationships}}     — Active relationship edges between entities
  *   {{arc}}               — Current narrative arc summary
@@ -52,7 +52,7 @@ export function registerCortexMacros(): void {
   registry.registerMacro({
     name: "entities",
     category: "memory",
-    description: "Active entity snapshots with facts and relationships from the Memory Cortex.",
+    description: "Active entity snapshots with descriptions and facts from the Memory Cortex. Use {{relationships}} for relationship edges.",
     args: [
       { name: "count", type: "integer", optional: true, description: "Max entities to include" },
     ],
@@ -195,14 +195,6 @@ function formatEntitySnapshots(snapshots: EntitySnapshot[]): string {
 
     if (snap.topFacts.length > 0) {
       lines.push(`  Facts: ${snap.topFacts.join(". ")}.`);
-    }
-
-    if (snap.relationships.length > 0) {
-      const relStrs = snap.relationships.map((r) => {
-        const label = r.label ? ` — ${r.label}` : "";
-        return `${r.targetName} (${r.type}${label})`;
-      });
-      lines.push(`  Relations: ${relStrs.join(" | ")}`);
     }
   }
 

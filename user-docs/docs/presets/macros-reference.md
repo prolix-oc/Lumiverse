@@ -1317,9 +1317,9 @@ Configure Chat Memory in **Settings → Advanced → Long-Term Chat Memory**, an
 
 | Macro | Returns | Args |
 |-------|---------|------|
-| `{{entities}}` | Formatted entity snapshots with facts and relationships | Optional: `{{entities::count}}` to limit the number of entities |
+| `{{entities}}` | Entity names, types, statuses, descriptions, and facts | Optional: `{{entities::count}}` to limit the number of entities |
 | `{{entityFacts::name}}` | Facts for one named entity | Entity name |
-| `{{relationships}}` | Active relationship edges in the current scene | — |
+| `{{relationships}}` | Active relationship edges in the current scene, without entity descriptions or facts | — |
 | `{{arc}}` | Current narrative arc summary | — |
 | `{{memorySalience}}` | Highest-salience retrieved memory | — |
 | `{{cortexActive}}` | `"yes"` / `"no"` — whether Memory Cortex returned results | — |

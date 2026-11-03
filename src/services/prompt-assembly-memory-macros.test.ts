@@ -69,7 +69,13 @@ function cortexResult(overrides: Partial<CortexResult> = {}): CortexResult {
       mentionCount: 1,
       topFacts: ["ENTITY_FACT"],
       emotionalProfile: {},
-      relationships: [],
+      relationships: [{
+        targetName: "Mira",
+        type: "ally",
+        label: "RELATIONSHIP_LABEL",
+        strength: 0.8,
+        sentiment: 0.8,
+      }],
     }],
     activeRelationships: [{
       sourceName: "Kael",
@@ -141,8 +147,8 @@ async function assemble(blocks: PromptBlock[] = []) {
 
 const memoryProbe = "BEGIN\n{{memoriesActive}}\n{{cortexActive}}\n{{memoriesCount}}\n{{memories}}\nRAW:{{memoriesRaw}}\nENTITY:{{entities}}\nEND";
 
-async function expectPreviewMatchesAssembly() {
-  const previewBlock = block(memoryProbe);
+async function expectPreviewMatchesAssembly(template = memoryProbe) {
+  const previewBlock = block(template);
   const assembled = await assemble([previewBlock]);
   const expected = assembled.breakdown.find(({ blockId }) => blockId === previewBlock.id)?.content;
   expect(expected).toBeDefined();
@@ -157,7 +163,7 @@ async function expectPreviewMatchesAssembly() {
   const single = await app.request("/macros/resolve", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...context, template: memoryProbe, prompt_block_id: previewBlock.id, trim: true }),
+    body: JSON.stringify({ ...context, template, prompt_block_id: previewBlock.id, trim: true }),
   });
   expect(single.status).toBe(200);
   expect((await single.json()).text).toBe(expected);
@@ -165,7 +171,7 @@ async function expectPreviewMatchesAssembly() {
   const batch = await app.request("/macros/resolve-batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...context, templates: { memory: memoryProbe }, prompt_block_ids: { memory: previewBlock.id } }),
+    body: JSON.stringify({ ...context, templates: { memory: template }, prompt_block_ids: { memory: previewBlock.id } }),
   });
   expect(batch.status).toBe(200);
   // Batch resolution preserves whitespace; assembly normalizes each block.
@@ -270,6 +276,52 @@ describe("memory macro placement", () => {
     expect(content).toContain("BEGIN");
     expect(result.memoryStats?.injectionMethod).toBe("macro");
     expect(result.breakdown.filter(({ type, excludeFromTotal }) => type === "long_term_memory" && !excludeFromTotal)).toHaveLength(0);
+  });
+
+  test.each(["{{entities}}", "{{entities::1}}"])("%s includes entity details without relationship blurbs", async (macro) => {
+    enableCortex();
+    const result = await assemble([block(macro)]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("[KNOWN ENTITIES]");
+    expect(content).toContain("Kael (character)");
+    expect(content).toContain("A traveler");
+    expect(content).toContain("ENTITY_FACT");
+    expect(content).not.toContain("Relations:");
+    expect(content).not.toContain("RELATIONSHIP_LABEL");
+    expect(content).not.toContain("Mira");
+  });
+
+  test("relationships includes edges without entity descriptions or facts", async () => {
+    enableCortex();
+    const result = await assemble([block("{{relationships}}")]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("[ACTIVE RELATIONSHIPS]");
+    expect(content).toContain("Kael -> Mira: ally (RELATIONSHIP_LABEL) [positive]");
+    expect(content).not.toContain("[KNOWN ENTITIES]");
+    expect(content).not.toContain("A traveler");
+    expect(content).not.toContain("ENTITY_FACT");
+  });
+
+  test("entities count limits snapshots without adding relationships", async () => {
+    const cortex = cortexResult();
+    cortex.entityContext.push({ ...cortex.entityContext[0]!, id: "entity-2", name: "Tovin" });
+    enableCortex(cortex);
+    const result = await assemble([block("{{entities::1}}")]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("Kael (character)");
+    expect(content).not.toContain("Tovin");
+    expect(content).not.toContain("RELATIONSHIP_LABEL");
+  });
+
+  test("entities and relationships stay separate in assembly and macro previews", async () => {
+    enableCortex();
+    const content = await expectPreviewMatchesAssembly("{{entities}}\nRELATIONSHIP_SECTION\n{{relationships}}");
+    const [entitySection, relationshipSection] = content.split("RELATIONSHIP_SECTION");
+    expect(entitySection).toContain("ENTITY_FACT");
+    expect(entitySection).not.toContain("RELATIONSHIP_LABEL");
+    expect(relationshipSection).toContain("RELATIONSHIP_LABEL");
+    expect(relationshipSection).not.toContain("ENTITY_FACT");
+    expect(content.match(/RELATIONSHIP_LABEL/g)).toHaveLength(1);
   });
 
   test.each([

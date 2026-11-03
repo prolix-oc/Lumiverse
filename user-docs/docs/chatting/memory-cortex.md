@@ -183,7 +183,7 @@ For a custom layout, use individual macros in enabled blocks:
 
 | Macro | Returns |
 |-------|---------|
-| `{{entities}}` | Selected entity snapshots with facts/relationships; `{{entities::3}}` limits to three |
+| `{{entities}}` | Selected entity names, types, statuses, descriptions, and facts; `{{entities::3}}` limits to three |
 | `{{entityFacts::Name}}` | Facts for a case-insensitive name match in **retrieved entity context**, not a search of every stored entity |
 | `{{relationships}}` | Selected relationship edges |
 | `{{arc}}` | Cortex arc text, not Loom Summary |
@@ -193,6 +193,8 @@ For a custom layout, use individual macros in enabled blocks:
 | `{{entityCount}}` | Retrieved entity count, not total stored entities |
 
 Cortex macros return empty content when their data is unavailable. With Cortex off, `{{memories}}` can still work while these are empty.
+
+`{{entities}}` does not append relationship blurbs. Use `{{relationships}}` to place relationship edges separately; it does not include entity descriptions or facts.
 
 ### Automatic Injection and Duplicate Content
 

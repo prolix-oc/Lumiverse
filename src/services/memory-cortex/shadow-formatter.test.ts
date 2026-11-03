@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatShadowPrompt } from "./shadow-formatter";
+import { formatContextSections, formatShadowPrompt, type FormatterMode } from "./shadow-formatter";
 import type { CortexMemory, EntitySnapshot, RelationEdge } from "./types";
 
 const components = {
@@ -46,7 +46,13 @@ const entities: EntitySnapshot[] = [{
   mentionCount: 3,
   topFacts: ["Mara intends to recover the map"],
   emotionalProfile: {},
-  relationships: [],
+  relationships: [{
+    targetName: "Tovin",
+    type: "ally",
+    label: "uneasy allies",
+    strength: 0.6,
+    sentiment: -0.2,
+  }],
 }];
 
 const relationships: RelationEdge[] = [{
@@ -59,6 +65,37 @@ const relationships: RelationEdge[] = [{
 }];
 
 const arc = "[Map Recovery] Mara and Tovin pursued the Syndicate while their trust remained damaged.";
+
+describe("Cortex entity and relationship separation", () => {
+  const modes: FormatterMode[] = ["shadow", "attributed", "clinical"];
+
+  test.each(modes)("%s entity sections do not inject snapshot relationships", (mode) => {
+    const options = { mode, tokenBudget: 2000 };
+    const outputs = [
+      formatShadowPrompt([], entities, [], null, options).text,
+      formatContextSections(entities, [], null, options),
+    ];
+    for (const text of outputs) {
+      expect(text).toContain("An expedition leader");
+      expect(text).toContain("Mara intends to recover the map");
+      expect(text).not.toContain("uneasy allies");
+      expect(text).not.toContain("Tovin");
+    }
+  });
+
+  test.each(modes)("%s formats relationships once through the relationship section", (mode) => {
+    const options = { mode, tokenBudget: 2000 };
+    const outputs = [
+      formatShadowPrompt([], entities, relationships, null, options).text,
+      formatContextSections(entities, relationships, null, options),
+    ];
+    for (const text of outputs) {
+      expect(text).toContain("An expedition leader");
+      expect(text.match(/uneasy allies/g)).toHaveLength(1);
+      expect(text.match(/Tovin/g)).toHaveLength(1);
+    }
+  });
+});
 
 describe("Cortex consolidation formatting", () => {
   test("narrative mode presents scenes and arcs as internal continuity", () => {

@@ -247,7 +247,7 @@ export const PROMPT_TEMPLATES: PromptTemplateItem[] = [
   { name: 'Chat Memories', content: '{{memories}}', role: 'system', description: 'Retrieved memory chunks with header' },
   { name: 'Chat Memories (Raw)', content: '{{memoriesRaw}}', role: 'system', description: 'Memory chunks without header wrapper' },
   { section: 'Memory Cortex' },
-  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with facts and relationships' },
+  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with descriptions and facts' },
   { name: 'Relationships', content: '{{relationships}}', role: 'system', description: 'Active relationship edges between entities' },
   { name: 'Story Arc', content: '{{arc}}', role: 'system', description: 'Current narrative arc summary' },
   { name: 'Top Salience Memory', content: '{{memorySalience}}', role: 'system', description: 'Highest-importance memory from retrieval' },
