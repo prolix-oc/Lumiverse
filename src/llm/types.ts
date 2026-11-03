@@ -314,6 +314,8 @@ export interface AssemblyContext {
   skipPresetProfileBinding?: boolean;
   /** Whether macro handlers may commit side effects. Defaults to true. */
   macroCommit?: boolean;
+  /** Resolve active world info without running prompt blocks or memory retrieval. */
+  worldInfoQuery?: { reserveTokens?: number };
   /** Explicit override: use presetId directly, bypassing profile block states and variable values too. */
   forcePresetId?: boolean;
   generationType: GenerationType;

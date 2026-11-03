@@ -337,6 +337,7 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
+  | { type: "world_books_resolve_for_chat"; requestId: string; chatId: string; reserveTokens?: number; userId?: string }
   | import("./uuid-contract").UUIDWorkerMessage
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }
@@ -2384,6 +2385,9 @@ export class WorkerHost {
         this.contentApi.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
         break;
       // ─── Activated World Info (gated: "world_books") ─────────────────
+      case "world_books_resolve_for_chat":
+        this.contentApi.handleWorldBooksResolveForChat(msg.requestId, msg.chatId, msg.reserveTokens, msg.userId);
+        break;
       case "world_books_get_activated":
         this.contentApi.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
         break;

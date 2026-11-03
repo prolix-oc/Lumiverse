@@ -65,6 +65,7 @@ export interface WorldInfoActivationOverridesDTO {
 }
 
 export interface WorldInfoInterceptorCtxDTO {
+  readonly purpose?: "prompt" | "query";
   readonly chatId: string;
   readonly characterId: string;
   readonly userId?: string;

@@ -81,6 +81,7 @@ import {
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
 import { orderWorldInfoForOutput } from "./world-info-output-order";
+import { resolveChatGenerationConnection } from "./generation/connection-resolution";
 import {
   worldInfoInterceptorChain,
   type WorldInfoInterceptorPlacementDTO,
@@ -114,7 +115,7 @@ import {
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
-import { applyPersonaAddonStates } from "./persona-addon-states";
+import { applyPersonaAddonStates, getChatPersonaAddonStates } from "./persona-addon-states";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as worldBooksSvc from "./world-books.service";
@@ -1923,7 +1924,7 @@ export async function assemblePrompt(
   if (!pf) {
     // Prefetch already applies add-on states + resolves global add-ons; only do
     // it here for the non-prefetched path so {{persona}} includes global add-ons.
-    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
+    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates ?? (ctx.worldInfoQuery ? getChatPersonaAddonStates(chat.metadata, persona?.id) : undefined));
     persona = (await globalAddonsSvc.resolvePersonaGlobalAddonsAsync(ctx.userId, persona));
   }
 
@@ -1931,7 +1932,9 @@ export async function assemblePrompt(
   const connection =
     pf?.connection !== undefined
       ? pf.connection
-      : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
+      : ctx.worldInfoQuery && connectionsSvc.resolveActingConnectionId(ctx.userId)
+        ? resolveChatGenerationConnection(ctx.userId, chat.metadata, ctx.connectionId)
+        : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
 
   // Start cold file loading while the rest of assembly resolves its inputs.
   // Clipping joins this pending load in the same runtime if it is not ready.
@@ -2020,7 +2023,7 @@ export async function assemblePrompt(
   profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
-  if (!blocks.length) {
+  if (!blocks.length && !ctx.worldInfoQuery) {
     const legacyResult = await legacyAssembly(
       messages,
       ctx.generationType,
@@ -2064,7 +2067,7 @@ export async function assemblePrompt(
     | null = null;
 
   let prepareCortexWarmJob: ((signal?: AbortSignal) => Promise<CortexWarmJob | undefined>) | undefined;
-  if (cortexEnabledForChat) {
+  if (cortexEnabledForChat && !ctx.worldInfoQuery) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
@@ -2183,7 +2186,7 @@ export async function assemblePrompt(
     import("./databank").DatabankRetrievalResult
   > | null = null;
   {
-    if (activeDatabankIds.length > 0) {
+    if (activeDatabankIds.length > 0 && !ctx.worldInfoQuery) {
       const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
       const dbSignal = ctx.signal
         ? AbortSignal.any([ctx.signal, chatBgSignal])
@@ -2264,6 +2267,7 @@ export async function assemblePrompt(
   const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
+      purpose: ctx.worldInfoQuery ? "query" : "prompt",
       chatId: ctx.chatId,
       characterId: character.id,
       userId: ctx.userId,
@@ -2460,7 +2464,7 @@ export async function assemblePrompt(
   const outputWorldInfo = orderWorldInfoForOutput(
     mergedWorldInfo.activatedEntries,
     interception.insertionOrderByEntryId,
-    runtimePlacementIds,
+    ctx.worldInfoQuery ? new Set<string>() : runtimePlacementIds,
   );
   const wiCache =
     runtimePlacementIds.size === 0 && outputWorldInfo === mergedWorldInfo.activatedEntries
@@ -2625,7 +2629,7 @@ export async function assemblePrompt(
     chat,
     messages,
     generationType: ctx.generationType,
-    commit: ctx.macroCommit,
+    commit: ctx.worldInfoQuery ? false : ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
     userInput: ctx.userInput,
@@ -2721,6 +2725,31 @@ export async function assemblePrompt(
       : [];
   const macroEnvSeed = cloneEnv(macroEnv);
   profiler.addPhase("macro-setup", performance.now() - phaseStartedAt);
+
+  if (ctx.worldInfoQuery) {
+    await resolveWorldInfoOutlets(outputWorldInfo, macroEnv, ctx.signal);
+    const parameters = buildParameters(samplerOverrides, preset, reasoningVal, connection?.provider, connection?.model);
+    const reserve = ctx.worldInfoQuery.reserveTokens;
+    const contextSize = parameters.max_context_length;
+    // Without a context size, prompt clipping has no limit either.
+    const limit = reserve !== undefined && typeof contextSize === "number" && Number.isFinite(contextSize) && contextSize > 0
+      ? contextSize - reserve
+      : Infinity;
+    const counter = limit === Infinity ? null : await resolveCounter(connection?.model || "");
+    const resolved: LlmMessage[] = [];
+    let tokens = 0;
+    for (const [index, entry] of outputWorldInfo.entries()) {
+      if (index % 32 === 0) await yieldAndCheckAbort(ctx.signal);
+      const content = restoreLiteralBraces((await evaluateForPromptAssembly(entry.content, macroEnv)).text).trim();
+      if (!content) continue;
+      const size = counter?.count(content) ?? 0;
+      if (tokens + size > limit) break;
+      tokens += size;
+      const role = interception.placementByEntryId.get(entry.id)?.role ?? entry.role;
+      resolved.push({ content, role: role === "assistant" || role === "user" ? role : "system" });
+    }
+    return { messages: resolved, breakdown: [], parameters, activatedWorldInfo };
+  }
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (
@@ -6043,6 +6072,16 @@ export async function getActivatedWorldInfoForChat(
   chatId: string,
 ): Promise<ActivatedWorldInfoEntry[]> {
   return (await computeActivatedWorldInfoForChat(userId, chatId)).activatedWorldInfo;
+}
+
+export async function getResolvedWorldInfoForChat(
+  userId: string, chatId: string, reserveTokens?: number,
+): Promise<{ content: string; role: "system" | "user" | "assistant" }[]> {
+  if (reserveTokens !== undefined && !Number.isFinite(reserveTokens)) {
+    throw new TypeError("World info reserve must be a finite number");
+  }
+  const result = await assemblePrompt({ userId, chatId, generationType: "normal", macroCommit: false, worldInfoQuery: { reserveTokens } });
+  return result.messages as { content: string; role: "system" | "user" | "assistant" }[];
 }
 
 /**

@@ -307,6 +307,7 @@ type MacroInvocationState = {
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | { type: "world_books_resolve_for_chat"; requestId: string; chatId: string; reserveTokens?: number; userId?: string }
   | import("./uuid-contract").UUIDWorkerMessage
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
@@ -714,6 +715,7 @@ type RuntimeEntityExtensionsAPI = {
   ): Promise<SpindleBatchJsonValue>;
 };
 type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
+  resolveForChat(chatId: string, options?: { reserveTokens?: number; userId?: string }): Promise<{ content: string; role: "system" | "user" | "assistant" }[]>;
   entries: {
     list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: RuntimeWorldBookEntryDTO[]; total: number }>;
     get(entryId: string, userId?: string): Promise<RuntimeWorldBookEntryDTO | null>;
@@ -3247,6 +3249,10 @@ const spindleApi: RuntimeSpindleAPI = {
         const result = await request({ type: "world_book_entries_delete", requestId, entryId, userId });
         return result as boolean;
       },
+    },
+    async resolveForChat(chatId, options) {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as { content: string; role: "system" | "user" | "assistant" }[];
     },
     async getActivated(chatId: string, userId?: string) {
       const requestId = crypto.randomUUID();
