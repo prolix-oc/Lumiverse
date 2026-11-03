@@ -332,8 +332,12 @@ function summarizeVarChanges(changedFields: readonly string[]): VarChangeSummary
  * Returns the last N messages from the chat, where N is the user's messagesPerPage setting.
  */
 function fetchLatestMessages(chatId: string) {
-  const pageSize = useStore.getState().messagesPerPage || 50
-  return messagesApi.list(chatId, { limit: pageSize, tail: true })
+  const state = useStore.getState()
+  const pageSize = state.messagesPerPage || 50
+  const requestSnapshot = state.activeChatId === chatId ? {
+    ids: state.messages.filter(message => !isLocalStreamPlaceholderId(message.id)).map(message => message.id), total: state.totalChatLength,
+  } : undefined
+  return messagesApi.list(chatId, { limit: pageSize, tail: true }).then(page => ({ ...page, requestSnapshot }))
 }
 
 function isCurrentGeneration(chatId: string, epoch: number) {
@@ -694,16 +698,20 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+          if (payload.inserted) {
+            state.insertMessage(payload.message)
+            return
+          }
 
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
           // the full message list, preventing a duplicate bubble flash.
-          if (state.isStreaming && state.streamingRenderMode !== "persisted-message" && !payload.message.is_user && payload.message.content) return
+          if (!payload.authored && state.isStreaming && state.streamingRenderMode !== "persisted-message" && !payload.message.is_user && payload.message.content) return
 
           // If streaming with a placeholder (regeneration), replace it with the
           // real staged message from the backend instead of adding a duplicate.
           if (
-            state.isStreaming &&
+            !payload.authored && state.isStreaming &&
             isLocalStreamPlaceholderId(state.regeneratingMessageId) &&
             !payload.message.is_user &&
             !payload.message.content
@@ -718,7 +726,7 @@ export function useWebSocket() {
           // Add it to the store and set it as the regenerating target so streaming
           // renders in-place on this card instead of spawning a duplicate ephemeral bubble.
           if (
-            state.isStreaming &&
+            !payload.authored && state.isStreaming &&
             !state.regeneratingMessageId &&
             !payload.message.is_user &&
             !payload.message.content

@@ -1,5 +1,9 @@
 import type { Message, PaginatedResult } from '@/types/api'
 
+export type MessageTailPage = Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'> & {
+  requestSnapshot?: { ids: string[]; total: number }
+}
+
 const LOCAL_MESSAGE_PREFIXES = ['__stream_placeholder_', '__regen_placeholder_']
 
 function isPersistedMessage(message: Message): boolean {
@@ -28,9 +32,21 @@ export function preserveNewerMessageRevisions(current: Message[], incoming: Mess
 export function reconcileMessageTail(
   current: Message[],
   currentTotal: number,
-  fresh: Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'>,
+  fresh: MessageTailPage,
 ): Message[] {
   const persisted = current.filter(isPersistedMessage)
+  if (fresh.requestSnapshot) {
+    const initial = fresh.requestSnapshot
+    const initialIds = new Set(initial.ids), currentById = new Map(persisted.map(message => [message.id, message]))
+    const incoming = fresh.data.filter(message => !initialIds.has(message.id) || currentById.has(message.id))
+    const freshIds = new Set(incoming.map(message => message.id))
+    const prefixLength = Math.max(0, Math.min(initial.ids.length, fresh.offset - Math.max(0, initial.total - initial.ids.length)))
+    return [
+      ...initial.ids.slice(0, prefixLength).flatMap(id => currentById.has(id) && !freshIds.has(id) ? [currentById.get(id)!] : []),
+      ...preserveNewerMessageRevisions(persisted, incoming),
+      ...persisted.filter(message => !initialIds.has(message.id) && !freshIds.has(message.id)),
+    ]
+  }
   const currentOffset = Math.max(0, currentTotal - persisted.length)
   const prefixLength = Math.max(0, Math.min(persisted.length, fresh.offset - currentOffset))
   const prefix = persisted.slice(0, prefixLength)
@@ -40,4 +56,15 @@ export function reconcileMessageTail(
     ...prefix.filter((message) => !freshIds.has(message.id)),
     ...preserveNewerMessageRevisions(persisted, fresh.data),
   ]
+}
+
+export function reconciledTailTotal(current: Message[], currentTotal: number, fresh: MessageTailPage): number {
+  if (!fresh.requestSnapshot) return fresh.total
+  const initialIds = new Set(fresh.requestSnapshot.ids), freshIds = new Set(fresh.data.map(message => message.id))
+  const currentIds = new Set(current.map(message => message.id))
+  const deleted = fresh.data.filter(message => initialIds.has(message.id) && !currentIds.has(message.id)).length
+  const knownCreations = Math.max(0, currentTotal - fresh.requestSnapshot.total + fresh.requestSnapshot.ids.filter(id => !currentIds.has(id)).length)
+  const missingCreations = Math.min(knownCreations, Math.max(0, currentTotal - fresh.total + deleted),
+    current.filter(message => isPersistedMessage(message) && !initialIds.has(message.id) && !freshIds.has(message.id)).length)
+  return fresh.total - deleted + missingCreations
 }

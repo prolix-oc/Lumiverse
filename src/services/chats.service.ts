@@ -2634,18 +2634,22 @@ export function claimAssociativeRegexAction(
   };
 }
 
-export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string): Message {
+export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string, beforeId?: string, authored = false): Message {
   const id = messageId ?? crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
   const maxIndex = getDb()
     .query("SELECT COALESCE(MAX(index_in_chat), -1) as max_idx FROM messages WHERE chat_id = ?")
     .get(chatId) as any;
-  const nextIndex = (maxIndex?.max_idx ?? -1) + 1;
+  const before = beforeId === undefined ? null : getMessage(userId, beforeId);
+  if (beforeId !== undefined && (!before || before.chat_id !== chatId)) throw new Error('Insertion target is not in this chat');
+  const nextIndex = before?.index_in_chat ?? (maxIndex?.max_idx ?? -1) + 1;
 
   const swipes = [input.content];
   const swipeDates = [now];
 
+  const insert = () => {
+  if (before) getDb().query(`UPDATE messages SET index_in_chat = index_in_chat + 1${messagesHaveRevisionColumn() ? ', revision = revision + 1' : ''} WHERE chat_id = ? AND index_in_chat >= ?`).run(chatId, nextIndex);
   getDb()
     .query(
       `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
@@ -2657,16 +2661,18 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
       JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
       input.parent_message_id || null, input.branch_id || null, now
     );
-
   getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+  };
+  if (before) getDb().transaction(insert)(); else insert();
 
   // getMessage without userId — internal use after validated chat
   const row = getDb().query("SELECT * FROM messages WHERE id = ?").get(id) as any;
   const message = rowToMessage(row);
-  eventBus.emit(EventType.MESSAGE_SENT, { chatId, message }, userId);
+  eventBus.emit(EventType.MESSAGE_SENT, { chatId, message, ...(authored ? { authored: true } : {}), ...(before ? { inserted: true } : {}) }, userId);
 
   if (userId) {
-    updateChatChunks(userId, chatId, message).catch(err => {
+    if (before) scheduleMemoryRebuildForActiveMessageChange(userId, chatId, message.id, 'message insertion');
+    else updateChatChunks(userId, chatId, message).catch(err => {
       console.warn("[chats] Failed to update chunks:", err);
     });
   }
@@ -2999,6 +3005,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     values.push(newSwipeId);
   }
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
+  if (input.is_user !== undefined) { fields.push("is_user = ?"); values.push(input.is_user ? 1 : 0); }
   if (normalizedExtra !== undefined) { fields.push(`extra = ${preserveSwipeVariablesSql(existing.extra, newSwipes.length)}`); values.push(JSON.stringify(normalizedExtra)); }
 
   if (fields.length === 0) return existing;
@@ -3029,6 +3036,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // even without a `content` patch — check the resolved active content
   // against the prior active content to catch that case.
   const activeContentChanged =
+    (input.is_user !== undefined && input.is_user !== existing.is_user) ||
     (patchedContent && contentSwipeId === newSwipeId) ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
   if (activeContentChanged && input.skipChunkRebuild !== true) {

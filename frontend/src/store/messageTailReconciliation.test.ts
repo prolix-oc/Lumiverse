@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test'
-import { reconcileMessageTail } from './messageTailReconciliation'
+import { reconcileMessageTail, reconciledTailTotal } from './messageTailReconciliation'
 import type { Message } from '@/types/api'
 
 function message(index: number, content = `message-${index}`): Message {
@@ -24,6 +24,21 @@ function message(index: number, content = `message-${index}`): Message {
 }
 
 describe('reconcileMessageTail', () => {
+  test('preserves concurrent creations and deletions without counting older loaded pages as new messages', () => {
+    const initial = Array.from({ length: 50 }, (_, i) => message(i + 50))
+    const requestSnapshot = { ids: initial.map(row => row.id), total: 100 }
+    const fresh = { data: initial, total: 100, offset: 50, requestSnapshot }
+    const prepended = Array.from({ length: 70 }, (_, i) => message(i + 30))
+    expect(reconcileMessageTail(prepended, 100, fresh)).toHaveLength(70)
+    expect(reconciledTailTotal(prepended, 100, fresh)).toBe(100)
+    const inserted = { ...message(49), id: 'inserted' }
+    const current = [inserted, ...initial]
+    expect(reconciledTailTotal(current, 101, fresh)).toBe(101)
+    expect(reconciledTailTotal(current, 101, { ...fresh, total: 101, offset: 51 })).toBe(101)
+    const replacement = [inserted, ...initial.slice(1)]
+    expect(reconcileMessageTail(replacement, 100, fresh).map(row => row.id)).not.toContain(initial[0].id)
+    expect(reconciledTailTotal(replacement, 100, fresh)).toBe(100)
+  })
   test('preserves loaded history before the refreshed tail', () => {
     const current = Array.from({ length: 100 }, (_, index) => message(index + 100))
     const fresh = Array.from({ length: 50 }, (_, index) => message(index + 150, `fresh-${index + 150}`))

@@ -81,9 +81,10 @@ export interface ChatSlice {
   setActiveChatDisplayOwner: (owner: string | null) => void
   setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
-  reconcileMessagesTail: (page: Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'>) => void
+  reconcileMessagesTail: (page: import('@/store/messageTailReconciliation').MessageTailPage) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
+  insertMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
   removeMessage: (id: string) => void
   beginStreaming: (regeneratingMessageId?: string, generationType?: string, backgroundSwipeId?: number) => void

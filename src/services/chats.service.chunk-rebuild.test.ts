@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { runMigrations } from "../db/migrate";
 import * as embeddingsSvc from "./embeddings.service";
-import { resetChatPipelineCoordinatorForTests } from "./chat-pipeline-coordinator.service";
-import { getChatChunks, rebuildChatChunksFromMessages } from "./chats.service";
+import * as vectorizationQueue from './vectorization-queue.service';
+import { resetChatPipelineCoordinatorForTests, getChatPipelineStatus } from "./chat-pipeline-coordinator.service";
+import { getChatChunks, rebuildChatChunksFromMessages, createMessage, updateMessage } from "./chats.service";
 
 const USER_ID = "chunk-order-user";
 const CHAT_ID = "chunk-order-chat";
@@ -63,6 +64,7 @@ function seedChat(messageCount: number): void {
 describe("chat chunk rebuild ordering", () => {
   let configSpy: ReturnType<typeof spyOn>;
   let deleteEmbeddingsSpy: ReturnType<typeof spyOn>;
+  let queueSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
     closeDatabase();
@@ -80,14 +82,15 @@ describe("chat chunk rebuild ordering", () => {
     } as any);
     deleteEmbeddingsSpy = spyOn(embeddingsSvc, "deleteChatChunkEmbeddings")
       .mockResolvedValue(undefined);
+    queueSpy = spyOn(vectorizationQueue, 'queueChunkVectorization').mockImplementation(() => {});
   });
 
   afterEach(async () => {
+    // Surgical rebuilds enqueue a debounced cache refresh; keep its test dependencies alive until it drains.
+    await Bun.sleep(120);
     configSpy.mockRestore();
     deleteEmbeddingsSpy.mockRestore();
-    // Surgical rebuilds enqueue a debounced cache refresh. Let it drain while
-    // the full test schema is still available and with normal disabled defaults.
-    await Bun.sleep(120);
+    queueSpy.mockRestore();
     resetChatPipelineCoordinatorForTests();
     closeDatabase();
   });
@@ -101,6 +104,26 @@ describe("chat chunk rebuild ordering", () => {
       "chunk-2",
       "chunk-3",
     ]);
+  });
+
+  test('authored insertion and role changes rebuild the affected chunk sequence', async () => {
+    seedChat(3);
+    const wait = async () => {
+      for (let i = 0; i < 100; i++) {
+        await Bun.sleep(2);
+        const status = getChatPipelineStatus(CHAT_ID);
+        if (!status?.running && !status?.queuedTasks.length) return;
+      }
+      throw new Error('Chunk rebuild did not finish');
+    };
+    const inserted = createMessage(CHAT_ID, { content: 'inserted', is_user: true, name: 'User' }, USER_ID, undefined, 'message-1', true);
+    await wait();
+    expect(getChatChunks(USER_ID, CHAT_ID).flatMap(chunk => chunk.message_ids)).toEqual(['message-0', inserted.id, 'message-1', 'message-2']);
+    updateMessage(USER_ID, inserted.id, { is_user: false });
+    await wait();
+    const chunks = getChatChunks(USER_ID, CHAT_ID);
+    expect(chunks.flatMap(chunk => chunk.message_ids)).toEqual(['message-0', inserted.id, 'message-1', 'message-2']);
+    expect(chunks.find(chunk => chunk.message_ids.includes(inserted.id))?.content).toContain('[CHARACTER | User]: inserted');
   });
 
   test("coalesces overlapping deleted-message rebuilds to the earliest surgical boundary", async () => {

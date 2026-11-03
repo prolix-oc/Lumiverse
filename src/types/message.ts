@@ -65,6 +65,7 @@ export interface CreateMessageInput {
 }
 
 export interface UpdateMessageInput {
+  is_user?: boolean;
   content?: string;
   name?: string;
   extra?: Record<string, any>;

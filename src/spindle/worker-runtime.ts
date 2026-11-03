@@ -4283,6 +4283,7 @@ const spindleApi: RuntimeSpindleAPI = {
     worldInfoRuntimePlacement: 1,
     worldInfoOutputOrdering: 1,
     worldInfoAdditionalEntries: 1,
+    runtimeMessageMutations: 1,
   }),
 
   registerContextHandler(

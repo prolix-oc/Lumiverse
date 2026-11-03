@@ -16,6 +16,7 @@ type PresetConflictWorkerError = {
 };
 
 export type WorkerHostStateApiContext = {
+  getOwnMetadataKey?: () => string | null;
   getChatOwnerId: (chatId: string) => string | null;
   enforceScopedUser: (userId: string | null | undefined) => void;
   resolveEffectiveUserId: (requestUserId?: string) => string | null;
@@ -79,8 +80,9 @@ export class WorkerHostStateApi {
         throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
       }
       if (mutationId !== undefined && !/^[0-9a-f-]{36}$/.test(mutationId)) throw new Error('Invalid runtime mutation identifier');
-      const result = command ? await (mutationId ? withRuntimeMutation(owner, mutationId, () => writeRuntimeState(owner, chatId, command)) : writeRuntimeState(owner, chatId, command))
-        : readRuntimeState(owner, chatId, characterId ?? '');
+      const metadataKey = this.context.getOwnMetadataKey?.();
+      const result = command ? await (mutationId ? withRuntimeMutation(owner, mutationId, () => writeRuntimeState(owner, chatId, command, metadataKey)) : writeRuntimeState(owner, chatId, command, metadataKey))
+        : readRuntimeState(owner, chatId, characterId ?? '', metadataKey);
       this.context.postResponse({ type: 'response', requestId, result });
     } catch (error) {
       this.context.postResponse({ type: 'response', requestId, error: error instanceof Error ? error.message : String(error) });

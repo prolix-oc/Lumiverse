@@ -11,9 +11,9 @@ import type { Message } from '../types/message';
 export type RuntimeStateCommand =
   | { kind: 'chat.metadata'; key: string; value: unknown }
   | { kind: 'chat.variables'; values: Record<string, string | null> }
-  | { kind: 'message.edit'; id: string; content: string }
+  | { kind: 'message.edit'; id: string; content?: string; role?: string; ownMetadata?: unknown }
   | { kind: 'message.delete'; id: string }
-  | { kind: 'message.create'; id: string; content: string; role: string }
+  | { kind: 'message.create'; id: string; content: string; role: string; beforeId?: string; ownMetadata?: unknown }
   | { kind: 'character.update'; id: string; patch: { name?: string; description?: string; first_mes?: string } }
   | { kind: 'persona.update'; id: string; patch: { name?: string; description?: string } }
   | { kind: 'lore.create'; bookId: string; patch: Record<string, unknown> }
@@ -25,14 +25,15 @@ export function projectRuntimeCharacter(character: Character) {
   return { ...fields, world_book_ids: getCharacterWorldBookIds(character.extensions) };
 }
 
-export function projectRuntimeMessage(message: Message) {
+export function projectRuntimeMessage(message: Message, metadataKey?: string | null) {
   const role: 'user' | 'system' | 'assistant' = message.is_user ? 'user' : message.extra?.spindle_role === 'system' ? 'system' : 'assistant';
   return { id: message.id, content: message.content, role, name: message.name,
     index_in_chat: message.index_in_chat, created_at: message.created_at, send_date: message.send_date,
-    extra: { greeting_index: message.extra?.greeting_index } };
+    extra: { greeting_index: message.extra?.greeting_index },
+    ...(metadataKey ? { ownMetadata: message.extra?.spindle_metadata?.[metadataKey] ?? null } : {}) };
 }
 
-export function readRuntimeState(userId: string, chatId: string, characterId: string) {
+export function readRuntimeState(userId: string, chatId: string, characterId: string, metadataKey?: string | null) {
   const chat = chats.getChat(userId, chatId);
   const character = characters.getCharacter(userId, characterId);
   if (!chat || !character) throw new Error('Runtime chat or character not found');
@@ -41,16 +42,28 @@ export function readRuntimeState(userId: string, chatId: string, characterId: st
   const worldBookIds = getCharacterWorldBookIds(character.extensions);
   // All reads are synchronous, so the revision describes this complete state without an interleaving write.
   return { revision: runtimeStateRevision(userId), chat, character: projectRuntimeCharacter(character), persona,
-    messages: chats.getMessages(userId, chatId).map(projectRuntimeMessage),
+    messages: chats.getMessages(userId, chatId).map(message => projectRuntimeMessage(message, metadataKey)),
     lore: worldBookIds.flatMap(id => books.listEntries(userId, id)),
     globalVariables: settings.getSetting(userId, 'macro_variables_global')?.value ?? {} };
 }
 
-export async function writeRuntimeState(userId: string, chatId: string, command: RuntimeStateCommand) {
+export async function writeRuntimeState(userId: string, chatId: string, command: RuntimeStateCommand, metadataKey?: string | null) {
   const chat = await chats.getChatAsync(userId, chatId);
   if (!chat) throw new Error('Runtime chat not found');
   let value: unknown;
   let patch: Record<string, unknown>;
+  const messageExtra = (extra: Record<string, any>, role?: string, ownMetadata?: unknown) => {
+    if (role !== undefined && !['system', 'assistant', 'user'].includes(role)) throw new Error('Invalid runtime message role');
+    const result = { ...extra };
+    if (role !== undefined) { if (role === 'system') result.spindle_role = role; else delete result.spindle_role; }
+    if (ownMetadata !== undefined) {
+      if (!metadataKey) throw new Error('Runtime message metadata requires an extension namespace');
+      const bag = { ...result.spindle_metadata };
+      if (ownMetadata === null) delete bag[metadataKey]; else bag[metadataKey] = ownMetadata;
+      result.spindle_metadata = bag;
+    }
+    return result;
+  };
   switch (command.kind) {
     case 'chat.metadata':
       value = await chats.mergeChatMetadataAsync(userId, chatId, { [command.key]: command.value });
@@ -66,9 +79,11 @@ export async function writeRuntimeState(userId: string, chatId: string, command:
         value = chats.deleteMessage(userId, command.id);
         patch = { deletedMessageId: command.id };
       } else {
-        const updated = chats.updateMessage(userId, command.id, { content: command.content });
+        const updated = chats.updateMessage(userId, command.id, { content: command.content,
+          ...(command.role !== undefined ? { is_user: command.role === 'user' } : {}),
+          ...(command.role !== undefined || command.ownMetadata !== undefined ? { extra: messageExtra(message.extra, command.role, command.ownMetadata) } : {}) });
         if (!updated) throw new Error('Runtime message update failed');
-        value = projectRuntimeMessage(updated); patch = { message: value };
+        value = projectRuntimeMessage(updated, metadataKey); patch = { message: value };
       }
       break;
     }
@@ -76,8 +91,8 @@ export async function writeRuntimeState(userId: string, chatId: string, command:
       if (!['system', 'assistant', 'user'].includes(command.role)) throw new Error('Invalid runtime message role');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(command.id)) throw new Error('Invalid runtime message identifier');
       const message = chats.createMessage(chatId, { is_user: command.role === 'user', name: '', content: command.content,
-        ...(command.role === 'system' ? { extra: { spindle_role: 'system' } } : {}) }, userId, command.id);
-      value = projectRuntimeMessage(message); patch = { message: value }; break;
+        extra: messageExtra({}, command.role, command.ownMetadata) }, userId, command.id, command.beforeId, true);
+      value = projectRuntimeMessage(message, metadataKey); patch = { message: value }; break;
     }
     case 'character.update': {
       const { name, description, first_mes } = command.patch;

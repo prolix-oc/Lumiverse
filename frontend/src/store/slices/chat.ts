@@ -3,7 +3,7 @@ import { sharedReadScope } from '@/lib/shared-read'
 import type { ChatSlice } from '@/types/store'
 import type { Message } from '@/types/api'
 import { settingsApi } from '@/api/settings'
-import { preserveNewerMessageRevisions, reconcileMessageTail } from '@/store/messageTailReconciliation'
+import { preserveNewerMessageRevisions, reconcileMessageTail, reconciledTailTotal } from '@/store/messageTailReconciliation'
 
 export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
   const LOCAL_STREAM_PLACEHOLDER_PREFIX = '__stream_placeholder_'
@@ -263,7 +263,7 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           state.totalChatLength,
           page,
         ))),
-        totalChatLength: page.total,
+        totalChatLength: reconciledTailTotal(state.messages, state.totalChatLength, page),
       })),
 
     prependMessages: (olderMessages) =>
@@ -285,6 +285,18 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
 
         const messages = sortMessagesByPosition([...state.messages, message])
         return { messages, totalChatLength: state.totalChatLength + 1 }
+      }),
+
+    insertMessage: (message) =>
+      set((state) => {
+        if (state.messages.some((row) => row.id === message.id)) return state
+        const shifted = state.messages.map((row) => row.index_in_chat < message.index_in_chat ? row : {
+          ...row,
+          index_in_chat: row.index_in_chat + 1,
+          // Matches the host bump, so a tail page fetched before the insert cannot restore the old position.
+          ...(typeof row.revision === 'number' ? { revision: row.revision + 1 } : {}),
+        })
+        return { messages: sortMessagesByPosition([...shifted, message]), totalChatLength: state.totalChatLength + 1 }
       }),
 
     updateMessage: (id, updates) =>

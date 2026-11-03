@@ -1075,6 +1075,7 @@ export class WorkerHost {
       postResponse: (message) => this.postToWorker(message),
     });
     this.stateApi = new WorkerHostStateApi({
+      getOwnMetadataKey: () => this.getOwnSpindleMetadataKey(),
       getChatOwnerId: (chatId) => this.getChatOwnerId(chatId),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
