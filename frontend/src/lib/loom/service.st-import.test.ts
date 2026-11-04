@@ -3,6 +3,7 @@ import {
   coerceImportedLoomPreset,
   computeGroups,
   createPortableLoomPresetExport,
+  exportToSTPreset,
   importFromSTPreset,
   marshalPreset,
   marshalUpdate,
@@ -10,6 +11,65 @@ import {
 } from './service'
 
 describe('SillyTavern preset import', () => {
+  test('keeps ST identifiers as block ids so prompts stay addressable', () => {
+    const preset = importFromSTPreset({
+      prompts: [
+        { identifier: 'main', name: 'Main', content: 'Main prompt' },
+        { identifier: '1488ea1c-4059-46b8-9a10-9676925d7723', name: 'Header', content: '' },
+        { identifier: 'prompt_1788337669850_g9jvkyl', name: 'Custom', content: 'Custom text' },
+        { identifier: 'unordered', name: 'Leftover', content: 'Not in order' },
+      ],
+      prompt_order: {
+        100001: {
+          order: [
+            { identifier: 'main', enabled: true },
+            { identifier: '1488ea1c-4059-46b8-9a10-9676925d7723', enabled: true },
+            { identifier: 'prompt_1788337669850_g9jvkyl', enabled: false },
+          ],
+        },
+      },
+    }, 'Ids')
+
+    const byName = (name: string) => preset.blocks.find((block) => block.name === name)!
+    expect(byName('Header').id).toBe('1488ea1c-4059-46b8-9a10-9676925d7723')
+    expect(byName('Custom').id).toBe('prompt_1788337669850_g9jvkyl')
+    expect(byName('Leftover').id).toBe('unordered')
+    // Markers keep generated ids; export maps them back to their ST identifiers.
+    expect(byName('Main').marker).toBe('main_prompt')
+    expect(byName('Main').id).not.toBe('main')
+    expect(new Set(preset.blocks.map((block) => block.id)).size).toBe(preset.blocks.length)
+  })
+
+  test('ST identifiers survive an export and re-import round trip', () => {
+    const first = importFromSTPreset({
+      prompts: [
+        { identifier: 'main', name: 'Main', content: 'Main prompt' },
+        { identifier: 'a1b2c3d4-0000-4000-8000-000000000001', name: 'Rule', content: 'Be kind.' },
+      ],
+      prompt_order: { 100001: { order: [{ identifier: 'main', enabled: true }, { identifier: 'a1b2c3d4-0000-4000-8000-000000000001', enabled: true }] } },
+    }, 'Round trip')
+    const exported = exportToSTPreset(first)
+    expect(exported.prompts.map((prompt: { identifier: string }) => prompt.identifier)).toContain('a1b2c3d4-0000-4000-8000-000000000001')
+    const second = importFromSTPreset(exported, 'Round trip again')
+    expect(second.blocks.find((block) => block.name === 'Rule')!.id).toBe('a1b2c3d4-0000-4000-8000-000000000001')
+  })
+
+  test('falls back to generated ids for missing or repeated ST identifiers', () => {
+    const preset = importFromSTPreset({
+      prompts: [
+        { identifier: 'dup', name: 'First', content: 'a' },
+        { identifier: 'dup', name: 'Second', content: 'b' },
+        { name: 'No id', content: 'c' },
+      ],
+      prompt_order: { 100001: { order: [{ identifier: 'dup', enabled: true }] } },
+    }, 'Fallback')
+
+    const ids = preset.blocks.map((block) => block.id)
+    expect(ids).toContain('dup')
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(preset.blocks.find((block) => block.name === 'No id')!.id).not.toBe('')
+  })
+
   test('keeps prompts grouped under sequential ━ category headings', () => {
     const preset = importFromSTPreset({
       prompts: [

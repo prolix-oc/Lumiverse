@@ -1520,8 +1520,10 @@ function importSTExtensions(extensions: unknown): Record<string, unknown> {
 /**
  * Convert a single ST prompt entry to an internal block.
  * Recognizes well-known ST identifiers and converts them to marker blocks.
+ * Other prompts keep their ST identifier as the block id (when unused), so
+ * preset extensions that reference prompts by identifier still resolve them.
  */
-function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
+function convertSTPromptToBlock(p: STPrompt, enabled: boolean, usedIds?: Set<string>): PromptBlock {
   const markerType = p.identifier ? ST_IDENTIFIER_TO_MARKER[p.identifier] : undefined
   if (markerType) {
     const block = createMarkerBlock(markerType, p.name || undefined)
@@ -1557,7 +1559,12 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
     depth = p.injection_depth
   }
 
+  const stId = typeof p.identifier === 'string' ? p.identifier.trim() : ''
+  const keepId = !!stId && !!usedIds && !usedIds.has(stId)
+  if (keepId) usedIds!.add(stId)
+
   return createBlock({
+    ...(keepId ? { id: stId } : {}),
     name: displayName,
     content: p.content || '',
     role: (p.role as PromptBlock['role']) || 'system',
@@ -1612,6 +1619,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
   }
 
   const processedIdentifiers = new Set<string>()
+  const usedBlockIds = new Set<string>()
 
   // First pass: follow prompt_order sequence
   for (const identifier of orderSequence) {
@@ -1623,7 +1631,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, usedBlockIds))
   }
 
   // Second pass: append any prompts not in prompt_order (preserves prompts[] order)
@@ -1635,7 +1643,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, usedBlockIds))
   }
 
   // Ensure chat_history marker exists
