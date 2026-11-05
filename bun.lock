@@ -690,7 +690,7 @@
 
     "lru-cache": ["lru-cache@11.2.7", "", {}, "sha512-aY/R+aEsRelme17KGQa/1ZSIpLpNYYrhcrepKTZgE+W3WM16YMCaPwOHLHsmopZHELU0Ojin1lPVxKR0MihncA=="],
 
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.78", "", {}, "sha512-anELRuz/AQKHQfTNnu37LpzFu+jJRfApktjTeDC+NpKGUlAPmEIDi643uFX3Sk/lds9HuvW0p4XKy9xffDae7Q=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.78", "", {}, "sha512-+MWbSvFFIS3yDwnTsmgo2XuLH8a/wRAIKNCpp3fRvOQ/Ys7UYShDiXiSSzOtRaNoF3+7SA5nomJgcYSTnKRP5g=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 
