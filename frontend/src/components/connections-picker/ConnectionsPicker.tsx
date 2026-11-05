@@ -144,6 +144,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   const { t: tp } = useTranslation('panels')
   const library = useConnectionLibrary('llm')
   const recentIds = useConnectionRecents('llm')
+  const showRecentConnections = useStore((s) => s.showRecentConnections !== false)
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({})
   const storedSettings = useStore((s) => s.connectionsPickerSettings)
@@ -152,6 +153,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
     modelLayout: 'grid' as const,
     ...storedSettings,
   }), [storedSettings])
+  const showRecent = showRecentConnections && settings.showRecent
   const modelLayout = settings.modelLayout === 'list' ? 'list' : 'grid'
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -356,10 +358,10 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
   useEffect(() => {
     if (providerTab === 'all') return
     if (providerTab === 'favorites' && favoriteProfiles.length > 0) return
-    if (providerTab === 'recent' && recentProfiles.length > 0) return
+    if (providerTab === 'recent' && showRecent && recentProfiles.length > 0) return
     if (providerTab.startsWith('tag:') && visibleTags.some((tag) => providerTab === `tag:${tag.id}`)) return
     setProviderTab(settings.showFavorites && favoriteProfiles.length > 0 ? 'favorites' : 'all')
-  }, [favoriteProfiles.length, providerTab, recentProfiles.length, settings.showFavorites, visibleTags])
+  }, [favoriteProfiles.length, providerTab, recentProfiles.length, settings.showFavorites, showRecent, visibleTags])
 
   useEffect(() => {
     if (!open || !providerTabShowsModels || variantAProfiles.length === 0) return
@@ -577,7 +579,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
           Favorites
         </button>
       )}
-      {settings.showRecent && (
+      {showRecent && (
         <button
           type="button"
           className={clsx(styles.providerTab, providerTab === 'recent' && styles.providerTabActive)}
@@ -1006,7 +1008,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
                     {renderGroupedProfiles(savedProfiles)}
                     {savedProfiles.length === 0 && <div className={styles.empty}>No saved connections.</div>}
                   </section>
-                  {settings.showRecent && recentProfiles.length > 0 && (
+                  {showRecent && recentProfiles.length > 0 && (
                     <section>
                       <h3>Recent</h3>
                       {recentProfiles.map(renderProfile)}
@@ -1039,7 +1041,7 @@ function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPi
                   {favoriteProfiles.map(renderProfile)}
                   {favoriteProfiles.length === 0 && <div className={styles.empty}>No favorites yet.</div>}
                 </section>
-                {settings.showRecent && (
+                {showRecent && (
                   <section>
                     <h3>Recent</h3>
                     {recentProfiles.map(renderProfile)}

@@ -1,4 +1,10 @@
 import { sortFolderGroups } from './folderSorting'
+import type { AppStore } from '@/types/store'
+
+const NO_RECENT_PERSONAS: string[] = []
+
+export const selectRecentPersonaIds = (state: AppStore) =>
+  state.showRecentPersonas !== false ? state.recentPersonaIds : NO_RECENT_PERSONAS
 
 export interface PersonaFolderGroup<T> {
   folder: string

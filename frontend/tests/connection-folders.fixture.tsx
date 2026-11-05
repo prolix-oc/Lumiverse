@@ -3,7 +3,7 @@ import { applyOrganizationEdits } from '../../src/shared/connection-organization
 import type { ConnectionLibraryKind } from '../src/lib/connectionLibrary'
 import EmbeddingConnectionPicker from '../src/components/shared/EmbeddingConnectionPicker'
 import ConnectionForm from '../src/components/panels/connection-manager/ConnectionForm'
-import type { CreateConnectionProfileInput } from '../src/types/api'
+import type { CreateConnectionProfileInput, Persona } from '../src/types/api'
 import { createRoot } from 'react-dom/client'
 import { useConnectionRow } from '../src/components/panels/connection-manager/useConnectionRow'
 import type { ConnectionPlacement } from '../src/lib/connectionPlacement'
@@ -13,6 +13,8 @@ import ConnectionCollection from '../src/components/panels/connection-manager/Co
 import { ConnectionSearchProvider } from '../src/components/panels/connection-manager/ConnectionSearch'
 import ConnectionSelect from '../src/components/shared/ConnectionSelect'
 import ConnectionQuickPicker from '../src/components/shared/ConnectionQuickPicker'
+import SettingsModal from '../src/components/modals/SettingsModal'
+import PersonaManager from '../src/components/panels/PersonaManager'
 import { ConnectionsPicker } from '../src/components/connections-picker/ConnectionsPicker'
 import { generateThemeVariables } from '../src/theme/engine'
 import { DEFAULT_THEME } from '../src/theme/presets'
@@ -49,6 +51,13 @@ const profiles = [
   { id: 'b', name: 'Beta', provider: 'anthropic', model: 'model-b' },
   { id: 'c', name: 'Gamma', provider: 'openai', model: 'model-c' },
 ].map(profile => ({ ...profile, api_url: '', preset_id: null, is_default: false, has_api_key: false, metadata: {}, default_parameters: {}, dimensions: null, enabled: true, created_at: 1, updated_at: 1 }))
+const personas: Persona[] = ['one', 'two', 'three'].map(id => ({
+  id, name: `Persona ${id}`, title: '', description: '', folder: '',
+  subjective_pronoun: '', objective_pronoun: '', possessive_pronoun: '',
+  reflexive_pronoun: '', possessive_pronoun_standalone: '',
+  avatar_path: null, image_id: null, attached_world_book_id: null,
+  is_default: false, is_narrator: false, metadata: {}, created_at: 1, updated_at: 1,
+}))
 const initialLibrary = {
   folders: [{ id: 'local', name: 'Local' }, { id: 'remote', name: 'Remote' }],
   folderOrder: ['local', 'remote', ''], assignments: { a: 'local', b: 'remote' },
@@ -60,6 +69,7 @@ await initI18n()
 await i18n.changeLanguage('en')
 Object.entries(generateThemeVariables(DEFAULT_THEME, 'dark')).forEach(([key, value]) => document.documentElement.style.setProperty(key, value))
 useStore.setState({ profiles, imageGenProfiles: profiles, sttProfiles: profiles, ttsProfiles: profiles, decisionProfiles: profiles })
+useStore.getState().setPersonas(personas)
 await useStore.getState().loadSettings()
 if (new URL(location.href).searchParams.get('picker') === 'full') {
   useStore.setState(state => ({
@@ -87,6 +97,12 @@ function Fixture() {
   const [selected, setSelected] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
   const [saved, setSaved] = useState<CreateConnectionProfileInput | null>(null)
+  if (new URL(location.href).searchParams.get('settings') === 'display') {
+    return <SettingsModal onClose={() => { location.search = '' }} />
+  }
+  if (new URL(location.href).searchParams.get('personas') === 'manager') {
+    return <PersonaManager />
+  }
   if (new URL(location.href).searchParams.get('picker') === 'full') {
     return <ConnectionsPicker open onClose={() => {}} />
   }
@@ -97,7 +113,7 @@ function Fixture() {
   if (new URL(location.href).searchParams.get('picker') === 'quick') {
     return <div style={{ width: 360, maxWidth: '100%' }}><ConnectionQuickPicker onSelect={id => useStore.getState().setActiveProfile(id)} /></div>
   }
-  return <main style={{ padding: 24, width: 520, maxWidth: '100%' }}>
+  return <main style={{ padding: 24, width: 520, maxWidth: '100%', height: '100%', overflow: 'auto' }}>
     <ConnectionSearchProvider>
       <ConnectionCollection kind={kind} profiles={currentProfiles} emptyMessage="No connections"
         onReorder={ids => {

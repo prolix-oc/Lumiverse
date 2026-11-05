@@ -7,7 +7,7 @@ import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/pers
 import { getPersistedChatPersonaId } from '@/lib/chatPersonaSelection'
 import { toast } from '@/lib/toast'
 import { selectPersona } from '@/lib/personaSelection'
-import { derivePersonaBrowserPage, groupPersonasByFolder } from '@/lib/personaBrowser'
+import { derivePersonaBrowserPage, groupPersonasByFolder, selectRecentPersonaIds } from '@/lib/personaBrowser'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
 
 const SEARCH_DEBOUNCE_MS = 150
@@ -25,7 +25,7 @@ export function usePersonaBrowser() {
   const updatePersonaInStore = useStore((s) => s.updatePersona)
   const removePersona = useStore((s) => s.removePersona)
   const activePersonaId = useStore((s) => s.activePersonaId)
-  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
+  const recentPersonaIds = useStore(selectRecentPersonaIds)
   const setActivePersona = useStore((s) => s.setActivePersona)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
