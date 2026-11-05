@@ -444,6 +444,7 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   showEditAndSend: true,
   enableToolbarIconReorder: true,
   showComposerCustomizeGear: true,
+  showRecentConnections: true,
   productivityTabPosition: 'after-display',
 })
 

@@ -10,7 +10,8 @@ export function rememberConnection(kind: ConnectionLibraryKind, id: string) {
 }
 
 export function useConnectionRecents(kind: ConnectionLibraryKind) {
+  const enabled = useStore(state => state.showRecentConnections !== false)
   const recent = useStore(state => state.recentConnections)
   const legacyText = useStore(state => state.connectionsPickerSettings?.recentProfileIds)
-  return useMemo(() => recentConnectionIds(recent, kind, legacyText).slice(0, 4), [recent, kind, legacyText])
+  return useMemo(() => enabled ? recentConnectionIds(recent, kind, legacyText).slice(0, 4) : [], [enabled, recent, kind, legacyText])
 }

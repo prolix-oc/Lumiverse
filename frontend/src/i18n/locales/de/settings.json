@@ -167,6 +167,8 @@
       "tabSize": "TAB-GRÖSSE",
       "tabSizeLarge": "Groß",
       "tabSizeCompact": "Kompakt",
+      "showRecentConnections": "Zuletzt verwendete Verbindungen anzeigen",
+      "showRecentConnectionsHint": "Zeigt die Gruppe „Zuletzt verwendet“ in Verbindungslisten an.",
       "duoAlwaysOpen": "Drawer im aufgeklappten Zustand immer anzeigen (iPhone Duo)",
       "duoAlwaysOpenHint": "Zeigt den Drawer aufgeklappt in einem eigenen Bereich. Deaktivieren, um ihn wie gewohnt zu öffnen und zu schließen.",
       "showTabLabels": "Tab-Beschriftungen anzeigen",
