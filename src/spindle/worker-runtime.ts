@@ -13,6 +13,8 @@ import type {
   DecisionResult,
   SpindleEmbeddingsAPI,
   SpindleManifest,
+  ChatAppendMessageDTO,
+  ChatAppendMessageOptionsDTO,
   SpindleCommandContextDTO,
   WorkerToHost,
   HostToWorker,
@@ -301,23 +303,6 @@ type MacroInvocationState = {
   commit: boolean;
 };
 
-type ChatAppendGenerationOptions = {
-  connection_id?: string;
-  persona_id?: string;
-  persona_addon_states?: Record<string, boolean>;
-  preset_id?: string;
-  force_preset_id?: boolean;
-  parameters?: Record<string, unknown>;
-  target_character_id?: string;
-  retain_council?: boolean;
-};
-
-type ChatAppendMessageOptions =
-  | boolean
-  | {
-      triggerGeneration?: boolean;
-      generation?: ChatAppendGenerationOptions;
-    };
 
 type SpindleUserRole = "operator" | "admin" | "user";
 
@@ -356,17 +341,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
-  | {
-      type: "chat_append_message";
-      requestId: string;
-      chatId: string;
-      message: {
-        role: "system" | "user" | "assistant";
-        content: string;
-        metadata?: Record<string, unknown>;
-      };
-      options?: ChatAppendMessageOptions;
-    }
+
   | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
   | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
   | { type: "rpc_pool_unregister"; endpoint: string }
@@ -2420,7 +2395,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
     },
     getMessages: getChatMessages,
-    async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {
+    async appendMessage(chatId: string, message: ChatAppendMessageDTO, options?: ChatAppendMessageOptionsDTO) {
       assertMutationAllowed("spindle.chat.appendMessage()");
       const requestId = crypto.randomUUID();
       const result = await request({

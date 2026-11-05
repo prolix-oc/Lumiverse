@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtensionInfo, SpindleManifest } from "lumiverse-spindle-types";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import * as chats from "../services/chats.service";
+import * as characters from "../services/characters.service";
 import { WorkerHost } from "./worker-host";
 
 type ReadMessage = {
@@ -79,6 +80,51 @@ function createHost(identifier: string, permitted = true) {
 }
 
 const storedMetadata = (messageId: string) => chats.getMessage(owner, messageId)!.extra.spindle_metadata;
+
+test("backend message append preserves explicit identity and legacy defaults", async () => {
+  const character = characters.createCharacter(owner, { name: "Character" });
+  const host = createHost("ext_alpha");
+  const response = await host.call({ type: "chat_append_message", message: {
+    role: "assistant", content: "", name: character.name, characterId: character.id, metadata: { run: "run" },
+  } });
+  expect(response.error).toBeUndefined();
+  const message = chats.getMessage(owner, (response.result as { id: string }).id)!;
+  expect(message.name).toBe(character.name);
+  expect(message.extra.character_id).toBe(character.id);
+  expect(message.extra.spindle_metadata).toEqual({ run: "run" });
+  const legacy = await host.call({ type: "chat_append_message", message: { role: "assistant", content: "reply" } });
+  expect(chats.getMessage(owner, (legacy.result as { id: string }).id)!.name).toBe("Assistant");
+});
+
+test("backend message identity cannot refer to another user's character or bypass chat permissions", async () => {
+  const other = characters.createCharacter("other-user", { name: "Private character" });
+  const message = { role: "assistant", content: "", name: "Character", characterId: other.id };
+  const count = chats.getMessages(owner, chatId).length;
+  expect((await createHost("ext_alpha").call({ type: "chat_append_message", message })).error).toContain("Invalid message character");
+  expect((await createHost("ext_alpha", false).call({ type: "chat_append_message", message })).error).toContain("permission");
+  expect(chats.getMessages(owner, chatId)).toHaveLength(count);
+});
+
+test("append rejects malformed identity and cross-account chats before saving", async () => {
+  const character = characters.createCharacter(owner, { name: "Character" });
+  const otherChat = chats.createChat("other-user", {}).id;
+  const host = createHost("ext_alpha");
+  const count = chats.getMessages(owner, chatId).length;
+  for (const message of [
+    { role: "assistant", content: "reply", name: 42 },
+    { role: "assistant", content: "reply", characterId: 42 },
+    { role: "assistant", content: "reply", characterId: "missing" },
+    { role: "user", content: "reply", characterId: character.id },
+    { role: "system", content: "reply", characterId: character.id },
+  ]) {
+    expect((await host.call({ type: "chat_append_message", message })).error).toContain("Invalid message");
+  }
+  expect((await host.call({ type: "chat_append_message", chatId: otherChat, message: {
+    role: "assistant", content: "reply", name: character.name, characterId: character.id,
+  } })).error).toContain("user-scoped");
+  expect(chats.getMessages(owner, chatId)).toHaveLength(count);
+  expect(chats.getMessages("other-user", otherChat)).toHaveLength(0);
+});
 
 test("default read keeps every swipe, the full extra bag and every extension's metadata", async () => {
   const messages = await createHost("ext_alpha").read();
