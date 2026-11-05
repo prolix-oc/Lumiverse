@@ -7,18 +7,9 @@ import { getCharacterWorldBookIds } from '../utils/character-world-books';
 import { runtimeStateRevision } from './runtime-state-revision';
 import type { Character } from '../types/character';
 import type { Message } from '../types/message';
+import type { RuntimeStateCommandDTO } from 'lumiverse-spindle-types';
 
-export type RuntimeStateCommand =
-  | { kind: 'chat.metadata'; key: string; value: unknown }
-  | { kind: 'chat.variables'; values: Record<string, string | null> }
-  | { kind: 'message.edit'; id: string; content?: string; role?: string; ownMetadata?: unknown }
-  | { kind: 'message.delete'; id: string }
-  | { kind: 'message.create'; id: string; content: string; role: string; beforeId?: string; ownMetadata?: unknown }
-  | { kind: 'character.update'; id: string; patch: { name?: string; description?: string; first_mes?: string } }
-  | { kind: 'persona.update'; id: string; patch: { name?: string; description?: string } }
-  | { kind: 'lore.create'; bookId: string; patch: Record<string, unknown> }
-  | { kind: 'lore.update'; id: string; patch: Record<string, unknown> }
-  | { kind: 'lore.delete'; id: string };
+export type RuntimeStateCommand = RuntimeStateCommandDTO;
 
 export function projectRuntimeCharacter(character: Character) {
   const { extensions: _extensions, ...fields } = character;
@@ -80,7 +71,8 @@ export async function writeRuntimeState(userId: string, chatId: string, command:
         patch = { deletedMessageId: command.id };
       } else {
         const updated = chats.updateMessage(userId, command.id, { content: command.content,
-          ...(command.role !== undefined ? { is_user: command.role === 'user' } : {}),
+          // The stored name belongs to the old speaker. Runtime-created rows use an empty name too.
+          ...(command.role !== undefined ? { is_user: command.role === 'user', ...((command.role === 'user') !== message.is_user ? { name: '' } : {}) } : {}),
           ...(command.role !== undefined || command.ownMetadata !== undefined ? { extra: messageExtra(message.extra, command.role, command.ownMetadata) } : {}) });
         if (!updated) throw new Error('Runtime message update failed');
         value = projectRuntimeMessage(updated, metadataKey); patch = { message: value };

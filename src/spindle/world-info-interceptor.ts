@@ -1,6 +1,10 @@
 import type { WorldBookEntry } from "../types/world-book";
 import type { BookSource } from "../services/world-info-sources.service";
-import type { WorldInfoInterceptorPlacementDTO } from "lumiverse-spindle-types";
+import type {
+  WorldInfoInterceptorCtxDTO as PublishedWorldInfoInterceptorCtxDTO,
+  WorldInfoInterceptorPlacementDTO,
+  WorldInfoInterceptorResultDTO as PublishedWorldInfoInterceptorResultDTO,
+} from "lumiverse-spindle-types";
 
 export type { WorldInfoInterceptorPlacementDTO } from "lumiverse-spindle-types";
 
@@ -64,8 +68,7 @@ export interface WorldInfoActivationOverridesDTO {
   readonly disableRecursion?: true;
 }
 
-export interface WorldInfoInterceptorCtxDTO {
-  readonly purpose?: "prompt" | "query";
+export interface WorldInfoInterceptorCtxDTO extends Pick<PublishedWorldInfoInterceptorCtxDTO, "purpose"> {
   readonly chatId: string;
   readonly characterId: string;
   readonly userId?: string;
@@ -88,9 +91,7 @@ export interface WorldInfoInterceptorMutationDTO {
   readonly outputOrder?: "selection" | "insertion";
 }
 
-export interface WorldInfoInterceptorResultDTO {
-  /** Non-persistent candidates, scoped to this extension and chat by the host. */
-  readonly additionalEntries?: readonly WorldInfoInterceptorEntryDTO[];
+export interface WorldInfoInterceptorResultDTO extends Pick<PublishedWorldInfoInterceptorResultDTO, "additionalEntries"> {
   readonly disabled?: readonly string[];
   readonly enabled?: readonly string[];
   readonly forced?: readonly string[];

@@ -18,7 +18,7 @@ unsub()
 
 | Event | Payload |
 |-------|---------|
-| `MESSAGE_SENT` | `{ chatId, message }` |
+| `MESSAGE_SENT` | `{ chatId, message, inserted? }`. `inserted` means rows at or after this message's index moved down by one |
 | `MESSAGE_EDITED` | `{ chatId, message }` |
 | `MESSAGE_DELETED` | `{ chatId, messageId }` |
 | `MESSAGE_SWIPED` | `MessageSwipedPayloadDTO` — see [Swipe Events](#swipe-events) |

@@ -337,7 +337,6 @@ type BackendProcessRuntimeToHost =
   | { type: "stopped" };
 
 type RuntimeWorkerToHost =
-  | { type: "world_books_resolve_for_chat"; requestId: string; chatId: string; reserveTokens?: number; userId?: string }
   | import("./uuid-contract").UUIDWorkerMessage
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: BeginMessageGenerationInput }

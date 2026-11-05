@@ -104,6 +104,7 @@ import type {
   InterceptorRegistrationOptions,
   QuietTrackedRequestDTO,
   QuietTrackedResultDTO,
+  ResolvedWorldInfoEntryDTO,
   SpindleHostDescriptorV1,
   ActivePresetDTO,
 } from "lumiverse-spindle-types";
@@ -307,7 +308,6 @@ type MacroInvocationState = {
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
-  | { type: "world_books_resolve_for_chat"; requestId: string; chatId: string; reserveTokens?: number; userId?: string }
   | import("./uuid-contract").UUIDWorkerMessage
   | import("./live-activities-contract").LiveActivityWorkerMessage
   | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
@@ -715,7 +715,6 @@ type RuntimeEntityExtensionsAPI = {
   ): Promise<SpindleBatchJsonValue>;
 };
 type RuntimeWorldBooksAPI = Omit<SpindleAPI["world_books"], "entries"> & {
-  resolveForChat(chatId: string, options?: { reserveTokens?: number; userId?: string }): Promise<{ content: string; role: "system" | "user" | "assistant" }[]>;
   entries: {
     list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: RuntimeWorldBookEntryDTO[]; total: number }>;
     get(entryId: string, userId?: string): Promise<RuntimeWorldBookEntryDTO | null>;
@@ -775,7 +774,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
-    write(chatId: string, command: import('./runtime-state').RuntimeStateCommand, userId?: string, mutationId?: string): Promise<unknown>;
+    write(chatId: string, command: import("lumiverse-spindle-types").RuntimeStateCommandDTO, userId?: string, mutationId?: string): Promise<unknown>;
   };
   frontendCapabilities: {
     declare(capability: "message_tag_interceptor"): () => void;
@@ -3252,7 +3251,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async resolveForChat(chatId, options) {
       const requestId = crypto.randomUUID();
-      return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as { content: string; role: "system" | "user" | "assistant" }[];
+      return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as ResolvedWorldInfoEntryDTO[];
     },
     async getActivated(chatId: string, userId?: string) {
       const requestId = crypto.randomUUID();
