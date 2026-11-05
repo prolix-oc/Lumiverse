@@ -397,6 +397,7 @@ function DisplaySettings() {
   const { t: tc } = useTranslation('common')
   const drawerSettings = useStore((s) => s.drawerSettings)
   const showRecentConnections = useStore((s) => s.showRecentConnections !== false)
+  const showRecentPersonas = useStore((s) => s.showRecentPersonas !== false)
   const desktopPinchZoomEnabled = useStore((s) => s.desktopPinchZoomEnabled)
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
@@ -616,6 +617,13 @@ function DisplaySettings() {
         onChange={(checked) => setSetting('showRecentConnections', checked)}
         label={t('display.drawer.showRecentConnections')}
         hint={t('display.drawer.showRecentConnectionsHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={showRecentPersonas}
+        onChange={(checked) => setSetting('showRecentPersonas', checked)}
+        label={t('display.drawer.showRecentPersonas')}
+        hint={t('display.drawer.showRecentPersonasHint')}
       />
 
       <DrawerWidthSettings settings={drawerSettings} onChange={updateDrawer} />

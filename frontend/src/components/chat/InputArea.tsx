@@ -95,6 +95,7 @@ import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefaults'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
+import { selectRecentPersonaIds } from '@/lib/personaBrowser'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
 import { useComposerBridge } from '@/lib/spindle/use-composer-bridge'
 import { useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
@@ -297,7 +298,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
   const personasLoaded = useStore((s) => s.personasLoaded)
-  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
+  const recentPersonaIds = useStore(selectRecentPersonaIds)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const messages = useStore((s) => s.messages)

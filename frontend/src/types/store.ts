@@ -879,6 +879,7 @@ export interface SettingsSlice {
   showCortexSecondaryUi: boolean
   showEditAndSend: boolean
   showRecentConnections: boolean
+  showRecentPersonas: boolean
   enableToolbarIconReorder: boolean
   productivityTabPosition: string
   hydrateStartupSettings: (settings: StartupSettings) => void

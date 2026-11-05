@@ -172,6 +172,8 @@
       "tabSizeCompact": "Compact",
       "showRecentConnections": "Show recently used connections",
       "showRecentConnectionsHint": "Show the Recently Used group in connection lists.",
+      "showRecentPersonas": "Show recently used personas",
+      "showRecentPersonasHint": "Show the Recently Used group in persona lists.",
       "duoAlwaysOpen": "Always show drawer when unfolded (iPhone Duo)",
       "duoAlwaysOpenHint": "Keep the drawer in a separate pane while unfolded. Turn off to open and close it normally.",
       "showTabLabels": "Show tab labels",

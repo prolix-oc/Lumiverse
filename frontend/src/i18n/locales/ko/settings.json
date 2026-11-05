@@ -172,6 +172,8 @@
       "tabSizeCompact": "작게",
       "showRecentConnections": "최근 사용 연결 표시",
       "showRecentConnectionsHint": "연결 목록에 최근 사용 그룹을 표시합니다.",
+      "showRecentPersonas": "최근 사용 페르소나 표시",
+      "showRecentPersonasHint": "페르소나 목록에 최근 사용 그룹을 표시합니다.",
       "duoAlwaysOpen": "펼쳤을 때 서랍 항상 표시 (iPhone Duo)",
       "duoAlwaysOpenHint": "기기를 펼치면 서랍을 별도 영역에 표시합니다. 끄면 평소처럼 서랍을 열고 닫을 수 있습니다.",
       "showTabLabels": "탭 라벨 표시",
