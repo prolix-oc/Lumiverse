@@ -33,6 +33,7 @@ import type {
 } from "lumiverse-spindle-types";
 import { WorkerHostFilesApi } from "./worker-host-files-api";
 import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
+import { getMessageRole } from "../utils/message-role";
 import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, StreamDoneChunkDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
@@ -1074,6 +1075,7 @@ export class WorkerHost {
       postResponse: (message) => this.postToWorker(message),
     });
     this.stateApi = new WorkerHostStateApi({
+      getOwnMetadataKey: () => this.getOwnSpindleMetadataKey(),
       getChatOwnerId: (chatId) => this.getChatOwnerId(chatId),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
@@ -2384,6 +2386,9 @@ export class WorkerHost {
         this.contentApi.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
         break;
       // ─── Activated World Info (gated: "world_books") ─────────────────
+      case "world_books_resolve_for_chat":
+        this.contentApi.handleWorldBooksResolveForChat(msg.requestId, msg.chatId, msg.reserveTokens, msg.userId);
+        break;
       case "world_books_get_activated":
         this.contentApi.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
         break;
@@ -4018,10 +4023,7 @@ export class WorkerHost {
   }
 
   private mapChatRole(isUser: boolean, extra: Record<string, unknown>): "system" | "user" | "assistant" {
-    if (isUser) return "user";
-    const rawRole = extra?.spindle_role;
-    if (rawRole === "system") return "system";
-    return "assistant";
+    return getMessageRole({ is_user: isUser, extra });
   }
 
   private handleChatSetSwipeVariables(requestId: string, chatId: string, messageId: string, input: any): void {

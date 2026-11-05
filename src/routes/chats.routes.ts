@@ -1116,7 +1116,8 @@ app.put("/:chatId/messages/:id", async (c) => {
     }
   }
 
-  const msg = svc.updateMessage(userId, messageId, body);
+  const { is_user: _isUser, ...update } = body;
+  const msg = svc.updateMessage(userId, messageId, update);
   if (!msg) return c.json({ error: "Not found" }, 404);
   return c.json(msg);
 });

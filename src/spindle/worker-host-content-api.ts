@@ -2379,6 +2379,21 @@ export class WorkerHostContentApi {
 
   // ─── Activated World Info (gated: "world_books") ─────────────────────
 
+  async handleWorldBooksResolveForChat(requestId: string, chatId: string, reserveTokens?: number, userId?: string): Promise<void> {
+    try {
+      for (const permission of ["world_books", "chats", "characters", "personas", "presets"] as const) {
+        if (!this.hasPermission(permission)) throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const result = await promptAssemblySvc.getResolvedWorldInfoForChat(resolvedUserId, chatId, reserveTokens);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
   async handleWorldBooksGetActivated(
     requestId: string,
     chatId: string,

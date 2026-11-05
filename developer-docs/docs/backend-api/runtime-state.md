@@ -31,14 +31,22 @@ The read cost grows with chat history and attached lore. Bootstrap or resynchron
 | --- | --- | --- |
 | `chat.metadata` | `key`, `value` | `chats` |
 | `chat.variables` | `values: Record<string, string \| null>` | `chats` |
-| `message.create` | `id` (UUID v4), `content`, `role` (`system`, `assistant`, `user`) | `chat_mutation` |
-| `message.edit` | `id`, `content` | `chat_mutation` |
+| `message.create` | `id` (UUID v4), `content`, `role` (`system`, `assistant`, `user`), optional `beforeId`, `ownMetadata` | `chat_mutation` |
+| `message.edit` | `id`, optional `content`, `role`, `ownMetadata` | `chat_mutation` |
 | `message.delete` | `id` | `chat_mutation` |
 | `character.update` | `id`, `patch` (`name`, `description`, `first_mes`) | `characters` |
 | `persona.update` | `id`, `patch` (`name`, `description`) | `personas` |
 | `lore.create` | `bookId`, `patch` (world-book entry fields) | `world_books` |
 | `lore.update` | `id`, `patch` (world-book entry fields) | `world_books` |
 | `lore.delete` | `id` | `world_books` |
+
+`beforeId` inserts the new message before that message in the same chat and moves later rows down. It sends one `MESSAGE_SENT` with `inserted: true`, with no separate event per moved row. A role edit keeps the message ID, swipes and attachments, and clears the stored name if the speaker side changes.
+
+The stored role is used in prompt history, including `system` messages. Assistant reasoning is omitted from prompt history when a message is changed to another role.
+
+`ownMetadata` holds this extension's data on a message, and reads return it only to that extension. A write replaces the extension's whole value, and `null` removes it. It stays when the text changes, so store a hash of the text with anything derived from it.
+
+These need `spindle.host.capabilities['runtime-message-mutations-v1']`.
 
 Variable writes merge the supplied keys and preserve other chat metadata. Message edits and deletions must target this chat. Character, persona and lore operations retain the corresponding service's ownership checks. A supplied message ID cannot overwrite an existing message.
 

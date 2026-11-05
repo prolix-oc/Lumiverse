@@ -457,6 +457,9 @@ export interface GenerationAcknowledgedPayload {
 }
 
 export interface MessageSentPayload {
+  authored?: boolean
+  /** Rows at or after this message's index moved down by one. */
+  inserted?: boolean
   chatId: string
   message: import('./api').Message
 }

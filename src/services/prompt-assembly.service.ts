@@ -81,6 +81,8 @@ import {
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
 import { orderWorldInfoForOutput } from "./world-info-output-order";
+import { resolveChatGenerationConnection } from "./generation/connection-resolution";
+import { getMessageRole } from "../utils/message-role";
 import {
   worldInfoInterceptorChain,
   type WorldInfoInterceptorPlacementDTO,
@@ -114,7 +116,7 @@ import {
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
-import { applyPersonaAddonStates } from "./persona-addon-states";
+import { applyPersonaAddonStates, getChatPersonaAddonStates } from "./persona-addon-states";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as worldBooksSvc from "./world-books.service";
@@ -285,7 +287,7 @@ function getStoredReasoningCarrier(message: Message): Pick<
   LlmMessage,
   "reasoning_content" | "thinking_blocks" | "reasoning_details" | "thought_signature"
 > {
-  if (message.is_user) return {};
+  if (getMessageRole(message) !== "assistant") return {};
   const carrier = message.extra?.reasoningCarrier;
   if (!carrier || typeof carrier !== "object" || Array.isArray(carrier)) {
     return {};
@@ -1923,7 +1925,7 @@ export async function assemblePrompt(
   if (!pf) {
     // Prefetch already applies add-on states + resolves global add-ons; only do
     // it here for the non-prefetched path so {{persona}} includes global add-ons.
-    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
+    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates ?? (ctx.worldInfoQuery ? getChatPersonaAddonStates(chat.metadata, persona?.id) : undefined));
     persona = (await globalAddonsSvc.resolvePersonaGlobalAddonsAsync(ctx.userId, persona));
   }
 
@@ -1931,7 +1933,9 @@ export async function assemblePrompt(
   const connection =
     pf?.connection !== undefined
       ? pf.connection
-      : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
+      : ctx.worldInfoQuery && connectionsSvc.resolveActingConnectionId(ctx.userId)
+        ? resolveChatGenerationConnection(ctx.userId, chat.metadata, ctx.connectionId)
+        : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
 
   // Start cold file loading while the rest of assembly resolves its inputs.
   // Clipping joins this pending load in the same runtime if it is not ready.
@@ -2020,7 +2024,7 @@ export async function assemblePrompt(
   profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
-  if (!blocks.length) {
+  if (!blocks.length && !ctx.worldInfoQuery) {
     const legacyResult = await legacyAssembly(
       messages,
       ctx.generationType,
@@ -2064,7 +2068,7 @@ export async function assemblePrompt(
     | null = null;
 
   let prepareCortexWarmJob: ((signal?: AbortSignal) => Promise<CortexWarmJob | undefined>) | undefined;
-  if (cortexEnabledForChat) {
+  if (cortexEnabledForChat && !ctx.worldInfoQuery) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
@@ -2183,7 +2187,7 @@ export async function assemblePrompt(
     import("./databank").DatabankRetrievalResult
   > | null = null;
   {
-    if (activeDatabankIds.length > 0) {
+    if (activeDatabankIds.length > 0 && !ctx.worldInfoQuery) {
       const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
       const dbSignal = ctx.signal
         ? AbortSignal.any([ctx.signal, chatBgSignal])
@@ -2264,6 +2268,7 @@ export async function assemblePrompt(
   const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
+      purpose: ctx.worldInfoQuery ? "query" : "prompt",
       chatId: ctx.chatId,
       characterId: character.id,
       userId: ctx.userId,
@@ -2276,7 +2281,7 @@ export async function assemblePrompt(
             : undefined;
         return {
           id: m.id,
-          role: m.is_user ? ("user" as const) : ("assistant" as const),
+          role: getMessageRole(m),
           content: m.content,
           is_user: m.is_user,
           is_greeting: isGreeting,
@@ -2295,6 +2300,7 @@ export async function assemblePrompt(
     ctx.userId,
     wiSources.bookSourceMap
   );
+  for (const [bookId, source] of interception.additionalBookSources ?? []) wiSources.bookSourceMap.set(bookId, source);
   const worldInfoSettings: WorldInfoSettings = {
     ...normalizedWorldInfoSettings,
     maxRecursionPasses:
@@ -2303,6 +2309,7 @@ export async function assemblePrompt(
         : normalizedWorldInfoSettings.maxRecursionPasses,
   };
   const intercepted = interception.entries;
+  const rawWiEntries = [...wiEntries, ...(interception.additionalEntries ?? [])];
   const hasCaptureRequests = interception.captureRequests.size > 0;
   const hasCapturedIds = [...interception.captureRequests.values()].some(
     (ids) => ids.size > 0,
@@ -2314,7 +2321,7 @@ export async function assemblePrompt(
   if (activationScanCache) {
     primeWorldInfoActivationScanCache(
       activationScanCache,
-      [intercepted, wiEntries],
+      [intercepted, rawWiEntries],
       worldInfoSettings,
     );
   }
@@ -2347,7 +2354,7 @@ export async function assemblePrompt(
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
   let captureVectorQuery: PreparedWorldInfoVectorQuery | undefined;
   const vectorViewsEquivalent = areWorldInfoVectorViewsEquivalent(
-    wiEntries,
+    rawWiEntries,
     intercepted,
   );
   const captureVectorViewCanShareNative =
@@ -2393,7 +2400,7 @@ export async function assemblePrompt(
       if (captureVectorViewCanShareNative) {
         rawVectorActivated = projectVectorActivatedEntries(
           detailed.entries,
-          wiEntries,
+          rawWiEntries,
         );
       }
 
@@ -2458,7 +2465,7 @@ export async function assemblePrompt(
   const outputWorldInfo = orderWorldInfoForOutput(
     mergedWorldInfo.activatedEntries,
     interception.insertionOrderByEntryId,
-    runtimePlacementIds,
+    ctx.worldInfoQuery ? new Set<string>() : runtimePlacementIds,
   );
   const wiCache =
     runtimePlacementIds.size === 0 && outputWorldInfo === mergedWorldInfo.activatedEntries
@@ -2483,7 +2490,7 @@ export async function assemblePrompt(
     const captureKeywordResult = profiler.measureSync(
       "world-info-capture-keyword",
       () => activateWorldInfo({
-        entries: wiEntries,
+        entries: rawWiEntries,
         messages,
         chatTurn: messages.length,
         wiState: captureWiState,
@@ -2501,7 +2508,7 @@ export async function assemblePrompt(
               ctx.userId,
               ctx.chatId,
               wiSources.worldBookIds,
-              wiEntries,
+              rawWiEntries,
               messages,
               ctx.signal,
               worldInfoSettings,
@@ -2623,7 +2630,7 @@ export async function assemblePrompt(
     chat,
     messages,
     generationType: ctx.generationType,
-    commit: ctx.macroCommit,
+    commit: ctx.worldInfoQuery ? false : ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
     userInput: ctx.userInput,
@@ -2719,6 +2726,31 @@ export async function assemblePrompt(
       : [];
   const macroEnvSeed = cloneEnv(macroEnv);
   profiler.addPhase("macro-setup", performance.now() - phaseStartedAt);
+
+  if (ctx.worldInfoQuery) {
+    await resolveWorldInfoOutlets(outputWorldInfo, macroEnv, ctx.signal);
+    const parameters = buildParameters(samplerOverrides, preset, reasoningVal, connection?.provider, connection?.model);
+    const reserve = ctx.worldInfoQuery.reserveTokens;
+    const contextSize = parameters.max_context_length;
+    // Without a context size, prompt clipping has no limit either.
+    const limit = reserve !== undefined && typeof contextSize === "number" && Number.isFinite(contextSize) && contextSize > 0
+      ? contextSize - reserve
+      : Infinity;
+    const counter = limit === Infinity ? null : await resolveCounter(connection?.model || "");
+    const resolved: LlmMessage[] = [];
+    let tokens = 0;
+    for (const [index, entry] of outputWorldInfo.entries()) {
+      if (index % 32 === 0) await yieldAndCheckAbort(ctx.signal);
+      const content = restoreLiteralBraces((await evaluateForPromptAssembly(entry.content, macroEnv)).text).trim();
+      if (!content) continue;
+      const size = counter?.count(content) ?? 0;
+      if (tokens + size > limit) break;
+      tokens += size;
+      const role = interception.placementByEntryId.get(entry.id)?.role ?? entry.role;
+      resolved.push({ content, role: role === "assistant" || role === "user" ? role : "system" });
+    }
+    return { messages: resolved, breakdown: [], parameters, activatedWorldInfo };
+  }
 
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (
@@ -3214,7 +3246,7 @@ export async function assemblePrompt(
         } else if (ctx.signal?.aborted) {
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
-        const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+        const role = getMessageRole(msg);
         const replacement = cortexHistoryPlan?.replacements.get(msg.id);
         if (replacement) {
           result.push(markAsChatHistory({
@@ -6043,6 +6075,16 @@ export async function getActivatedWorldInfoForChat(
   return (await computeActivatedWorldInfoForChat(userId, chatId)).activatedWorldInfo;
 }
 
+export async function getResolvedWorldInfoForChat(
+  userId: string, chatId: string, reserveTokens?: number,
+): Promise<{ content: string; role: "system" | "user" | "assistant" }[]> {
+  if (reserveTokens !== undefined && !Number.isFinite(reserveTokens)) {
+    throw new TypeError("World info reserve must be a finite number");
+  }
+  const result = await assemblePrompt({ userId, chatId, generationType: "normal", macroCommit: false, worldInfoQuery: { reserveTokens } });
+  return result.messages as { content: string; role: "system" | "user" | "assistant" }[];
+}
+
 /**
  * Full activated world-info entry models for a chat (keyword + vector).
  * Used to populate `{{outlet::name}}` outside prompt assembly — e.g. the
@@ -8124,7 +8166,7 @@ async function onelinerImpersonation(
     } else if (ctx.signal?.aborted) {
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
-    const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+    const role = getMessageRole(msg);
     const replacement = historyPlan?.replacements.get(msg.id);
     if (replacement) {
       result.push(markAsChatHistory({ role, content: replacement.content,
@@ -8512,7 +8554,7 @@ async function legacyAssembly(
     if (m.extra?.hidden === true) continue;
     const replacement = historyPlan?.replacements.get(m.id);
     if (replacement) {
-      llmMessages.push(markAsChatHistory({ role: m.is_user ? "user" : "assistant", content: replacement.content,
+      llmMessages.push(markAsChatHistory({ role: getMessageRole(m), content: replacement.content,
         [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: m.id, index_in_chat: m.index_in_chat }));
       legacyHistoryCount++;
       continue;
@@ -8555,7 +8597,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: parts.length > 0 ? parts : resolved,
             ...getStoredReasoningCarrier(m),
           },
@@ -8570,7 +8612,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: resolved,
             ...getStoredReasoningCarrier(m),
           },

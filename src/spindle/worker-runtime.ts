@@ -104,6 +104,7 @@ import type {
   InterceptorRegistrationOptions,
   QuietTrackedRequestDTO,
   QuietTrackedResultDTO,
+  ResolvedWorldInfoEntryDTO,
   SpindleHostDescriptorV1,
   ActivePresetDTO,
 } from "lumiverse-spindle-types";
@@ -773,7 +774,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
-    write(chatId: string, command: import('./runtime-state').RuntimeStateCommand, userId?: string, mutationId?: string): Promise<unknown>;
+    write(chatId: string, command: import("lumiverse-spindle-types").RuntimeStateCommandDTO, userId?: string, mutationId?: string): Promise<unknown>;
   };
   frontendCapabilities: {
     declare(capability: "message_tag_interceptor"): () => void;
@@ -3248,6 +3249,10 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as boolean;
       },
     },
+    async resolveForChat(chatId, options) {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as ResolvedWorldInfoEntryDTO[];
+    },
     async getActivated(chatId: string, userId?: string) {
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -4276,6 +4281,8 @@ const spindleApi: RuntimeSpindleAPI = {
     worldInfoActivationCapture: 1,
     worldInfoRuntimePlacement: 1,
     worldInfoOutputOrdering: 1,
+    worldInfoAdditionalEntries: 1,
+    runtimeMessageMutations: 1,
   }),
 
   registerContextHandler(

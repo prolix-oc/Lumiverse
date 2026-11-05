@@ -29,6 +29,7 @@ One interceptor per extension; a second registration replaces the first.
 
 ```ts
 interface WorldInfoInterceptorCtx {
+  purpose?: 'prompt' | 'query'
   chatId: string
   characterId: string
   userId?: string
@@ -107,6 +108,7 @@ interface WorldInfoInterceptorResult {
     selectionContent?: string
     outputOrder?: "selection" | "insertion"
   }[]
+  additionalEntries?: WorldInfoInterceptorEntry[]
   activationOverrides?: {
     disableRecursion?: true
   }
@@ -123,6 +125,7 @@ Return `void` or omit all fields for a no-op pass-through. The fields are indepe
 | `mutated.content` | Replaces the content inserted for this prompt. The stored entry is unchanged. |
 | `mutated.selectionContent` | Replaces content only for selection, duplicate checks, and token limits. |
 | `mutated.outputOrder` | `"insertion"` requests insertion order after selection. `"selection"` clears an earlier request. Omission leaves the current request unchanged. |
+| `additionalEntries` | Adds candidates for this prompt only. They go through normal activation and are never saved. The host scopes their IDs to this extension and chat. A malformed or duplicate entry fails the prompt build, because silently dropping it would change the prompt with no sign of why. Needs `spindle.host.capabilities['world-info-additional-entries-v1']`. |
 | `activationOverrides.disableRecursion` | Disables recursive activation for this prompt. |
 
 Mutating an entry that another interceptor disabled is allowed but inert.
