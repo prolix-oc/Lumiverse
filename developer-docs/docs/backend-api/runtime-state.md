@@ -42,6 +42,8 @@ The read cost grows with chat history and attached lore. Bootstrap or resynchron
 
 `beforeId` inserts the new message before that message in the same chat and moves later rows down. It sends one `MESSAGE_SENT` with `inserted: true`, with no separate event per moved row. A role edit keeps the message ID, swipes and attachments, and clears the stored name if the speaker side changes.
 
+The stored role is used in prompt history, including `system` messages. Assistant reasoning is omitted from prompt history when a message is changed to another role.
+
 `ownMetadata` holds this extension's data on a message, and reads return it only to that extension. A write replaces the extension's whole value, and `null` removes it. It stays when the text changes, so store a hash of the text with anything derived from it.
 
 These need `spindle.host.capabilities['runtime-message-mutations-v1']`.

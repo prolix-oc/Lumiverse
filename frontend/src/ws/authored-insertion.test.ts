@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import ts from 'typescript'
 import { preserveNewerMessageRevisions, reconcileMessageTail, reconciledTailTotal } from '../store/messageTailReconciliation'
+import { getHistoryBoundary } from '../lib/history-page-loader'
 
 const parse = (name: string, source: string) => ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 const slice = parse('chat.ts', await Bun.file(new URL('../store/slices/chat.ts', import.meta.url)).text())
@@ -21,6 +22,26 @@ function compile(source: string, dependencies: Record<string, unknown>) {
   const compiled = new Bun.Transpiler({ loader: 'tsx' }).transformSync(`const invoke = ${source};`)
   return new Function(...Object.keys(dependencies), `${compiled}; return invoke;`)(...Object.values(dependencies))
 }
+
+test('insertion before unloaded history keeps pagination contiguous and survives an older tail response', () => {
+  const state: any = {}
+  Object.assign(state, compile(factorySource, { settingsApi: { put: async () => {} }, preserveNewerMessageRevisions, reconcileMessageTail, reconciledTailTotal })(
+    (next: any) => Object.assign(state, typeof next === 'function' ? next(state) : next), () => state))
+  const initial = Array.from({ length: 50 }, (_, index) => ({ id: `message-${index + 50}`, index_in_chat: index + 50, revision: 1 }))
+  state.messages = initial
+  state.totalChatLength = 100
+  const page = { data: initial, total: 100, offset: 50, requestSnapshot: { ids: initial.map(row => row.id), total: 100 } }
+  state.insertMessage({ id: 'inserted', index_in_chat: 0, revision: 1 })
+  expect(getHistoryBoundary(state.messages)).toMatchObject({ id: 'message-50', index_in_chat: 51 })
+  expect(state.messages).toHaveLength(50)
+  expect(state.totalChatLength).toBe(101)
+  state.reconcileMessagesTail(page)
+  expect(getHistoryBoundary(state.messages)).toMatchObject({ id: 'message-50', index_in_chat: 51 })
+  expect(state.totalChatLength).toBe(101)
+  state.prependMessages([{ id: 'inserted', index_in_chat: 0, revision: 1 }, ...Array.from({ length: 50 }, (_, index) => ({ id: `message-${index}`, index_in_chat: index + 1, revision: 2 }))])
+  expect(state.messages).toHaveLength(101)
+  expect(new Set(state.messages.map((row: any) => row.id)).size).toBe(101)
+})
 
 test.each([true, false])('authored insertion preserves continuation order and stream content, is_user=%s', isUser => {
   const state: any = {}

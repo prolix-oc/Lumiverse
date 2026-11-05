@@ -27,6 +27,7 @@ import { EditAndSendContextError } from "../llm/types";
 import { readMessageRevision } from "../utils/message-revision";
 import { prepareNativeSwipeVariablesWithDb, preserveSwipeVariablesSql, readVariableBoundary, remapSwipeVariableOwnerWithDb, reconcileSwipeVariablesWithDb, setSwipeVariablesWithDb, trackVariableWrite, type ReconcileVariableOptions, type VariableBoundary, type SetSwipeVariablesInput } from "../db/swipe-variable-state";
 import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
+import { getMessageRole } from "../utils/message-role";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as audioSvc from "./audio.service";
@@ -2649,21 +2650,24 @@ export function createMessage(chatId: string, input: CreateMessageInput, userId:
   const swipeDates = [now];
 
   const insert = () => {
-  if (before) getDb().query(`UPDATE messages SET index_in_chat = index_in_chat + 1${messagesHaveRevisionColumn() ? ', revision = revision + 1' : ''} WHERE chat_id = ? AND index_in_chat >= ?`).run(chatId, nextIndex);
-  getDb()
-    .query(
-      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
-      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
-      JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
-      input.parent_message_id || null, input.branch_id || null, now
-    );
-  getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+    if (before) {
+      getDb().query(`UPDATE messages SET index_in_chat = index_in_chat + 1${messagesHaveRevisionColumn() ? ', revision = revision + 1' : ''} WHERE chat_id = ? AND index_in_chat >= ?`).run(chatId, nextIndex);
+    }
+    getDb()
+      .query(
+        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
+        now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
+        JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
+        input.parent_message_id || null, input.branch_id || null, now
+      );
+    getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
   };
-  if (before) getDb().transaction(insert)(); else insert();
+  if (before) getDb().transaction(insert)();
+  else insert();
 
   // getMessage without userId — internal use after validated chat
   const row = getDb().query("SELECT * FROM messages WHERE id = ?").get(id) as any;
@@ -3036,7 +3040,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // even without a `content` patch — check the resolved active content
   // against the prior active content to catch that case.
   const activeContentChanged =
-    (input.is_user !== undefined && input.is_user !== existing.is_user) ||
+    getMessageRole(updated) !== getMessageRole(existing) ||
     (patchedContent && contentSwipeId === newSwipeId) ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
   if (activeContentChanged && input.skipChunkRebuild !== true) {

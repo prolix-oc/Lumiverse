@@ -7,6 +7,33 @@ import { writeRuntimeState, readRuntimeState } from './runtime-state';
 import { eventBus } from '../ws/bus';
 import { EventType } from '../ws/events';
 import * as embeddings from '../services/embeddings.service';
+import { assemblePrompt } from '../services/prompt-assembly.service';
+import { createPreset } from '../services/presets.service';
+
+test('runtime system-role edits reach legacy and Loom prompt history without assistant reasoning', async () => {
+  const db = initDatabase(':memory:');
+  const config = spyOn(embeddings, 'getEmbeddingConfig').mockResolvedValue({ enabled: false } as any);
+  try {
+    db.run('PRAGMA foreign_keys = OFF');
+    db.run(await Bun.file(join(import.meta.dir, '../db/baseline.sql')).text());
+    const userId = 'role-owner';
+    const character = createCharacter(userId, { name: 'Character' });
+    const chat = chats.createChatRaw(userId, { character_id: character.id });
+    const message = chats.createMessage(chat.id, { is_user: false, name: 'Character', content: 'Role-edited content',
+      extra: { reasoningCarrier: { type: 'gemini_thought_signature', signature: 'assistant-only' } } }, userId);
+    await writeRuntimeState(userId, chat.id, { kind: 'message.edit', id: message.id, role: 'system' }, 'extension');
+    const preset = createPreset(userId, { name: 'History', provider: 'openai', prompt_order: [{
+      id: 'history', name: 'History', enabled: true, role: 'system', marker: 'chat_history', content: '',
+      position: 'pre_history', depth: 0, isLocked: false, color: null, injectionTrigger: [], group: null,
+    }] });
+    for (const presetId of [undefined, preset.id]) {
+      const result = await assemblePrompt({ userId, chatId: chat.id, generationType: 'normal', presetId, macroCommit: false });
+      const history = result.messages.find(row => row.content === message.content);
+      expect(history?.role).toBe('system');
+      expect(history).not.toHaveProperty('thought_signature');
+    }
+  } finally { await Bun.sleep(120); config.mockRestore(); closeDatabase(); }
+});
 
 test('runtime role changes and insertion preserve message identity, swipes, attachments and source times', async () => {
   const db = initDatabase(':memory:');

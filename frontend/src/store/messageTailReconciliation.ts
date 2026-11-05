@@ -60,11 +60,12 @@ export function reconcileMessageTail(
 
 export function reconciledTailTotal(current: Message[], currentTotal: number, fresh: MessageTailPage): number {
   if (!fresh.requestSnapshot) return fresh.total
-  const initialIds = new Set(fresh.requestSnapshot.ids), freshIds = new Set(fresh.data.map(message => message.id))
+  const initialIds = new Set(fresh.requestSnapshot.ids)
   const currentIds = new Set(current.map(message => message.id))
   const deleted = fresh.data.filter(message => initialIds.has(message.id) && !currentIds.has(message.id)).length
   const knownCreations = Math.max(0, currentTotal - fresh.requestSnapshot.total + fresh.requestSnapshot.ids.filter(id => !currentIds.has(id)).length)
-  const missingCreations = Math.min(knownCreations, Math.max(0, currentTotal - fresh.total + deleted),
-    current.filter(message => isPersistedMessage(message) && !initialIds.has(message.id) && !freshIds.has(message.id)).length)
+  // Insertions before the loaded history increase the total without adding a
+  // visible row. The count delta also excludes history pages loaded meanwhile.
+  const missingCreations = Math.min(knownCreations, Math.max(0, currentTotal - fresh.total + deleted))
   return fresh.total - deleted + missingCreations
 }

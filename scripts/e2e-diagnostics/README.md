@@ -27,6 +27,9 @@ bun run diagnose
 
 ## Scripts
 
+- `node check-runtime-message-mutations.mjs`
+  Exercises the production chat store and WebSocket callbacks with controlled events in Chromium, Firefox and WebKit at desktop/mobile widths. Checks insertion during continuation, role edits, stale tail responses and pagination after insertion into unloaded history. Requires frontend dependencies and matching browsers; no backend, credentials or personal data.
+
 - `bun run check:st-preset-import`
   Exercises SillyTavern file import, exact and duplicate identifiers, editor save/reload, mouse and keyboard reorder, category detach/append, and portable/ST exports at desktop/mobile widths in Chromium, Firefox and WebKit. Uses the real Loom UI, validation and API client with controlled persistence and profile state. Requires frontend dependencies and matching browsers; no live account or personal data.
 

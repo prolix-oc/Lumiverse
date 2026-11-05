@@ -8,6 +8,7 @@ import { runtimeStateRevision } from './runtime-state-revision';
 import type { Character } from '../types/character';
 import type { Message } from '../types/message';
 import type { RuntimeStateCommandDTO } from 'lumiverse-spindle-types';
+import { getMessageRole } from '../utils/message-role';
 
 export type RuntimeStateCommand = RuntimeStateCommandDTO;
 
@@ -17,7 +18,7 @@ export function projectRuntimeCharacter(character: Character) {
 }
 
 export function projectRuntimeMessage(message: Message, metadataKey?: string | null) {
-  const role: 'user' | 'system' | 'assistant' = message.is_user ? 'user' : message.extra?.spindle_role === 'system' ? 'system' : 'assistant';
+  const role = getMessageRole(message);
   return { id: message.id, content: message.content, role, name: message.name,
     index_in_chat: message.index_in_chat, created_at: message.created_at, send_date: message.send_date,
     extra: { greeting_index: message.extra?.greeting_index },

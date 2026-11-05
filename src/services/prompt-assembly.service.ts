@@ -82,6 +82,7 @@ import {
 } from "./world-info-activation.service";
 import { orderWorldInfoForOutput } from "./world-info-output-order";
 import { resolveChatGenerationConnection } from "./generation/connection-resolution";
+import { getMessageRole } from "../utils/message-role";
 import {
   worldInfoInterceptorChain,
   type WorldInfoInterceptorPlacementDTO,
@@ -286,7 +287,7 @@ function getStoredReasoningCarrier(message: Message): Pick<
   LlmMessage,
   "reasoning_content" | "thinking_blocks" | "reasoning_details" | "thought_signature"
 > {
-  if (message.is_user) return {};
+  if (getMessageRole(message) !== "assistant") return {};
   const carrier = message.extra?.reasoningCarrier;
   if (!carrier || typeof carrier !== "object" || Array.isArray(carrier)) {
     return {};
@@ -2280,7 +2281,7 @@ export async function assemblePrompt(
             : undefined;
         return {
           id: m.id,
-          role: m.is_user ? ("user" as const) : ("assistant" as const),
+          role: getMessageRole(m),
           content: m.content,
           is_user: m.is_user,
           is_greeting: isGreeting,
@@ -3245,7 +3246,7 @@ export async function assemblePrompt(
         } else if (ctx.signal?.aborted) {
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
-        const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+        const role = getMessageRole(msg);
         const replacement = cortexHistoryPlan?.replacements.get(msg.id);
         if (replacement) {
           result.push(markAsChatHistory({
@@ -8165,7 +8166,7 @@ async function onelinerImpersonation(
     } else if (ctx.signal?.aborted) {
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
-    const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+    const role = getMessageRole(msg);
     const replacement = historyPlan?.replacements.get(msg.id);
     if (replacement) {
       result.push(markAsChatHistory({ role, content: replacement.content,
@@ -8553,7 +8554,7 @@ async function legacyAssembly(
     if (m.extra?.hidden === true) continue;
     const replacement = historyPlan?.replacements.get(m.id);
     if (replacement) {
-      llmMessages.push(markAsChatHistory({ role: m.is_user ? "user" : "assistant", content: replacement.content,
+      llmMessages.push(markAsChatHistory({ role: getMessageRole(m), content: replacement.content,
         [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: m.id, index_in_chat: m.index_in_chat }));
       legacyHistoryCount++;
       continue;
@@ -8596,7 +8597,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: parts.length > 0 ? parts : resolved,
             ...getStoredReasoningCarrier(m),
           },
@@ -8611,7 +8612,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: resolved,
             ...getStoredReasoningCarrier(m),
           },

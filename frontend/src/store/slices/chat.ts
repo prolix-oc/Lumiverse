@@ -296,7 +296,10 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
           // Matches the host bump, so a tail page fetched before the insert cannot restore the old position.
           ...(typeof row.revision === 'number' ? { revision: row.revision + 1 } : {}),
         })
-        return { messages: sortMessagesByPosition([...shifted, message]), totalChatLength: state.totalChatLength + 1 }
+        // Keep the loaded suffix contiguous so the history cursor can still
+        // retrieve messages between an offscreen insertion and this window.
+        const beforeLoadedHistory = state.messages.length > 0 && message.index_in_chat < state.messages[0].index_in_chat
+        return { messages: beforeLoadedHistory ? shifted : sortMessagesByPosition([...shifted, message]), totalChatLength: state.totalChatLength + 1 }
       }),
 
     updateMessage: (id, updates) =>
