@@ -52,7 +52,7 @@ import { buildEmotionalContext } from "./emotional-context";
 import { assembleCortexGraphContext, queryCortex as queryCortexImpl, queryVaultCortex as queryVaultCortexImpl } from "./retrieval";
 import { filterCortexMemoriesForPrompt } from "./prompt-memory-filter";
 import { filterCortexMemoriesByDistance } from "../chat-memory-distance";
-import { getChatMemoryDistanceThreshold } from "../embeddings.service";
+import { getChatMemoryDistanceThreshold, isChatMemoryVectorizationEnabled } from "../embeddings.service";
 import { formatShadowPrompt, type FormatterMode, type ShadowPromptResult } from "./shadow-formatter";
 import { getCortexUsageStats, runMaintenance, debouncedVectorize } from "./gc";
 import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat, getColorMap, recordColorAttribution, stripFontTags, stripThoughtDelimiters, mergeColorAttributions, FONT_ATTRIBUTION_VERSION } from "./font-attribution";
@@ -1461,6 +1461,9 @@ export function scheduleProcessChunk(
   descriptionAliases?: Map<string, string>,
   signal?: AbortSignal,
 ): Promise<ChatPipelineTaskResult<void>> {
+  if (!isChatMemoryVectorizationEnabled(data.userId)) {
+    return Promise.resolve({ status: "skipped", reason: "chat_vectorization_disabled" });
+  }
   const db = getDb();
   const queuedRow = db
     .query("SELECT updated_at FROM chat_chunks WHERE id = ? AND chat_id = ?")
@@ -1475,6 +1478,9 @@ export function scheduleProcessChunk(
     dedupeKey: data.chunkId,
     revision: queuedRevision,
     preflight: () => {
+      if (!isChatMemoryVectorizationEnabled(data.userId)) {
+        return { action: "skip", reason: "chat_vectorization_disabled" } as const;
+      }
       const cfg = getCortexConfig(data.userId);
       if (!isCortexEnabledForStoredChat(data.userId, data.chatId, cfg)) {
         return { action: "skip", reason: "cortex_disabled" } as const;
@@ -1495,6 +1501,8 @@ export function scheduleProcessChunk(
       return { action: "run" } as const;
     },
     run: (laneSignal) => {
+      // The coordinator awaits preflight, so recheck at the execution boundary.
+      if (!isChatMemoryVectorizationEnabled(data.userId)) return Promise.resolve();
       const run = () => processChunk(
         data,
         characterNames,

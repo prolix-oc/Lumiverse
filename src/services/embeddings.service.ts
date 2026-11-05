@@ -2021,6 +2021,15 @@ export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfi
   return withEmbeddingSecretStatus(ctx.userId, await toConfigWithStatus(ctx.userId, cfg, ctx.inherited || undefined), ctx.inherited);
 }
 
+/** Read the current effective opt-in without awaiting secret status or writing
+ * config migrations. Queue admission must not use a snapshot captured before
+ * a user disabled chat vectorization. */
+export function isChatMemoryVectorizationEnabled(userId: string): boolean {
+  const ctx = resolveEmbeddingUserContext(userId, false);
+  const cfg = readRawEmbeddingConfig(ctx.userId, false);
+  return cfg.enabled && cfg.vectorize_chat_messages;
+}
+
 function applyLegacyConnectionPatch(current: EmbeddingConfig, input: Record<string, any>): Record<string, any> {
   if (Array.isArray(input.connectionProfiles)) return input;
   const profiles = current.connectionProfiles ?? [];

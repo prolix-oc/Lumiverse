@@ -14,6 +14,7 @@ let vectorCleanup: (() => void) | null = null;
 const deletedChatVectors: string[] = [];
 mock.module("./embeddings.service", () => ({
   getChatMemoryDistanceThreshold: async () => 0.6,
+  isChatMemoryVectorizationEnabled: () => false,
   deleteChatChunkEmbeddings: async (_userId: string, id: string) => { deletedChatVectors.push(id); },
   deleteWorldBookEntryEmbeddingsBeforeSourceDelete: async <T>(_userId: string, _ids: string[], deleteSource: () => Promise<T>) => {
     vectorCleanup?.();

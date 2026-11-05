@@ -4503,8 +4503,7 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
 }
 
 async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
+  if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
 
   const chat = getChat(userId, chatId);
   const characterId = chat?.character_id ?? null;
@@ -4523,7 +4522,10 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
   const lastChunk = getLastChatChunk(chatId);
   let chunkId: string;
 
-  if (!lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId))) {
+  const startNewChunk = !lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId));
+  // Sanitization and chunk-boundary resolution can outlive a settings change.
+  if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
+  if (startNewChunk) {
     const newChunk = createChatChunk(chatId, [newMessage], [sanitizedContent]);
     chunkId = newChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, newChunk.id, 5);

@@ -29,6 +29,8 @@ Cortex's **Advanced** mode is inside the Memory Cortex tab. **Settings → Advan
 
 **Warm Memory Cortex when opening a chat** is opt-in. It prepares state on chat open; manual recompilation works while it is off. Chat Memory's warmup toggle is separately located in Settings → Advanced.
 
+Automatic warmup and manual recompilation both require **Settings → Embeddings → Vectorize chat messages**. Turning warmup off still allows Cortex to analyze new messages, including a new chat's greeting, while chat vectorization is enabled. **Injection Strategy → Disabled** controls prompt output rather than background analysis.
+
 ### What the Modes Actually Change
 
 | Mode | Behavior |
