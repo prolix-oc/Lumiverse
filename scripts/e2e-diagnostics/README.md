@@ -30,6 +30,9 @@ bun run diagnose
 - `bun run check:st-preset-import`
   Exercises SillyTavern file import, exact and duplicate identifiers, editor save/reload, mouse and keyboard reorder, category detach/append, and portable/ST exports at desktop/mobile widths in Chromium, Firefox and WebKit. Uses the real Loom UI, validation and API client with controlled persistence and profile state. Requires frontend dependencies and matching browsers; no live account or personal data.
 
+- `node check-connection-recents.mjs`
+  Exercises the real Display settings checkboxes, persistence, all six connection kinds, quick picker, full picker variants A/B/C and persona manager in Chromium, Firefox and WebKit at desktop/mobile widths. Checks the default for existing accounts, hide/show after reload, selection and embedding models while hidden, retained history when re-enabled, and independent persona visibility without removing canonical cards. Uses the real store with isolated HTTP settings storage; no backend, credentials or personal data. `CONNECTION_BROWSERS=chromium` selects an engine.
+
 - `node check-image-provider-settings.mjs`
   Exercises the actual Generation Settings modal with controlled connections in Chromium, Firefox and WebKit at desktop/mobile widths. Covers all 18 new providers, model-specific source-image restrictions, reference addition/removal and runtime errors (144 provider/model/viewport/browser cases). No backend, credentials or paid provider calls.
 
