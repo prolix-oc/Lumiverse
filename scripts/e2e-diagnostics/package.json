@@ -14,7 +14,8 @@
     "check:pwa-build": "node check-pwa-build.mjs",
     "check:pwa-upgrade": "node check-pwa-upgrade.mjs",
     "check:vite-hmr": "node check-vite-hmr.mjs",
-    "check:profile-transitions": "node check-profile-transitions.mjs"
+    "check:profile-transitions": "node check-profile-transitions.mjs",
+    "check:st-preset-import": "node check-st-preset-import.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

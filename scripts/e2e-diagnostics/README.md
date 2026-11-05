@@ -27,6 +27,9 @@ bun run diagnose
 
 ## Scripts
 
+- `bun run check:st-preset-import`
+  Exercises SillyTavern file import, exact and duplicate identifiers, editor save/reload, mouse and keyboard reorder, category detach/append, and portable/ST exports at desktop/mobile widths in Chromium, Firefox and WebKit. Uses the real Loom UI, validation and API client with controlled persistence and profile state. Requires frontend dependencies and matching browsers; no live account or personal data.
+
 - `node check-image-provider-settings.mjs`
   Exercises the actual Generation Settings modal with controlled connections in Chromium, Firefox and WebKit at desktop/mobile widths. Covers all 18 new providers, model-specific source-image restrictions, reference addition/removal and runtime errors (144 provider/model/viewport/browser cases). No backend, credentials or paid provider calls.
 

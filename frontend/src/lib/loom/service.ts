@@ -1520,11 +1520,16 @@ function importSTExtensions(extensions: unknown): Record<string, unknown> {
 /**
  * Convert a single ST prompt entry to an internal block.
  * Recognizes well-known ST identifiers and converts them to marker blocks.
+ * Other prompts keep their ST identifier as the block id (when safe and unused), so
+ * preset extensions that reference prompts by identifier still resolve them.
  */
-function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
-  const markerType = p.identifier ? ST_IDENTIFIER_TO_MARKER[p.identifier] : undefined
+function convertSTPromptToBlock(p: STPrompt, enabled: boolean, allocateId: (preferred?: string) => string): PromptBlock {
+  const markerType = p.identifier && Object.hasOwn(ST_IDENTIFIER_TO_MARKER, p.identifier)
+    ? ST_IDENTIFIER_TO_MARKER[p.identifier]
+    : undefined
   if (markerType) {
     const block = createMarkerBlock(markerType, p.name || undefined)
+    block.id = allocateId()
     block.enabled = enabled
     block.injectionTrigger = Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : []
     block.characterTagTrigger = sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger)
@@ -1558,6 +1563,7 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
   }
 
   return createBlock({
+    id: allocateId(p.identifier),
     name: displayName,
     content: p.content || '',
     role: (p.role as PromptBlock['role']) || 'system',
@@ -1611,31 +1617,49 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     if (p.identifier) promptByIdentifier.set(p.identifier, p)
   }
 
-  const processedIdentifiers = new Set<string>()
+  const processedPrompts = new Set<STPrompt>()
+  const usedBlockIds = new Set<string>()
+  // Reserve source identities before generating any marker/fallback ids.
+  const reservedIds = new Set(prompts.map((p) => p.identifier).filter((id): id is string => (
+    typeof id === 'string' && !!id.trim()
+  )))
+  const allocateBlockId = (preferred?: string): string => {
+    // Profiles and prompt-variable maps use object keys. Prototype property
+    // names must receive fresh ids rather than reaching those existing maps.
+    if (typeof preferred === 'string' && preferred.trim()
+      && !Object.hasOwn(Object.prototype, preferred) && !usedBlockIds.has(preferred)) {
+      usedBlockIds.add(preferred)
+      return preferred
+    }
+    let id = generateUUID()
+    while (usedBlockIds.has(id) || reservedIds.has(id)) id = generateUUID()
+    usedBlockIds.add(id)
+    return id
+  }
 
   // First pass: follow prompt_order sequence
   for (const identifier of orderSequence) {
     const p = promptByIdentifier.get(identifier)
-    if (!p) continue
-    processedIdentifiers.add(identifier)
+    if (!p || processedPrompts.has(p)) continue
+    processedPrompts.add(p)
 
     const enabled = p.identifier && enabledOverrides.has(p.identifier)
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, allocateBlockId))
   }
 
   // Second pass: append any prompts not in prompt_order (preserves prompts[] order)
   for (const p of prompts) {
-    if (p.identifier && processedIdentifiers.has(p.identifier)) continue
-    processedIdentifiers.add(p.identifier || '')
+    if (processedPrompts.has(p)) continue
+    processedPrompts.add(p)
 
     const enabled = p.identifier && enabledOverrides.has(p.identifier)
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, allocateBlockId))
   }
 
   // Ensure chat_history marker exists
@@ -1648,7 +1672,9 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
         break
       }
     }
-    blocks.splice(insertIdx, 0, createMarkerBlock('chat_history'))
+    const chatHistory = createMarkerBlock('chat_history')
+    chatHistory.id = allocateBlockId()
+    blocks.splice(insertIdx, 0, chatHistory)
   }
 
   return {
@@ -1724,7 +1750,7 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
 
   for (const block of exportLoom.blocks) {
     // Determine ST identifier — well-known markers use their ST name,
-    // everything else (custom blocks, categories) uses the block's own UUID
+    // everything else (custom blocks, categories) uses the block's own id
     const markerMapping = block.marker && block.marker !== 'category'
       ? MARKER_TO_ST_IDENTIFIER[block.marker]
       : undefined
