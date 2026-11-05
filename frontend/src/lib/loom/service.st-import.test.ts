@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
+import * as uuid from '@/lib/uuid'
 import {
   coerceImportedLoomPreset,
   computeGroups,
@@ -65,9 +66,76 @@ describe('SillyTavern preset import', () => {
     }, 'Fallback')
 
     const ids = preset.blocks.map((block) => block.id)
+    expect(preset.blocks.filter((block) => !block.marker).map((block) => block.content)).toEqual(['b', 'a', 'c'])
     expect(ids).toContain('dup')
     expect(new Set(ids).size).toBe(ids.length)
     expect(preset.blocks.find((block) => block.name === 'No id')!.id).not.toBe('')
+  })
+
+  test('retains every definition with repeated identifiers without repeating ordered entries', () => {
+    const prompts = [
+      { identifier: 'dup', name: 'First', content: 'a' },
+      { identifier: 'dup', name: 'Second', content: 'b' },
+    ]
+    for (const prompt_order of [undefined, { 100001: { order: [{ identifier: 'dup' }, { identifier: 'dup' }] } }]) {
+      const preset = importFromSTPreset({ prompts, prompt_order }, 'Duplicates')
+      const ordinary = preset.blocks.filter((block) => !block.marker)
+      expect(ordinary).toHaveLength(2)
+      expect(ordinary.map((block) => block.content).sort()).toEqual(['a', 'b'])
+      expect(new Set(preset.blocks.map((block) => block.id)).size).toBe(preset.blocks.length)
+    }
+  })
+
+  test('preserves exact nonblank identifiers and their extension references', () => {
+    const ids = [' padded ', 'padded']
+    const preset = importFromSTPreset({
+      prompts: ids.map((identifier) => ({ identifier, name: identifier, content: `Content for ${identifier}` })),
+      extensions: { toolkit: { ids } },
+    }, 'Exact identities')
+    for (const id of ids) {
+      expect(preset.blocks.find((block) => block.id === id)).toMatchObject({ marker: null, content: `Content for ${id}` })
+    }
+    expect(preset.passthroughMetadata.toolkit).toEqual({ ids })
+    const reimported = importFromSTPreset(exportToSTPreset(preset), 'Again')
+    expect(reimported.blocks.filter((block) => !block.marker).map((block) => block.id)).toEqual(ids)
+  })
+
+  test('preserves content under prototype-like identifiers with safe generated ids', () => {
+    const ids = Object.getOwnPropertyNames(Object.prototype)
+    const preset = importFromSTPreset({
+      prompts: ids.map((identifier) => ({ identifier, name: identifier, content: `Content for ${identifier}` })),
+    }, 'Reserved keys')
+    for (const name of ids) {
+      const block = preset.blocks.find((block) => block.name === name)!
+      expect(block).toMatchObject({ marker: null, content: `Content for ${name}` })
+      expect(Object.hasOwn(Object.prototype, block.id)).toBe(false)
+    }
+    expect(new Set(preset.blocks.map((block) => block.id)).size).toBe(preset.blocks.length)
+  })
+
+  test('generated marker and fallback ids cannot consume preserved prompt identifiers', () => {
+    const reserved = '00000000-0000-4000-8000-000000000001'
+    const fallback = '00000000-0000-4000-8000-000000000002'
+    let next = 0
+    const candidates = [reserved, reserved, 'generated', 'generated', 'generated', reserved]
+    const generator = spyOn(uuid, 'generateUUID').mockImplementation(() => (
+      candidates[next++] ?? `00000000-0000-4000-8000-${String(next).padStart(12, '0')}`
+    ))
+    try {
+      const preset = importFromSTPreset({ prompts: [
+        { identifier: 'main', name: 'Main', content: 'Main' },
+        { name: 'Missing', content: 'Fallback' },
+        { identifier: reserved, name: 'Preserved', content: 'Original' },
+        { identifier: fallback, name: 'Other', content: 'Other' },
+        { identifier: '   ', name: 'Blank', content: 'Blank' },
+      ] }, 'Collisions')
+      expect(preset.blocks.find((block) => block.name === 'Preserved')!.id).toBe(reserved)
+      expect(preset.blocks.find((block) => block.name === 'Other')!.id).toBe(fallback)
+      expect(preset.blocks.find((block) => block.name === 'Blank')!.id.trim()).not.toBe('')
+      expect(new Set(preset.blocks.map((block) => block.id)).size).toBe(preset.blocks.length)
+    } finally {
+      generator.mockRestore()
+    }
   })
 
   test('keeps prompts grouped under sequential ━ category headings', () => {

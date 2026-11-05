@@ -140,16 +140,9 @@ const ROLE_DISPLAY_LABELS: Record<string, string> = {
   assistant_append: 'asst+',
 }
 
-const ROOT_DROP_PREFIX = 'root-drop:'
-
 function parseRootDropId(id: unknown) {
-  if (typeof id !== 'string' || !id.startsWith(ROOT_DROP_PREFIX)) return null
-  const index = Number(id.slice(ROOT_DROP_PREFIX.length).split(':', 1)[0])
-  return Number.isFinite(index) ? index : null
-}
-
-function rootDropId(index: number, appendCategoryId?: string) {
-  return `${ROOT_DROP_PREFIX}${index}${appendCategoryId ? `:category:${appendCategoryId}` : ''}`
+  // Prompt ids are strings; numeric drop targets cannot collide with imports.
+  return typeof id === 'number' && Number.isInteger(id) && id >= 0 ? id : null
 }
 
 function hasExplicitGroup(block: PromptBlock) {
@@ -213,16 +206,9 @@ function getCategoryEndIndex(blocks: PromptBlock[], categoryId: string) {
   return endIndex
 }
 
-function parseRootDropCategoryId(id: unknown) {
-  if (typeof id !== 'string' || !id.startsWith(ROOT_DROP_PREFIX)) return null
-  const marker = ':category:'
-  const markerIndex = id.indexOf(marker)
-  return markerIndex === -1 ? null : id.slice(markerIndex + marker.length) || null
-}
-
-function RootDropSlot({ id, active, appendArmed }: { id: string; active: boolean; appendArmed?: boolean }) {
+function RootDropSlot({ id, categoryId, active, appendArmed }: { id: number; categoryId?: string; active: boolean; appendArmed?: boolean }) {
   const { t } = useLb()
-  const { setNodeRef, isOver } = useDroppable({ id, disabled: !active })
+  const { setNodeRef, isOver } = useDroppable({ id, data: { categoryId }, disabled: !active })
   return (
     <div className={s.rootDropSlotWrap}>
       <div
@@ -2466,8 +2452,8 @@ function LoomBuilderNative({
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
-  const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<string | null>(null)
-  const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<string | null>(null)
+  const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<number | null>(null)
+  const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<number | null>(null)
 
   useEffect(() => {
     setShowPromptVariablesModal(false)
@@ -2673,7 +2659,7 @@ useEffect(() => {
   }, [isSearchVisible])
 
   useEffect(() => {
-    if (!hoveredAppendRootDropId) {
+    if (hoveredAppendRootDropId == null) {
       setArmedAppendRootDropId(null)
       return
     }
@@ -2782,7 +2768,9 @@ useEffect(() => {
     const draggedBlock = blocks.find(b => b.id === active.id)
     if (!draggedBlock) return
     const rootDropIndex = parseRootDropId(over.id)
-    const armedAppendCategoryId = armedAppendRootDropId === over.id ? parseRootDropCategoryId(over.id) : null
+    const armedAppendCategoryId = rootDropIndex != null && armedAppendRootDropId === over.id
+      ? over.data.current?.categoryId
+      : null
 
     if (draggedBlock.marker === 'category') {
       const catIdx = blocks.findIndex(b => b.id === active.id)
@@ -2842,7 +2830,7 @@ useEffect(() => {
 
   const handleDragOver = useCallback((event: any) => {
     const activeBlock = activePreset?.blocks.find((block) => block.id === event.active?.id)
-    const appendCategoryId = parseRootDropCategoryId(event.over?.id)
+    const appendCategoryId = parseRootDropId(event.over?.id) != null ? event.over?.data.current?.categoryId : null
     setHoveredAppendRootDropId(appendCategoryId && activeBlock?.marker !== 'category' ? event.over.id : null)
   }, [activePreset?.blocks])
 
@@ -3486,7 +3474,7 @@ useEffect(() => {
               onDragCancel={handleDragCancel}
             >
               <SortableContext items={visibleBlockIds} strategy={verticalListSortingStrategy}>
-                <RootDropSlot id={rootDropId(0)} active={!!activeDragId && !isSearchActive} />
+                <RootDropSlot id={0} active={!!activeDragId && !isSearchActive} />
                 {displayedGroups.map(group => (
                   <Fragment key={group.categoryBlock?.id || group.children[0]?.id || 'ungrouped'}>
                     {group.categoryBlock && (
@@ -3518,9 +3506,10 @@ useEffect(() => {
                       ))
                     }
                     <RootDropSlot
-                      id={rootDropId(rootDropIndexAfterGroup(group), group.categoryBlock?.id)}
+                      id={rootDropIndexAfterGroup(group)}
+                      categoryId={group.categoryBlock?.id}
                       active={!!activeDragId && !isSearchActive}
-                      appendArmed={!!activeDraggedBlock && activeDraggedBlock.marker !== 'category' && armedAppendRootDropId === rootDropId(rootDropIndexAfterGroup(group), group.categoryBlock?.id)}
+                      appendArmed={!!activeDraggedBlock && activeDraggedBlock.marker !== 'category' && armedAppendRootDropId === rootDropIndexAfterGroup(group)}
                     />
                   </Fragment>
                 ))}
