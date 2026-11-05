@@ -105,6 +105,27 @@ test("backend message identity cannot refer to another user's character or bypas
   expect(chats.getMessages(owner, chatId)).toHaveLength(count);
 });
 
+test("append rejects malformed identity and cross-account chats before saving", async () => {
+  const character = characters.createCharacter(owner, { name: "Character" });
+  const otherChat = chats.createChat("other-user", {}).id;
+  const host = createHost("ext_alpha");
+  const count = chats.getMessages(owner, chatId).length;
+  for (const message of [
+    { role: "assistant", content: "reply", name: 42 },
+    { role: "assistant", content: "reply", characterId: 42 },
+    { role: "assistant", content: "reply", characterId: "missing" },
+    { role: "user", content: "reply", characterId: character.id },
+    { role: "system", content: "reply", characterId: character.id },
+  ]) {
+    expect((await host.call({ type: "chat_append_message", message })).error).toContain("Invalid message");
+  }
+  expect((await host.call({ type: "chat_append_message", chatId: otherChat, message: {
+    role: "assistant", content: "reply", name: character.name, characterId: character.id,
+  } })).error).toContain("user-scoped");
+  expect(chats.getMessages(owner, chatId)).toHaveLength(count);
+  expect(chats.getMessages("other-user", otherChat)).toHaveLength(0);
+});
+
 test("default read keeps every swipe, the full extra bag and every extension's metadata", async () => {
   const messages = await createHost("ext_alpha").read();
   expect(messages.map((m) => m.content)).toEqual(["message 0", "swipe b", "message 2", "message 3", "message 4"]);
