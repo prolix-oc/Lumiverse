@@ -142,7 +142,7 @@ function readEntryById(userId: string, entryId: string): WorldBookEntry | null {
   return getEntry(userId, entryId);
 }
 
-function emitWorldBookChanged(userId: string, id: string): void {
+export function emitWorldBookChanged(userId: string, id: string): void {
   const worldBook = getWorldBook(userId, id);
   if (!worldBook) return;
   eventBus.emit(EventType.WORLD_BOOK_CHANGED, { id, worldBook }, userId);
@@ -910,12 +910,33 @@ function setEntriesPendingReindex(entries: WorldBookEntry[]): void {
   }
 }
 
-function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookEntry, requeue: boolean): void {
+function worldBookEntryMayHaveVectors(entry: WorldBookEntry): boolean {
+  return entry.vectorized || entry.vector_index_status !== "not_enabled";
+}
+
+function deleteWorldBookVectorsAndMaybeRequeue(
+  userId: string,
+  entry: WorldBookEntry,
+  requeue: boolean,
+  deferredDeletes?: string[],
+): void {
   if (requeue && isWorldBookEntryVectorEligible(entry)) {
     vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
     return;
   }
+  if (deferredDeletes) {
+    deferredDeletes.push(entry.id);
+    return;
+  }
   void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
+    console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+  });
+}
+
+// A write per entry overflows the vector store's write lock queue.
+export function deleteWorldBookEntryVectorsGrouped(userId: string, entryIds: string[]): void {
+  if (entryIds.length === 0) return;
+  void embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, entryIds, () => undefined).catch((err: unknown) => {
     console.warn("[embeddings] Failed to remove world book entry vectors:", err);
   });
 }
@@ -1776,7 +1797,12 @@ export function createEntry(
   return created;
 }
 
-export function updateEntry(userId: string, id: string, input: UpdateWorldBookEntryInput): WorldBookEntry | null {
+export function updateEntry(
+  userId: string,
+  id: string,
+  input: UpdateWorldBookEntryInput,
+  options?: { deferredVectorDeletes?: string[] },
+): WorldBookEntry | null {
   const expectedRevision = readExpectedRevision(input);
   const existing = getEntry(userId, id);
   if (!existing) return null;
@@ -1869,9 +1895,11 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   if (isOrganizationOnlyMutation(input)) {
     // Organization edits never enqueue, delete or invalidate vectors, in any index state.
   } else if (!updated.vectorized) {
-    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
+    if (worldBookEntryMayHaveVectors(existing)) {
+      deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false, options?.deferredVectorDeletes);
+    }
   } else if (shouldResetVectorIndex(input)) {
-    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true);
+    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true, options?.deferredVectorDeletes);
   } else if (updated.vector_index_status !== "indexed" && isWorldBookEntryVectorEligible(updated)) {
     vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
   }
@@ -2293,18 +2321,22 @@ export async function bulkOperateEntries(
       touchWorldBook(worldBookId, now);
     })();
 
+    const deferredVectorDeletes: string[] = [];
     for (const mutation of mutations) {
       const updated = getEntry(userId, mutation.entry.id);
       if (!updated) continue;
       if (isOrganizationOnlyMutation(input.fields)) continue;
       if (!updated.vectorized) {
-        deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
+        if (worldBookEntryMayHaveVectors(mutation.entry)) {
+          deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false, deferredVectorDeletes);
+        }
       } else if (mutation.resetsVectorIndex) {
-        deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true);
+        deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true, deferredVectorDeletes);
       } else if (updated.vector_index_status !== "indexed" && isWorldBookEntryVectorEligible(updated)) {
         vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
       }
     }
+    deleteWorldBookEntryVectorsGrouped(userId, deferredVectorDeletes);
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
   }

@@ -171,6 +171,18 @@ export type WorkerHostContentApiContext = {
   postResponse: (message: { type: "response"; requestId: string; result?: unknown; error?: string }) => void;
 };
 
+function touchedWorldBookIds(events: ReadonlyArray<{ event: string; payload: unknown }>): Set<string> {
+  const ids = new Set<string>();
+  for (const { event, payload } of events) {
+    const record = payload as { id?: unknown; worldBookId?: unknown } | null;
+    const id = event === EventType.WORLD_BOOK_CHANGED ? record?.id
+      : event === EventType.WORLD_BOOK_ENTRY_CHANGED || event === EventType.WORLD_BOOK_ENTRY_DELETED ? record?.worldBookId
+      : undefined;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return ids;
+}
+
 /** Content CRUD and media conversion surface exposed to one Spindle extension. */
 export class WorkerHostContentApi {
   constructor(private readonly context: WorkerHostContentApiContext) {}
@@ -1553,6 +1565,7 @@ export class WorkerHostContentApi {
     userId: string,
     operation: SpindleBatchOperation,
     expectedRevisions: Record<string, number> | undefined,
+    deferredVectorDeletes: string[],
   ): SpindleBatchJsonValue {
     const args = this.asBatchRecord(operation.args, "operation args");
     const id = args.id ?? args.entryId ?? args.characterId ?? args.presetId ?? args.personaId ?? args.scriptId;
@@ -1567,6 +1580,8 @@ export class WorkerHostContentApi {
         userId,
         entryId,
         input as unknown as Parameters<typeof worldBooksSvc.updateEntry>[2],
+        // Deleting inside the transaction would lose vectors when a later operation rolls the batch back.
+        { deferredVectorDeletes },
       );
       if (!entry) throw new Error("World book entry not found");
       return this.toBatchJson(this.toWorldBookEntryDTO(entry));
@@ -1695,13 +1710,14 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
+      const deferredVectorDeletes: string[] = [];
       const batch = eventBus.withBufferedEvents(() => getDb().transaction((): SpindleBatchResult[] => {
         const completed: SpindleBatchResult[] = [];
         try {
           for (const operation of operations) {
             completed.push({
               ok: true,
-              result: this.executeSpindleBatchOperation(resolvedUserId, operation, expectedRevisions),
+              result: this.executeSpindleBatchOperation(resolvedUserId, operation, expectedRevisions, deferredVectorDeletes),
             });
           }
           return completed;
@@ -1710,10 +1726,13 @@ export class WorkerHostContentApi {
           throw new Error(`BATCH_ROLLED_BACK: ${message}`);
         }
       })());
+      worldBooksSvc.deleteWorldBookEntryVectorsGrouped(resolvedUserId, deferredVectorDeletes);
       eventBus.emit(EventType.SPINDLE_BATCH_CHANGED, {
         operationCount: operations.length,
         sourceEvents: [...new Set(batch.events.map((entry) => entry.event))],
       }, resolvedUserId);
+      // Buffered entry events are dropped, so each touched book gets one change event.
+      for (const worldBookId of touchedWorldBookIds(batch.events)) worldBooksSvc.emitWorldBookChanged(resolvedUserId, worldBookId);
       this.postToWorker({ type: "response", requestId, result: batch.value });
     } catch (err: any) {
       const message = err?.message || String(err);
