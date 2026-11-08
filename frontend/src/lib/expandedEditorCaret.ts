@@ -29,8 +29,13 @@ interface CaretRevealOptions {
   getScrollContainer?: () => HTMLElement | null
 }
 
-/** Scroll only enough to expose the active selection end, never the whole field. */
+/** Reveal a collapsed caret; native selection owns scrolling between two handles. */
 export function revealExpandedEditorCaret(textarea: HTMLTextAreaElement, mirror: HTMLElement, options: CaretRevealOptions = {}): void {
+  // WebKit can keep reporting a forward selection while its upper handle is
+  // dragged upward. Revealing selectionEnd then repeatedly scrolls back down
+  // against native selection autoscroll. Neither endpoint alone describes the
+  // visible handle, so leave ranges to the browser, including during resizing.
+  if (textarea.selectionStart !== textarea.selectionEnd) return
   options.prepare?.()
   const rect = textarea.getBoundingClientRect()
   if (rect.height <= 0 || textarea.offsetHeight <= 0) return

@@ -113,6 +113,28 @@ const checkKeyboardLayout = async (page, name) => {
           assert.equal(await editor.evaluate(el => el.selectionEnd), draft.length, 'keyboard does not rewrite selection')
           await checkMetrics(page, `${name}/${platform}/ui=${scale}/keyboard/highlighted=${highlighted}`)
           if (lineCount === 80) {
+            // iOS may report a forward range even when the upper handle moves.
+            // Native handle autoscroll must survive every selection notification
+            // and viewport callback while the lower endpoint stays offscreen.
+            for (const direction of ['forward', 'backward', 'none']) {
+              for (const start of [Math.floor(draft.length / 2), 0]) {
+                await editor.evaluate((el, { start, direction }) => {
+                  el.setSelectionRange(start, el.value.length, direction)
+                  el.scrollTop = 20
+                  el.dispatchEvent(new Event('select'))
+                  document.dispatchEvent(new Event('selectionchange'))
+                  visualViewport.dispatchEvent(new Event('scroll'))
+                }, { start, direction })
+                await settle(page)
+                near(await editor.evaluate(el => el.scrollTop), 20, `${platform} selection handle owns scrolling (${direction})`)
+                assert.deepEqual(await editor.evaluate(el => [el.selectionStart, el.selectionEnd]), [start, draft.length])
+              }
+            }
+            await editor.evaluate(el => {
+              el.setSelectionRange(el.value.length, el.value.length)
+              el.dispatchEvent(new Event('select'))
+            })
+            await settle(page)
             await editor.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
             await settle(page)
             await change(page, 'setViewport', { height: visibleHeight, fullHeight: 844, offsetTop: platform !== 'android' ? 140 : 0, focused: true })

@@ -177,6 +177,48 @@ describe('expanded editor caret visibility', () => {
     return container
   }
 
+  test('leaves both selection handles and their native scrolling alone', () => {
+    const container = scrollContainer()
+    // iOS does not reliably identify which handle is moving via direction.
+    // The lower end can stay offscreen while the upper handle scrolls upward.
+    for (const direction of ['forward', 'backward', 'none'] as const) {
+      textarea.setSelectionRange(2, 15, direction)
+      textarea.scrollTop = 80
+      container.scrollTop = 100
+      revealExpandedEditorCaret(textarea, mirror, { getScrollContainer: () => container })
+      expect(textarea.scrollTop).toBe(80)
+      expect(container.scrollTop).toBe(100)
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 15])
+    }
+  })
+
+  test('allows repeated upward selection extension through viewport events, then resumes typing reveal', () => {
+    const container = scrollContainer()
+    fieldTop = () => 100 - container.scrollTop
+    uninstall = installExpandedEditorCaretReveal(textarea, mirror, { getScrollContainer: () => container })
+    textarea.focus()
+    flush()
+    for (const start of [10, 6, 2, 0]) {
+      textarea.setSelectionRange(start, 15, 'forward')
+      textarea.scrollTop = start * 4
+      container.scrollTop = 30
+      textarea.dispatchEvent(new dom.window.Event('selectionchange'))
+      textarea.dispatchEvent(new dom.window.Event('select'))
+      document.dispatchEvent(new dom.window.Event('selectionchange'))
+      viewport.height -= 5
+      viewport.dispatchEvent(new dom.window.Event('resize'))
+      window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+      resize()
+      flush()
+      expect(textarea.scrollTop).toBe(start * 4)
+      expect(container.scrollTop).toBe(30)
+    }
+    textarea.setRangeText('!', 0, 15, 'end')
+    textarea.dispatchEvent(new dom.window.Event('input'))
+    flush()
+    expect(getExpandedEditorCaretRect(textarea, mirror)!.bottom).toBe(368)
+  })
+
   test('leaves the list alone when the caret is visible in a partly clipped field', () => {
     const container = scrollContainer()
     caretOffset = 20
