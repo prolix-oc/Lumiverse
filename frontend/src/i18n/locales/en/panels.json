@@ -3670,6 +3670,8 @@
         "persona_description": "User Persona",
         "scenario": "Scenario",
         "dialogue_examples": "Example Messages",
+        "system_prompt": "Character System Prompt",
+        "post_history_instructions": "Character Post-History Instructions",
         "main_prompt": "Main Prompt",
         "enhance_definitions": "Enhance Definitions",
         "jailbreak": "Post-History Instructions",

@@ -3317,6 +3317,8 @@
         "persona_description": "ユーザーのペルソナ",
         "scenario": "状況例",
         "dialogue_examples": "メッセージの例",
+        "system_prompt": "キャラクターのシステムプロンプト",
+        "post_history_instructions": "キャラクターの履歴後指示",
         "main_prompt": "メイン プロンプト",
         "enhance_definitions": "定義の強化",
         "jailbreak": "履歴後の指示",

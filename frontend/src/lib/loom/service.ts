@@ -65,6 +65,7 @@ export function createMarkerBlock(markerType: string, name?: string): PromptBloc
     marker: markerType,
     content: '',
     isLocked: isStructural,
+    position: markerType === 'post_history_instructions' ? 'post_history' : 'pre_history',
   })
 }
 
@@ -1480,6 +1481,7 @@ interface STPrompt {
   enabled?: boolean
   injection_trigger?: string[]
   lumiverse_character_tag_trigger?: string[]
+  lumiverse_character_instruction?: unknown
   system_prompt?: boolean
   marker?: boolean
   injection_position?: number
@@ -1524,6 +1526,21 @@ function importSTExtensions(extensions: unknown): Record<string, unknown> {
  * preset extensions that reference prompts by identifier still resolve them.
  */
 function convertSTPromptToBlock(p: STPrompt, enabled: boolean, allocateId: (preferred?: string) => string): PromptBlock {
+  const instruction = p.lumiverse_character_instruction
+  if (
+    isRecord(instruction)
+    && (instruction.marker === 'system_prompt' || instruction.marker === 'post_history_instructions')
+    && isPromptBlockPlacement(instruction.placement)
+  ) {
+    return {
+      ...createMarkerBlock(instruction.marker, p.name || undefined),
+      ...instruction.placement,
+      id: allocateId(p.identifier),
+      enabled,
+      injectionTrigger: Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : [],
+      characterTagTrigger: sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger),
+    }
+  }
   const markerType = p.identifier && Object.hasOwn(ST_IDENTIFIER_TO_MARKER, p.identifier)
     ? ST_IDENTIFIER_TO_MARKER[p.identifier]
     : undefined
@@ -1756,6 +1773,9 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
       : undefined
     const identifier = markerMapping ?? block.id
     const isWellKnown = !!markerMapping
+    const characterInstructionMacro = block.marker === 'system_prompt' ? '{{charPrompt}}'
+      : block.marker === 'post_history_instructions' ? '{{charInstruction}}'
+      : null
 
     // Map position → injection_position / injection_depth
     let injection_position = 0
@@ -1779,7 +1799,7 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
       name: block.marker === 'category' && !block.name.startsWith(CATEGORY_MARKER)
         ? `${CATEGORY_MARKER}${block.name}`
         : block.name,
-      content: block.content || '',
+      content: characterInstructionMacro ?? (block.content || ''),
       role,
       enabled: block.enabled,
       system_prompt: false,
@@ -1788,6 +1808,15 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
       injection_depth,
       injection_order: 100,
       forbid_overrides: false,
+    }
+
+    // These slots have no ST marker identifier. Export their macro content and
+    // retain native placement so importing back into Loom preserves opt-outs.
+    if (characterInstructionMacro) {
+      stPrompt.lumiverse_character_instruction = {
+        marker: block.marker,
+        placement: { role: block.role, position: block.position, depth: block.depth },
+      }
     }
 
     // Include injection_trigger for non-marker prompts (maps 1:1 with ST)

@@ -3670,6 +3670,8 @@
         "persona_description": "Nutzer-Persona",
         "scenario": "Szenario",
         "dialogue_examples": "Beispielnachrichten",
+        "system_prompt": "Systemprompt der Charakterkarte",
+        "post_history_instructions": "Anweisungen der Charakterkarte nach dem Verlauf",
         "main_prompt": "Haupt-Prompt",
         "enhance_definitions": "Definitionen verbessern",
         "jailbreak": "Anweisungen nach dem Verlauf",

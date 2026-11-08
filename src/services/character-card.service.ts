@@ -1,7 +1,7 @@
 import { inflateSync } from "zlib";
 import { unzipSync } from "fflate";
 import type { CreateCharacterInput } from "../types/character";
-import type { CreateRegexScriptInput, RegexTarget } from "../types/regex-script";
+import type { CreateRegexScriptInput, RegexAction, RegexTarget } from "../types/regex-script";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -636,6 +636,8 @@ export interface BundledRegexScript {
   name: string;
   find_regex: string;
   replace_string: string;
+  /** Optional for older bundles that predate interactive regex actions. */
+  actions?: RegexAction[];
   flags: string;
   placement: string[];
   scope: string;

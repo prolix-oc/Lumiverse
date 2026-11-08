@@ -59,6 +59,8 @@ export const MARKER_NAMES: Record<string, string> = {
   persona_description: 'User Persona',
   scenario: 'Scenario',
   dialogue_examples: 'Example Messages',
+  system_prompt: 'Character System Prompt',
+  post_history_instructions: 'Character Post-History Instructions',
   main_prompt: 'Main Prompt',
   enhance_definitions: 'Enhance Definitions',
   jailbreak: 'Post-History Instructions',
@@ -75,6 +77,8 @@ export const STRUCTURAL_MARKERS = new Set([
   'persona_description',
   'scenario',
   'dialogue_examples',
+  'system_prompt',
+  'post_history_instructions',
 ])
 
 export const CONTENT_BEARING_MARKERS = new Set([
@@ -274,6 +278,8 @@ export const ADDABLE_MARKERS: AddableMarkerItem[] = [
   'persona_description',
   'scenario',
   'dialogue_examples',
+  'system_prompt',
+  'post_history_instructions',
   { section: 'Prompts' },
   'main_prompt',
   'enhance_definitions',

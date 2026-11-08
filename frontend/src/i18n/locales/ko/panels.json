@@ -3670,6 +3670,8 @@
         "persona_description": "사용자 페르소나",
         "scenario": "시나리오",
         "dialogue_examples": "예시 메시지",
+        "system_prompt": "캐릭터 시스템 프롬프트",
+        "post_history_instructions": "캐릭터 대화 기록 후 지침",
         "main_prompt": "메인 프롬프트",
         "enhance_definitions": "정의 강화",
         "jailbreak": "채팅 내역 이후 지침",

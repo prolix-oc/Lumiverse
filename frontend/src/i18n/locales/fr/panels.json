@@ -3321,6 +3321,8 @@
         "persona_description": "Personnalité de l'utilisateur",
         "scenario": "Scénario",
         "dialogue_examples": "Exemples de messages",
+        "system_prompt": "Prompt système du personnage",
+        "post_history_instructions": "Instructions du personnage après l’historique",
         "main_prompt": "Invite principale",
         "enhance_definitions": "Améliorer les définitions",
         "jailbreak": "Instructions de post-historique",

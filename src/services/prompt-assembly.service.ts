@@ -1260,6 +1260,8 @@ const STRUCTURAL_MARKERS = new Set([
   "persona_description",
   "scenario",
   "dialogue_examples",
+  "system_prompt",
+  "post_history_instructions",
 ]);
 
 const CONTENT_BEARING_MARKERS = new Set([
@@ -1276,6 +1278,8 @@ const MARKER_TO_MACRO: Record<string, string> = {
   persona_description: "{{persona}}",
   scenario: "{{scenario}}",
   dialogue_examples: "{{mesExamples}}",
+  system_prompt: "{{system}}",
+  post_history_instructions: "{{charPostHistoryInstructions}}",
 };
 
 /** Sampler override camelCase → API snake_case mapping. */
@@ -1634,13 +1638,17 @@ const MEMORY_CONTENT_MACROS = new Set([
 ]);
 const DATABANK_CONTENT_MACROS = new Set(["databank", "databankraw"]);
 
-function detectPromptContextMacros(
+function detectPromptContentPlacements(
   blocks: PromptBlock[],
   generationType: GenerationType,
   characterTags: string[],
-): { memory: boolean; databank: boolean } {
-  const usage = { memory: false, databank: false };
+): { memory: boolean; databank: boolean; systemPrompt: boolean; postHistoryInstructions: boolean } {
+  const usage = { memory: false, databank: false, systemPrompt: false, postHistoryInstructions: false };
   for (const block of blocks) {
+    // Explicit character slots own inclusion, even when disabled or filtered.
+    // This lets presets suppress a card field without fallback re-injecting it.
+    if (block.marker === "system_prompt") usage.systemPrompt = true;
+    if (block.marker === "post_history_instructions") usage.postHistoryInstructions = true;
     if (!block.enabled || !block.content) continue;
     if (block.injectionTrigger?.length && !block.injectionTrigger.includes(generationType)) continue;
     if (!promptBlockMatchesCharacterTags(block.characterTagTrigger, characterTags)) continue;
@@ -1654,10 +1662,12 @@ function detectPromptContextMacros(
       if (name === "escape" || name === "comment" || name === "//") continue;
       if (MEMORY_CONTENT_MACROS.has(name)) usage.memory = true;
       if (DATABANK_CONTENT_MACROS.has(name)) usage.databank = true;
+      if (name === "system") usage.systemPrompt = true;
+      if (name === "charposthistoryinstructions") usage.postHistoryInstructions = true;
       for (const argument of node.args) pendingNodes.push(...argument);
       if (node.type === "scoped_macro") pendingNodes.push(...node.body);
     }
-    if (usage.memory && usage.databank) break;
+    if (usage.memory && usage.databank && usage.systemPrompt && usage.postHistoryInstructions) break;
   }
   return usage;
 }
@@ -2875,7 +2885,12 @@ export async function assemblePrompt(
   };
   profiler.addPhase("databank-retrieval", performance.now() - phaseStartedAt);
 
-  const { memory: macroHandlesMemory, databank: macroHandlesDatabank } = detectPromptContextMacros(
+  const {
+    memory: macroHandlesMemory,
+    databank: macroHandlesDatabank,
+    systemPrompt: hasSystemPromptPlacement,
+    postHistoryInstructions: hasPostHistoryInstructionsPlacement,
+  } = detectPromptContentPlacements(
     effectiveBlocks,
     ctx.generationType,
     focusedCharacter.tags,
@@ -3046,9 +3061,24 @@ export async function assemblePrompt(
   let hasWiBefore = false;
   let hasWiAfter = false;
   let firstChatIdx = -1;
-  let phiMacroReferenced = false;
   let blockYieldCounter = 0;
   phaseStartedAt = performance.now();
+
+  // Older presets have no character-instruction slots. Keep populated card
+  // fields useful by default while allowing explicit markers/macros to place
+  // them (or disabled markers to suppress them).
+  if (!hasSystemPromptPlacement && effectiveCharacter.system_prompt) {
+    const resolved = normalizePromptBlockText(await evaluateHostPromptSource(
+      "{{system}}", macroEnv, "prompt_source:character_wrapper",
+    ));
+    if (resolved) {
+      result.push({ role: "system", content: resolved });
+      breakdown.push({
+        type: "block", name: "Character System Prompt", role: "system",
+        content: resolved, marker: "system_prompt",
+      });
+    }
+  }
   // Marker-pinned WI entries (position-7 entries whose wi_marker targets a
   // specific loom block): splice adjacent to that block rather than joining
   // the legacy {{wi_marker}} macro pool. Group by target marker, then by side.
@@ -3562,14 +3592,6 @@ export async function assemblePrompt(
 
     // Content-bearing markers and regular blocks → resolve block.content
     const content = block.content || "";
-    if (
-      !phiMacroReferenced &&
-      /\{\{\s*(?:jailbreak|charJailbreak|charInstruction|charPostHistoryInstructions)\s*(?:\}\}|::)/i.test(
-        content,
-      )
-    ) {
-      phiMacroReferenced = true;
-    }
     const rawTokenCountContent = await evaluatePromptBlockTokenCountContent(
       content,
       macroEnv,
@@ -3652,7 +3674,7 @@ export async function assemblePrompt(
 
   // ---- Post-history instructions ----
   phaseStartedAt = performance.now();
-  if (!phiMacroReferenced && effectiveCharacter.post_history_instructions) {
+  if (!hasPostHistoryInstructionsPlacement && effectiveCharacter.post_history_instructions) {
     const resolved = (await evaluateHostPromptSource(
       "{{charPostHistoryInstructions}}",
       macroEnv,
@@ -3665,7 +3687,7 @@ export async function assemblePrompt(
         name: "Post-History Instructions",
         role: "system",
         content: resolved,
-        marker: "jailbreak",
+        marker: "post_history_instructions",
       });
     }
   }

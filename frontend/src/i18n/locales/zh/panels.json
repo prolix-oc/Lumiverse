@@ -3317,6 +3317,8 @@
         "persona_description": "用户人设",
         "scenario": "场景",
         "dialogue_examples": "示例消息",
+        "system_prompt": "角色系统提示词",
+        "post_history_instructions": "角色历史后指令",
         "main_prompt": "主提示词",
         "enhance_definitions": "增强定义",
         "jailbreak": "历史后指令",
