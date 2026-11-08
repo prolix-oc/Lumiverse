@@ -1974,6 +1974,39 @@ describe("Edge cases", () => {
     expect(await ev("{{unknownMacro}}")).toBe("{{unknownMacro}}");
   });
 
+  test("unknown macro passes through with its original spelling", async () => {
+    for (const source of [
+      "{{plugin.memory}}",
+      "{{unknownMacro .localVar}}",
+      "{{:else}}",
+      "{{unknownMacro:single}}",
+      "{{ unknownMacro }}",
+      "{{unknownMacro::a::{{.nested}}}}",
+    ]) {
+      expect(await ev(`before ${source} after`)).toBe(`before ${source} after`);
+    }
+  });
+
+  test("unknown macro still consumes escaped braces", async () => {
+    expect(await ev("{{unknown::\\{a\\}}}")).toBe("{{unknown::{a}}}");
+    // The lexer does not read this one as an escape, and later text must survive.
+    expect(await ev("{{foo}\\}} tail {{user}}")).toBe("{{foo}} tail Alice");
+  });
+
+  test("unterminated unknown macro is still closed", async () => {
+    expect(await ev("before {{foo")).toBe("before {{foo}}");
+    expect(await ev("{{foo::{{bar}}")).toBe("{{foo::{{bar}}}}");
+  });
+
+  test("an unresolved macro in a condition is falsy even when unclosed", async () => {
+    for (const value of ["{{foo", "{{foo}", "oops {{ foo", "{{foo}}"]) {
+      const env = makeEnv();
+      env.variables.local.set("x", value);
+      expect(await ev("{{if::{{getvar::x}}}}T{{else}}F{{/if}}", env)).toBe("F");
+      expect(await ev("{{unless::{{getvar::x}}}}T{{else}}F{{/unless}}", env)).toBe("T");
+    }
+  });
+
   test("escaped braces", async () => {
     expect(await ev("\\{{not a macro\\}}")).toBe("{{not a macro}}");
   });
