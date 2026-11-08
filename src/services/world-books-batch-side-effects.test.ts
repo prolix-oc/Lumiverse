@@ -8,6 +8,7 @@ import { WorkerHostContentApi, type SpindleBatchJsonValue, type SpindleBatchOper
 
 const singleDeletes: string[] = [];
 const groupedDeletes: string[][] = [];
+const queued: Array<{ entryId: string; inTransaction: boolean; supersedesIndexed: boolean }> = [];
 
 mock.module("./embeddings.service", () => ({
   deleteWorldBookEntryEmbeddings: async (_userId: string, entryId: string) => {
@@ -23,7 +24,9 @@ mock.module("./embeddings.service", () => ({
   },
 }));
 mock.module("./vectorization-queue.service", () => ({
-  queueWorldBookEntryVectorization: () => {},
+  queueWorldBookEntryVectorization: (_userId: string, entryId: string, _priority?: number, supersedesIndexed = false) => {
+    queued.push({ entryId, inTransaction: getDb().inTransaction, supersedesIndexed });
+  },
 }));
 
 const { bulkOperateEntries, createEntry, createWorldBook, getEntry, updateEntry } = await import("./world-books.service");
@@ -90,6 +93,7 @@ beforeEach(async () => {
   await applyBaseline();
   singleDeletes.length = 0;
   groupedDeletes.length = 0;
+  queued.length = 0;
 });
 
 afterEach(() => closeDatabase());
@@ -166,6 +170,70 @@ describe("spindle batch world book events", () => {
 });
 
 describe("spindle batch vector cleanup", () => {
+  test("a rolled back content edit does not enqueue a replacement for the restored indexed entry", async () => {
+    const book = createWorldBook(OWNER_ID, { name: "Rollback reindex" });
+    const [entry] = entries(book.id, 1, true);
+    queued.length = 0;
+    makeApi().api.handleSpindleBatch("rollback-reindex", [update(entry!.id, { content: "abandoned edit" }), update("missing-entry", { comment: "fail" })], undefined, OWNER_ID);
+    await settle();
+    expect(getEntry(OWNER_ID, entry!.id)?.vector_index_status).toBe("indexed");
+    expect(queued).toEqual([]);
+    expect(deletedIds()).toEqual([]);
+  });
+
+  test("disabling then re-enabling an entry in one batch schedules only its final reindex after commit", async () => {
+    const book = createWorldBook(OWNER_ID, { name: "Final vector state" });
+    const [entry] = entries(book.id, 1, true);
+    queued.length = 0;
+    makeApi().api.handleSpindleBatch("off-on", [update(entry!.id, { vectorized: false }), update(entry!.id, { vectorized: true })], undefined, OWNER_ID);
+    await settle();
+    expect(getEntry(OWNER_ID, entry!.id)?.vectorized).toBe(true);
+    expect(deletedIds()).toEqual([]);
+    expect(queued).toEqual([{ entryId: entry!.id, inTransaction: false, supersedesIndexed: true }]);
+  });
+
+  test("a later ordinary edit preserves cleanup required by an earlier vector disable", async () => {
+    const book = createWorldBook(OWNER_ID, { name: "Disable then edit" });
+    const [entry] = entries(book.id, 1, true);
+    queued.length = 0;
+    makeApi().api.handleSpindleBatch("off-edit", [update(entry!.id, { vectorized: false }), update(entry!.id, { comment: "renamed" })], undefined, OWNER_ID);
+    await settle();
+    expect(deletedIds()).toEqual([entry!.id]);
+    expect(queued).toEqual([]);
+  });
+
+  test("a content edit followed by disabling vectors never queues intermediate content", async () => {
+    const book = createWorldBook(OWNER_ID, { name: "Edit then disable" });
+    const [entry] = entries(book.id, 1, true);
+    queued.length = 0;
+    makeApi().api.handleSpindleBatch("edit-off", [update(entry!.id, { content: "new lore" }), update(entry!.id, { vectorized: false })], undefined, OWNER_ID);
+    await settle();
+    expect(deletedIds()).toEqual([entry!.id]);
+    expect(queued).toEqual([]);
+  });
+
+  test("a cross-owner update rolls back all edits, events and vector work", async () => {
+    const ownBook = createWorldBook(OWNER_ID, { name: "Own book" });
+    const foreignBook = createWorldBook("other-owner", { name: "Private book" });
+    const [ownEntry] = entries(ownBook.id, 1, true);
+    const foreignEntry = createEntry("other-owner", foreignBook.id, { content: "private", vectorized: true })!;
+    queued.length = 0;
+    const events = recordEvents();
+    const { api, responses } = makeApi();
+    try {
+      api.handleSpindleBatch("foreign", [update(ownEntry!.id, { content: "discard" }), update(foreignEntry.id, { vectorized: false })], undefined, OWNER_ID);
+      await settle();
+      expect((responses[0]?.result as Array<{ ok: boolean }>).every((r) => !r.ok)).toBe(true);
+      expect(getEntry(OWNER_ID, ownEntry!.id)?.content).toBe(ownEntry!.content);
+      expect(getEntry("other-owner", foreignEntry.id)?.vectorized).toBe(true);
+      expect(queued).toEqual([]);
+      expect(deletedIds()).toEqual([]);
+      expect(events.bookChanged).toEqual([]);
+    } finally {
+      events.stop();
+    }
+  });
+
   test("a rolled back batch does not delete vectors of entries that stay vectorized", async () => {
     const book = createWorldBook(OWNER_ID, { name: "Rollback vectors" });
     const [entry] = entries(book.id, 1, true);
