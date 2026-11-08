@@ -33,12 +33,12 @@ import { canSkipDisplayRegex } from './match-gate'
 // quarantine can reset it without evidence.ts importing this module (which
 // would close a cycle, since this module imports evidence.ts). Emitting the
 // warning itself stays here — evidence.ts has no business owning toasts.
-function announceSkippedOnce(script: RegexScript, reason: string): void {
-  if (!shouldAnnounceRegexSkip(script.id)) return
+function announceSkippedOnce(script: RegexScript, kind: 'quarantined' | 'unavailable', reason: string): void {
+  if (!shouldAnnounceRegexSkip(script.id, kind)) return
   console.warn(`[display] skipping display regex script (script=${script.id} "${script.name}", reason=${reason})`)
   toast.warning(
-    i18n.t('panels:regexPanel.quarantinedDisplay', { name: script.name }),
-    { title: i18n.t('panels:regexPanel.slowDisplayTitle'), duration: 7000 },
+    i18n.t(`panels:regexPanel.${kind === 'quarantined' ? 'quarantinedDisplay' : 'unavailableDisplay'}`, { name: script.name }),
+    { title: i18n.t(`panels:regexPanel.${kind === 'quarantined' ? 'slowDisplayTitle' : 'skippedDisplayTitle'}`), duration: 7000 },
   )
 }
 
@@ -198,7 +198,7 @@ async function applyBatchInWorker(
               )
             ) continue
             quarantineRegexScript(timedOut.script)
-            announceSkippedOnce(timedOut.script, 'worker and backend deadlines exceeded')
+            announceSkippedOnce(timedOut.script, 'quarantined', 'worker and backend deadlines exceeded')
           }
           return { ok: true, outcome: confirmed }
         }
@@ -239,7 +239,7 @@ async function backendThenRaw(
 ): Promise<DisplayRegexBackendResult> {
   const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
   if (backendResult !== null) return backendResult
-  for (const script of scripts) announceSkippedOnce(script, 'worker and backend unavailable')
+  for (const script of scripts) announceSkippedOnce(script, 'unavailable', 'worker and backend unavailable')
   return { result: content, cacheable: false }
 }
 
@@ -274,7 +274,7 @@ export async function applyDisplayRegexTiered(
     if (!placementEligible(script, context)) continue
     const decision = getRegexExecTier(script)
     if (decision.tier === 'quarantined') {
-      announceSkippedOnce(script, decision.reason)
+      announceSkippedOnce(script, 'quarantined', decision.reason)
       continue
     }
     eligible.push(script)

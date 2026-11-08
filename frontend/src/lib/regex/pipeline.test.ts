@@ -380,7 +380,18 @@ describe('isolated regex pipeline', () => {
       const body = `${'a'.repeat(40)}X`
       const outcome = await applyDisplayRegexTiered(body, [risky], context)
       expect(outcome).toMatchObject({ result: body, cacheable: false })
-      expect(toastCalls).toHaveLength(1)
+      expect(toastCalls).toEqual(['panels:regexPanel.unavailableDisplay'])
+      expect(getRegexExecTier(risky).tier).toBe('worker')
+      expect(evidenceReports).toEqual([])
+
+      // A temporary failure must not consume the warning for a later real
+      // quarantine of the same script.
+      quarantineRegexScript(risky)
+      await applyDisplayRegexTiered(body, [risky], context)
+      expect(toastCalls).toEqual([
+        'panels:regexPanel.unavailableDisplay',
+        'panels:regexPanel.quarantinedDisplay',
+      ])
     } finally {
       fetchSpy.mockRestore()
     }
@@ -393,6 +404,28 @@ describe('isolated regex pipeline', () => {
     const result = await applyDisplayRegexTiered('x', [quarantined], context)
     expect(result.result).toBe('x')
     expect(spawned).toHaveLength(0)
+  })
+
+  test('temporary executor failures leave unchanged scripts eligible for a later successful render', async () => {
+    makeHarness({ spawnThrows: true })
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 503 }))
+    try {
+      const unchanged = script('retry')
+      expect(await applyDisplayRegexTiered('x', [unchanged], context)).toMatchObject({
+        result: 'x', cacheable: false,
+      })
+
+      const { spawned } = makeHarness()
+      const retry = applyDisplayRegexTiered('x', [unchanged], context)
+      await flush()
+      echoWorker(spawned[0])
+      expect((await retry).result).toBe('y')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(evidenceReports).toEqual([])
+      expect(toastCalls).toEqual(['panels:regexPanel.unavailableDisplay'])
+    } finally {
+      fetchSpy.mockRestore()
+    }
   })
 
   test('owned processing state reaches the final callback without transport', async () => {

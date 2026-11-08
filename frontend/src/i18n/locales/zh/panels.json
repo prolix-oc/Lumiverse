@@ -726,6 +726,8 @@
     "timedOutDetail": "该脚本触发了正则超时，执行时已被跳过。",
     "slowDetail": "该脚本被标记为慢，执行耗时 {{seconds}} 秒。",
     "quarantinedDisplay": "显示正则「{{name}}」卡死了隔离执行器，已被跳过。请在正则脚本中解除隔离后再次运行。",
+    "unavailableDisplay": "由于隔离执行环境不可用，本次渲染已跳过显示正则「{{name}}」。",
+    "skippedDisplayTitle": "已跳过正则脚本",
     "quarantined": "已隔离",
     "quarantinedDetail": "该脚本卡死了隔离执行器，正在被跳过。解除隔离即可再次运行。",
     "clearQuarantine": "再次运行",

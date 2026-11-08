@@ -936,6 +936,8 @@
     "timedOutDetail": "이 스크립트는 정규식 제한 시간에 도달하여 실행 중 건너뛰어졌습니다.",
     "slowDetail": "이 스크립트는 실행에 {{seconds}}초가 걸려 느림으로 표시되었습니다.",
     "quarantinedDisplay": "표시 정규식 \"{{name}}\"이(가) 격리된 실행 환경을 멈추게 하여 실행에서 제외되고 있습니다. 다시 실행하려면 정규식 스크립트에서 격리를 해제하십시오.",
+    "unavailableDisplay": "격리된 실행 환경을 사용할 수 없어 이번 렌더링에서 표시 정규식 \"{{name}}\"을(를) 건너뛰었습니다.",
+    "skippedDisplayTitle": "정규식 스크립트 건너뜀",
     "quarantined": "격리됨",
     "quarantinedDetail": "이 스크립트는 격리된 실행 환경을 멈추게 하여 실행에서 제외되고 있습니다. 다시 실행하려면 격리를 해제하십시오.",
     "clearQuarantine": "다시 실행",

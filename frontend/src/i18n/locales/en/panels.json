@@ -936,6 +936,8 @@
     "timedOutDetail": "This script hit the regex timeout and was skipped during execution.",
     "slowDetail": "This script was flagged as slow after taking {{seconds}}s to run.",
     "quarantinedDisplay": "Display regex \"{{name}}\" hung the isolated executor and is being skipped. Clear its quarantine in Regex Scripts to run it again.",
+    "unavailableDisplay": "Display regex \"{{name}}\" was skipped for this render because isolated execution was unavailable.",
+    "skippedDisplayTitle": "Regex Script Skipped",
     "presetLoadFailed": "Could not load this swipe’s preset regexes. Refresh to retry.",
     "quarantined": "Quarantined",
     "quarantinedDetail": "This script hung the isolated executor and is being skipped. Clear the quarantine to run it again.",

@@ -726,6 +726,8 @@
     "timedOutDetail": "Ce script a atteint le délai d'expiration de l'expression régulière et a été ignoré pendant l'exécution.",
     "slowDetail": "Ce script a été signalé comme lent après avoir mis {{seconds}}s à s'exécuter.",
     "quarantinedDisplay": "L'expression régulière d'affichage \"{{name}}\" a bloqué l'exécuteur isolé et est désormais ignorée. Levez sa mise en quarantaine dans Scripts Regex pour la réexécuter.",
+    "unavailableDisplay": "L'expression régulière d'affichage \"{{name}}\" a été ignorée pour ce rendu, car l'exécution isolée était indisponible.",
+    "skippedDisplayTitle": "Script Regex ignoré",
     "quarantined": "En quarantaine",
     "quarantinedDetail": "Ce script a bloqué l'exécuteur isolé et est actuellement ignoré. Levez la quarantaine pour le réexécuter.",
     "clearQuarantine": "Réexécuter",

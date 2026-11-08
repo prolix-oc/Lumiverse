@@ -936,6 +936,8 @@
     "timedOutDetail": "Dieses Skript hat das Regex-Zeitlimit erreicht und wurde bei der Ausführung übersprungen.",
     "slowDetail": "Dieses Skript wurde als langsam markiert, nachdem es {{seconds}} s zur Ausführung benötigte.",
     "quarantinedDisplay": "Anzeige-Regex „{{name}}“ hat den isolierten Executor blockiert und wird übersprungen. Hebe die Quarantäne in den Regex-Skripten auf, um es erneut auszuführen.",
+    "unavailableDisplay": "Die Anzeige-Regex „{{name}}“ wurde für diese Darstellung übersprungen, da die isolierte Ausführung nicht verfügbar war.",
+    "skippedDisplayTitle": "Regex-Skript übersprungen",
     "quarantined": "In Quarantäne",
     "quarantinedDetail": "Dieses Skript hat den isolierten Executor blockiert und wird übersprungen. Hebe die Quarantäne auf, um es erneut auszuführen.",
     "clearQuarantine": "Erneut ausführen",

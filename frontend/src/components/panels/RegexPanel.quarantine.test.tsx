@@ -319,6 +319,24 @@ describe('RegexPanel quarantine recovery', () => {
     expect(evidenceReports).toEqual([])
   })
 
+  test('a metadata-only refetch surfaces the quarantine badge and a working clear action', async () => {
+    const original = script('hung-script')
+    storeState = baseStoreState([original])
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, panels.regexPanel.uncategorized))
+    expect(byAriaLabel(host, QUARANTINE_DETAIL)).toBeNull()
+
+    storeState.regexScripts = [{ ...original, metadata: { regex_evidence: { quarantined: true } } }]
+    await rerender(host)
+
+    const badge = byAriaLabel(host, QUARANTINE_DETAIL)
+    expect(badge).not.toBeNull()
+    await click(badge!)
+    await click(byAriaLabel(host, CLEAR_ARIA)!)
+    expect(evidenceReports).toEqual([{ id: original.id, payload: { quarantined: false } }])
+    expect(byAriaLabel(host, QUARANTINE_DETAIL)).toBeNull()
+  })
+
   test('a failed clear surfaces the server error and leaves the panel usable', async () => {
     const hung = script('hung-script', { metadata: { regex_evidence: { quarantined: true } } })
     storeState = baseStoreState([hung])

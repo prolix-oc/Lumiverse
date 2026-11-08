@@ -726,6 +726,8 @@
     "timedOutDetail": "Questo script ha raggiunto il timeout del regex ed è stato saltato durante l'esecuzione.",
     "slowDetail": "Questo script è stato segnalato come lento dopo aver impiegato {{seconds}}s per l'esecuzione.",
     "quarantinedDisplay": "Il regex di visualizzazione \"{{name}}\" ha bloccato l'esecutore isolato ed è stato saltato. Rimuovi la quarantena in Script Regex per eseguirlo di nuovo.",
+    "unavailableDisplay": "Il regex di visualizzazione \"{{name}}\" è stato saltato per questo rendering perché l'esecuzione isolata non era disponibile.",
+    "skippedDisplayTitle": "Script Regex saltato",
     "quarantined": "In quarantena",
     "quarantinedDetail": "Questo script ha bloccato l'esecutore isolato e viene saltato. Rimuovi la quarantena per eseguirlo di nuovo.",
     "clearQuarantine": "Esegui di nuovo",
