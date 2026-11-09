@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect, beforeAll, spyOn } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
 import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
@@ -762,6 +762,97 @@ describe("Time macros", () => {
 });
 
 describe("Random macros", () => {
+  for (const name of ["random", "pick"]) {
+    test(`${name} chooses each comma-separated item and trims surrounding whitespace`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        for (const [value, expected] of [[0, "thing1"], [0.5, "thing2"], [0.999, "thing3"]] as const) {
+          rng.mockReturnValue(value);
+          expect(await ev(`{{${name}:: thing1, thing2, thing3 }}`)).toBe(expected);
+          expect(await ev(`{{${name}: thing1, thing2, thing3 }}`)).toBe(expected);
+        }
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} preserves escaped commas, multiword items, and internal newlines`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        rng.mockReturnValue(0);
+        expect(await ev(`{{${name}::hello\\, world, another choice}}`)).toBe("hello, world");
+        expect(await ev(`{{${name}::hello\\, world}}`)).toBe("hello, world");
+        rng.mockReturnValue(0.999);
+        expect(await ev(`{{${name}::hello\\, world, another choice\non two lines}}`)).toBe("another choice\non two lines");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} keeps commas literal when choices use ::`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        rng.mockReturnValue(0);
+        expect(await ev(`{{${name}::hello, world::goodbye, world}}`)).toBe("hello, world");
+        rng.mockReturnValue(0.999);
+        expect(await ev(`{{${name}::hello, world::goodbye, world}}`)).toBe("goodbye, world");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} resolves nested macros before splitting a comma-separated list`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        const env = makeEnv({ localVars: { choices: "one, two, three" } });
+        expect(await ev(`{{${name}::{{getvar::choices}}}}`, env)).toBe("two");
+        expect(await ev(`{{${name}::{{user}}, {{char}}, someone else}}`, env)).toBe("Bob");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} preserves empty comma-separated choices`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        expect(await ev(`{{${name}::one, , three}}`)).toBe("");
+        expect(await ev(`{{${name}::,}}`)).toBe("");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} treats comma-separated numbers as choices`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        expect(await ev(`{{${name}::1, 100}}`)).toBe("100");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} returns object text intact when internal commas are escaped`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.999);
+      try {
+        expect(await ev(`{{${name}::{"name":"one"\\,"rank":1}, {"name":"two"\\,"rank":2} }}`)).toBe('{"name":"two","rank":2}');
+      } finally {
+        rng.mockRestore();
+      }
+    });
+  }
+
+  test("random numeric range still includes both endpoints", async () => {
+    const rng = spyOn(Math, "random");
+    try {
+      rng.mockReturnValue(0);
+      expect(await ev("{{random::1::100}}")).toBe("1");
+      rng.mockReturnValue(0.999);
+      expect(await ev("{{random::1::100}}")).toBe("100");
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
   test("random integer range", async () => {
     const result = parseInt(await ev("{{random::1::10}}"), 10);
     expect(result).toBeGreaterThanOrEqual(1);

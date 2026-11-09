@@ -579,8 +579,8 @@ Macros for randomness and dice rolling.
 
 | Macro | Returns | Args |
 |-------|---------|------|
-| `{{random::min::max}}` | Random integer between min and max | Two numbers separated by `::`, or a list of items |
-| `{{pick::item1::item2::...}}` | One randomly chosen item | List of options separated by `::` |
+| `{{random::min::max}}` | Random integer between min and max, or one randomly chosen item | Two numbers separated by `::`, or options separated by `::` or commas |
+| `{{pick::item1::item2::...}}` | One randomly chosen item | Options separated by `::` or commas |
 | `{{roll::NdS}}` | Dice roll total | Dice notation (e.g., `2d6`, `1d20`, `3d8`) |
 
 **Examples:**
@@ -588,8 +588,14 @@ Macros for randomness and dice rolling.
 ```
 {{char}} rolls a {{roll::1d20}} on their perception check.
 The weather today is {{pick::sunny::cloudy::rainy::stormy}}.
+A random choice: {{random::thing1, thing2, thing3}}
+A comma-separated pick: {{pick::sunny, cloudy, rainy, stormy}}
 A random number: {{random::1::100}}
 ```
+
+Both `random` and `pick` accept SillyTavern-style comma-separated choices. Whitespace around each comma-separated item is trimmed; use `\,` for a literal comma inside an item, such as `{{random::hello\, world, goodbye}}`. Empty items remain possible choices.
+
+When multiple arguments are separated by `::`, commas inside each argument stay literal: `{{pick::hello, world::goodbye, world}}`. Numeric ranges still use `::`: `{{random::1::100}}` rolls between 1 and 100, while `{{random::1, 100}}` chooses either 1 or 100. Choices are text, so commas inside object text must also be escaped or kept within a `::`-separated argument.
 
 ---
 

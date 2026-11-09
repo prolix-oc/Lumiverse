@@ -1,5 +1,14 @@
 import { registry } from "../MacroRegistry";
 
+function getChoices(args: string[]): string[] {
+  // Explicit :: arguments take precedence, so commas in those items stay literal.
+  // A single argument can instead use SillyTavern's comma-separated syntax.
+  if (args.length !== 1 || !args[0].includes(",")) return args;
+  return args[0]
+    .split(/(?<!\\),/)
+    .map((item) => item.trim().replace(/\\,/g, ","));
+}
+
 export function registerRandomMacros(): void {
   registry.registerMacro({
     builtIn: true,
@@ -8,7 +17,7 @@ export function registerRandomMacros(): void {
     name: "random",
     category: "Random",
     description:
-      "Random integer between min and max (inclusive), or pick a random item from a list of strings",
+      "Random integer between min and max (inclusive), or pick a random item from a ::- or comma-separated list",
     returnType: "string",
     args: [
       { name: "min_or_item1", description: "Minimum value or first item" },
@@ -31,8 +40,9 @@ export function registerRandomMacros(): void {
       }
 
       // Otherwise, pick a random item from the list
-      const idx = Math.floor(Math.random() * ctx.args.length);
-      return ctx.args[idx];
+      const choices = getChoices(ctx.args);
+      const idx = Math.floor(Math.random() * choices.length);
+      return choices[idx];
     },
   });
 
@@ -42,13 +52,14 @@ export function registerRandomMacros(): void {
     volatile: true,
     name: "pick",
     category: "Random",
-    description: "Pick a random item from a list of arguments. Stable per evaluation when seeded.",
+    description: "Pick a random item from a ::- or comma-separated list of arguments. Stable per evaluation when seeded.",
     returnType: "string",
     isList: true,
     handler: (ctx) => {
       if (ctx.args.length === 0) return "";
-      const idx = Math.floor(Math.random() * ctx.args.length);
-      return ctx.args[idx];
+      const choices = getChoices(ctx.args);
+      const idx = Math.floor(Math.random() * choices.length);
+      return choices[idx];
     },
   });
 

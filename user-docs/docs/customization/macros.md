@@ -50,7 +50,7 @@ Current time: 14:30 on Wednesday.
 | **String** | `{{upper}}`, `{{replace}}`, `{{len}}`, `{{split}}` | [String macros](../presets/macros-reference.md#string-manipulation) |
 | **Math** | `{{calc::2+3}}`, `{{clamp}}`, `{{min}}`, `{{max}}` | [Math macros](../presets/macros-reference.md#math) |
 | **Logic** | `{{switch}}`, `{{case}}`, `{{default}}`, `{{and}}`, `{{not}}`, `{{matches}}` | [Logic macros](../presets/macros-reference.md#logic-comparisons) |
-| **Random** | `{{random::1::100}}`, `{{pick::a::b::c}}`, `{{roll::2d6}}` | [Entropy macros](../presets/macros-reference.md#random-entropy) |
+| **Random** | `{{random::1::100}}`, `{{random::a, b, c}}`, `{{pick::a, b, c}}`, `{{roll::2d6}}` | [Entropy macros](../presets/macros-reference.md#random-entropy) |
 | **Variables** | `{{.var}}` (local), `{{@var}}` (chat-persisted), `{{$var}}` (global) | [Variable macros](../presets/macros-reference.md#variables) |
 | **JSON** | `{{jsonGet}}`, `{{jsonSet}}`, `{{jsonBlock}}`, `{{getchatvarkey::state::party[0].hp}}` | [JSON macros](../presets/macros-reference.md#json) |
 | **Prompt Variables** | `{{var::tone}}`, `{{varDefault::tone}}` | [Prompt variable macros](../presets/macros-reference.md#prompt-variables-preset-inputs) |
