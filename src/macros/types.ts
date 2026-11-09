@@ -46,6 +46,8 @@ export interface MacroNode {
   flags: MacroFlags;
   raw: string;
   offset: number;
+  /** The source ended before this macro's closing braces. */
+  unterminated?: boolean;
 }
 
 export interface ScopedMacroNode {

@@ -97,6 +97,18 @@ Closing scoped macros use `/`, like `{{/if}}`, `{{/trim}}`, or `{{/numbered}}`.
 
 ---
 
+### Unknown Macros and Imported Templates
+
+An unregistered, non-scoped macro with closing `}}` keeps its original spelling. For example, `{{plugin.memory}}`, `{{unknown:single}}`, and `{{ unknown }}` remain exactly as written. They are not converted to the argument syntax used by built-in macros.
+
+Arguments inside an unknown macro stay literal too: `{{unknown::{{user}}}}` stays unchanged. Nested comments, conditional branches, and variable assignments are neither evaluated nor removed. In particular, a comment inside an unknown macro can reach the model as literal text; place comments outside the unknown macro if they should be discarded. Registered macros outside it continue to resolve normally.
+
+This corrects earlier behavior that normalized unknown macro spelling and could drop nested comments or scoped blocks. A comparison such as `{{eq::{{ unknown }}::{{unknown}}}}` now returns an empty result because the two spellings differ. A malformed expression such as `{{foo} tail {{user}}` is parsed as one closed unknown macro and remains literal, including `{{user}}`.
+
+Two recovery paths still rebuild the parsed expression: an unterminated macro receives closing braces, and an expression containing backslash-escaped braces consumes those escapes. These paths can normalize spelling and omit nested scoped blocks. Unknown scoped wrappers retain their existing behavior: their body is evaluated and the wrapper is removed. To deliberately preserve arbitrary template content, use `{{#escape}}...{{/escape}}`.
+
+---
+
 ## Core Macros
 
 Utility macros for text manipulation and flow control.

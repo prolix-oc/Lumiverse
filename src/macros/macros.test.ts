@@ -1974,6 +1974,64 @@ describe("Edge cases", () => {
     expect(await ev("{{unknownMacro}}")).toBe("{{unknownMacro}}");
   });
 
+  test("unknown macro passes through with its original spelling", async () => {
+    for (const source of [
+      "{{plugin.memory}}",
+      "{{unknownMacro .localVar}}",
+      "{{:else}}",
+      "{{unknownMacro:single}}",
+      "{{ unknownMacro }}",
+      "{{unknownMacro::a::{{.nested}}}}",
+    ]) {
+      expect(await ev(`before ${source} after`)).toBe(`before ${source} after`);
+    }
+  });
+
+  test("unknown macro arguments stay literal without running nested side effects", async () => {
+    const env = makeEnv({ localVars: { untouched: "original" } });
+    for (const source of [
+      "{{unknown::{{// note}}}}",
+      "{{unknown::{{if::1}}yes{{else}}no{{/if}}}}",
+      "{{unknown::{{setvar::untouched::changed}}}}",
+      "{{unknown::{{#escape}}{{user}}{{/escape}}}}",
+    ]) {
+      const result = await evaluate(`${source}|{{user}}`, env, registry);
+      expect(result.text).toBe(`${source}|Alice`);
+      expect(await ev(result.text, env)).toBe(result.text);
+      expect(await ev(`{{if::1}}${source}{{/if}}`, env)).toBe(source);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.touchedVars.size).toBe(0);
+      expect(result.cacheable).toBe(true);
+    }
+    expect(env.variables.local.get("untouched")).toBe("original");
+  });
+
+  test("unknown spelling is visible to comparisons and malformed closed input stays literal", async () => {
+    expect(await ev("{{eq::{{ unknown }}::{{unknown}}}}")).toBe("");
+    const source = "{{foo} tail {{user}}";
+    expect(await ev(source)).toBe(source);
+  });
+
+  test("unknown macro still consumes escaped braces", async () => {
+    expect(await ev("{{unknown::\\{a\\}}}")).toBe("{{unknown::{a}}}");
+    // The lexer does not read this one as an escape, and later text must survive.
+    expect(await ev("{{foo}\\}} tail {{user}}")).toBe("{{foo}} tail Alice");
+  });
+
+  test("unterminated unknown macro is still closed", async () => {
+    expect(await ev("before {{foo")).toBe("before {{foo}}");
+    expect(await ev("{{foo::{{bar}}")).toBe("{{foo::{{bar}}}}");
+  });
+
+  test("an unresolved macro in a condition is falsy even when unclosed", async () => {
+    for (const value of ["{{foo", "{{foo}", "oops {{ foo", "{{foo}}"]) {
+      const env = makeEnv();
+      env.variables.local.set("x", value);
+      expect(await ev("{{if::{{getvar::x}}}}T{{else}}F{{/if}}", env)).toBe("F");
+      expect(await ev("{{unless::{{getvar::x}}}}T{{else}}F{{/unless}}", env)).toBe("T");
+    }
+  });
+
   test("escaped braces", async () => {
     expect(await ev("\\{{not a macro\\}}")).toBe("{{not a macro}}");
   });
