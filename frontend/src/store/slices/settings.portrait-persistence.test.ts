@@ -380,6 +380,7 @@ describe('long message collapse settings', () => {
   test('defaults to disabled with the comfortable height preset', () => {
     const initial = store()
     expect(initial.longMessageCollapseEnabled).toBe(false)
+    expect(initial.longMessageCollapseUserMessages).toBe(false)
     expect(initial.longMessageCollapsePreset).toBe('comfortable')
     expect(initial.longMessageCollapseCustomHeight).toBe(500)
     expect(initial.longMessageCollapseDepth).toBe(0)
@@ -391,12 +392,14 @@ describe('long message collapse settings', () => {
     const first = store()
 
     first.setSetting('longMessageCollapseEnabled', true)
+    first.setSetting('longMessageCollapseUserMessages', true)
     first.setSetting('longMessageCollapsePreset', 'custom')
     first.setSetting('longMessageCollapseCustomHeight', 347)
     first.setSetting('longMessageCollapseDepth', 6)
     await flushSettingsNow()
 
     expect(rows.get('longMessageCollapseEnabled')).toBe(true)
+    expect(rows.get('longMessageCollapseUserMessages')).toBe(true)
     expect(rows.get('longMessageCollapsePreset')).toBe('custom')
     expect(rows.get('longMessageCollapseCustomHeight')).toBe(347)
     expect(rows.get('longMessageCollapseDepth')).toBe(6)
@@ -404,6 +407,7 @@ describe('long message collapse settings', () => {
     const restored = store()
     await restored.loadSettings()
     expect(restored.longMessageCollapseEnabled).toBe(true)
+    expect(restored.longMessageCollapseUserMessages).toBe(true)
     expect(restored.longMessageCollapsePreset).toBe('custom')
     expect(restored.longMessageCollapseCustomHeight).toBe(347)
     expect(restored.longMessageCollapseDepth).toBe(6)

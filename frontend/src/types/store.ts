@@ -791,6 +791,7 @@ export interface SettingsSlice {
   chatImageAlignment: ChatImageAlignment
   chatImageTargets: ChatImageTargets
   longMessageCollapseEnabled: boolean
+  longMessageCollapseUserMessages: boolean
   longMessageCollapsePreset: LongMessageCollapsePreset
   longMessageCollapseCustomHeight: number
   longMessageCollapseDepth: number

@@ -529,6 +529,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
   const displayMode = useStore((s) => s.chatDisplayMode)
   const longMessageCollapseEnabled = useStore((s) => s.longMessageCollapseEnabled)
+  const longMessageCollapseUserMessages = useStore((s) => s.longMessageCollapseUserMessages)
   const longMessageCollapsePreset = useStore((s) => s.longMessageCollapsePreset)
   const longMessageCollapseCustomHeight = useStore((s) => s.longMessageCollapseCustomHeight)
   const longMessageCollapseDepth = useStore((s) => s.longMessageCollapseDepth)
@@ -572,6 +573,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       const depth = visibleMessages.length - 1 - index
       const longMessageEligible = isLongMessageCollapseEligible({
         enabled: longMessageCollapseEnabled,
+        includeUserMessages: longMessageCollapseUserMessages,
         isUser: message.is_user,
         depth,
         collapseDepth: longMessageCollapseDepth,
@@ -626,7 +628,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     items.push({ type: 'bottom', key: 'bottom' })
 
     return items
-  }, [chatId, displayMode, expandedLongMessageKeySet, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, longMessageCollapseDepth, longMessageCollapseEnabled, longMessageCollapseHeight, longMessageCollapsePreset, lumiaOOCStyle, streamingError, visibleMessages])
+  }, [chatId, displayMode, expandedLongMessageKeySet, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, longMessageCollapseDepth, longMessageCollapseEnabled, longMessageCollapseUserMessages, longMessageCollapseHeight, longMessageCollapsePreset, lumiaOOCStyle, streamingError, visibleMessages])
 
   // ResizeObserver reports a swipe replacement after commit. Remember that
   // semantic change across the short async measurement window so the resize
@@ -870,6 +872,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     )
     const isCollapsedLongMessage = isLongMessageCollapseEligible({
       enabled: longMessageCollapseEnabled,
+      includeUserMessages: longMessageCollapseUserMessages,
       isUser: message.is_user,
       depth,
       collapseDepth: longMessageCollapseDepth,
@@ -883,7 +886,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     const estimate = clampEstimate(collapseAwareEstimate)
     estimatedRowHeightsRef.current.set(measureKey, estimate)
     return estimate
-  }, [chatId, expandedLongMessageKeySet, isBubble, longMessageCollapseEnabled, longMessageCollapseDepth, longMessageCollapseHeight, lumiaOOCStyle])
+  }, [chatId, expandedLongMessageKeySet, isBubble, longMessageCollapseEnabled, longMessageCollapseUserMessages, longMessageCollapseDepth, longMessageCollapseHeight, lumiaOOCStyle])
 
   const rangeExtractor = useCallback((range: Range) => {
     const indexes = new Set(defaultRangeExtractor(range))
@@ -1187,6 +1190,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       const targetDepth = visibleMessages.length - 1 - targetItem.messageIndex
       const targetLongMessageEligible = isLongMessageCollapseEligible({
         enabled: longMessageCollapseEnabled,
+        includeUserMessages: longMessageCollapseUserMessages,
         isUser: targetItem.message.is_user,
         depth: targetDepth,
         collapseDepth: longMessageCollapseDepth,
@@ -1229,6 +1233,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     findTarget,
     longMessageCollapseDepth,
     longMessageCollapseEnabled,
+    longMessageCollapseUserMessages,
     markUserUnpinned,
     rowVirtualizer,
     suppressKeyboardRepin,

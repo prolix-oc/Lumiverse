@@ -142,6 +142,8 @@
       "helper": "Limit long messages to a comfortable height until you expand them.",
       "enabled": "Collapse long messages",
       "enabledHint": "Applies in every chat display mode, including while a reply is generating.",
+      "includeUserMessages": "Also collapse user messages",
+      "includeUserMessagesHint": "Apply the same height and depth limits to your messages.",
       "height": "COLLAPSED HEIGHT",
       "depth": "COLLAPSE AT DEPTH",
       "depthHint": "Depth 0 is the newest message. Long messages at this depth or older can collapse.",

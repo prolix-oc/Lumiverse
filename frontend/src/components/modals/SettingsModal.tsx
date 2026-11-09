@@ -402,6 +402,7 @@ function DisplaySettings() {
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const longMessageCollapseEnabled = useStore((s) => s.longMessageCollapseEnabled)
+  const longMessageCollapseUserMessages = useStore((s) => s.longMessageCollapseUserMessages)
   const longMessageCollapsePreset = useStore((s) => s.longMessageCollapsePreset)
   const longMessageCollapseCustomHeight = useStore((s) => s.longMessageCollapseCustomHeight)
   const longMessageCollapseDepth = useStore((s) => s.longMessageCollapseDepth)
@@ -453,6 +454,12 @@ function DisplaySettings() {
 
       {longMessageCollapseEnabled && (
         <>
+          <Toggle.Checkbox
+            checked={longMessageCollapseUserMessages}
+            onChange={(checked) => setSetting('longMessageCollapseUserMessages', checked)}
+            label={t('display.longMessages.includeUserMessages')}
+            hint={t('display.longMessages.includeUserMessagesHint')}
+          />
           <div className={styles.field}>
             <label className={styles.fieldLabel}>{t('display.longMessages.height')}</label>
             <div className={styles.segmented}>

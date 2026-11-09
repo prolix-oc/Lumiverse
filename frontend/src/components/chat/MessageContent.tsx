@@ -1849,6 +1849,7 @@ export default function MessageContent({
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const longMessageCollapseEnabled = useStore((s) => s.longMessageCollapseEnabled)
+  const longMessageCollapseUserMessages = useStore((s) => s.longMessageCollapseUserMessages)
   const longMessageCollapsePreset = useStore((s) => s.longMessageCollapsePreset)
   const longMessageCollapseCustomHeight = useStore((s) => s.longMessageCollapseCustomHeight)
   const longMessageCollapseDepth = useStore((s) => s.longMessageCollapseDepth)
@@ -1859,6 +1860,7 @@ export default function MessageContent({
   const setLongMessageExpanded = useStore((s) => s.setLongMessageExpanded)
   const longMessageEligible = isLongMessageCollapseEligible({
     enabled: longMessageCollapseEnabled && !readOnly,
+    includeUserMessages: longMessageCollapseUserMessages,
     isUser,
     depth,
     collapseDepth: longMessageCollapseDepth,

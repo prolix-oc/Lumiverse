@@ -162,6 +162,8 @@ beforeEach(() => {
   root = createRoot(host)
   useStore.setState({
     longMessageCollapseEnabled: true,
+    longMessageCollapseUserMessages: false,
+    longMessageCollapseDepth: 0,
     longMessageCollapsePreset: 'comfortable',
     expandedLongMessageKeys: [],
   })
@@ -596,7 +598,7 @@ describe('MessageContent long-message collapsing', () => {
     expect(useStore.getState().expandedLongMessageKeys).not.toContain('chat-1:message-1')
   })
 
-  test('does not constrain short assistant messages or any user message', async () => {
+  test('does not constrain short assistant messages or user messages by default', async () => {
     await act(async () => {
       root?.render(
         <MessageContent content="Short" isUser={false} userName="User" chatId="chat-1" messageId="short" />,
@@ -622,6 +624,32 @@ describe('MessageContent long-message collapsing', () => {
     const viewport = host.querySelector<HTMLElement>('[data-component="MessageContent"] > div')
     expect(viewport?.style.maxHeight).toBe('')
     expect(host.querySelector('[data-long-message-toggle]')).toBeNull()
+  })
+
+  test('opts user messages into collapse and preserves expansion across remounts', async () => {
+    await act(async () => {
+      useStore.setState({ longMessageCollapseUserMessages: true })
+      root?.render(<MessageContent content={'Long user content '.repeat(80)} isUser userName="User" chatId="chat-1" messageId="user-1" />)
+    })
+    setRenderedBodyHeight(900)
+    await flushLayout()
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-controls="long-message-body-user-1"]')!
+    expect(toggle.textContent).toBe('Read more')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)?.style.maxHeight).toBe('500px')
+    await act(async () => toggle.click())
+    expect(toggle.textContent).toBe('Show less')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { root?.unmount(); root = createRoot(host) })
+    await act(async () => {
+      root?.render(<MessageContent content={'Long user content '.repeat(80)} isUser userName="User" chatId="chat-1" messageId="user-1" />)
+    })
+    setRenderedBodyHeight(900)
+    await flushLayout()
+    expect(host.querySelector('button[aria-expanded="true"]')?.textContent).toBe('Show less')
+    await act(async () => useStore.setState({ longMessageCollapseUserMessages: false }))
+    expect(host.querySelector('[data-long-message-toggle]')).toBeNull()
+    expect(host.querySelector<HTMLElement>('[data-component="MessageContent"] > div')?.style.maxHeight).toBe('')
   })
 
   test('uses every preset height and honors the disabled setting', async () => {
