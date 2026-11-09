@@ -128,6 +128,8 @@
       "helper": "Limitez la hauteur des messages longs jusqu’à leur développement.",
       "enabled": "Réduire les messages longs",
       "enabledHint": "S’applique à tous les modes d’affichage, y compris pendant la génération d’une réponse.",
+      "includeUserMessages": "Réduire aussi vos messages",
+      "includeUserMessagesHint": "Applique les mêmes limites de hauteur et de profondeur à vos messages.",
       "height": "HAUTEUR RÉDUITE",
       "depth": "RÉDUIRE À PARTIR DE LA PROFONDEUR",
       "depthHint": "La profondeur 0 correspond au message le plus récent. Les messages longs à cette profondeur ou plus anciens peuvent être réduits.",

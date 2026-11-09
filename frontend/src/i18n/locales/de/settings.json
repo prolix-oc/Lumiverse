@@ -139,6 +139,8 @@
       "helper": "Begrenzt lange Nachrichten auf eine angenehme Höhe, bis Sie sie erweitern.",
       "enabled": "Lange Nachrichten einklappen",
       "enabledHint": "Gilt in jedem Chat-Anzeigemodus, auch während eine Antwort generiert wird.",
+      "includeUserMessages": "Auch eigene Nachrichten einklappen",
+      "includeUserMessagesHint": "Wendet dieselben Höhen- und Tiefengrenzen auf Ihre Nachrichten an.",
       "height": "EINGEKLAPPTE HÖHE",
       "depth": "AB TIEFE EINKLAPPEN",
       "depthHint": "Tiefe 0 ist die neueste Nachricht. Lange Nachrichten ab dieser Tiefe oder älter können eingeklappt werden.",
