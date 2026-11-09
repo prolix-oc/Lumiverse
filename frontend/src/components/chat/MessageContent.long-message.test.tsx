@@ -400,6 +400,26 @@ describe('MessageContent inline HTML rendering', () => {
       content.includes('Widget') ? 'Widget' : 'Document',
     )
   })
+
+  test('keeps inline styled glossary elements inside their prose paragraph without splitting into islands', async () => {
+    const glossA = '<button type="button" class="tb-gloss" tabindex="0"><style>.tb-gloss{display:inline-block}</style><span class="tb-gloss-term">Thiren</span><span class="tb-gloss-pop" role="tooltip">Beast-kin citizens.</span></button>'
+    const glossB = '<span class="tb-gloss" data-no-island tabindex="0"><style>.tb-gloss{display:inline-block}</style><span class="tb-gloss-term">Sovereign&#39;s Mile</span><span class="tb-gloss-pop" role="tooltip">Final uphill furlong.</span></span>'
+    const content = [
+      `Then we both reach for each other's waistbands at the same instant — both of us flinching back a half-step, ears flat, the ${glossA} wiring humming a chord neither of us asked for.`,
+      '',
+      `<font color="#E8534A" style="font-weight:bold">"Take the ${glossB} and they'll still call it a fluke."</font>`,
+    ].join('\n')
+
+    await render(content)
+
+    expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+    const paragraphs = host.querySelectorAll('p')
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]?.querySelector('button.tb-gloss .tb-gloss-term')?.textContent).toBe('Thiren')
+    expect(paragraphs[0]?.textContent).toContain('ears flat, the ThirenBeast-kin citizens. wiring humming a chord')
+    expect(paragraphs[1]?.querySelector('span.tb-gloss .tb-gloss-term')?.textContent).toBe("Sovereign's Mile")
+    expect(host.querySelectorAll('style')).toHaveLength(1)
+  })
 })
 
 describe('HTML island scanning', () => {

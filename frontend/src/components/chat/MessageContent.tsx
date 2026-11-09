@@ -152,8 +152,8 @@ function normalizeQuotesInHTML(html: string): string {
 }
 
 const BLOCK_CLOSE_RE = /^<\/(p|div|li|blockquote|h[1-6]|pre|table|tr|td|th)\b/i
-const SKIP_OPEN_RE = /^<(pre|code)\b/i
-const SKIP_CLOSE_RE = /^<\/(pre|code)\b/i
+const SKIP_OPEN_RE = /^<(pre|code|style)\b/i
+const SKIP_CLOSE_RE = /^<\/(pre|code|style)\b/i
 const FEET_INCHES_QUOTE_RE = /(?<=\d(?:'|&#(?:0*39|x0*27);|&apos;)\d+)/iy
 
 function isFeetInchesQuote(text: string, quoteIndex: number): boolean {
@@ -392,6 +392,60 @@ const INLINE_HTML_CARD_TAGS = new Set([
   'nav',
   'section',
 ])
+const PROSE_WRAPPER_HTML_TAGS: Record<string, true> = {
+  b: true,
+  blockquote: true,
+  em: true,
+  font: true,
+  h1: true,
+  h2: true,
+  h3: true,
+  h4: true,
+  h5: true,
+  h6: true,
+  i: true,
+  li: true,
+  p: true,
+  q: true,
+  s: true,
+  strong: true,
+  u: true,
+}
+const ALWAYS_INLINE_STYLED_HTML_TAGS: Record<string, true> = {
+  abbr: true,
+  button: true,
+  cite: true,
+  code: true,
+  dfn: true,
+  kbd: true,
+  label: true,
+  mark: true,
+  samp: true,
+  small: true,
+  sub: true,
+  sup: true,
+  time: true,
+  var: true,
+}
+const INLINE_PHRASING_HTML_TAGS: Record<string, true> = {
+  ...ALWAYS_INLINE_STYLED_HTML_TAGS,
+  a: true,
+  b: true,
+  bdi: true,
+  bdo: true,
+  data: true,
+  del: true,
+  em: true,
+  font: true,
+  i: true,
+  ins: true,
+  output: true,
+  ruby: true,
+  s: true,
+  span: true,
+  strong: true,
+  u: true,
+}
 const VOID_HTML_TAGS = new Set([
   'area',
   'base',
@@ -773,8 +827,27 @@ function escapeRegexLiteral(value: string): string {
 }
 
 interface HtmlElementMatch {
+  tag: string
   noIsland: boolean
   end: number
+}
+
+interface HtmlIslandCandidate {
+  kind: 'island' | 'inline'
+  end: number
+}
+
+function hasInlineProseContext(raw: string, start: number, end: number): boolean {
+  const lineStart = Math.max(raw.lastIndexOf('\n', start - 1), raw.lastIndexOf('\r', start - 1)) + 1
+  let lineEnd = raw.indexOf('\n', end)
+  const cr = raw.indexOf('\r', end)
+  if (lineEnd < 0 || (cr >= 0 && cr < lineEnd)) lineEnd = cr
+  if (lineEnd < 0) lineEnd = raw.length
+
+  const beforeText = raw.slice(lineStart, start).replace(/<[^>]*>/g, '').trim()
+  if (beforeText.length > 0) return true
+  const afterText = raw.slice(end, lineEnd).replace(/<[^>]*>/g, '').trim()
+  return afterText.length > 0
 }
 
 function lowerBound(positions: readonly number[], start: number): number {
@@ -885,16 +958,16 @@ function parseHtmlElementAt(raw: string, start: number, index?: HtmlIslandIndex,
 
   if (tag === 'style') {
     const end = findStyleBlockEnd(raw, start, index, work)
-    return end == null ? null : { noIsland, end }
+    return end == null ? null : { tag, noIsland, end }
   }
 
   if (VOID_HTML_TAGS.has(tag) || (index ? index.selfClosingEnds.has(openingEnd) : /\/\s*>$/.test(openingTag))) {
     if (work && !index) work.characters += openingEnd - start
-    return { noIsland, end: openingEnd }
+    return { tag, noIsland, end: openingEnd }
   }
   if (index) {
     const end = index.elementEnd(tag, start)
-    return end == null ? null : { noIsland, end }
+    return end == null ? null : { tag, noIsland, end }
   }
 
   const tagRe = new RegExp(`</?${escapeRegexLiteral(tag)}(?=[\\s>/])`, 'gi')
@@ -915,7 +988,7 @@ function parseHtmlElementAt(raw: string, start: number, index?: HtmlIslandIndex,
 
     if (depth <= 0) {
       if (work) work.characters += tokenEnd - start
-      return { noIsland, end: tokenEnd }
+      return { tag, noIsland, end: tokenEnd }
     }
   }
 
@@ -982,21 +1055,32 @@ function getFenceRangeContaining(ranges: Array<[number, number]>, pos: number, s
   return -1
 }
 
-function getIslandEndAt(raw: string, start: number, isStreaming: boolean, index?: HtmlIslandIndex, work?: { characters: number }): number | null {
+function getIslandCandidateAt(raw: string, start: number, isStreaming: boolean, index?: HtmlIslandIndex, work?: { characters: number }): HtmlIslandCandidate | null {
   const styleEnd = findStyleBlockEnd(raw, start, index, work)
   if (styleEnd != null) {
-    return extendThroughAdjacentHtmlSiblings(raw, styleEnd, index)
+    return { kind: 'island', end: extendThroughAdjacentHtmlSiblings(raw, styleEnd, index) }
   }
 
   if (isStreaming && /^<style(?=[\s>])/i.test(raw.slice(start))) return null
 
   const element = parseHtmlElementAt(raw, start, index, work)
-  if (!element || element.noIsland) return null
+  if (!element) return null
 
-  if (index ? index.hasStyle(start, element.end) : /<style[\s>]/i.test(raw.slice(start, element.end))) {
-    return element.end
+  const hasInnerStyle = index ? index.hasStyle(start, element.end) : /<style[\s>]/i.test(raw.slice(start, element.end))
+  if (element.noIsland) {
+    return hasInnerStyle ? { kind: 'inline', end: element.end } : null
   }
 
+  if (hasInnerStyle) {
+    if (PROSE_WRAPPER_HTML_TAGS[element.tag]) return null
+    if (
+      ALWAYS_INLINE_STYLED_HTML_TAGS[element.tag]
+      || (INLINE_PHRASING_HTML_TAGS[element.tag] && hasInlineProseContext(raw, start, element.end))
+    ) {
+      return { kind: 'inline', end: element.end }
+    }
+    return { kind: 'island', end: element.end }
+  }
   const trail: number[] = []
   let peekStart = element.end
   while (true) {
@@ -1014,8 +1098,7 @@ function getIslandEndAt(raw: string, start: number, isStreaming: boolean, index?
   }
   for (const start of trail) index!.closingTrails.set(start, peekStart)
   const trailingStyleEnd = findStyleBlockEnd(raw, peekStart, index)
-  if (trailingStyleEnd != null) return extendThroughAdjacentHtmlSiblings(raw, trailingStyleEnd, index)
-
+  if (trailingStyleEnd != null) return { kind: 'island', end: extendThroughAdjacentHtmlSiblings(raw, trailingStyleEnd, index) }
   return null
 }
 
@@ -1114,12 +1197,17 @@ export function extractHtmlIslands(
 
     content += raw.slice(pos, nextTag)
 
-    const islandEnd = getIslandEndAt(raw, nextTag, isStreaming, index, work)
-    if (islandEnd != null && islandEnd > nextTag) {
-      const idx = islands.length
-      islands.push(raw.slice(nextTag, islandEnd))
-      content += `<!--${HTML_ISLAND_TOKEN}_${idx}-->`
-      pos = islandEnd
+    const candidate = getIslandCandidateAt(raw, nextTag, isStreaming, index, work)
+    if (candidate != null && candidate.end > nextTag) {
+      if (candidate.kind === 'inline') {
+        content += raw.slice(nextTag, candidate.end)
+        pos = candidate.end
+      } else {
+        const idx = islands.length
+        islands.push(raw.slice(nextTag, candidate.end))
+        content += `<!--${HTML_ISLAND_TOKEN}_${idx}-->`
+        pos = candidate.end
+      }
     } else {
       if (lastStyle === undefined) {
         for (const match of raw.matchAll(/<style[\s>]/gi)) lastStyle = match.index
@@ -1564,9 +1652,9 @@ function restoreInlineHtmlCardSpacing(root: HTMLElement, html: string): void {
       && parent !== root
       && (insideCard.get(parent) ?? false)
     const isCard = !parentInsideCard
+      && !element.hasAttribute('data-no-island')
       && INLINE_HTML_CARD_TAGS.has(element.localName)
       && (styleCounts.get(element) ?? 0) >= INLINE_HTML_CARD_STYLE_THRESHOLD
-
     insideCard.set(element, parentInsideCard || isCard)
     if (isCard) cards.push(element)
   }

@@ -304,7 +304,7 @@ function sanitizeHtml(html: string, options: SanitizeHtmlOptions): string {
   }
 
   const wrapper = document.createElement('div')
-  for (const css of styleExtraction.styles) {
+  for (const css of new Set(styleExtraction.styles)) {
     const style = document.createElement('style')
     style.textContent = css
     wrapper.appendChild(style)
@@ -314,7 +314,7 @@ function sanitizeHtml(html: string, options: SanitizeHtmlOptions): string {
 }
 
 export function sanitizeRichHtml(html: string): string {
-  return sanitizeHtml(html, { allowInlineSvg: true, allowStyleTag: false })
+  return sanitizeHtml(html, { allowInlineSvg: true, allowStyleTag: true })
 }
 
 export function sanitizeHtmlIsland(html: string): string {

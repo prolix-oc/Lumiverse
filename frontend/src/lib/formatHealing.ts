@@ -1,6 +1,6 @@
 import { mapOutsideJsonBlocks } from './jsonBlocks'
 
-const HTML_TAG_RE = /<!--[\s\S]*?(?:-->|$)|<\/?[a-zA-Z][a-zA-Z0-9:-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/g
+const HTML_TAG_RE = /<!--[\s\S]*?(?:-->|$)|<style\b[^>]*>[\s\S]*?(?:<\/style\s*>|$)|<\/?[a-zA-Z][a-zA-Z0-9:-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi
 
 function getFencedCodeRanges(text: string): Array<[number, number]> {
   if (!text.includes('```') && !text.includes('~~~')) return []
