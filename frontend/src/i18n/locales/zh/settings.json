@@ -44,6 +44,8 @@
       "helper": "将较长的消息限制在舒适的高度，直到你将其展开。",
       "enabled": "折叠较长的消息",
       "enabledHint": "适用于所有聊天显示模式，包括回复生成期间。",
+      "includeUserMessages": "同时折叠自己的消息",
+      "includeUserMessagesHint": "对自己的消息应用相同的高度和深度限制。",
       "height": "折叠高度",
       "depth": "从此深度开始折叠",
       "depthHint": "深度 0 是最新消息。位于此深度或更早的长消息可以折叠。",

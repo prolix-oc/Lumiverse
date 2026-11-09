@@ -128,6 +128,8 @@
       "helper": "將較長的訊息限制在舒適的高度，直到你將其展開。",
       "enabled": "摺疊較長的訊息",
       "enabledHint": "適用於所有聊天顯示模式，包括回覆產生期間。",
+      "includeUserMessages": "同時摺疊自己的訊息",
+      "includeUserMessagesHint": "對自己的訊息套用相同的高度和深度限制。",
       "height": "摺疊高度",
       "depth": "從此深度開始摺疊",
       "depthHint": "深度 0 是最新訊息。位於此深度或更早的長訊息可以摺疊。",

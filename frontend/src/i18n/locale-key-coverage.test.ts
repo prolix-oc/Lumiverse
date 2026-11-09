@@ -107,6 +107,21 @@ describe('i18n locale key coverage', () => {
     }
   })
 
+  test('long-message collapse settings have complete keys in every locale', () => {
+    const settings = (lng: string) => loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as {
+      display: { longMessages: Record<string, string> }
+    }
+    const expected = leafKeyPaths(settings('en').display.longMessages).sort()
+    for (const lng of localeDirs()) {
+      const section = settings(lng).display.longMessages
+      expect(leafKeyPaths(section).sort(), `${lng} long-message settings`).toEqual(expected)
+      for (const value of Object.values(section)) {
+        expect(typeof value).toBe('string')
+        expect(value.trim()).not.toBe('')
+      }
+    }
+  })
+
   test('wallpaper controls and library have complete keys and interpolation variables in every locale', () => {
     const english = loadJson(join(EN_DIR, 'panels.json')) as Record<string, unknown>
     for (const lng of localeDirs()) {

@@ -44,6 +44,8 @@
       "helper": "Limita i messaggi lunghi a un’altezza comoda finché non vengono espansi.",
       "enabled": "Comprimi i messaggi lunghi",
       "enabledHint": "Si applica a tutte le modalità di chat, anche durante la generazione di una risposta.",
+      "includeUserMessages": "Comprimi anche i tuoi messaggi",
+      "includeUserMessagesHint": "Applica gli stessi limiti di altezza e profondità ai tuoi messaggi.",
       "height": "ALTEZZA COMPRESSA",
       "depth": "COMPRIMI DALLA PROFONDITÀ",
       "depthHint": "La profondità 0 è il messaggio più recente. I messaggi lunghi a questa profondità o più vecchi possono essere compressi.",

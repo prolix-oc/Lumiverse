@@ -24,6 +24,16 @@ describe('long message collapse depth', () => {
     expect(isLongMessageCollapseEligible(base)).toBe(true)
   })
 
+  test('opted-in user messages respect depth, enablement and identity', () => {
+    const user = { ...base, isUser: true, includeUserMessages: true, collapseDepth: 5 }
+    expect(isLongMessageCollapseEligible({ ...user, depth: 4 })).toBe(false)
+    expect(isLongMessageCollapseEligible({ ...user, depth: 5 })).toBe(true)
+    expect(isLongMessageCollapseEligible({ ...user, depth: 20 })).toBe(true)
+    expect(isLongMessageCollapseEligible({ ...user, depth: 20, enabled: false })).toBe(false)
+    expect(isLongMessageCollapseEligible({ ...user, depth: 20, chatId: undefined })).toBe(false)
+    expect(isLongMessageCollapseEligible({ ...user, depth: 20, messageId: undefined })).toBe(false)
+  })
+
   test('still excludes user messages', () => {
     expect(isLongMessageCollapseEligible({ ...base, isUser: true, depth: 20, collapseDepth: 5 })).toBe(false)
   })
