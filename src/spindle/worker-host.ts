@@ -38,6 +38,7 @@ import { WorkerHostDesktopCaptureApi } from "./worker-host-desktop-capture-api";
 import type { DryRunResultDTO, GetBreakdownWorkerMessage, StreamDoneChunkDTO } from "./generation-contract";
 import type { DesktopCaptureWorkerMessage } from "./desktop-capture-contract";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import { isGenericBinaryContentType } from "./cors-media";
 import { getGitMetadata } from "../utils/git-metadata";
 import { uuidv4, uuidv7 } from "../utils/uuid";
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
@@ -4683,14 +4684,15 @@ export class WorkerHost {
         const contentType = (response.headers.get("content-type") || "").toLowerCase();
         const isAllowedContentType =
           binaryMediaType === "audio"
-            ? contentType.startsWith("audio/") || contentType.startsWith("application/ogg")
+            ? contentType.startsWith("audio/") || contentType.startsWith("application/ogg") || isGenericBinaryContentType(contentType)
             : binaryMediaType === "font"
               ? contentType.startsWith("font/") ||
                 contentType === "application/font-woff" ||
                 contentType === "application/font-woff2" ||
                 contentType === "application/x-font-ttf" ||
                 contentType === "application/x-font-otf" ||
-                contentType === "application/vnd.ms-fontobject"
+                contentType === "application/vnd.ms-fontobject" ||
+                isGenericBinaryContentType(contentType)
               : contentType.startsWith("image/");
         if (!isAllowedContentType) {
           throw new Error(
