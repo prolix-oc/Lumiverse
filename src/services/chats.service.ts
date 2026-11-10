@@ -3049,7 +3049,10 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
       memoryCortex.invalidateLinkedCortexCache(updated.chat_id);
     } catch { /* ignore if not loaded */ }
 
-    rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]).catch(err => {
+    const chunkUpdate = input.finalizesStaged
+      ? updateChatChunks(userId, updated.chat_id, updated)
+      : rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]);
+    chunkUpdate.catch(err => {
       console.warn("[chats] Failed to rebuild chunks after message edit:", err);
     });
   }
@@ -4515,6 +4518,8 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
 }
 
 async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
+  // A staged reply has no text yet; updateMessage chunks it when it is finalized.
+  if (!newMessage.is_user && !newMessage.content) return;
   if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
 
   const chat = getChat(userId, chatId);
@@ -4978,6 +4983,8 @@ async function chunkAndPersistMessages(
   chatMemSettings: embeddingsSvc.ChatMemorySettings,
   salienceByContent: Map<string, SalienceSnapshotRow[]>,
 ): Promise<void> {
+  // A rebuild can run while a reply streams; its staged message is chunked at finalize.
+  messages = messages.filter((m) => m.is_user || m.content);
   if (messages.length === 0) return;
 
   const targetTokens = chatMemSettings.chunkTargetTokens;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { runMigrations } from "../db/migrate";
 import * as embeddingsSvc from "./embeddings.service";
+import * as memoryCortex from "./memory-cortex";
 import * as vectorizationQueue from './vectorization-queue.service';
 import { resetChatPipelineCoordinatorForTests, getChatPipelineStatus } from "./chat-pipeline-coordinator.service";
 import { getChatChunks, rebuildChatChunksFromMessages, createMessage, updateMessage } from "./chats.service";
@@ -124,6 +125,62 @@ describe("chat chunk rebuild ordering", () => {
     const chunks = getChatChunks(USER_ID, CHAT_ID);
     expect(chunks.flatMap(chunk => chunk.message_ids)).toEqual(['message-0', inserted.id, 'message-1', 'message-2']);
     expect(chunks.find(chunk => chunk.message_ids.includes(inserted.id))?.content).toContain('[CHARACTER | User]: inserted');
+  });
+
+  test("a staged reply enters memory once, when it is finalized with its text", async () => {
+    seedChat(1);
+    const vectorizationSpy = spyOn(embeddingsSvc, "isChatMemoryVectorizationEnabled").mockReturnValue(true);
+    const cortexEnabledSpy = spyOn(memoryCortex, "isCortexEnabledForChat").mockReturnValue(true);
+    const processChunkSpy = spyOn(memoryCortex, "scheduleProcessChunk").mockResolvedValue({ status: "completed" });
+    try {
+      const staged = createMessage(CHAT_ID, { is_user: false, name: "Character", content: "" }, USER_ID);
+      await Bun.sleep(30);
+      expect(processChunkSpy).not.toHaveBeenCalled();
+      expect(getChatChunks(USER_ID, CHAT_ID).flatMap((chunk) => chunk.message_ids)).not.toContain(staged.id);
+
+      updateMessage(USER_ID, staged.id, { content: "The finished reply.", finalizesStaged: true });
+      for (let i = 0; i < 100 && processChunkSpy.mock.calls.length === 0; i++) await Bun.sleep(2);
+
+      expect(processChunkSpy).toHaveBeenCalledTimes(1);
+      const chunk = processChunkSpy.mock.calls[0]![0];
+      expect(chunk.content).toContain("The finished reply.");
+      expect(chunk.messageIds).toContain(staged.id);
+    } finally {
+      vectorizationSpy.mockRestore();
+      cortexEnabledSpy.mockRestore();
+      processChunkSpy.mockRestore();
+    }
+  });
+
+  test("a rebuild while a reply streams leaves it to be chunked once, at finalize", async () => {
+    seedChat(2);
+    const vectorizationSpy = spyOn(embeddingsSvc, "isChatMemoryVectorizationEnabled").mockReturnValue(true);
+    try {
+      const staged = createMessage(CHAT_ID, { is_user: false, name: "Character", content: "" }, USER_ID);
+      await rebuildChatChunksFromMessages(USER_ID, CHAT_ID, ["message-0"]);
+      expect(getChatChunks(USER_ID, CHAT_ID).flatMap((chunk) => chunk.message_ids)).not.toContain(staged.id);
+
+      updateMessage(USER_ID, staged.id, { content: "The finished reply.", finalizesStaged: true });
+      const chunks = () => getChatChunks(USER_ID, CHAT_ID);
+      for (let i = 0; i < 100 && !chunks().some((chunk) => chunk.content.includes("The finished reply.")); i++) await Bun.sleep(2);
+
+      expect(chunks().flatMap((chunk) => chunk.message_ids).filter((id) => id === staged.id)).toEqual([staged.id]);
+    } finally {
+      vectorizationSpy.mockRestore();
+    }
+  });
+
+  test("an empty user message, such as an image on its own, is still chunked", async () => {
+    seedChat(1);
+    const vectorizationSpy = spyOn(embeddingsSvc, "isChatMemoryVectorizationEnabled").mockReturnValue(true);
+    try {
+      const imageOnly = createMessage(CHAT_ID, { is_user: true, name: "User", content: "" }, USER_ID);
+      const chunkedIds = () => getChatChunks(USER_ID, CHAT_ID).flatMap((chunk) => chunk.message_ids);
+      for (let i = 0; i < 100 && !chunkedIds().includes(imageOnly.id); i++) await Bun.sleep(2);
+      expect(chunkedIds()).toContain(imageOnly.id);
+    } finally {
+      vectorizationSpy.mockRestore();
+    }
   });
 
   test("coalesces overlapping deleted-message rebuilds to the earliest surgical boundary", async () => {

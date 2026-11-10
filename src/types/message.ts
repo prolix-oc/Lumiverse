@@ -89,4 +89,8 @@ export interface UpdateMessageInput {
    * for Regens/Swipes". The fingerprint hash in generate.service already
    * invalidates stale cache on read when chat state actually diverges. */
   skipCouncilCacheInvalidation?: boolean;
+  /** Internal-only: this update gives the generation pipeline's empty staged
+   * message its text, so it enters memory chunks and Memory Cortex as a new
+   * message would. */
+  finalizesStaged?: boolean;
 }
