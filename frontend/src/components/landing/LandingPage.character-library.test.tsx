@@ -110,6 +110,7 @@ type StoreState = {
   homepageCharacterLibrarySettings: Record<string, unknown>
   favorites: string[]
   landingHiddenCharacterIds: string[]
+  landingPinFavorites: boolean
   settingsLoaded: boolean
   activeChatId: string | null
   openModal: MockFn
@@ -202,6 +203,7 @@ function createStoreState(enabled = true): StoreState {
     homepageCharacterLibrarySettings: defaultHomepageSettings(enabled),
     favorites: [],
     landingHiddenCharacterIds: [],
+    landingPinFavorites: true,
     settingsLoaded: true,
     activeChatId: null,
     openModal: jest.fn(),

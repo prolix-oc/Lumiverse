@@ -107,6 +107,7 @@ interface StartupSettings {
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
   landingPageGalleryWidth?: "compact" | "expanded";
+  landingPinFavorites?: boolean;
   wallpaper?: unknown;
   drawerSettings?: unknown;
   spindleSettings?: unknown;
@@ -135,6 +136,7 @@ export const STARTUP_SETTINGS_KEYS = [
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
   "landingPageGalleryWidth",
+  "landingPinFavorites",
   "wallpaper",
   "drawerSettings",
   "spindleSettings",
@@ -231,6 +233,11 @@ export function getStartupSettings(userId: string): StartupSettings {
     startupSettings.landingPageGalleryWidth = landingPageGalleryWidth;
   }
 
+  const landingPinFavorites = rows.get("landingPinFavorites");
+  if (typeof landingPinFavorites === "boolean") {
+    startupSettings.landingPinFavorites = landingPinFavorites;
+  }
+
   if (rows.has("wallpaper")) {
     startupSettings.wallpaper = rows.get("wallpaper");
   }
@@ -302,7 +309,7 @@ function getLandingRecentChats(userId: string, snapshot?: StartupSettings): Pagi
   // Preserve landing's independent fallback when an unrelated startup setting
   // is malformed. Healthy startup reads each preference only once.
   const settings = snapshot ?? Object.fromEntries(settingsSvc.getSettingsByKeys(userId, [
-    'landingPageChatsDisplayed', 'favorites', 'landingHiddenCharacterIds',
+    'landingPageChatsDisplayed', 'favorites', 'landingHiddenCharacterIds', 'landingPinFavorites',
   ])) as StartupSettings;
   const stored = settings.landingPageChatsDisplayed;
   const limit =
@@ -311,8 +318,9 @@ function getLandingRecentChats(userId: string, snapshot?: StartupSettings): Pagi
       : LANDING_CHATS_DEFAULT_LIMIT;
   const favorites = settings.favorites;
   const hidden = settings.landingHiddenCharacterIds;
+  const pinFavorites = settings.landingPinFavorites !== false;
   return chatsSvc.listRecentChatsGrouped(userId, { limit, offset: 0 }, {
-    favoriteCharacterIds: Array.isArray(favorites)
+    favoriteCharacterIds: pinFavorites && Array.isArray(favorites)
       ? favorites.filter((id): id is string => typeof id === "string" && id.length > 0)
       : [],
   }, Array.isArray(hidden) ? hidden.filter((id): id is string => typeof id === 'string' && id.length > 0) : []);

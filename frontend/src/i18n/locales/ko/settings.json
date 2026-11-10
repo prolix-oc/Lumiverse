@@ -242,7 +242,9 @@
       "batchSize": "랜딩 페이지 묶음당 채팅 수",
       "hiddenCharacters": "홈에서 숨김 ({{count}})",
       "manageHiddenCharacters": "숨김 항목 관리",
-      "hiddenCharactersHelper": "랜딩 페이지에서 숨겨진 캐릭터나 개별 채팅을 복원합니다. 캐릭터 브라우저에는 영향을 주지 않습니다."
+      "hiddenCharactersHelper": "랜딩 페이지에서 숨겨진 캐릭터나 개별 채팅을 복원합니다. 캐릭터 브라우저에는 영향을 주지 않습니다.",
+      "pinFavorites": "즐겨찾기 상단에 고정",
+      "pinFavoritesHint": "즐겨찾기한 카드를 랜딩 페이지 상단에 표시합니다"
     }
   },
   "notifications": {

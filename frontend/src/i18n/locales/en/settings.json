@@ -242,7 +242,9 @@
       "batchSize": "LANDING PAGE CHATS PER BATCH",
       "hiddenCharacters": "HIDDEN FROM HOME ({{count}})",
       "manageHiddenCharacters": "Manage hidden items",
-      "hiddenCharactersHelper": "Restore characters or individual chats hidden from the landing page. This does not affect Character Browser."
+      "hiddenCharactersHelper": "Restore characters or individual chats hidden from the landing page. This does not affect Character Browser.",
+      "pinFavorites": "Pin favorites to top",
+      "pinFavoritesHint": "Display favorited cards at the top of the landing page"
     }
   },
   "notifications": {
