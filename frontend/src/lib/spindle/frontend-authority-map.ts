@@ -139,6 +139,10 @@ const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
 ]
 
 const DOMAIN_ROWS: readonly AuthorityRow[] = [
+  ...(['v4', 'v7'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.uuid.${method}`, source: `uuid.${method}`, ctxLeaf: `ctx.uuid.${method}`,
+    freeBecause: 'pure-host-action: generates a local identifier without reading protected data, persisting host state, or contacting a backend',
+  })),
   free({ surface: 'ctx_member', id: 'ctx.client.getInfo', source: 'client.info', ctxLeaf: 'ctx.client.getInfo', freeBecause: 'pure-host-action: reads client identity and callable bridge metadata without invoking commands or prompting' }),
   free({ surface: 'ctx_member', id: 'ctx.stt.listProviders', source: 'stt.providers', ctxLeaf: 'ctx.stt.listProviders', freeBecause: 'pure-host-action: reads speech capability metadata without audio, credentials, or microphone access' }),
   ...(['onHostActivity', 'isHostCapturing'] as const).map((method) => free({

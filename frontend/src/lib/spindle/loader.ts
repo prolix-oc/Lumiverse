@@ -86,6 +86,7 @@ import {
   destroyComponentsForExtensionPermission,
 } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
+import { createFrontendUUIDAPI, SPINDLE_FRONTEND_UUID_HOST_CAPABILITIES, type SpindleFrontendUUIDAPI } from './uuid-api'
 import { installSpindleNavigationGuards } from './navigation-guards'
 import { DRAWER_TABS, ensureRegistryRoot } from '@/lib/drawer-tab-registry'
 import { resolveCouncilTabId } from '@/lib/council-navigation'
@@ -354,6 +355,7 @@ type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'message
   readonly frontendSessionId: string
   host: FrontendExtensionHost
   readonly client: SpindleClientAPI
+  readonly uuid: SpindleFrontendUUIDAPI
   theme: SpindleThemeAuthoringAPI
   dom: FrontendExtensionDOM
   ready(): void
@@ -1423,6 +1425,7 @@ async function doLoadFrontendExtension(
         "message-preset-context-v1": 1,
         ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES, ...CONNECTION_ORGANIZATION_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
+        ...SPINDLE_FRONTEND_UUID_HOST_CAPABILITIES,
         ...SPINDLE_TTS_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
         ...SPINDLE_COMPOSER_HOST_CAPABILITIES,
@@ -1467,6 +1470,7 @@ async function doLoadFrontendExtension(
     const baseContext: FrontendExtensionContextBase = {
       host,
       client: createFrontendClientAPI(assertFrontendActive),
+      uuid: createFrontendUUIDAPI(assertFrontendActive),
       theme: createNativeThemeAuthoringAPI(
         assertFrontendActive,
         (member) => assertCanonicalPermission('app_manipulation', member),

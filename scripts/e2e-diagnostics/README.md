@@ -115,6 +115,10 @@ bun run diagnose
 - `bun run diagnose:spindle`
   Runs a generic Spindle extension sweep against a chat page or custom target route and captures extension logs, websocket traffic, root snapshots, screenshots, and optional button probes.
 
+## Frontend UUID diagnostics
+
+Run `node scripts/e2e-diagnostics/check-spindle-uuid.mjs` from the repository root. It exercises the real frontend UUID helper on a non-loopback HTTP origin where `crypto.randomUUID` is unavailable, at desktop and iPhone-sized viewports in Chromium, Firefox and WebKit. Checks synchronous draft creation, UUID format and uniqueness, unload, and remount without a backend, credentials or personal data. Set `UUID_BROWSERS=chromium` to select one engine. Actual loader wiring and stale-generation rejection are covered by the isolated loader lifecycle tests.
+
 ## Generic Spindle diagnostics
 
 By default, the generic Spindle harness opens the busiest recent chat and inspects all enabled extensions returned by `/api/v1/spindle`.
