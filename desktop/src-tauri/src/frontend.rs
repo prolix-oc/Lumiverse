@@ -120,8 +120,8 @@ static NEXT_FRONTEND_POPUP_ID: AtomicU64 = AtomicU64::new(1);
 const CHROMELESS_WIDGET_MIN_SIZE: u32 = 24;
 const CHROMED_WIDGET_MIN_WIDTH: u32 = 160;
 const CHROMED_WIDGET_MIN_HEIGHT: u32 = 100;
-const WIDGET_MAX_WIDTH: u32 = 1200;
-const WIDGET_MAX_HEIGHT: u32 = 900;
+const WIDGET_MAX_WIDTH: u32 = 7680;
+const WIDGET_MAX_HEIGHT: u32 = 4320;
 
 // WebView2 explicitly supports this switch for applications whose foreground
 // work must not be coalesced into background-timer batches. Supplying browser

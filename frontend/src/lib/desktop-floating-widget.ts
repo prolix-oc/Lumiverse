@@ -32,7 +32,7 @@ export interface DesktopFloatingWidgetPopoutState {
  * owns the same numbers in desktop/src-tauri/src/frontend.rs. */
 export const DESKTOP_WIDGET_MIN_SIZE = { width: 160, height: 100 } as const
 export const DESKTOP_WIDGET_CHROMELESS_MIN_SIZE = { width: 24, height: 24 } as const
-export const DESKTOP_WIDGET_MAX_SIZE = { width: 1200, height: 900 } as const
+export const DESKTOP_WIDGET_MAX_SIZE = { width: 7680, height: 4320 } as const
 
 export function desktopWidgetMinSize(chromeless: boolean): { width: number; height: number } {
   return chromeless ? DESKTOP_WIDGET_CHROMELESS_MIN_SIZE : DESKTOP_WIDGET_MIN_SIZE
