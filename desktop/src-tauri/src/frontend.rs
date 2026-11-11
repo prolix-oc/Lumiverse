@@ -1193,15 +1193,16 @@ pub fn sync_desktop_widget_size(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
+    // `widget_id` is local to the pop-out's frontend instance; see
+    // `widget_for_window_label`. Matching on the label also limits a widget
+    // window to resizing itself.
+    let _ = widget_id;
     let updated = {
         let mut widgets = state.widgets.lock().unwrap();
         let widget = widgets
             .iter_mut()
-            .find(|entry| entry.id == widget_id)
+            .find(|entry| extension_widget_label(entry) == window.label())
             .ok_or("That floating widget is no longer registered")?;
-        if window.label() != extension_widget_label(widget) {
-            return Err("A widget window may only resize itself".into());
-        }
         if !valid_widget_size(widget.chromeless, width, height) {
             return Err("Invalid floating-widget size".into());
         }
