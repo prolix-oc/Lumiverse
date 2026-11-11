@@ -20,6 +20,7 @@ import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impe
 import { isChatImageSize, isChatImageAlignment, isChatImageTargets, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { whistleLanguage } from '@/lib/whistle/config'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
+import { reconcileInstalledExtensionDrawerTabs } from '../extension-drawer-reconciliation'
 import {
   deriveReorderArgs,
   normalizeConnectionsOrder,
@@ -965,6 +966,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
 
     set(patch as any)
+    reconcileInstalledExtensionDrawerTabs(get())
     if (Object.prototype.hasOwnProperty.call(settings, 'activeProfileId')) {
       const raw = settings.activeProfileId
       const id = raw == null || raw === '' ? null : String(raw)
@@ -1706,6 +1708,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (!isCurrentLoad()) return
         persistKey('imageGeneration', patch.imageGeneration)
       }
+      reconcileInstalledExtensionDrawerTabs(get())
     } catch (err) {
       if (isCurrentLoad()) {
         traceSettings('loadSettings:failed', { loadGeneration })

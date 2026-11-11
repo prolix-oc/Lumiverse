@@ -1680,7 +1680,7 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
-        if (payload.operation === 'installed') syncExtensions(true)
+        if (payload.operation === 'installed' || payload.operation === 'removed') syncExtensions(true)
         if (payload.operation === 'disabled' && payload.extensionId) {
           const state = useStore.getState()
           state.setExtensionUpdates(

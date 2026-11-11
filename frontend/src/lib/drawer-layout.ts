@@ -1,4 +1,4 @@
-import type { DrawerCustomIconData, DrawerLayoutItem } from '@/types/store'
+import type { DrawerCustomIconData, DrawerLayoutItem, DrawerSettings } from '@/types/store'
 import { sanitizeDrawerCustomIconData } from '@/lib/drawer-custom-icon'
 import { councilViewForTab } from '@/lib/council-navigation'
 import { uuidv4 } from '@/lib/uuid'
@@ -27,6 +27,58 @@ export function canonicalDrawerLayoutTabId(tabId: string): string {
   // while everything before it is the extension + declared drawer-tab ID.
   const match = /^(spindle:.*:tab:.*):\d+$/.exec(tabId)
   return match?.[1] ?? tabId
+}
+
+/** Prune installation-owned references only after the installed list is known. */
+export function reconcileExtensionDrawerSettings(
+  settings: DrawerSettings,
+  installedExtensionIds: ReadonlySet<string>,
+): DrawerSettings {
+  return pruneExtensionDrawerSettings(settings, (owner) => installedExtensionIds.has(owner))
+}
+
+/** A confirmed uninstall can prune its owner even while the list is refreshing. */
+export function removeExtensionDrawerSettings(settings: DrawerSettings, extensionId: string): DrawerSettings {
+  return pruneExtensionDrawerSettings(settings, (owner) => owner !== extensionId)
+}
+
+function pruneExtensionDrawerSettings(
+  settings: DrawerSettings,
+  keepOwner: (extensionId: string) => boolean,
+): DrawerSettings {
+  const keepTab = (tabId: string): boolean => {
+    const owner = /^spindle:([^:]+):tab:.+/.exec(tabId)?.[1]
+    return !owner || keepOwner(owner)
+  }
+  const pruneIds = (ids: string[]): string[] => {
+    if (!Array.isArray(ids)) return ids
+    const next = ids.filter(keepTab)
+    return next.length === ids.length ? ids : next
+  }
+  let layout = settings.layout
+  if (Array.isArray(layout)) {
+    const next: DrawerLayoutItem[] = []
+    for (const item of layout) {
+      if (!item || typeof item !== 'object') {
+        next.push(item)
+        continue
+      }
+      if (item.type === 'tab' && !keepTab(item.tabId)) continue
+      if (item.type === 'folder') {
+        const children = pruneIds(item.children)
+        next.push(children === item.children ? item : { ...item, children })
+      } else {
+        next.push(item)
+      }
+    }
+    if (next.length !== layout.length || next.some((item, index) => item !== layout[index])) layout = next
+  }
+  const tabOrder = pruneIds(settings.tabOrder)
+  const hiddenTabIds = pruneIds(settings.hiddenTabIds)
+  if (layout === settings.layout && tabOrder === settings.tabOrder && hiddenTabIds === settings.hiddenTabIds) {
+    return settings
+  }
+  return { ...settings, layout, tabOrder, hiddenTabIds }
 }
 
 function sanitizeLegacyTabOrder(tabOrder?: string[] | null): string[] {
@@ -166,6 +218,7 @@ export function flattenDrawerLayoutTabIds(layout: DrawerLayoutItem[]): string[] 
  * Reconcile persisted organization with the tabs currently known to the host.
  * Saved unknown tab IDs are intentionally retained so temporarily unavailable
  * extensions return to the same position/folder when they register again.
+ * Uninstalled owners are pruned separately after the installed list loads.
  */
 export function reconcileDrawerLayout(options: {
   layout?: unknown
