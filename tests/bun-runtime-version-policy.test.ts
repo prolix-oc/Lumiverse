@@ -12,6 +12,9 @@ import {
 } from "../src/runtime/bun-runtime";
 
 const root = join(import.meta.dir, "..");
+// The first Git Bash launch on Windows runners can exceed Bun's default 5s.
+// Keep a process deadline as well as the test deadline so hangs still fail.
+const shellTestTimeoutMs = process.platform === "win32" ? 30_000 : 5_000;
 
 async function read(path: string): Promise<string> {
   return (await Bun.file(join(root, path)).text()).replace(/\r\n/g, "\n");
@@ -131,6 +134,7 @@ describe("Bun runtime version policy", () => {
       ].join("\n");
       const result = Bun.spawnSync(["bash", "-c", shell], {
         cwd: directory,
+        timeout: shellTestTimeoutMs - 1_000,
         env: {
           ...process.env,
           LUMIVERSE_TEST_NEXT_VERSION: after,
@@ -145,7 +149,7 @@ describe("Bun runtime version policy", () => {
       if (success) expect(result.stderr.toString()).toBe("");
       else expect(result.stderr.toString()).toContain(probeWorks ? "still below the required 1.4.4" : "Termux install probe failed");
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  });
+  }, shellTestTimeoutMs);
 
   test("selects a versioned Windows runtime and compares prerelease versions numerically", () => {
     expect(meetsBunVersion("1.4.3", "1.4.4")).toBe(false);
@@ -217,7 +221,7 @@ describe("Bun runtime version policy", () => {
       "run_migrate_st",
       section("  install-desktop)", "\n    ;;").replace("  install-desktop)", ""),
     ].join("\n");
-    const result = Bun.spawnSync(["bash", "-c", shell], { cwd: root });
+    const result = Bun.spawnSync(["bash", "-c", shell], { cwd: root, timeout: shellTestTimeoutMs - 1_000 });
     expect(result.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString().trim().split(/\r?\n/)).toEqual([
@@ -225,7 +229,7 @@ describe("Bun runtime version policy", () => {
       "/mock/raw-bun run scripts/migrate-sillytavern.ts",
       "/mock/raw-bun run scripts/install-desktop.ts",
     ]);
-  });
+  }, shellTestTimeoutMs);
 
   test("updates native Termux Bun and rebuilds its wrapper only when the version changes", async () => {
     const launcher = await read("start.sh");

@@ -3627,6 +3627,7 @@ async function runGeneration(
           ? { extra: partialExtra }
           : {}),
         skipCouncilCacheInvalidation: true,
+        finalizesStaged: true,
       });
       messageId = lifecycle.stagedMessageId;
     } else if (lifecycle.continueMessageId && (closedContent || fullReasoning || carrier)) {
@@ -4156,6 +4157,7 @@ async function runGeneration(
           ...(lifecycle.variableStateId ? { contentSwipeId: lifecycle.streamingSwipeId } : {}),
           ...(stagedExtra ? { extra: stagedExtra } : {}),
           skipCouncilCacheInvalidation: true,
+          finalizesStaged: true,
         });
         messageId = lifecycle.stagedMessageId;
       } else if (lifecycle.impersonateDraft) {

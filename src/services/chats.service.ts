@@ -3049,7 +3049,10 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
       memoryCortex.invalidateLinkedCortexCache(updated.chat_id);
     } catch { /* ignore if not loaded */ }
 
-    rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]).catch(err => {
+    const chunkUpdate = input.finalizesStaged && !existing.is_user && !existing.content
+      ? finalizeStagedMessageChunks(userId, updated.chat_id, updated.id)
+      : rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]);
+    chunkUpdate.catch(err => {
       console.warn("[chats] Failed to rebuild chunks after message edit:", err);
     });
   }
@@ -4514,7 +4517,38 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
   })();
 }
 
+/** Finalization shares the rebuild lane so an in-flight edit cannot discard it.
+ * A preceding rebuild may already include the finished row; reuse that chunk. */
+async function finalizeStagedMessageChunks(userId: string, chatId: string, messageId: string): Promise<void> {
+  await enqueueChatPipelineTask({
+    chatId,
+    kind: "chunk_finalize",
+    run: async () => {
+      const message = getMessage(userId, messageId);
+      if (!message || message.extra?.hidden === true || !message.content) return;
+      if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
+      const findChunk = () => (getDb().query(
+        `SELECT * FROM chat_chunks WHERE chat_id = ?
+         AND (message_range_start IS NULL OR message_range_start <= ?)
+         AND (message_range_end IS NULL OR message_range_end >= ?)`,
+      ).all(chatId, message.index_in_chat, message.index_in_chat) as any[])
+        .map(rowToChatChunk).find((candidate) => candidate.message_ids.includes(messageId));
+      // Another message may have arrived while this task waited. Preserve the
+      // chronological boundaries rather than appending behind a newer chunk.
+      let chunk = findChunk();
+      if (!chunk && (getLastChatChunk(chatId)?.message_range_end ?? -1) > message.index_in_chat) {
+        await _rebuildChatChunksFromBody(userId, chatId, message.index_in_chat);
+        chunk = findChunk();
+      }
+      if (chunk) await scheduleChunkCortex(userId, chatId, chunk.id);
+      else await updateChatChunks(userId, chatId, message);
+    },
+  });
+}
+
 async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
+  // A staged reply has no text yet; updateMessage chunks it when it is finalized.
+  if (!newMessage.is_user && !newMessage.content) return;
   if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
 
   const chat = getChat(userId, chatId);
@@ -4549,9 +4583,15 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
 
   scheduleChatMemoryRefresh(userId, chatId, 8);
 
+  await scheduleChunkCortex(userId, chatId, chunkId);
+}
+
+async function scheduleChunkCortex(userId: string, chatId: string, chunkId: string): Promise<void> {
   // Memory Cortex: process chunk for entity extraction, salience scoring, etc.
   // Runs async and never blocks the main flow.
   try {
+    const chat = getChat(userId, chatId);
+    const characterId = chat?.character_id ?? null;
     const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
     if (chunk) {
       const cortexConfig = memoryCortex.getCortexConfig(userId);
@@ -4978,6 +5018,8 @@ async function chunkAndPersistMessages(
   chatMemSettings: embeddingsSvc.ChatMemorySettings,
   salienceByContent: Map<string, SalienceSnapshotRow[]>,
 ): Promise<void> {
+  // A rebuild can run while a reply streams; its staged message is chunked at finalize.
+  messages = messages.filter((m) => m.is_user || m.content);
   if (messages.length === 0) return;
 
   const targetTokens = chatMemSettings.chunkTargetTokens;

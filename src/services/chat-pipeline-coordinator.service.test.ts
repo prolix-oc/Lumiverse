@@ -21,6 +21,29 @@ afterEach(() => {
 });
 
 describe("chat pipeline coordinator", () => {
+  test("chunk finalization waits for Cortex without aborting or superseding ingestion", async () => {
+    const blocker = deferred<void>();
+    const order: string[] = [];
+    let activeSignal!: AbortSignal;
+    const active = enqueueChatPipelineTask({
+      chatId: "chat-finalize", kind: "cortex_ingest",
+      run: async (signal) => { activeSignal = signal; await blocker.promise; order.push("active"); },
+    });
+    const queued = enqueueChatPipelineTask({
+      chatId: "chat-finalize", kind: "cortex_ingest",
+      run: async () => { order.push("queued"); },
+    });
+    const finalized = enqueueChatPipelineTask({
+      chatId: "chat-finalize", kind: "chunk_finalize",
+      run: async () => { order.push("finalized"); },
+    });
+    expect(activeSignal.aborted).toBe(false);
+    expect(getChatPipelineStatus("chat-finalize")?.queuedCounts.chunk_finalize).toBe(1);
+    blocker.resolve();
+    expect((await Promise.all([active, queued, finalized])).map((result) => result.status)).toEqual(["completed", "completed", "completed"]);
+    expect(order).toEqual(["active", "queued", "finalized"]);
+  });
+
   test("chunk rebuilds abort active cortex work and supersede queued ingests", async () => {
     const order: string[] = [];
 
