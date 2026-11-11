@@ -1680,6 +1680,10 @@
       "stateExcluded": "Ausgeschlossen \u2014 klicken zum Zurücksetzen"
     },
     "alternateAvatars": {
+      "addFromGallery": "Aus Galerie hinzufügen",
+      "uploadImage": "Avatar hochladen",
+      "galleryLoadFailed": "Galeriebilder konnten nicht geladen werden.",
+      "uploadFailed": "Der alternative Avatar konnte nicht hochgeladen werden.",
       "title": "Alternative Avatare",
       "helper": "Zusätzliche Profilbilder für diesen Charakter, pro Chat umschaltbar.",
       "selectionHint": "Tippe auf einen Avatar, um ihn in diesem Chat zu verwenden.",

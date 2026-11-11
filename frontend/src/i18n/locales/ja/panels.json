@@ -1425,6 +1425,10 @@
       "noTagsFound": "タグが見つかりません"
     },
     "alternateAvatars": {
+      "addFromGallery": "ギャラリーから追加",
+      "uploadImage": "アバターをアップロード",
+      "galleryLoadFailed": "ギャラリーの画像を読み込めませんでした。",
+      "uploadFailed": "代替アバターをアップロードできませんでした。",
       "title": "代替アバター",
       "helper": "このキャラクターの追加のプロフィール写真、ごとに切り替え可能チャット。",
       "selectionHint": "このチャットで使用するには、アバターをタップします。",

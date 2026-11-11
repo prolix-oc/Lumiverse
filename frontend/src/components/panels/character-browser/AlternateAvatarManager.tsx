@@ -1,9 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Plus, X, Pencil, Check, Link2 } from 'lucide-react'
+import { Plus, X, Pencil, Check, Link2, Image as ImageIcon } from 'lucide-react'
 import { imagesApi } from '@/api/images'
+import type { CharacterGalleryItem } from '@/types/api'
 import LazyImage from '@/components/shared/LazyImage'
+import ImageCropModal from '@/components/shared/ImageCropModal'
+import CharacterGalleryPicker from './CharacterGalleryPicker'
 import styles from './AlternateAvatarManager.module.css'
 import clsx from 'clsx'
 import {
@@ -11,16 +14,13 @@ import {
   PRIMARY_AVATAR_ENTRY_ID,
   type AvatarBindingField,
   type AvatarBindings,
+  type AlternateAvatarEntry,
 } from '@/lib/avatarBindings'
 
-export interface AlternateAvatarEntry {
-  id: string
-  image_id: string
-  original_image_id?: string
-  label: string
-}
+export type { AlternateAvatarEntry } from '@/lib/avatarBindings'
 
 interface Props {
+  characterId: string
   primaryImageId: string | null
   alternates: AlternateAvatarEntry[]
   onChange: (alternates: AlternateAvatarEntry[]) => void
@@ -29,6 +29,7 @@ interface Props {
   greetingCount: number
   onBindingsChange: (bindings: AvatarBindings) => void
   openCropFlow: (file: File) => void
+  onGalleryCropComplete: (file: File, source: CharacterGalleryItem) => void
   /** When provided, tapping an avatar selects it for the active chat. */
   activeChatAvatarId?: string | null
   onAvatarSelect?: (avatarEntryId: string) => void
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export default function AlternateAvatarManager({
+  characterId,
   primaryImageId,
   alternates,
   onChange,
@@ -45,9 +47,10 @@ export default function AlternateAvatarManager({
   greetingCount,
   onBindingsChange,
   openCropFlow,
+  onGalleryCropComplete,
   activeChatAvatarId,
   onAvatarSelect,
-  uploadProgress,
+  uploadProgress = null,
 }: Props) {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
@@ -55,6 +58,8 @@ export default function AlternateAvatarManager({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [bindingEditorId, setBindingEditorId] = useState<string | null>(null)
+  const [showGalleryPicker, setShowGalleryPicker] = useState(false)
+  const [galleryCropSource, setGalleryCropSource] = useState<CharacterGalleryItem | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   const selectable = !!onAvatarSelect
@@ -178,6 +183,17 @@ export default function AlternateAvatarManager({
         )}
       </div>
 
+      <div className={styles.controls}>
+        <button
+          type="button"
+          className={styles.controlBtn}
+          onClick={() => setShowGalleryPicker(true)}
+          disabled={uploadProgress !== null}
+        >
+          <ImageIcon size={14} /> {t('characterBrowser.alternateAvatars.addFromGallery')}
+        </button>
+      </div>
+
       <div className={styles.strip}>
         {/* Primary avatar (non-deletable) */}
         {primaryImageId && (
@@ -286,12 +302,35 @@ export default function AlternateAvatarManager({
           className={styles.addCard}
           onClick={() => fileInputRef.current?.click()}
           disabled={uploadProgress !== null}
+          title={t('characterBrowser.alternateAvatars.uploadImage')}
+          aria-label={t('characterBrowser.alternateAvatars.uploadImage')}
         >
           <Plus size={16} />
         </button>
       </div>
 
       {bindingEditorId && renderBindingEditor(bindingEditorId)}
+
+      {showGalleryPicker && (
+        <CharacterGalleryPicker
+          characterId={characterId}
+          onClose={() => setShowGalleryPicker(false)}
+          onSelect={(item) => {
+            setShowGalleryPicker(false)
+            setGalleryCropSource(item)
+          }}
+        />
+      )}
+      <ImageCropModal
+        isOpen={galleryCropSource !== null}
+        imageSrc={galleryCropSource ? imagesApi.url(galleryCropSource.image_id) : null}
+        onCancel={() => setGalleryCropSource(null)}
+        onCropDone={(blob) => {
+          if (!galleryCropSource) return
+          onGalleryCropComplete(new File([blob], 'avatar.png', { type: 'image/png' }), galleryCropSource)
+          setGalleryCropSource(null)
+        }}
+      />
 
       <input
         ref={fileInputRef}

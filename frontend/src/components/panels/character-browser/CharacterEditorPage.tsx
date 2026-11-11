@@ -100,6 +100,7 @@ import CharacterLoraTab from './CharacterLoraTab'
 import AlternateFieldEditor from './AlternateFieldEditor'
 import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
+import { uploadAlternateAvatar } from '@/lib/alternateAvatarUpload'
 import CharacterTokenReportModal, { type CharacterTokenReportItem } from './CharacterTokenReportModal'
 import { GuideViewer } from '@/components/shared/GuideViewer'
 import {
@@ -1502,29 +1503,21 @@ export default function CharacterEditorPage() {
 
   const { cropModalProps, openCropFlow } = useImageCropFlow(handleCropComplete)
 
-  // Separate crop flow for alternate avatar uploads
+  // Both local files and gallery selections use the same avatar save path.
   const handleAltAvatarCropComplete = useCallback(
-    async (croppedFile: File, originalFile: File) => {
+    async (croppedFile: File, originalFile: File | CharacterGalleryItem) => {
       if (!editingCharacterId || !character) return
       setAltAvatarUploadProgress(0)
       try {
-        // Upload original (full aspect ratio) for lightbox
-        const originalImage = await imagesApi.upload(originalFile, (p) => setAltAvatarUploadProgress(Math.round(p * 0.4)))
-        // Upload cropped for display
-        const image = await imagesApi.upload(croppedFile, (p) => setAltAvatarUploadProgress(40 + Math.round(p * 0.6)))
-        const newId = uuidv7()
-        const entry: AlternateAvatarEntry = {
-          id: newId,
-          image_id: image.id,
-          original_image_id: originalImage.id,
-          label: t('characterEditor.newAvatar'),
-        }
+        const entry = await uploadAlternateAvatar(croppedFile, originalFile, t('characterEditor.newAvatar'), setAltAvatarUploadProgress)
+        if (editingCharacterIdRef.current !== editingCharacterId) return
         mutateExtensions((ext) => {
           const currentAlts = (ext.alternate_avatars || []) as AlternateAvatarEntry[]
           return { ...ext, alternate_avatars: [...currentAlts, entry] }
         }, true)
       } catch (err) {
         console.error('[AltAvatar] Upload failed:', err)
+        toast.error(t('characterBrowser.alternateAvatars.uploadFailed'))
       } finally {
         setAltAvatarUploadProgress(null)
       }
@@ -2535,6 +2528,8 @@ export default function CharacterEditorPage() {
                         </div>
                       </div>
                       <AlternateAvatarManager
+                        key={editingCharacterId}
+                        characterId={editingCharacterId!}
                         primaryImageId={character?.image_id || null}
                         alternates={(workingExtensions.alternate_avatars || []) as AlternateAvatarEntry[]}
                         onChange={handleAlternateAvatarsChange}
@@ -2543,6 +2538,7 @@ export default function CharacterEditorPage() {
                         greetingCount={1 + alternateGreetings.length}
                         onBindingsChange={handleAvatarBindingsChange}
                         openCropFlow={openAltAvatarCropFlow}
+                        onGalleryCropComplete={handleAltAvatarCropComplete}
                         activeChatAvatarId={activeChatId ? activeChatAvatarId : undefined}
                         onAvatarSelect={activeChatId ? handleAvatarSelect : undefined}
                         uploadProgress={altAvatarUploadProgress}

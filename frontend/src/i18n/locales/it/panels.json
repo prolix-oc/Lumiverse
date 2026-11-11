@@ -1424,6 +1424,10 @@
       "noTagsFound": "Nessun tag trovato"
     },
     "alternateAvatars": {
+      "addFromGallery": "Aggiungi dalla galleria",
+      "uploadImage": "Carica avatar",
+      "galleryLoadFailed": "Impossibile caricare le immagini della galleria.",
+      "uploadFailed": "Impossibile caricare l’avatar alternativo.",
       "title": "Avatar alternativi",
       "helper": "Foto profilo aggiuntive per questo personaggio, selezionabili per chat.",
       "selectionHint": "Tocca un avatar per usarlo in questa chat.",

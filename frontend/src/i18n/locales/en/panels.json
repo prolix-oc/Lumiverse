@@ -1680,6 +1680,10 @@
       "stateExcluded": "Excluded — click to clear"
     },
     "alternateAvatars": {
+      "addFromGallery": "Add from Gallery",
+      "uploadImage": "Upload avatar",
+      "galleryLoadFailed": "Could not load gallery images.",
+      "uploadFailed": "Could not upload the alternate avatar.",
       "title": "Alternate Avatars",
       "helper": "Additional profile pictures for this character, switchable per chat.",
       "selectionHint": "Tap an avatar to use it in this chat.",

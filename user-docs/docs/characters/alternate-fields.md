@@ -42,9 +42,12 @@ Give your character multiple avatar options — different outfits, different art
 
 1. Open the character editor
 2. Go to the avatar section
-3. Click **Add Alternate Avatar**
-4. Upload an image and give it a label
-5. Repeat for as many variants as you want
+3. Click the **+** button to upload an image, or **Add from Gallery** to choose an image already in this character's gallery
+4. Crop the image for the avatar and confirm
+5. Click the avatar's label to rename it. Images added from the gallery start with their gallery caption as the label, when available
+6. Repeat for as many variants as you want
+
+The full image is preserved for portrait views. Adding an avatar from the gallery keeps the image in the gallery.
 
 ### Switching Avatars in Chat
 

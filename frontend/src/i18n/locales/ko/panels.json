@@ -1680,6 +1680,10 @@
       "stateExcluded": "제외됨 — 클릭하여 해제"
     },
     "alternateAvatars": {
+      "addFromGallery": "갤러리에서 추가",
+      "uploadImage": "아바타 업로드",
+      "galleryLoadFailed": "갤러리 이미지를 불러오지 못했습니다.",
+      "uploadFailed": "대체 아바타를 업로드하지 못했습니다.",
       "title": "대체 아바타",
       "helper": "채팅별로 전환할 수 있는 이 캐릭터의 추가 프로필 사진입니다.",
       "selectionHint": "아바타를 누르면 이 채팅에서 사용합니다.",
