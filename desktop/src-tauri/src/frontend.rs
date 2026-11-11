@@ -444,6 +444,38 @@ fn extension_widget_label(widget: &DesktopWidgetDescriptor) -> String {
     format!("widget-{hash:016x}")
 }
 
+/// A pop-out is a second frontend instance whose placement IDs never match the
+/// primary frontend's catalog, so its window label identifies its entry.
+fn widget_for_window_label<'a>(
+    widgets: &'a [DesktopWidgetDescriptor],
+    label: &str,
+) -> Option<&'a DesktopWidgetDescriptor> {
+    widgets
+        .iter()
+        .find(|widget| extension_widget_label(widget) == label)
+}
+
+#[cfg(test)]
+mod widget_label_tests {
+    use super::{extension_widget_label, widget_for_window_label, DesktopWidgetDescriptor};
+    #[test]
+    fn finds_only_the_calling_widget_window() {
+        let widgets = ["a", "b"].map(|id| DesktopWidgetDescriptor {
+            id: format!("spindle:demo:float:{id}"),
+            extension_id: "demo".into(),
+            index: 0,
+            title: "Demo".into(),
+            width: 320,
+            height: 240,
+            chromeless: false,
+        });
+        let label = extension_widget_label(&widgets[1]);
+        let found = widget_for_window_label(&widgets, &label).map(|widget| widget.id.as_str());
+        assert_eq!(found, Some("spindle:demo:float:b"));
+        assert!(widget_for_window_label(&widgets, "main").is_none());
+    }
+}
+
 fn valid_widget_descriptor(widget: &DesktopWidgetDescriptor) -> bool {
     !widget.id.is_empty()
         && widget.id.len() <= 256
@@ -1357,16 +1389,11 @@ pub fn return_extension_widget(
     state: State<'_, DesktopWidgetCatalogState>,
     widget_id: String,
 ) -> Result<(), String> {
-    let widget = state
-        .widgets
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|entry| entry.id == widget_id)
-        .cloned()
-        .ok_or("That floating widget is no longer registered")?;
-    if window.label() != extension_widget_label(&widget) {
-        return Err("A widget window may only return itself to the page".into());
+    // `widget_id` is local to the pop-out's frontend instance; see
+    // `widget_for_window_label`.
+    let _ = widget_id;
+    if widget_for_window_label(&state.widgets.lock().unwrap(), window.label()).is_none() {
+        return Err("That floating widget is no longer registered".into());
     }
     window.close().map_err(|error| error.to_string())
 }
