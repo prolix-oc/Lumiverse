@@ -645,6 +645,35 @@ afterEach(async () => {
 })
 
 describe('LandingPage character library', () => {
+  for (const layout of ['cards', 'compact'] as const) {
+    test(`changing favorite pinning refreshes ordering and retains favorite styling in ${layout}`, async () => {
+      storeState = { ...createStoreState(false), landingPageLayoutMode: layout, favorites: ['favorite'], landingHiddenCharacterIds: ['hidden'] }
+      const favorite = recentChat('favorite', 'Favorite')
+      const recent = recentChat('recent', 'Recent')
+      listRecentGrouped.mockImplementation(async (params: { favorite_ids?: string }) =>
+        page(params.favorite_ids ? [favorite, recent] : [recent, favorite]))
+      const host = await mountLanding()
+      await flush()
+      const names = () => [...host.querySelectorAll('[data-component="LandingPageChats"] h3 span')].map((node) => node.textContent)
+      const favoriteClass = layout === 'cards' ? '.favoriteCard' : '.favoriteListItem'
+      expect(names()).toEqual(['Favorite', 'Recent'])
+      expect(host.querySelectorAll(favoriteClass)).toHaveLength(1)
+
+      await act(async () => { storeState = { ...storeState, landingPinFavorites: false }; notifyStore() })
+      await flush()
+      expect(listRecentGrouped.mock.calls.at(-1)![0]).toEqual(expect.objectContaining({ hidden_character_ids: 'hidden' }))
+      expect(listRecentGrouped.mock.calls.at(-1)![0].favorite_ids).toBeUndefined()
+      expect(names()).toEqual(['Recent', 'Favorite'])
+      expect(host.querySelectorAll(favoriteClass)).toHaveLength(1)
+      expect(storeState.favorites).toEqual(['favorite'])
+
+      await act(async () => { storeState = { ...storeState, landingPinFavorites: true }; notifyStore() })
+      await flush()
+      expect(listRecentGrouped.mock.calls.at(-1)![0].favorite_ids).toBe('favorite')
+      expect(names()).toEqual(['Favorite', 'Recent'])
+    })
+  }
+
   for (const platform of ['ios', 'android']) {
     test(`uses native ${platform} motion with a fine pointer attached`, async () => {
       motionSupported = true

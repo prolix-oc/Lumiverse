@@ -223,7 +223,9 @@
       "compact": "緊湊",
       "expanded": "擴展",
       "galleryWidthHelper": "在桌面端保持舒適的閱讀寬度，或將最近聊天畫廊擴展至整個視窗。",
-      "batchSize": "首頁每批聊天數量"
+      "batchSize": "首頁每批聊天數量",
+      "pinFavorites": "將收藏置頂",
+      "pinFavoritesHint": "在首頁頂部顯示已收藏的卡片"
     }
   },
   "notifications": {

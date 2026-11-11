@@ -139,6 +139,8 @@ Type to search, then press Enter to execute.
 
 When you open Lumiverse (or navigate to the home page), you land on the **Landing Page**. It shows recent chats grouped by character. Click any chat to resume it, or click a character to start a new conversation. The landing page layout (compact list vs. grid) and the number of chats shown are configurable from **Settings → Display**.
 
+Favorites are pinned to the top by default. Turn off **Pin favorites to top** in **Settings → Display** to sort them with the other cards. Their favorite outlines remain visible in both layouts.
+
 ---
 
 ## Settings

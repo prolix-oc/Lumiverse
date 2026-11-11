@@ -191,6 +191,7 @@ function isValidSettingValue(key: string, value: unknown): boolean {
   if (key === 'chatImageAlignment') return isChatImageAlignment(value)
   if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
+  if (key === 'landingPinFavorites') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
 }

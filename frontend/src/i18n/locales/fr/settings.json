@@ -223,7 +223,9 @@
       "compact": "Compacte",
       "expanded": "Étendue",
       "galleryWidthHelper": "Conservez une largeur de lecture confortable sur ordinateur ou étendez la galerie de discussions récentes à toute la fenêtre.",
-      "batchSize": "LANDING PAGE CHATS PAR BATCH"
+      "batchSize": "LANDING PAGE CHATS PAR BATCH",
+      "pinFavorites": "Épingler les favoris en haut",
+      "pinFavoritesHint": "Afficher les cartes favorites en haut de la page d'accueil"
     }
   },
   "notifications": {

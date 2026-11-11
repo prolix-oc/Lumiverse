@@ -223,7 +223,9 @@
       "compact": "コンパクト",
       "expanded": "拡張",
       "galleryWidthHelper": "デスクトップでは読みやすい幅を維持するか、最近のチャット ギャラリーをウィンドウ全体に拡張できます。",
-      "batchSize": "ランディング ページのバッチごとのチャット"
+      "batchSize": "ランディング ページのバッチごとのチャット",
+      "pinFavorites": "お気に入りを先頭に固定",
+      "pinFavoritesHint": "お気に入りのカードをホームページの先頭に表示します"
     }
   },
   "notifications": {
