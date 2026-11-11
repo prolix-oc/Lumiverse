@@ -76,6 +76,18 @@ function assertLeafKeyParity(enPath: string, otherPath: string, label: string) {
 describe('i18n locale key coverage', () => {
   const enFiles = enNamespaceFiles()
 
+  test('favorite pinning controls are translated in every supported locale', () => {
+    for (const lng of localeDirs()) {
+      const settings = loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as {
+        display: { landing: Record<string, string> }
+      }
+      for (const key of ['pinFavorites', 'pinFavoritesHint']) {
+        expect(typeof settings.display.landing[key], `${lng} ${key}`).toBe('string')
+        expect(settings.display.landing[key].trim()).not.toBe('')
+      }
+    }
+  })
+
   test('english locale has the expected namespace files', () => {
     expect(enFiles).toContain('panels.json')
     expect(enFiles).toContain('weaver.json')

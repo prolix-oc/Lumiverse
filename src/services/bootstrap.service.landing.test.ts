@@ -35,3 +35,23 @@ test('a malformed unrelated startup preference keeps the independent recent-list
   expect(payload.recentChats.data.map(item => item.character_id)).toEqual(['b']);
   expect(payload.recentChats.total).toBe(2);
 });
+
+test('landingPinFavorites: false disables pinning favorites in the landing bootstrap page', () => {
+  const db = getDb();
+  db.run("UPDATE chats SET updated_at = 500 WHERE character_id = 'c'");
+  db.run("UPDATE chats SET updated_at = 100 WHERE character_id = 'b'");
+  db.run("INSERT INTO settings VALUES ('u', 'landingPinFavorites', 'false', 0)");
+  const { payload, errors } = buildLandingBootstrapPayload('u');
+  expect(errors).toEqual({});
+  expect(payload.recentChats.data.map((item: any) => item.character_id)).toEqual(['c']);
+});
+
+test('landingPinFavorites: true keeps favorites pinned in the landing bootstrap page', () => {
+  const db = getDb();
+  db.run("UPDATE chats SET updated_at = 500 WHERE character_id = 'c'");
+  db.run("UPDATE chats SET updated_at = 100 WHERE character_id = 'b'");
+  db.run("INSERT INTO settings VALUES ('u', 'landingPinFavorites', 'true', 0)");
+  const { payload, errors } = buildLandingBootstrapPayload('u');
+  expect(errors).toEqual({});
+  expect(payload.recentChats.data.map((item: any) => item.character_id)).toEqual(['b']);
+});

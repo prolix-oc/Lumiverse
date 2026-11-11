@@ -139,7 +139,9 @@
       "compact": "Compatta",
       "expanded": "Espansa",
       "galleryWidthHelper": "Mantieni una larghezza di lettura confortevole sul desktop oppure espandi la galleria delle chat recenti a tutta la finestra.",
-      "batchSize": "CHAT PER BATCH NELLA PAGINA INIZIALE"
+      "batchSize": "CHAT PER BATCH NELLA PAGINA INIZIALE",
+      "pinFavorites": "Fissa i preferiti in alto",
+      "pinFavoritesHint": "Mostra le card preferite in cima alla pagina iniziale"
     }
   },
   "notifications": {

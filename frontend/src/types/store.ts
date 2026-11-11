@@ -152,6 +152,7 @@ export interface StartupSettings {
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
   landingPageGalleryWidth?: 'compact' | 'expanded'
+  landingPinFavorites?: boolean
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
   spindleSettings?: Partial<SpindleSettings>
@@ -780,6 +781,7 @@ export interface SettingsSlice {
   /** Keeps the landing gallery comfortable on wide screens unless expanded by the user. */
   landingPageGalleryWidth: 'compact' | 'expanded'
   landingHiddenCharacterIds: string[]
+  landingPinFavorites: boolean
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number

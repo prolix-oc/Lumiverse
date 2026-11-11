@@ -942,6 +942,7 @@ function LandingPageNative() {
   const fontScale = deviceControls?.fontScale ?? themeFontScale
   const favorites = useStore((s) => s.favorites)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
+  const pinFavorites = useStore((s) => s.landingPinFavorites)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const openModal = useStore((s) => s.openModal)
   const toggleFavorite = useStore((s) => s.toggleFavorite)
@@ -1131,11 +1132,11 @@ function LandingPageNative() {
     ...(debouncedSearchQuery ? { search: debouncedSearchQuery } : {}),
     sort: sortField,
     direction: sortDirection,
-    ...(favorites.length > 0 ? { favorite_ids: favorites.join(',') } : {}),
+    ...(pinFavorites && favorites.length > 0 ? { favorite_ids: favorites.join(',') } : {}),
     ...(landingHiddenCharacterIds.length > 0
       ? { hidden_character_ids: landingHiddenCharacterIds.join(',') }
       : {}),
-  }), [debouncedSearchQuery, favorites, landingHiddenCharacterIds, sortDirection, sortField])
+  }), [debouncedSearchQuery, favorites, landingHiddenCharacterIds, pinFavorites, sortDirection, sortField])
 
   // pointerdown + openedAt guard per the project's Android outside-click rule
   useEffect(() => {

@@ -410,6 +410,7 @@ function DisplaySettings() {
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
   const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
+  const landingPinFavorites = useStore((s) => s.landingPinFavorites)
   const toastPosition = useStore((s) => s.toastPosition)
   const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
   const chatHeadsSize = useStore((s) => s.chatHeadsSize)
@@ -802,6 +803,13 @@ function DisplaySettings() {
         </Button>
         <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
       </div>
+
+      <Toggle.Checkbox
+        checked={landingPinFavorites}
+        onChange={(checked) => setSetting('landingPinFavorites', checked)}
+        label={t('display.landing.pinFavorites')}
+        hint={t('display.landing.pinFavoritesHint')}
+      />
 
     </div>
   )

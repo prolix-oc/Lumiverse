@@ -239,7 +239,9 @@
       "batchSize": "CHATS PRO STAPEL AUF DER STARTSEITE",
       "hiddenCharacters": "AUF DER STARTSEITE AUSGEBLENDET ({{count}})",
       "manageHiddenCharacters": "Ausgeblendete Elemente verwalten",
-      "hiddenCharactersHelper": "Stellen Sie Charaktere oder einzelne Chats wieder her, die auf der Startseite ausgeblendet wurden. Der Charakter-Browser ist davon nicht betroffen."
+      "hiddenCharactersHelper": "Stellen Sie Charaktere oder einzelne Chats wieder her, die auf der Startseite ausgeblendet wurden. Der Charakter-Browser ist davon nicht betroffen.",
+      "pinFavorites": "Favoriten oben anheften",
+      "pinFavoritesHint": "Favorisierte Karten oben auf der Startseite anzeigen"
     }
   },
   "notifications": {

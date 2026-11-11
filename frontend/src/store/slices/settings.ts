@@ -44,6 +44,7 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageLayoutMode',
   'landingPageGalleryWidth',
   'landingHiddenCharacterIds',
+  'landingPinFavorites',
   'charactersPerPage',
   'personasPerPage',
   'messagesPerPage',
@@ -190,6 +191,7 @@ function isValidSettingValue(key: string, value: unknown): boolean {
   if (key === 'chatImageAlignment') return isChatImageAlignment(value)
   if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
+  if (key === 'landingPinFavorites') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
 }
@@ -754,6 +756,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   landingPageLayoutMode: 'cards',
   landingPageGalleryWidth: 'compact',
   landingHiddenCharacterIds: [],
+  landingPinFavorites: true,
   charactersPerPage: 50,
   personasPerPage: 24,
   messagesPerPage: 50,
@@ -923,6 +926,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (settings.landingPageGalleryWidth === 'compact' || settings.landingPageGalleryWidth === 'expanded') {
       patch.landingPageGalleryWidth = settings.landingPageGalleryWidth
+    }
+    if (typeof settings.landingPinFavorites === 'boolean') {
+      patch.landingPinFavorites = settings.landingPinFavorites
     }
     if (settings.wallpaper && typeof settings.wallpaper === 'object') {
       patch.wallpaper = { ...settings.wallpaper }
