@@ -78,6 +78,9 @@ postman/
 # Zensical docs build output
 # =============================================================================
 
+/user-docs/site/
+/developer-docs/site/
+
 *.md
 !developer-docs/**/*.md
 !user-docs/**/*.md
