@@ -24,6 +24,7 @@ import { registerNamesMacros } from "./definitions/identity";
 import { registerCharacterMacros } from "./definitions/persona-card";
 import { registerTagMacros } from "./definitions/tags";
 import { registerChatMacros } from "./definitions/conversation";
+import { registerPresetHistoryMacros } from "./definitions/preset-history";
 import { registerTimeMacros } from "./definitions/temporal";
 import { registerRandomMacros } from "./definitions/entropy";
 import { registerVariableMacros } from "./definitions/vars";
@@ -62,6 +63,7 @@ export function initMacros(): void {
   registerCharacterMacros();
   registerTagMacros();
   registerChatMacros();
+  registerPresetHistoryMacros();
   registerTimeMacros();
   registerRandomMacros();
   registerVariableMacros();

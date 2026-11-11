@@ -137,6 +137,7 @@ import * as audioSvc from "./audio.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
 import * as councilProfilesSvc from "./council/council-profiles.service";
 import { readCachedChatMemory } from "./chat-memory-cache.service";
+import { capturePresetHistory, type PresetHistorySnapshot } from "../types/preset-history";
 import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import * as memoryCortex from "./memory-cortex";
 import { buildEmotionalContext } from "./memory-cortex";
@@ -1901,6 +1902,8 @@ export async function assemblePrompt(
   const messages = ctx.excludeMessageId
     ? editedContextMessages.filter((m) => m.id !== ctx.excludeMessageId)
     : editedContextMessages;
+  // Attribution follows the committed branch, including the original selection of a replaced response.
+  const presetHistory = capturePresetHistory(editedContextMessages, ctx.rejectedPresetHistory);
   const contextAnchorMessageId =
     typeof chat.metadata?.context_history_anchor_message_id === "string"
       ? chat.metadata.context_history_anchor_message_id
@@ -2045,6 +2048,7 @@ export async function assemblePrompt(
       ctx.userId,
       ctx.userInput,
       ctx.signal,
+      presetHistory,
     );
     return {
       ...legacyResult,
@@ -2634,6 +2638,8 @@ export async function assemblePrompt(
   );
 
   const macroEnv: MacroEnv = buildEnv({
+    userId: ctx.userId,
+    presetHistory,
     character: effectiveCharacter,
     focusedCharacter,
     persona,
@@ -8374,6 +8380,7 @@ async function legacyAssembly(
   userId?: string,
   userInput?: string,
   signal?: AbortSignal,
+  presetHistory?: PresetHistorySnapshot,
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
@@ -8422,6 +8429,8 @@ async function legacyAssembly(
       : resolveCharacterWithAlternateFields(character as Character, chatObj);
 
     macroEnv = buildEnv({
+      userId,
+      presetHistory,
       character: legacyEffectiveChar,
       focusedCharacter: legacyFocusedChar,
       persona: persona ?? null,

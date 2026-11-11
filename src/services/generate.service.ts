@@ -61,6 +61,7 @@ import {
 } from "./inline-web-search";
 import { getWebSearchSettings } from "./web-search-settings.service";
 import type { Message } from "../types/message";
+import { readPresetHistoryEntry, type PresetHistoryTarget } from "../types/preset-history";
 import type { ConnectionProfile } from "../types/connection-profile";
 import {
   interceptorPipeline,
@@ -1034,6 +1035,7 @@ async function runPromptPipeline(opts: {
   /** Committed edit identity for assembly validation and history cutoff. */
   editAndSendContext?: EditAndSendContext;
   rejectedSwipe?: string;
+  rejectedPresetHistory?: PresetHistoryTarget;
   continueMessageId?: string;
   continuePostfix?: string;
   targetCharacterId?: string;
@@ -1133,6 +1135,7 @@ async function runPromptPipeline(opts: {
       excludeMessageId: opts.excludeMessageId,
       editAndSendContext: opts.editAndSendContext,
       rejectedSwipe: opts.rejectedSwipe,
+      rejectedPresetHistory: opts.rejectedPresetHistory,
       continueMessageId: opts.continueMessageId,
       continuePostfix: opts.continuePostfix,
       targetCharacterId: opts.targetCharacterId,
@@ -2775,6 +2778,8 @@ export async function startGeneration(
             excludeMessageId,
             editAndSendContext,
             rejectedSwipe,
+            rejectedPresetHistory: targetAssistantMessage && (genType === "regenerate" || genType === "swipe")
+              ? { messageId: targetAssistantMessage.id, entry: readPresetHistoryEntry(targetAssistantMessage) } : undefined,
             continueMessageId: lifecycle.continueMessageId,
             continuePostfix: lifecycle.continuePostfix,
             targetCharacterId: pipelineTargetCharId,

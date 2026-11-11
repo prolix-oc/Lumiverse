@@ -7,6 +7,7 @@ import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { GenerationType } from "../llm/types";
+import { capturePresetHistory, type PresetHistorySnapshot } from "../types/preset-history";
 import type {
   MacroEnv,
   MacroHandler,
@@ -21,6 +22,9 @@ export interface BuildEnvContext {
   persona: Persona | null;
   chat: Chat;
   messages: Message[];
+  presetHistory?: PresetHistorySnapshot;
+  /** This caller intentionally omitted message bodies; load attribution only if a history macro runs. */
+  deferPresetHistory?: boolean;
   generationType: GenerationType;
   /** Defaults to true. False marks the evaluation as dry / non-committing. */
   commit?: boolean;
@@ -160,6 +164,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     _dynamicMacrosLower: buildDynamicLookup(ctx.dynamicMacros),
     signal: ctx.signal,
     extra: {
+      presetHistory: ctx.presetHistory ?? (ctx.deferPresetHistory ? {} : capturePresetHistory(ctx.messages)),
       userId: ctx.userId ?? (chat as any).user_id as string | undefined,
       characterId: character.id,
       preserveMessageSource: macroInterceptorChain.ownsMessageSource(character.extensions, ctx.userId ?? (chat as any).user_id),

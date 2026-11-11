@@ -221,6 +221,7 @@ async function buildEnvFromIds(userId: string, body: {
           return c ? getEffectiveCharacterName(c) : undefined;
         });
         const env = buildEnv({
+          userId,
           character,
           focusedCharacter,
           persona,

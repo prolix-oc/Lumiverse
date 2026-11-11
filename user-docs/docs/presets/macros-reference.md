@@ -539,6 +539,8 @@ Macros for the current chat state.
 | `{{userInput}}` | `{{user_input}}` | Exact input-bar draft captured when the generation began; empty for generations not started from the input bar |
 | `{{lastCharMessage}}` | `{{last_char_message}}`, `{{lastBotMessage}}` | Content of the last character message |
 | `{{lastMessageName}}` | — | Name of whoever sent the last message |
+| `{{lastPreset}}` | — | Most recent available preset name from the selected assistant swipes |
+| `{{lastPresets::5}}` | — | Up to five recent preset names, newest first, separated by newlines |
 | `{{messageCount}}` | `{{message_count}}`, `{{messagecount}}` | Total message count in the chat |
 | `{{chatId}}` | `{{chat_id}}` | The current chat's unique ID |
 | `{{firstIncludedMessageId}}` | — | Index of the first message included in the prompt |
@@ -546,6 +548,18 @@ Macros for the current chat state.
 | `{{lastSwipeId}}` | — | Index of the last swipe on the final message |
 | `{{currentSwipeId}}` | — | Index of the active swipe |
 | `{{rejectedSwipe}}` | `{{rejectedGeneration}}`, `{{regeneratedMessage}}` | Content of the regenerate/swipe target before the new swipe was staged; empty otherwise |
+
+### Preset history
+
+`{{lastPreset}}` returns a name, including when the recorded preset has since been deleted. `{{lastPresets::5::, }}` joins recent names with a custom separator. Count defaults to 1, accepts whole numbers from 0 to 100, and is capped at 100. Negative, fractional, or non-numeric counts return empty with a diagnostic. Results larger than 65,536 characters also return empty with a diagnostic.
+
+History follows conversation order and the **currently selected swipe of each assistant message**. Repeated presets remain repeated. User/system messages, greetings, hidden messages, synthetic injections, and empty pending responses are skipped. Up to 100 attributed responses are inspected; missing metadata or names that cannot be recovered can leave fewer results than requested. No available history returns an empty string.
+
+During regeneration, the response being replaced contributes its selection from before the new swipe was staged. During continuation, the existing response contributes its previous attribution. All blocks in a generation share the same snapshot, taken before history clipping or memory replacement. Edit-and-Send excludes later messages. Continuing one swipe with another preset replaces its attribution; this does not reconstruct each earlier segment.
+
+Recorded names preserve the historical label. ID-only records use the current name of a preset you own; deleted presets without recorded names are skipped. Names containing macro syntax are returned literally. Preview/display resolution uses the chat's selected history when that resolution request starts.
+
+Place changing preset-history context in a small block late in the prompt when possible. Using it near the beginning can reduce provider prompt-prefix cache reuse. Lumiverse tracks its history dependency separately from persisted variables so ordinary macro and display caches remain reusable.
 
 ---
 

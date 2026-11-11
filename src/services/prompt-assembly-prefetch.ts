@@ -238,7 +238,8 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   return {
     chat,
     variableStateSeed,
-    messages,
+    // Assembly owns exclusion and Edit-and-Send clipping; retain the target's attribution in its input snapshot.
+    messages: allMessages,
     character,
     persona,
     connection,

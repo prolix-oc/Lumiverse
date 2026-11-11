@@ -45,7 +45,9 @@ import {
   invalidateDisplayRegexCache,
   invalidateDisplayRegexCacheForMessage,
   invalidateDisplayRegexCacheForVars,
+  invalidateDisplayRegexCacheForPresetHistory,
 } from '@/hooks/useDisplayRegex'
+import { selectedPresetHistorySignature } from '@/lib/preset-history'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
 import { getIOSAppState, subscribeIOSAppState } from '@/lib/ios-app-state'
@@ -358,21 +360,39 @@ const pendingGenerationMetrics = new Map<string, GenerationMetricsReadyPayload>(
 /** Patch buffered/live metrics onto the in-store message (no-op if absent). */
 function applyGenerationMetrics(payload: GenerationMetricsReadyPayload): void {
   const state = useStore.getState()
-  if (payload.chatId !== state.activeChatId || !payload.messageId) return
+  if (!payload.messageId) return
   if (payload.tokenCount == null && !payload.generationMetrics) return
-  const msg = state.messages.find((m) => m.id === payload.messageId)
-  if (!msg) return
+  const msg = payload.chatId === state.activeChatId ? state.messages.find((m) => m.id === payload.messageId) : undefined
+  if (!msg) {
+    // History macros can read beyond the loaded page or from a cached, inactive chat.
+    if (payload.generationMetrics?.presetId || payload.generationMetrics?.presetName) {
+      invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
+    }
+    return
+  }
   // Metrics are anchored to the generated swipe; top-level extra is the active
   // swipe's projection. Skip when the user is viewing a different swipe — the
   // persisted value surfaces when they navigate to it.
   if (payload.swipeId != null && msg.swipe_id !== payload.swipeId) return
+  const generationMetricsBySwipe = payload.generationMetrics && Array.isArray(msg.extra.generationMetricsBySwipe)
+    ? [...msg.extra.generationMetricsBySwipe] : undefined
+  if (generationMetricsBySwipe) generationMetricsBySwipe[msg.swipe_id] = payload.generationMetrics
   state.updateMessage(payload.messageId, {
     extra: {
       ...msg.extra,
       ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
       ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
+      ...(generationMetricsBySwipe ? { generationMetricsBySwipe } : {}),
     },
   })
+  invalidatePresetHistoryForChange(payload.chatId, msg, useStore.getState().messages.find(m => m.id === msg.id))
+}
+
+function invalidatePresetHistoryForChange(chatId: string, before: Message | null | undefined, after: Message | null | undefined) {
+  // An event for unloaded history can still change another message's macro output.
+  if (before === undefined || selectedPresetHistorySignature(before) !== selectedPresetHistorySignature(after)) {
+    invalidateDisplayRegexCacheForPresetHistory(chatId)
+  }
 }
 
 function withReasoningSnapshot(
@@ -650,6 +670,7 @@ export function useWebSocket() {
       // overlay. Each disconnect resets all three signals; reconnect flips them
       // back to true (socket open → CONNECTED with role → pong received).
       wsClient.on(WS_OPEN, () => {
+        invalidateDisplayRegexCacheForPresetHistory()
         notifyDeletionReconnect()
         store.getState().setWsConnected(true)
         // Push the current extension drawer-tab snapshot so the backend's
@@ -696,6 +717,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, null, payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
           if (payload.inserted) {
@@ -742,6 +764,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.message?.id), payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           const next = payload.message
           const preset = next?.extra?.spindle_metadata?.preset_contexts?.[next.swipe_id]
@@ -774,6 +797,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_DELETED, (payload: MessageDeletedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.messageId), null)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           state.removeMessage(payload.messageId)
           if (payload.messageId) invalidateDisplayRegexCacheForMessage(payload.messageId)
@@ -782,6 +806,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_SWIPED, (payload: MessageSwipedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.message?.id), payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           state.updateMessage(payload.message.id, payload.message)
           // Deleting a swipe shifts indices, so a pending "new swipe" pointer is
@@ -956,6 +981,7 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.GENERATION_ENDED, (payload: GenerationEndedPayload) => {
+        invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           // Guard: ignore events from stale generations that were replaced by a newer one
@@ -1004,6 +1030,7 @@ export function useWebSocket() {
             const mpPeerErr = !!sErr.mpRoomId && !sErr.mpIsHost && sErr.mpChatId === payload.chatId
             if (payload.chatId && !mpPeerErr) {
               fetchLatestMessages(payload.chatId).then(async (res) => {
+                invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
                 if (!isCurrentGeneration(payload.chatId, generationEpoch)) return
                 const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
@@ -1117,6 +1144,7 @@ export function useWebSocket() {
             // backend work (sidecar LLM scene analysis, DB reads) cannot delay
             // message delivery and cause a perceived UI stall.
             fetchLatestMessages(payload.chatId).then((res) => {
+              invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
               const s = store.getState()
               if (isCurrentGeneration(payload.chatId, generationEpoch)) {
                 const messages = completedMessageId && completedReasoning
@@ -1316,6 +1344,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.GENERATION_STOPPED, (payload: { generationId?: string; chatId?: string }) => {
         const state = store.getState()
+        invalidateDisplayRegexCacheForPresetHistory(payload.chatId || state.activeChatId || undefined)
         if ((payload.chatId && payload.chatId !== state.activeChatId) || state.streamingNavigationPaused) {
           if (payload.generationId) state.updateChatHead(payload.generationId, { status: 'stopped' })
           if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
@@ -1355,6 +1384,7 @@ export function useWebSocket() {
           state.stopStreaming()
         } else if (chatId) {
           fetchLatestMessages(chatId).then(async (res) => {
+            invalidateDisplayRegexCacheForPresetHistory(chatId)
             if (!isCurrentGeneration(chatId, generationEpoch)) return
             const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
             const s = store.getState()
@@ -1488,6 +1518,7 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.PRESET_CHANGED, (payload: { id: string; preset?: import('@/types/api').Preset }) => {
+        invalidateDisplayRegexCacheForPresetHistory()
         const preset = payload.preset
         if (!preset) {
           void refreshLoomRegistry().catch(error => console.warn('[presets] Could not refresh registry:', error))
@@ -1505,6 +1536,7 @@ export function useWebSocket() {
         store.setState({ loomRegistry: registry })
       }),
       wsClient.on(EventType.PRESET_DELETED, (payload: { id: string }) => {
+        invalidateDisplayRegexCacheForPresetHistory()
         const registry = { ...store.getState().loomRegistry }
         delete registry[payload.id]
         store.setState({ loomRegistry: registry })

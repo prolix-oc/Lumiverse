@@ -148,6 +148,10 @@ mock.module('@/i18n', () => ({ default: { t: (key: string) => key } }))
 const {
   getDisplayContentCacheStatsForTests,
   invalidateDisplayRegexCache,
+  invalidateDisplayRegexCacheForPresetHistory,
+  seedDisplayContentEntryForTests,
+  seedDisplayPreprocessEntryForTests,
+  getDisplayPreprocessCacheStatsForTests,
   resetDisplayRegexCachesForTests,
   useDisplayRegexState,
 } = await import('./useDisplayRegex')
@@ -262,6 +266,21 @@ afterAll(() => {
 })
 
 describe('useDisplayRegex resolver lifecycle', () => {
+  test('history invalidation removes only readers in the affected chat, including empty results', () => {
+    for (const seed of [seedDisplayContentEntryForTests, seedDisplayPreprocessEntryForTests]) {
+      seed({ key: 'history-a', value: '', touchedVars: ['context:presetHistory:a'] })
+      seed({ key: 'history-b', value: 'B', touchedVars: ['context:presetHistory:b'] })
+      seed({ key: 'independent', value: 'Stable', touchedVars: ['chat:unrelated'] })
+    }
+    invalidateDisplayRegexCacheForPresetHistory('a')
+    expect(getDisplayContentCacheStatsForTests().size).toBe(2)
+    expect(getDisplayContentCacheStatsForTests().hasKey('history-a')).toBe(false)
+    expect(getDisplayContentCacheStatsForTests().hasKey('history-b')).toBe(true)
+    expect(getDisplayPreprocessCacheStatsForTests().size).toBe(2)
+    invalidateDisplayRegexCacheForPresetHistory()
+    expect(getDisplayContentCacheStatsForTests().size).toBe(1)
+    expect(getDisplayPreprocessCacheStatsForTests().size).toBe(1)
+  })
   test.each(['body', 'templates'] as const)(
     'HTML replacement runs once with both inputs ready when %s resolves first',
     async (first) => {
@@ -796,13 +815,14 @@ describe('useDisplayRegex resolver lifecycle', () => {
     }
   })
 
-  test('an invalidation starts fresh work and a late pre-invalidation result cannot overwrite it', async () => {
+  test.each(['all', 'history'])('a %s invalidation starts fresh work and an obsolete result cannot overwrite it', async (scope) => {
     const { host, root } = await createHarness()
     const identity = { chatId: 'chat-invalidated', messageId: 'message-invalidated' }
     try {
       await render(root, { content: 'chunk', identity, isStreaming: true })
       const obsolete = pendingResults.get('chunk')!
-      await act(async () => invalidateDisplayRegexCache())
+      await act(async () => scope === 'history'
+        ? invalidateDisplayRegexCacheForPresetHistory(identity.chatId) : invalidateDisplayRegexCache())
       await flushReact()
       expect(pendingResults.get('chunk')).not.toBe(obsolete)
       await settle('chunk', 'fresh result')
