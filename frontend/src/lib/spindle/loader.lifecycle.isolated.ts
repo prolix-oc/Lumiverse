@@ -471,6 +471,8 @@ const manifest: SpindleManifest = {
 
 type LifecycleContext = {
   ready(): void
+  host: { capabilities: Readonly<Record<string, number>> }
+  uuid: { v4(): string; v7(): string }
   ui: {
     mount(point: string): FakeRoot
     registerDomDecorator(options: Omit<DecoratorOptions, 'owner' | 'generation'>): () => void
@@ -879,6 +881,19 @@ describe('loader lifecycle orchestration', () => {
 
       expect(fetchCount).toBe(2)
       expect(getLoadedExtensions().has('reload_after_invalidation')).toBe(true)
+      const context = lifecycleGlobals.__lifecycleContext as LifecycleContext
+      expect(context.host.capabilities['frontend-uuid-v1']).toBe(1)
+      expect(context.uuid.v4()).toMatch(/^uuid-v4-/)
+      expect(context.uuid.v7()).toMatch(/^uuid-v7-/)
+      const retained = context.uuid.v4
+      await unloadFrontendExtension('reload_after_invalidation')
+      expect(() => retained()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+      expect(() => context.uuid.v7()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+      await loadFrontendExtension('reload_after_invalidation', { ...manifest, identifier: 'reload_after_invalidation' })
+      const remounted = lifecycleGlobals.__lifecycleContext as LifecycleContext
+      expect(remounted.uuid).not.toBe(context.uuid)
+      expect(remounted.uuid.v4()).toMatch(/^uuid-v4-/)
+      expect(() => retained()).toThrow('SPINDLE_FRONTEND_INACTIVE')
       await unloadFrontendExtension('reload_after_invalidation')
     } finally {
       globalThis.fetch = originalFetch
@@ -1227,7 +1242,7 @@ test('tab takeover disposes the runtime and rejects retained or newly loaded fro
   const release = activeTab.claim('takeover-account')
   try {
     await loadFrontendExtension('tab_takeover', { ...manifest, identifier: 'tab_takeover' })
-    const context = lifecycleGlobals.__lifecycleContext as { sendToBackend(value: unknown): void }
+    const context = lifecycleGlobals.__lifecycleContext as LifecycleContext & { sendToBackend(value: unknown): void }
     expect(getLoadedExtensions().has('tab_takeover')).toBe(true)
     window.localStorage.setItem('lumiverse:active-tab:takeover-account', 'replacement')
     window.dispatchEvent(new dom.window.StorageEvent('storage', {
@@ -1237,6 +1252,8 @@ test('tab takeover disposes the runtime and rejects retained or newly loaded fro
     expect(getLoadedExtensions().has('tab_takeover')).toBe(false)
     expect(lifecycleGlobals.__lifecycleTeardownCalls).toBe(1)
     expect(() => context.sendToBackend({ type: 'late-write' })).toThrow('Another tab is active')
+    expect(() => context.uuid.v4()).toThrow('Another tab is active')
+    expect(() => context.uuid.v7()).toThrow('Another tab is active')
     await expect(loadFrontendExtension('late_load', manifest)).rejects.toThrow('Another tab is active')
   } finally { release() }
 })

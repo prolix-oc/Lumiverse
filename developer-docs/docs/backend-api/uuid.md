@@ -20,6 +20,8 @@ Each call makes a request to the backend host. UUID v7 calls share the helper's
 counter with other calls in that backend process, including calls from other
 extensions, and increase monotonically within the same millisecond.
 
+For synchronous generation in a frontend extension, use [ctx.uuid](../frontend-api/uuid.md). Its separate capability is `frontend-uuid-v1`; `uuid-v1` alone does not advertise frontend support.
+
 For extensions that also support older hosts, check the capability before use:
 
 ```ts

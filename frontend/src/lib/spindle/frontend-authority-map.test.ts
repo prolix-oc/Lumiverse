@@ -88,6 +88,8 @@ describe('frontend authority map', () => {
     }
     expect(frontendAuthorityPermission('ctx_member', 'ctx.connections.models')).toBe('generation')
     expect(frontendAuthorityPermission('ctx_member', 'ctx.client.getInfo')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.uuid.v4')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.uuid.v7')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.listProviders')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.onHostActivity')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.isHostCapturing')).toBeNull()
