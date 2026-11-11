@@ -1646,7 +1646,7 @@ mod tests {
     use super::{
         download_file_name, frontend_startup_shell_script, is_frontend_popup_label,
         supports_windows_rounded_corners, supports_windows_system_backdrop, valid_widget_size,
-        FrontendStartupAppearance,
+        FrontendStartupAppearance, WIDGET_MAX_HEIGHT, WIDGET_MAX_WIDTH,
     };
 
     #[test]
@@ -1713,6 +1713,18 @@ mod tests {
         assert!(!valid_widget_size(false, 48, 48));
         assert!(valid_widget_size(false, 160, 100));
         assert!(!valid_widget_size(true, 23, 48));
+    }
+
+    #[test]
+    fn widgets_can_grow_to_large_display_sizes() {
+        assert!(valid_widget_size(false, 1720, 1362));
+        assert!(valid_widget_size(
+            false,
+            WIDGET_MAX_WIDTH,
+            WIDGET_MAX_HEIGHT
+        ));
+        assert!(!valid_widget_size(false, WIDGET_MAX_WIDTH + 1, 100));
+        assert!(!valid_widget_size(true, 48, WIDGET_MAX_HEIGHT + 1));
     }
 }
 
