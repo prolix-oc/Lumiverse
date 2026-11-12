@@ -102,7 +102,7 @@
     inset 0 -1px 0 var(--lcs-glass-border);
 }
 
-.container > * {
+.container > :not([data-composer-formatting]) {
   position: relative;
 }
 
@@ -695,7 +695,9 @@
   flex: 1 1 auto;
   display: flex;
   align-items: flex-end;
-  min-width: 8rem;
+  /* Large fonts and UI zoom can leave less than 8rem beside the buttons.
+     Let the draft rewrap so the send button stays inside narrow panes. */
+  min-width: 0;
   min-height: 40px;
   max-height: 180px;
   border-radius: var(--lcs-radius, 14px);
@@ -904,6 +906,7 @@
 
 .textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   border: none;
   outline: none;

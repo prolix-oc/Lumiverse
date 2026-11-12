@@ -394,6 +394,8 @@
     "enterToSendMobile": "在移动端按 Enter 发送",
     "saveDraft": "保存草稿输入",
     "saveDraftHint": "自动保存未发送的消息，在刷新页面或切换聊天后仍可恢复",
+    "formattingBar": "格式工具栏",
+    "formattingBarHint": "在消息输入框上方显示格式按钮。在光标位置插入成对符号，或用符号包裹选中的文本。",
     "defaultImpersonationMode": "默认代写模式",
     "defaultImpersonationModeHint": "用于未指定自身代写模式的聊天和群聊。",
     "portraitSide": "立绘面板位置",

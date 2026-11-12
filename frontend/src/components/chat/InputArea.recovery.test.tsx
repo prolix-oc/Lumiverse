@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { act, createElement } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 import { MemoryRouter } from 'react-router'
 import type { Message } from '@/types/api'
@@ -27,6 +27,7 @@ Object.assign(globalThis, {
 Object.assign(dom.window, {
   matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
 })
+const { createRoot } = await import('react-dom/client')
 
 const createMessage = mock((_chatId: string, _input: unknown): Promise<Message> => Promise.reject(new Error('backend unavailable')))
 const generate = mock((_input: unknown): Promise<{ generationId: string }> => Promise.resolve({ generationId: 'generation-1' }))
@@ -129,6 +130,7 @@ beforeEach(async () => {
   state.isStreaming = false
   state.mpRoomId = null
   state.saveDraftInput = true
+  state.showComposerFormattingBar = false
   state.voiceSettings = {}
   createMessage.mockReset()
   createMessage.mockImplementation(() => Promise.reject(new Error('backend unavailable')))
@@ -156,15 +158,49 @@ test('rewrapped drafts resize when folding narrows the composer without editing 
   const resize = resizeObservers.get(textarea)!
   expect(resize).toBeDefined()
   resize([{ contentRect: { width: 480 } }])
+  await act(async () => { await new Promise(requestAnimationFrame) })
   expect(textarea.style.height).toBe('36px')
   scrollHeight = 72
   resize([{ contentRect: { width: 180 } }])
+  await act(async () => { await new Promise(requestAnimationFrame) })
   expect(textarea.style.height).toBe('72px')
   expect(textarea.value).toBe('my work')
   expect(saved().text).toBe('my work')
   scrollHeight = 36
   resize([{ contentRect: { width: 480 } }])
+  await act(async () => { await new Promise(requestAnimationFrame) })
   expect(textarea.style.height).toBe('36px')
+})
+
+test('formatting is opt-in and wraps selections without losing the draft or focus', async () => {
+  expect(host.querySelector('[aria-label="input.formatting.label"]')).toBeNull()
+  state.showComposerFormattingBar = true
+  await mount()
+  const textarea = host.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')!
+  textarea.focus()
+  textarea.setSelectionRange(3, 7, 'backward')
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="input.formatting.bold"]')!.click())
+  expect(textarea.value).toBe('my **work**')
+  expect([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection]).toEqual([5, 9, 'backward'])
+  expect(document.activeElement).toBe(textarea)
+  expect(saved().text).toBe('my **work**')
+  await remount()
+  expect(bridge.text).toBe('my **work**')
+})
+
+test('formatting inserts at a caret and leaves composition text alone', async () => {
+  state.showComposerFormattingBar = true
+  await mount()
+  const textarea = host.querySelector<HTMLTextAreaElement>('textarea[name="chat-message"]')!
+  textarea.setSelectionRange(3, 3)
+  const button = host.querySelector<HTMLButtonElement>('[aria-label="input.formatting.underline"]')!
+  await act(async () => button.click())
+  expect(textarea.value).toBe('my <u></u>work')
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 6])
+  await act(async () => textarea.dispatchEvent(new dom.window.CompositionEvent('compositionstart', { bubbles: true })))
+  await act(async () => button.click())
+  expect(textarea.value).toBe('my <u></u>work')
+  await act(async () => textarea.dispatchEvent(new dom.window.CompositionEvent('compositionend', { bubbles: true })))
 })
 
 test('failed sends retain the editable message, persist through refresh, and can be retried', async () => {

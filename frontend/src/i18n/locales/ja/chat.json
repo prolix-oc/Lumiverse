@@ -39,6 +39,15 @@
     "assistant": "アシスタント"
   },
   "input": {
+    "formatting": {
+      "label": "メッセージの書式設定",
+      "bold": "太字",
+      "italic": "斜体",
+      "underline": "下線",
+      "quotes": "引用符",
+      "singleQuotes": "一重引用符",
+      "parentheses": "丸括弧"
+    },
     "placeholder": "メッセージを入力...",
     "backHome": "ホームに戻る",
     "regenerate": "再生成",

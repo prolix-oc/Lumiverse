@@ -15,6 +15,14 @@ Type your message in the input area and press **Enter** to send (or click the se
 !!! tip "Shift+Enter"
     Press **Shift+Enter** to add a new line without sending.
 
+### Formatting bar
+
+Enable **Settings → Chat → Input → Formatting bar** to show a compact floating pill above the composer. It is off by default, and your choice is saved with your account.
+
+Tap **B**, **I**, **U**, **"**, **'**, or **( )** to insert a pair of symbols with the caret between them. If you select text first, the button wraps that text and keeps it selected so you can apply another format. Underline inserts `<u>…</u>`; bold and italic use Markdown.
+
+The controls grow with font scaling and keep comfortable touch targets on touchscreens. Swipe the row horizontally when it does not fit in a narrow pane.
+
 ---
 
 ## Editing Messages

@@ -806,6 +806,8 @@ export interface SettingsSlice {
   bubbleOpacity: number
   inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
+  /** Opt-in paired formatting controls above the chat input. */
+  showComposerFormattingBar: boolean
   /** Account-synced composer action bar layout; null until first saved. */
   composerActionBar: { order: string[]; hidden: string[] } | null
   defaultImpersonationMode: ImpersonationPreference

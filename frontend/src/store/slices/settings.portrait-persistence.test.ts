@@ -41,6 +41,34 @@ afterEach(() => {
   settingsApi.putMany = original.putMany
 })
 
+describe('composer formatting preference', () => {
+  test('is off for existing accounts and persists explicit on and off choices', async () => {
+    const rows = new Map<string, unknown>()
+    database(rows)
+    const first = store()
+    await first.loadSettings()
+    expect(first.showComposerFormattingBar).toBe(false)
+    first.setSetting('showComposerFormattingBar', true)
+    await flushSettingsNow()
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.showComposerFormattingBar).toBe(true)
+    restored.setSetting('showComposerFormattingBar', false)
+    await flushSettingsNow()
+    const disabled = store()
+    await disabled.loadSettings()
+    expect(disabled.showComposerFormattingBar).toBe(false)
+    expect(rows.get('showComposerFormattingBar')).toBe(false)
+  })
+
+  test.each(['true', 'false', 1, null, {}])('ignores malformed opt-in values: %j', async value => {
+    database(new Map([['showComposerFormattingBar', value]]))
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.showComposerFormattingBar).toBe(false)
+  })
+})
+
 describe('mobile wallpaper persistence', () => {
   test('saves, reloads and clears the mobile override independently of global display settings', async () => {
     const rows = new Map<string, unknown>()

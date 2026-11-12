@@ -531,6 +531,8 @@
     "enterToSendMobile": "Press Enter to send on mobile",
     "saveDraft": "Save draft input",
     "saveDraftHint": "Automatically saves your unsent message so it persists across page refreshes and chat switches",
+    "formattingBar": "Formatting bar",
+    "formattingBarHint": "Show formatting buttons above the message input. Insert paired symbols at the caret or wrap selected text.",
     "defaultImpersonationMode": "Default impersonation mode",
     "defaultImpersonationModeHint": "Used by chats and group chats that do not set their own impersonation mode.",
     "portraitSide": "Portrait panel side",

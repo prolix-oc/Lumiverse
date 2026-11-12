@@ -39,6 +39,15 @@
     "assistant": "助手"
   },
   "input": {
+    "formatting": {
+      "label": "訊息格式",
+      "bold": "粗體",
+      "italic": "斜體",
+      "underline": "底線",
+      "quotes": "引號",
+      "singleQuotes": "單引號",
+      "parentheses": "圓括號"
+    },
     "placeholder": "輸入消息…",
     "backHome": "返回主頁",
     "regenerate": "重新生成",

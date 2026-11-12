@@ -478,6 +478,8 @@
     "enterToSendMobile": "モバイルで Enter キーを押して送信",
     "saveDraft": "下書き入力を保存",
     "saveDraftHint": "未送信のメッセージが自動的に保存されるため、ページの更新やチャットの切り替え後も保持されます",
+    "formattingBar": "書式設定バー",
+    "formattingBarHint": "メッセージ入力欄の上に書式設定ボタンを表示します。カーソル位置に記号のペアを挿入するか、選択したテキストを記号で囲みます。",
     "defaultImpersonationMode": "デフォルトのなりすましモード",
     "defaultImpersonationModeHint": "独自のなりすましモードを設定していないチャットとグループチャットで使用されます。",
     "portraitSide": "ポートレート パネル側",

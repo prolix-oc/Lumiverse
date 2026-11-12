@@ -968,6 +968,7 @@ function ChatSettings() {
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const showComposerFormattingBar = useStore((s) => s.showComposerFormattingBar)
   const defaultImpersonationMode = useStore((s) => s.defaultImpersonationMode)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -1277,6 +1278,13 @@ function ChatSettings() {
         onChange={(checked) => setSetting('saveDraftInput', checked)}
         label={t('chat.saveDraft')}
         hint={t('chat.saveDraftHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={showComposerFormattingBar}
+        onChange={(checked) => setSetting('showComposerFormattingBar', checked)}
+        label={t('chat.formattingBar')}
+        hint={t('chat.formattingBarHint')}
       />
 
       <div className={styles.field}>

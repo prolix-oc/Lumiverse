@@ -64,6 +64,15 @@
     "assistant": "Assistant"
   },
   "input": {
+    "formatting": {
+      "label": "Message formatting",
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline",
+      "quotes": "Quotation marks",
+      "singleQuotes": "Single quotation marks",
+      "parentheses": "Parentheses"
+    },
     "placeholder": "Type a message…",
     "backHome": "Back to home",
     "regenerate": "Regenerate",

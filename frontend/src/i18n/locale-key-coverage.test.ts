@@ -88,6 +88,19 @@ describe('i18n locale key coverage', () => {
     }
   })
 
+  test('composer formatting controls are translated in every supported locale', () => {
+    for (const lng of localeDirs()) {
+      const settings = loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as { chat: Record<string, string> }
+      const chat = loadJson(join(LOCALES_ROOT, lng, 'chat.json')) as { input: { formatting: Record<string, string> } }
+      for (const key of ['formattingBar', 'formattingBarHint']) {
+        expect(settings.chat[key]?.trim(), `${lng} ${key}`).toBeTruthy()
+      }
+      for (const key of ['label', 'bold', 'italic', 'underline', 'quotes', 'singleQuotes', 'parentheses']) {
+        expect(chat.input.formatting[key]?.trim(), `${lng} formatting ${key}`).toBeTruthy()
+      }
+    }
+  })
+
   test('english locale has the expected namespace files', () => {
     expect(enFiles).toContain('panels.json')
     expect(enFiles).toContain('weaver.json')
