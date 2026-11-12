@@ -3,9 +3,24 @@ import type { ConnectionProfile } from "../types/connection-profile";
 import * as connSvc from "./connections.service";
 import * as secretsSvc from "./secrets.service";
 import { describeProviderError, fetchProviderJson } from "../utils/provider-errors";
-import type { NanoGptBalance, NanoGptModelProviders, NanoGptPaygoUsage } from "../types/nanogpt";
+import type { NanoGptBalance, NanoGptModelProvider, NanoGptModelProviders, NanoGptPaygoUsage } from "../types/nanogpt";
 
 const API_TIMEOUT_MS = 15_000;
+
+/**
+ * Wire shape of `/api/models/{model}/providers`.
+ *
+ * NanoGPT names the upstream list `providers` for models that support provider
+ * selection and `providerDetails` for models that do not — first-party routes
+ * such as `google/gemini-*`, which answer with
+ * `supportsProviderSelection: false` plus a `message` saying so. Reading only
+ * `providers` turns that perfectly valid answer into a parse failure, so both
+ * names are accepted here.
+ */
+type NanoGptProviderDiscoveryResponse = Omit<NanoGptModelProviders, "providers"> & {
+  providers?: NanoGptModelProvider[];
+  providerDetails?: NanoGptModelProvider[];
+};
 
 /** Discovery and balance are rooted at /api, even with a subscription API base. */
 export function resolveNanoGptApiEndpoint(apiUrl: string | null | undefined, path: string): URL {
@@ -36,11 +51,16 @@ export async function discoverModelProviders(userId: string, input: {
 }): Promise<NanoGptModelProviders> {
   const { apiKey, apiUrl } = await resolveCredentials(userId, input);
   const url = resolveNanoGptApiEndpoint(apiUrl, `/api/models/${encodeURIComponent(input.model.trim())}/providers`);
-  const raw = await fetchProviderJson<NanoGptModelProviders>("NanoGPT", "provider discovery", url, {
+  const raw = await fetchProviderJson<NanoGptProviderDiscoveryResponse>("NanoGPT", "provider discovery", url, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(API_TIMEOUT_MS),
   });
-  if (typeof raw?.supportsProviderSelection !== "boolean" || !Array.isArray(raw.providers)) {
+  const rawProviders = Array.isArray(raw?.providers)
+    ? raw.providers
+    : Array.isArray(raw?.providerDetails)
+      ? raw.providerDetails
+      : null;
+  if (typeof raw?.supportsProviderSelection !== "boolean" || !rawProviders) {
     throw new Error("NanoGPT returned an invalid provider list");
   }
   return {
@@ -48,7 +68,7 @@ export async function discoverModelProviders(userId: string, input: {
     displayName: raw.displayName || input.model.trim(),
     supportsProviderSelection: raw.supportsProviderSelection,
     defaultPrice: raw.defaultPrice,
-    providers: raw.providers.filter((p) => p && typeof p.provider === "string" && p.provider.trim()).map((p) => ({
+    providers: rawProviders.filter((p) => p && typeof p.provider === "string" && p.provider.trim()).map((p) => ({
       provider: p.provider,
       displayName: p.displayName,
       available: p.available === true,
