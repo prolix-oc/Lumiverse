@@ -10,6 +10,7 @@ export const ST_MIGRATION_PHASES = [
   "personas",
   "chats",
   "groupChats",
+  "gallery",
 ] as const;
 
 export type StMigrationPhase = (typeof ST_MIGRATION_PHASES)[number];
@@ -32,6 +33,7 @@ function sameScope(a: MigrationScope, b: MigrationScope): boolean {
     && !!a.chats === !!b.chats
     && !!a.groupChats === !!b.groupChats
     && !!a.connections === !!b.connections
+    && !!a.gallery === !!b.gallery
     && !!a.repairExisting === !!b.repairExisting
     && !!a.dryRun === !!b.dryRun
   );

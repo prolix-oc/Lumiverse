@@ -340,6 +340,93 @@ export function convertRisuRegexScripts(
 }
 
 /**
+ * SillyTavern's CharacterLibrary extension stores alternate variants under
+ * `extensions.alternate_fields`, keyed by its own `alt_*` names with
+ * `{ title, content }` entries. Lumiverse's native shape is keyed by the field
+ * name with `{ id, label, content }`. This maps one onto the other.
+ *
+ * The original `alt_*` keys are kept for portability; the converted entries are
+ * written alongside them under the native field names.
+ */
+const ST_ALTERNATE_FIELD_MAP: Record<string, string> = {
+  alt_descriptions: "description",
+  alt_personalities: "personality",
+  alt_scenarios: "scenario",
+  alt_example_dialogue: "mes_example",
+  alt_main_prompts: "system_prompt",
+  alt_post_history: "post_history_instructions",
+};
+
+interface AlternateFieldEntry {
+  id: string;
+  label: string;
+  content: string;
+}
+
+/**
+ * Convert one SillyTavern alternate-field list into native entries.
+ * Tolerates the current object shape, the legacy bare-string shape, and an
+ * object that stores the text under `description` instead of `content`.
+ */
+export function convertAlternateEntries(raw: unknown): AlternateFieldEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const converted: AlternateFieldEntry[] = [];
+  for (let index = 0; index < raw.length; index++) {
+    const entry = raw[index];
+    if (!entry) continue;
+    const item = typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const content = typeof entry === "string"
+      ? entry
+      : typeof item.content === "string"
+        ? item.content
+        : typeof item.description === "string"
+          ? item.description
+          : null;
+    // An empty string is a real (if useless) variant; only a missing text field
+    // disqualifies the entry.
+    if (content === null) continue;
+
+    const id = typeof item.id === "string" && item.id.trim() ? item.id : crypto.randomUUID();
+    const label = typeof item.title === "string" && item.title.trim()
+      ? item.title
+      : typeof item.label === "string" && item.label.trim()
+        ? item.label
+        : `Alternate ${index + 1}`;
+    converted.push({ id, label: String(label), content });
+  }
+  return converted;
+}
+
+/**
+ * Fold SillyTavern `alt_*` entries into Lumiverse's native alternate-field keys
+ * in place. Existing native entries win on an identical label+content pair, and
+ * unconvertible source keys are left untouched.
+ */
+export function mergeSillyTavernAlternateFields(extensions: Record<string, any>): void {
+  const source = extensions.alternate_fields;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
+
+  const normalized: Record<string, any> = { ...source };
+  for (const [sourceKey, targetKey] of Object.entries(ST_ALTERNATE_FIELD_MAP)) {
+    const converted = convertAlternateEntries(source[sourceKey]);
+    if (converted.length === 0) continue;
+
+    const existing: AlternateFieldEntry[] = Array.isArray(normalized[targetKey])
+      ? normalized[targetKey]
+      : [];
+    const seen = new Set(existing.map((entry) => `${entry?.label}\u0000${entry?.content}`));
+    const added = converted.filter((entry) => {
+      const key = `${entry.label}\u0000${entry.content}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    normalized[targetKey] = [...existing, ...added];
+  }
+  extensions.alternate_fields = normalized;
+}
+
+/**
  * Maps raw character card data (V1/V2/V3 spec) to our CreateCharacterInput.
  */
 function mapCardToInput(data: Record<string, any>): CreateCharacterInput {
@@ -370,6 +457,10 @@ function mapCardToInput(data: Record<string, any>): CreateCharacterInput {
 
   if (data.character_book) extensions.character_book = data.character_book;
   if (data.character_version !== undefined) extensions.character_version = data.character_version;
+
+  // Every import path (PNG, JSON, CHARX) funnels through here, so this is the
+  // single place SillyTavern's alternate fields become native equivalents.
+  mergeSillyTavernAlternateFields(extensions);
 
   if (Object.keys(extensions).length > 0) input.extensions = extensions;
 

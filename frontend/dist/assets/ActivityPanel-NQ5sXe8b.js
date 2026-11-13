@@ -1,0 +1,1 @@
+import{Co as e,Mo as t,nr as n}from"./global-Cs_teJJq.js";var r=t(e(),1),i=n();function a({active:e,children:t}){let[n,a]=(0,r.useState)(e);return e&&!n&&a(!0),!e&&!n?null:(0,i.jsx)(r.Activity,{mode:e?`visible`:`hidden`,children:t})}export{a as t};

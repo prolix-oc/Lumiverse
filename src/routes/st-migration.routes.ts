@@ -419,6 +419,8 @@ app.post("/execute", async (c) => {
     chats: !!scope.chats,
     groupChats: !!scope.groupChats,
     connections: !!scope.connections,
+    // Gallery import needs characters to attach images to; ignore it otherwise.
+    gallery: !!scope.gallery && !!scope.characters,
     repairExisting: !!scope.repairExisting,
     dryRun: !!scope.dryRun,
   };

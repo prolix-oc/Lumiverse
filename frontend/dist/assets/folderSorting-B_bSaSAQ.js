@@ -1,0 +1,1 @@
+function e(e,t){return e?t?e.localeCompare(t):-1:+!!t}function t(t){return[...t].sort((t,n)=>e(t.folder,n.folder))}export{t};

@@ -1,0 +1,1 @@
+import{ft as e}from"./global-Cs_teJJq.js";var t=e(`outline`,`bolt`,`Bolt`,[[`path`,{d:`M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11`,key:`svg-0`}]]);export{t};

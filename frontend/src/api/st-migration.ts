@@ -82,6 +82,8 @@ export interface MigrationScope {
   personas: boolean
   chats: boolean
   groupChats: boolean
+  /** Copy CharacterLibrary gallery folders and localize external media. */
+  gallery: boolean
 }
 
 export interface ExecuteResult {

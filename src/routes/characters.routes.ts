@@ -100,12 +100,25 @@ const LOCAL_CHARACTER_EXTENSION_KEYS = new Set([
   "ttsVoice",
 ]);
 
-function buildCardReplacementInput(existing: Character, card: CreateCharacterInput): UpdateCharacterInput {
+export function buildCardReplacementInput(existing: Character, card: CreateCharacterInput): UpdateCharacterInput {
   const preservedExtensions = Object.fromEntries(
     Object.entries(existing.extensions ?? {}).filter(([key]) =>
       LOCAL_CHARACTER_EXTENSION_KEYS.has(key) || key.startsWith("_lumiverse_")
     )
   );
+
+  const mergedExtensions: Record<string, any> = {
+    ...(card.extensions ?? {}),
+    ...preservedExtensions,
+  };
+
+  // `alternate_fields` is preserved by default so re-importing an updated card
+  // does not drop the user's variants. When the incoming card actually carries
+  // alternates, they are authoritative — otherwise an updated card would
+  // silently keep stale variants.
+  if (card.extensions && Object.prototype.hasOwnProperty.call(card.extensions, "alternate_fields")) {
+    mergedExtensions.alternate_fields = card.extensions.alternate_fields;
+  }
 
   return {
     // Deliberately omit `name`: this endpoint only replaces card contents.
@@ -120,10 +133,7 @@ function buildCardReplacementInput(existing: Character, card: CreateCharacterInp
     post_history_instructions: card.post_history_instructions ?? "",
     tags: card.tags ?? [],
     alternate_greetings: card.alternate_greetings ?? [],
-    extensions: {
-      ...(card.extensions ?? {}),
-      ...preservedExtensions,
-    },
+    extensions: mergedExtensions,
   };
 }
 
