@@ -1,4 +1,12 @@
 import { getDb } from "../db/connection";
+import { eventBus } from '../ws/bus';
+import { EventType } from '../ws/events';
+import type { EmbeddingConnectionDTO, EmbeddingsEmbedResult } from "lumiverse-spindle-types";
+import {
+  withInferenceLease,
+  withLeaseAbort,
+  type InferenceRequestClass,
+} from "./inference-scheduler";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import type {
@@ -42,6 +50,7 @@ import {
   worldBookVectorTrackingFingerprint,
 } from "./world-book-vector-state";
 import { getActiveVectorStore } from "./vector-store";
+import { getResolvedVectorStoreConfig } from "./vector-store-config.service";
 import {
   MAX_SOURCE_FILTER_IDS,
   andFilter,
@@ -139,6 +148,9 @@ export function isEmbeddingAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const name = (err as { name?: string }).name;
   if (name === "AbortError") return true;
+  // A background embedding preempted by interactive work is a cancellation,
+  // not a provider failure: do not burn the fallback chain on it.
+  if ((err as { code?: string }).code === "INFERENCE_PREEMPTED") return true;
   const message = (err as { message?: string }).message || "";
   return name === "DOMException" && /abort/i.test(message);
 }
@@ -446,7 +458,7 @@ export interface ChatMemorySettings {
   // --- Retrieval ---
   queryContextSize: number;       // Default 6. Range: 1–64. Messages used to build query vector
   retrievalTopK: number;          // Default 4. Range: 1+
-  similarityThreshold: number;    // Default 0 (disabled). Range: 0–2
+  similarityThreshold: number;    // Maximum cosine distance (lower = closer). Default 0 (disabled). Range: 0–2
 
   // --- Query ---
   queryStrategy: "recent_messages" | "last_user_message" | "weighted_recent";
@@ -644,6 +656,14 @@ export function loadChatMemorySettings(userId: string): ChatMemorySettings | nul
   const setting = settingsSvc.getSetting(userId, CHAT_MEMORY_SETTINGS_KEY);
   if (!setting?.value) return null;
   return normalizeChatMemorySettings(setting.value);
+}
+
+/** Shared by basic recall and Cortex, including users with only legacy settings. */
+export async function getChatMemoryDistanceThreshold(
+  userId: string,
+  settings: ChatMemorySettings | null = loadChatMemorySettings(userId),
+): Promise<number> {
+  return settings?.similarityThreshold ?? (await getEmbeddingConfig(userId)).similarity_threshold;
 }
 
 /**
@@ -1416,7 +1436,9 @@ export function getProviderDefaults(provider: EmbeddingProvider) {
 
 const NVIDIA_NIM_EMBEDDING_MODELS = [
   "nvidia/llama-nemotron-embed-1b-v2",
+  "nvidia/llama-nemotron-embed-vl-1b-v2",
   "nvidia/nemotron-3-embed-1b",
+  "nvidia/nemotron-3.5-embed-1b",
   "nvidia/nv-embed-v1",
   "nvidia/nv-embedqa-e5-v5",
 ];
@@ -1427,13 +1449,6 @@ const MISTRAL_EMBEDDING_MODELS = [
 ];
 
 type EmbeddingInputType = "query" | "passage";
-
-function nvidiaNimNeedsInputType(cfg: { provider: string; model: string }): boolean {
-  return cfg.provider === "nvidia-nim" && [
-    "nvidia/llama-nemotron-embed-1b-v2",
-    "nvidia/nv-embedqa-e5-v5",
-  ].includes(cfg.model);
-}
 
 function isLikelyEmbeddingModel(model: string): boolean {
   return /(?:embed|retriev)/i.test(model);
@@ -1855,7 +1870,7 @@ export async function previewEmbeddingModels(
 }
 
 /** Raw per-user embedding config (no inheritance resolution). */
-function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
+function readRawEmbeddingConfig(userId: string, persistMigration = true): EmbeddingConfig {
   const setting = settingsSvc.getSetting(userId, EMBEDDING_SETTINGS_KEY);
   const cfg = normalizeConfig(setting?.value);
   const rawProfiles = Array.isArray((setting?.value as any)?.connectionProfiles)
@@ -1881,8 +1896,9 @@ function readRawEmbeddingConfig(userId: string): EmbeddingConfig {
     }
   }
 
-  if (!setting?.value || !storedBlobHasProfiles(setting.value) || profilesMissingNames || profilesNeedingProviderMigration) {
+  if (persistMigration && (!setting?.value || !storedBlobHasProfiles(setting.value) || profilesMissingNames || profilesNeedingProviderMigration)) {
     settingsSvc.putSetting(userId, EMBEDDING_SETTINGS_KEY, persistableConfig(cfg), { suppressBroadcast: true });
+    eventBus.emit(EventType.CONNECTION_ORGANIZATION_CHANGED, { kind: 'embedding' });
   }
   return cfg;
 }
@@ -1963,12 +1979,12 @@ function mergeEmbeddingConfigUpdate(
  * Returns the userId whose settings + secret should drive embedding
  * operations, and whether inheritance is active for the caller.
  */
-function resolveEmbeddingUserContext(callerUserId: string): { userId: string; inherited: boolean } {
+function resolveEmbeddingUserContext(callerUserId: string, persistMigration = true): { userId: string; inherited: boolean } {
   const ownerId = getFirstUserId();
   if (!ownerId || ownerId === callerUserId) {
     return { userId: callerUserId, inherited: false };
   }
-  const ownerCfg = readRawEmbeddingConfig(ownerId);
+  const ownerCfg = readRawEmbeddingConfig(ownerId, persistMigration);
   if (ownerCfg.enabled) {
     return { userId: ownerId, inherited: true };
   }
@@ -2003,6 +2019,15 @@ export async function getEmbeddingConfig(userId: string): Promise<EmbeddingConfi
   const cfg = readRawEmbeddingConfig(ctx.userId);
   await migrateLegacyConnectionSecrets(ctx.userId, cfg);
   return withEmbeddingSecretStatus(ctx.userId, await toConfigWithStatus(ctx.userId, cfg, ctx.inherited || undefined), ctx.inherited);
+}
+
+/** Read the current effective opt-in without awaiting secret status or writing
+ * config migrations. Queue admission must not use a snapshot captured before
+ * a user disabled chat vectorization. */
+export function isChatMemoryVectorizationEnabled(userId: string): boolean {
+  const ctx = resolveEmbeddingUserContext(userId, false);
+  const cfg = readRawEmbeddingConfig(ctx.userId, false);
+  return cfg.enabled && cfg.vectorize_chat_messages;
 }
 
 function applyLegacyConnectionPatch(current: EmbeddingConfig, input: Record<string, any>): Record<string, any> {
@@ -2335,11 +2360,60 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
   }
 }
 
+export interface EmbeddingRequestOptions {
+  omitDimensions?: boolean;
+  signal?: AbortSignal;
+  inputType?: EmbeddingInputType;
+  /** Local-inference scheduling class for the resource this request hits. */
+  leaseClass?: InferenceRequestClass;
+  /** Short diagnostics label for the scheduler queue entry. */
+  leasePurpose?: string;
+}
+
+/**
+ * Gate the driver call on the local-inference resource that owns its endpoint.
+ * Vertex is remote and keeps its original path.
+ */
 async function requestEmbeddingsWithDriver(
+  userId: string,
   driver: EmbeddingDriverConfig,
   apiKey: string,
   texts: string[],
-  options?: { omitDimensions?: boolean; signal?: AbortSignal; inputType?: EmbeddingInputType }
+  options?: EmbeddingRequestOptions,
+): Promise<number[][]> {
+  if (!texts.length) return [];
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
+
+  if (driver.provider === "google_vertex") {
+    return requestEmbeddingsWithDriverInner(driver, apiKey, texts, options, userId);
+  }
+
+  const requestClass: InferenceRequestClass = options?.leaseClass
+    ?? (options?.inputType === "query" ? "retrieval" : "bulk");
+  return withInferenceLease(
+    {
+      userId,
+      endpoint: driver.api_url,
+      requestClass,
+      purpose: options?.leasePurpose ?? "embeddings",
+      signal: options?.signal,
+    },
+    (lease) => requestEmbeddingsWithDriverInner(
+      driver,
+      apiKey,
+      texts,
+      { ...options, signal: withLeaseAbort(options?.signal, lease) },
+      userId,
+    ),
+  );
+}
+
+async function requestEmbeddingsWithDriverInner(
+  driver: EmbeddingDriverConfig,
+  apiKey: string,
+  texts: string[],
+  options: EmbeddingRequestOptions | undefined,
+  userId: string,
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw resolveAbortError(options.signal);
@@ -2361,6 +2435,7 @@ async function requestEmbeddingsWithDriver(
     const vectors: number[][] = [];
     for (let offset = 0; offset < texts.length; offset += 96) {
       vectors.push(...await requestEmbeddingsWithDriver(
+        userId,
         driver,
         apiKey,
         texts.slice(offset, offset + 96),
@@ -2385,7 +2460,7 @@ async function requestEmbeddingsWithDriver(
   if (isOllamaLegacySingleOnly && texts.length > 1) {
     const results: number[][] = [];
     for (const text of texts) {
-      const [vec] = await requestEmbeddingsWithDriver(driver, apiKey, [text], options);
+      const [vec] = await requestEmbeddingsWithDriver(userId, driver, apiKey, [text], options);
       results.push(vec);
     }
     return results;
@@ -2405,7 +2480,9 @@ async function requestEmbeddingsWithDriver(
   if (!isOllamaNative && driver.provider !== "cohere") {
     body.encoding_format = "float";
   }
-  if (nvidiaNimNeedsInputType(driver)) {
+  // NIM accepts query/passage roles at the provider level. Do not gate this on
+  // model IDs: newer Nemotron models and custom served names need it too.
+  if (driver.provider === "nvidia-nim") {
     body.input_type = options?.inputType ?? "passage";
   }
   if (!options?.omitDimensions && driver.send_dimensions && driver.dimensions) {
@@ -2462,7 +2539,7 @@ async function requestEmbeddingsWithDriver(
 async function requestEmbeddings(
   userId: string,
   texts: string[],
-  options?: { omitDimensions?: boolean; signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   // Resolve which user's settings + API key actually drive this call. In gate
   // mode non-owners inherit the owner's config and use the owner's key.
@@ -2498,7 +2575,7 @@ async function requestEmbeddings(
           "Embedding API key is not configured",
         );
       }
-      const vectors = await requestEmbeddingsWithDriver(driver, apiKey, texts, options);
+      const vectors = await requestEmbeddingsWithDriver(ctx.userId, driver, apiKey, texts, options);
       if (options?.signal?.aborted) throw resolveAbortError(options.signal);
       return vectors;
     } catch (err) {
@@ -2520,13 +2597,13 @@ async function requestEmbeddings(
 export async function embedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   return requestEmbeddings(userId, texts, options);
 }
 
 function getModelFingerprint(
-  cfg: Pick<EmbeddingConfig, "provider" | "model" | "dimensions" | "api_url" | "vertex_region" | "vertex_project">,
+  cfg: Pick<EmbeddingDriverConfig, "provider" | "model" | "dimensions" | "api_url" | "vertex_region" | "vertex_project">,
 ): ModelFingerprint {
   // For Vertex the `api_url` field is cosmetic — the effective endpoint is
   // derived from `vertex_region`. Encode it into the fingerprint so a region
@@ -2578,7 +2655,7 @@ const inflightEmbeddings = new Map<string, InflightEmbeddingEntry>();
 export async function cachedEmbedTexts(
   userId: string,
   texts: string[],
-  options?: { signal?: AbortSignal; inputType?: EmbeddingInputType },
+  options?: EmbeddingRequestOptions,
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (options?.signal?.aborted) throw resolveAbortError(options.signal);
@@ -2599,7 +2676,15 @@ export async function cachedEmbedTexts(
     const cached = embeddingCache.get(key);
     if (cached) return [cached];
 
-    const vec = await joinOrStartInflight(userId, texts, key, options?.signal, inputType);
+    const vec = await joinOrStartInflight(
+      userId,
+      texts,
+      key,
+      options?.signal,
+      inputType,
+      options?.leaseClass,
+      options?.leasePurpose,
+    );
     return [vec];
   }
 
@@ -2621,11 +2706,13 @@ export async function cachedEmbedTexts(
     const uncachedTexts = uncachedIndices.map((i) => texts[i]);
     const vectors = await requestEmbeddings(userId, uncachedTexts, { ...options, inputType });
     if (options?.signal?.aborted) throw resolveAbortError(options.signal);
+    const cacheEntries: Array<{ key: string; vector: number[] }> = [];
     for (let j = 0; j < uncachedIndices.length; j++) {
       const idx = uncachedIndices[j];
       results[idx] = vectors[j];
-      embeddingCache.set(computeCacheKey(texts[idx], cacheFingerprint), vectors[j]);
+      cacheEntries.push({ key: computeCacheKey(texts[idx], cacheFingerprint), vector: vectors[j] });
     }
+    embeddingCache.setMany(cacheEntries);
   }
 
   return results as number[][];
@@ -2637,7 +2724,12 @@ export async function embedQuery(
   text: string,
   options?: { signal?: AbortSignal },
 ): Promise<number[]> {
-  const [vector] = await cachedEmbedTexts(userId, [text], { signal: options?.signal, inputType: "query" });
+  const [vector] = await cachedEmbedTexts(userId, [text], {
+    signal: options?.signal,
+    inputType: "query",
+    leaseClass: "retrieval",
+    leasePurpose: "embeddings-query",
+  });
   return vector ?? [];
 }
 
@@ -2649,7 +2741,12 @@ export async function embedInBatches<T>(
   getText: (item: T) => string,
   onBatchReady: (items: T[], texts: string[], vectors: number[][]) => Promise<void>,
   onItemFailed: (items: T[], error: Error) => void | Promise<void>,
-  options?: { signal?: AbortSignal; label?: string },
+  options?: {
+    signal?: AbortSignal;
+    label?: string;
+    leaseClass?: InferenceRequestClass;
+    leasePurpose?: string;
+  },
 ): Promise<void> {
   if (items.length === 0) return;
   const bs = Math.max(1, Math.min(initialBatchSize, 200));
@@ -2661,7 +2758,11 @@ export async function embedInBatches<T>(
     }
     const texts = batch.map(getText);
     try {
-      const vectors = await cachedEmbedTexts(userId, texts, { signal: options?.signal });
+      const vectors = await cachedEmbedTexts(userId, texts, {
+        signal: options?.signal,
+        leaseClass: options?.leaseClass ?? "bulk",
+        leasePurpose: options?.leasePurpose ?? options?.label ?? "embeddings-batch",
+      });
       await onBatchReady(batch, texts, vectors);
     } catch (err) {
       if (options?.signal?.aborted) {
@@ -2689,6 +2790,8 @@ function joinOrStartInflight(
   key: string,
   signal: AbortSignal | undefined,
   inputType: EmbeddingInputType,
+  leaseClass: InferenceRequestClass | undefined,
+  leasePurpose: string | undefined,
 ): Promise<number[]> {
   const existing = inflightEmbeddings.get(key);
   if (existing) {
@@ -2703,7 +2806,12 @@ function joinOrStartInflight(
     hasUncancellableJoiner: false,
   };
 
-  entry.promise = requestEmbeddings(userId, texts, { signal: controller.signal, inputType }).then(
+  entry.promise = requestEmbeddings(userId, texts, {
+    signal: controller.signal,
+    inputType,
+    leaseClass,
+    leasePurpose,
+  }).then(
     (vecs) => {
       if (controller.signal.aborted) {
         inflightEmbeddings.delete(key);
@@ -2895,14 +3003,144 @@ export async function testEmbeddingConnection(
   const apiKey = await resolveProfileSecret(ctx.userId, profile);
   if (!apiKey) throw new Error("No API key is configured for this embedding connection");
   const vectors = await requestEmbeddingsWithDriver(
+    ctx.userId,
     profileToDriverConfig(cfg, profile),
     apiKey,
     [text],
-    { omitDimensions: true },
+    { omitDimensions: true, leaseClass: "retrieval", leasePurpose: "embeddings-test" },
   );
   const first = vectors[0] || [];
   if (!first.length) throw new Error("No embedding vector returned");
   return { dimension: first.length, provider: profile.provider };
+}
+
+/** Limits for embeddings requested by extensions (spindle.embeddings.embed). */
+export const EXTENSION_EMBED_MAX_TEXTS = 256;
+export const EXTENSION_EMBED_MAX_TEXT_CHARS = 8192;
+
+/** The effective user's embedding connections, without URLs or secrets. */
+/** Ensure legacy configurations use the same persistent IDs as the native manager. */
+export function prepareEmbeddingOrganization(userId: string): void {
+  // Use the existing legacy migration before opening the snapshot read transaction.
+  const context = resolveEmbeddingUserContext(userId);
+  readRawEmbeddingConfig(context.userId);
+}
+
+/** Read-only effective profile summaries; does not migrate or load credentials. */
+export function embeddingOrganizationProfiles(userId: string) {
+  const effectiveUser = resolveEmbeddingUserContext(userId, false).userId;
+  const stored = settingsSvc.getSetting(effectiveUser, EMBEDDING_SETTINGS_KEY)?.value as { connectionProfiles?: Array<{ id?: unknown }> } | undefined;
+  const savedIds = new Set((Array.isArray(stored?.connectionProfiles) ? stored.connectionProfiles : [])
+    .map(profile => profile?.id).filter(isUsableProfileId));
+  const cfg = readRawEmbeddingConfig(effectiveUser, false);
+  const primaryId = cfg.primaryProfileId ?? cfg.connectionProfiles?.[0]?.id;
+  return (cfg.connectionProfiles ?? []).filter(profile => savedIds.has(profile.id)).map(profile => ({
+    id: profile.id, kind: 'embedding' as const,
+    name: profile.name || embeddingProviderDisplayName(profile.provider),
+    provider: profile.provider, model: profile.model, active: profile.id === primaryId,
+  }));
+}
+
+export async function listEmbeddingConnections(userId: string): Promise<EmbeddingConnectionDTO[]> {
+  const cfg = await getEmbeddingConfig(userId);
+  return cfg.connectionProfiles.map((profile) => ({
+    id: profile.id,
+    name: profile.name || embeddingProviderDisplayName(profile.provider),
+    provider: profile.provider,
+    model: profile.model,
+    dimensions: profile.dimensions,
+    enabled: profile.enabled,
+    is_primary: profile.id === cfg.primaryProfileId,
+    has_api_key: profile.hasSecret,
+  }));
+}
+
+/**
+ * Embed texts with exactly one connection: `connectionId`, or the primary one.
+ * Unlike the chain used for retrieval, fallbacks are never used, so every
+ * vector in one result (and across calls) comes from the same model.
+ * Uses connection-scoped cache entries: host retrieval can cache fallback
+ * vectors under its primary fingerprint, which cannot identify their source.
+ */
+export async function embedTextsWithConnection(
+  userId: string,
+  texts: string[],
+  options: { connectionId?: string; inputType?: EmbeddingInputType; signal?: AbortSignal } = {},
+): Promise<EmbeddingsEmbedResult> {
+  if (options.signal?.aborted) throw resolveAbortError(options.signal);
+  if (!Array.isArray(texts) || texts.length === 0) throw new Error("texts must be a non-empty array");
+  if (texts.length > EXTENSION_EMBED_MAX_TEXTS) throw new Error(`At most ${EXTENSION_EMBED_MAX_TEXTS} texts per request`);
+  for (const text of texts) {
+    if (typeof text !== "string" || !text.trim()) throw new Error("Each text must be a non-empty string");
+    if (text.length > EXTENSION_EMBED_MAX_TEXT_CHARS) throw new Error(`Each text must be at most ${EXTENSION_EMBED_MAX_TEXT_CHARS} characters`);
+  }
+  const inputType: EmbeddingInputType = options.inputType ?? "passage";
+  if (inputType !== "query" && inputType !== "passage") throw new Error('input_type must be "query" or "passage"');
+
+  const ctx = resolveEmbeddingUserContext(userId);
+  const cfg = readRawEmbeddingConfig(ctx.userId);
+  if (!cfg.enabled) throw new Error("Embeddings are disabled for this user");
+  const connectionId = options.connectionId ?? cfg.primaryProfileId;
+  const profile = cfg.connectionProfiles?.find((entry) => entry.id === connectionId);
+  if (!profile) throw new Error("Embedding connection not found");
+  if (!profile.enabled) throw new Error("Embedding connection is disabled");
+
+  const driver: EmbeddingDriverConfig = {
+    provider: profile.provider,
+    api_url: profile.api_url,
+    model: profile.model,
+    dimensions: profile.dimensions,
+    send_dimensions: cfg.send_dimensions,
+    request_timeout: cfg.request_timeout,
+    vertex_region: profile.vertex_region,
+    vertex_project: profile.vertex_project,
+  };
+  const fingerprint = getModelFingerprint(driver);
+  const cacheFingerprint: ModelFingerprint = {
+    ...fingerprint,
+    api_url: `${fingerprint.api_url}|input_type:${inputType}|connection_id:${profile.id}`,
+  };
+  const keys = texts.map((text) => computeCacheKey(text, cacheFingerprint));
+  const embeddings: Array<number[] | null> = keys.map((key) => embeddingCache.get(key));
+  const missing = embeddings.flatMap((vector, index) => (vector ? [] : [index]));
+
+  if (missing.length > 0) {
+    const apiKey = await resolveProfileSecret(ctx.userId, profile);
+    if (!apiKey) throw new Error("No API key is configured for this embedding connection");
+    const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
+    for (let offset = 0; offset < missing.length; offset += batchSize) {
+      if (options.signal?.aborted) throw resolveAbortError(options.signal);
+      const indices = missing.slice(offset, offset + batchSize);
+      let vectors: number[][];
+      try {
+        vectors = await requestEmbeddingsWithDriver(ctx.userId, driver, apiKey, indices.map((index) => texts[index]), {
+          inputType,
+          signal: options.signal,
+          leaseClass: "bulk",
+          leasePurpose: "embeddings-batch",
+        });
+      } catch (err) {
+        if (options.signal?.aborted || isEmbeddingAbortError(err)) throw resolveAbortError(options.signal);
+        throw sanitizeEmbeddingError(err, [apiKey]);
+      }
+      if (options.signal?.aborted) throw resolveAbortError(options.signal);
+      indices.forEach((index, j) => {
+        embeddings[index] = vectors[j];
+      });
+    }
+  }
+
+  const dimensions = Array.isArray(embeddings[0]) ? embeddings[0].length : 0;
+  if (!dimensions || embeddings.some((vector) => (
+    !Array.isArray(vector)
+    || vector.length !== dimensions
+    || vector.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ))) {
+    throw new Error("Embedding provider returned invalid vectors");
+  }
+  const result = embeddings as number[][];
+  embeddingCache.setMany(missing.map((index) => ({ key: keys[index], vector: result[index] })));
+  return { embeddings: result, connection_id: profile.id, model: driver.model, dimensions };
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
@@ -3271,7 +3509,6 @@ export const __test__ = {
   mergeEmbeddingConfigUpdate,
   putEmbeddingSecret,
   NVIDIA_NIM_EMBEDDING_MODELS,
-  nvidiaNimNeedsInputType,
   parseEmbeddingResponse,
   collectWorldBookHitsByUniqueSource,
   collapseWorldBookHitsBySource,
@@ -3565,7 +3802,9 @@ export async function reindexWorldBookEntries(
   if (optimizeAfter) {
     try {
       const store = await getActiveVectorStore();
-      if (rebuildVectorIndex) getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
+      if (store.id === "lancedb" && rebuildVectorIndex) {
+        getTableState(WORLD_BOOK_EMBEDDINGS_TABLE).vectorIndexReady = false;
+      }
       await store.optimize(["embeddings_world_books"]);
     } catch (err) {
       console.warn("[embeddings] Post-reindex optimize failed:", err);
@@ -3953,6 +4192,11 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
   await settingsSvc.putSettingAsync(userId, WORLD_BOOK_VECTOR_VERSION_KEY, WORLD_BOOK_VECTOR_VERSION);
   worldBookVectorVersionChecked.add(getWorldBookVectorVersionCacheKey(userId));
 
+  resetLanceDbIndexState();
+}
+
+function resetLanceDbIndexState(): void {
+  if (getResolvedVectorStoreConfig().provider !== "lancedb") return;
   for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
     const state = getTableState(tableName);
     state.vectorIndexReady = false;
@@ -4006,15 +4250,7 @@ function markAllVectorStateStaleAfterReset(): void {
     console.warn("[embeddings] Failed to mark vector state stale after reset:", err);
   }
 
-  for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
-    const state = getTableState(tableName);
-    state.vectorIndexReady = false;
-    state.scalarIndexReady = false;
-    state.ftsIndexReady = false;
-    state.lastIndexRebuildAt = 0;
-    state.unindexedRowEstimate = 0;
-  }
-  stopIndexHealthMonitor();
+  resetLanceDbIndexState();
 }
 
 /**
@@ -4953,4 +5189,22 @@ export function mapDatabankSearchHits(
   }
 
   return results;
+}
+
+/**
+ * Endpoint the active embedding chain will contact first. Used by the
+ * inference scheduler to pick the resource for work that is dispatched to a
+ * worker or subprocess, where the request itself is not visible to the host.
+ */
+export function resolvePrimaryEmbeddingEndpoint(userId: string): string | null {
+  try {
+    const ctx = resolveEmbeddingUserContext(userId);
+    const cfg = readRawEmbeddingConfig(ctx.userId);
+    const chain = selectFallbackChain(cfg);
+    const profile = chain[0];
+    const endpoint = profile ? profile.api_url || cfg.api_url : cfg.api_url;
+    return endpoint || null;
+  } catch {
+    return null;
+  }
 }

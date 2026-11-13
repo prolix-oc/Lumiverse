@@ -227,6 +227,15 @@ async function rerender(host: HTMLElement) {
 const QUARANTINE_DETAIL = panels.regexPanel.quarantinedDetail
 const CLEAR_ARIA = 'Clear the quarantine on hung-script and run it again'
 
+function mountedScriptIds(host: HTMLElement) {
+  return [...host.querySelectorAll('[data-spindle-mount="regex_entry_row"]')]
+    .map((element) => element.getAttribute('data-spindle-scope')!.slice('regex-entry:'.length, -':row'.length))
+}
+
+function largeFolder(count = 584, folder = 'Large folder') {
+  return Array.from({ length: count }, (_, i) => script(`rule-${String(i).padStart(4, '0')}`, { folder }))
+}
+
 beforeAll(async () => {
   await englishI18n.use(initReactI18next).init({
     resources: { en: { panels, shared, common } },
@@ -308,6 +317,24 @@ describe('RegexPanel quarantine recovery', () => {
     expect(byAriaLabel(host, QUARANTINE_DETAIL)).toBeNull()
     expect(host.textContent).not.toContain(QUARANTINE_DETAIL)
     expect(evidenceReports).toEqual([])
+  })
+
+  test('a metadata-only refetch surfaces the quarantine badge and a working clear action', async () => {
+    const original = script('hung-script')
+    storeState = baseStoreState([original])
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, panels.regexPanel.uncategorized))
+    expect(byAriaLabel(host, QUARANTINE_DETAIL)).toBeNull()
+
+    storeState.regexScripts = [{ ...original, metadata: { regex_evidence: { quarantined: true } } }]
+    await rerender(host)
+
+    const badge = byAriaLabel(host, QUARANTINE_DETAIL)
+    expect(badge).not.toBeNull()
+    await click(badge!)
+    await click(byAriaLabel(host, CLEAR_ARIA)!)
+    expect(evidenceReports).toEqual([{ id: original.id, payload: { quarantined: false } }])
+    expect(byAriaLabel(host, QUARANTINE_DETAIL)).toBeNull()
   })
 
   test('a failed clear surfaces the server error and leaves the panel usable', async () => {
@@ -674,5 +701,98 @@ describe('RegexPanel folders', () => {
     expect(bulkRemoveRegexScripts).toHaveBeenCalledWith(['deletable-script', 'protected-script'])
     expect(storedRegexFolders).toEqual(['Reusable targets'])
     expect(errorToasts).toEqual(['1 scripts could not be deleted'])
+  })
+})
+
+describe('RegexPanel large folders', () => {
+  test('opening a 584-script folder mounts only 50 sortable rows and pages through all scripts', async () => {
+    const scripts = largeFolder()
+    storeState = baseStoreState(scripts)
+    const host = await mount(<RegexPanel />)
+    expect(mountedScriptIds(host)).toEqual([])
+    await click(folderHeader(host, 'Large folder'))
+    expect(mountedScriptIds(host)).toEqual(scripts.slice(0, 50).map((s) => s.id))
+    expect(host.querySelectorAll(`[aria-label="${panels.regexPanel.dragToFolderAria}"]`)).toHaveLength(50)
+
+    await click(byAriaLabel(host, shared.pagination.nextPage)!)
+    expect(mountedScriptIds(host)).toEqual(scripts.slice(50, 100).map((s) => s.id))
+    const pages = byAriaLabel(host, 'Script pages in Large folder')!
+    await click([...pages.querySelectorAll('button')].find((button) => button.textContent === '12')!)
+    expect(mountedScriptIds(host)).toEqual(scripts.slice(550).map((s) => s.id))
+    expect((byAriaLabel(host, shared.pagination.nextPage) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  test('literal search finds patterns beyond the current page and resets pagination', async () => {
+    const scripts = largeFolder()
+    scripts[583].find_regex = '(a+)+$[LATE-MATCH]'
+    storeState = baseStoreState(scripts)
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, 'Large folder'))
+    await click(byAriaLabel(host, shared.pagination.nextPage)!)
+    const search = byAriaLabel(host, 'Search scripts in Large folder') as HTMLInputElement
+    await changeInput(search, '(A+)+$[late-match]')
+    expect(mountedScriptIds(host)).toEqual([scripts[583].id])
+    expect(byAriaLabel(host, 'Script pages in Large folder')).toBeNull()
+
+    await changeInput(search, 'absent pattern')
+    expect(mountedScriptIds(host)).toEqual([])
+    expect(host.textContent).toContain(panels.regexPanel.noSearchResults)
+    await changeInput(search, '')
+    expect(mountedScriptIds(host)).toEqual(scripts.slice(0, 50).map((s) => s.id))
+  })
+
+  test('clamps the page after scripts are deleted by another tab', async () => {
+    const scripts = largeFolder(51)
+    storeState = baseStoreState(scripts)
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, 'Large folder'))
+    await click(byAriaLabel(host, shared.pagination.nextPage)!)
+    expect(mountedScriptIds(host)).toEqual([scripts[50].id])
+
+    storeState.regexScripts = scripts.slice(0, 30)
+    await rerender(host)
+    expect(mountedScriptIds(host)).toEqual(scripts.slice(0, 30).map((s) => s.id))
+  })
+
+  test('folder bulk selection includes scripts on other pages and outside the search results', async () => {
+    const scripts = largeFolder()
+    storeState = baseStoreState(scripts)
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, 'Large folder'))
+    await changeInput(byAriaLabel(host, 'Search scripts in Large folder') as HTMLInputElement, scripts[583].name)
+    await click(byAriaLabel(host, panels.regexPanel.bulkSelect)!)
+    await click(byAriaLabel(host, 'Select all scripts in Large folder')!)
+    expect(host.textContent).toContain('584 of 584 selected')
+    await click(host.querySelector<HTMLElement>(`button[title="${panels.regexPanel.disableSelected}"]`)!)
+    expect(storeState.toggleSelectedRegexScripts).toHaveBeenCalledWith(scripts.map((s) => s.id), true)
+  })
+
+  test('page changes flush pending inline edits before a row unmounts', async () => {
+    const scripts = largeFolder(51)
+    storeState = baseStoreState(scripts)
+    const host = await mount(<RegexPanel />)
+    await click(folderHeader(host, 'Large folder'))
+    await click(host.querySelector<HTMLElement>('[data-spindle-mount="regex_entry_row"]')!.parentElement!)
+    await changeInput(host.querySelector<HTMLInputElement>(`input[value="${scripts[0].name}"]`)!, 'Edited name')
+    await click(byAriaLabel(host, shared.pagination.nextPage)!)
+    expect(updateRegexScript).toHaveBeenCalledWith(scripts[0].id, { name: 'Edited name' })
+    expect(mountedScriptIds(host)).toEqual([scripts[50].id])
+  })
+
+  test('adding a script reveals its editor on the last page', async () => {
+    const scripts = largeFolder(50, '')
+    const newScript = script('new-script')
+    storeState = {
+      ...baseStoreState(scripts),
+      addRegexScript: jest.fn(async () => {
+        storeState.regexScripts = [...scripts, newScript]
+        return newScript
+      }),
+    }
+    const host = await mount(<RegexPanel />)
+    await click(host.querySelector<HTMLElement>('button[title="Add"]')!)
+    await click(menuButton(panels.regexPanel.newScript))
+    expect(mountedScriptIds(host)).toEqual([newScript.id])
+    expect(host.querySelector<HTMLInputElement>('input[value="new-script"]')).not.toBeNull()
   })
 })

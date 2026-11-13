@@ -24,10 +24,12 @@ const matchAll = mock(async (): Promise<any[]> => [])
 const showNotification = mock(async (_title: string, _options: NotificationOptions) => {})
 const getNotifications = mock(async (): Promise<any[]> => [{}])
 const setAppBadge = mock(async (_count: number) => {})
+const openWindow = mock(async (_url: string) => null)
 
 ;(globalThis as any).self = {
   addEventListener: (name: string, handler: (event: any) => void) => handlers.set(name, handler),
-  clients: { matchAll },
+  clients: { matchAll, openWindow },
+  location: { origin: 'https://lumiverse.test' },
   registration: { showNotification, getNotifications },
   navigator: { setAppBadge },
 }
@@ -47,6 +49,59 @@ beforeEach(() => {
   getNotifications.mockImplementation(async () => [{}])
   setAppBadge.mockReset()
   setAppBadge.mockImplementation(async () => {})
+  openWindow.mockClear()
+})
+
+describe('notification clicks', () => {
+  function client(url: string) {
+    const value = { url, postMessage: mock(() => {}), focus: mock(async () => value) }
+    return value
+  }
+
+  async function click(url = '/chat/chat-1') {
+    let completion: Promise<unknown> | undefined
+    handlers.get('notificationclick')!({
+      notification: { close() {}, data: { url } },
+      waitUntil(promise: Promise<unknown>) { completion = promise },
+    })
+    expect(completion).toBeDefined()
+    await completion
+  }
+
+  test('focuses the existing chat without requesting navigation', async () => {
+    const open = client('https://lumiverse.test/chat/chat-1?panel=details')
+    matchAll.mockResolvedValue([open])
+    await click()
+    expect(open.focus).toHaveBeenCalledTimes(1)
+    expect(open.postMessage).not.toHaveBeenCalled()
+    expect(openWindow).not.toHaveBeenCalled()
+  })
+
+  test('prefers a window that already displays the requested chat', async () => {
+    const other = client('https://lumiverse.test/chat/chat-2')
+    const open = client('https://lumiverse.test/chat/chat-1')
+    matchAll.mockResolvedValue([other, open])
+    await click()
+    expect(other.focus).not.toHaveBeenCalled()
+    expect(open.focus).toHaveBeenCalledTimes(1)
+    expect(open.postMessage).not.toHaveBeenCalled()
+  })
+
+  test('still routes a different chat in an existing window', async () => {
+    const open = client('https://lumiverse.test/chat/chat-2')
+    matchAll.mockResolvedValue([open])
+    await click()
+    expect(open.postMessage).toHaveBeenCalledWith({ type: 'NAVIGATE', url: '/chat/chat-1' })
+  })
+
+  test('opens a fresh route if an existing window cannot be focused', async () => {
+    const open = client('https://lumiverse.test/chat/chat-1')
+    open.focus.mockRejectedValue(new Error('Discarded window'))
+    matchAll.mockResolvedValue([open])
+    await click()
+    expect(openWindow).toHaveBeenCalledTimes(1)
+    expect(openWindow).toHaveBeenCalledWith('/chat/chat-1')
+  })
 })
 
 const payload = {

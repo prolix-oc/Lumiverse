@@ -20,6 +20,12 @@
   transition: all var(--lumiverse-transition-fast);
 }
 
+.next {
+  -webkit-touch-callout: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
 /* The page-toward direction holds the swipe being generated (live) or a
    freshly-generated swipe the user hasn't viewed yet (ready). */
 .btnAccent {

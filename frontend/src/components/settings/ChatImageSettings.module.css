@@ -1,0 +1,117 @@
+.panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+}
+
+.label {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.hint {
+  margin: 0;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+  color: var(--lumiverse-text-muted);
+}
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preset,
+.alignment {
+  min-width: 0;
+  min-height: 40px;
+  padding: 10px 6px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+  font: inherit;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.preset {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+}
+
+.preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, 52px);
+  height: 36px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 3px;
+}
+
+.image {
+  display: block;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.alignments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.targets {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.targetOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+.target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.target input {
+  accent-color: var(--lumiverse-primary);
+}
+
+.target input:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.selected {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-010);
+}
+
+.preset:focus-visible,
+.alignment:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

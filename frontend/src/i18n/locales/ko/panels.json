@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "폴더를 삭제하기 전에 연결 편집을 저장하거나 취소하세요.",
+    "newFolder": "새 폴더",
+    "folder": "폴더",
+    "invalidFolderName": "1~64자의 고유한 폴더 이름을 입력하세요. 미분류는 예약된 이름입니다.",
+    "deleteFolderMessage": "“{{name}}” 폴더를 삭제할까요? 연결은 미분류로 이동합니다.",
+    "allFolders": "모든 폴더",
+    "filterFolder": "폴더별 연결 필터",
+    "search": "연결, 공급자, 모델, 폴더 검색…",
+    "noMatches": "일치하는 연결이 없습니다.",
     "embeddings": "임베딩 모델",
     "imageGeneration": "이미지 생성",
     "speechToText": "음성 인식(STT)",
@@ -874,6 +883,10 @@
     "scopeThisChat": "현재 채팅",
     "scopePreset": "프리셋",
     "noScripts": "정규식 스크립트가 아직 없습니다.",
+    "searchFolder": "이 폴더의 스크립트 검색…",
+    "searchFolderAria": "{{folder}}의 스크립트 검색",
+    "folderPagesAria": "{{folder}}의 스크립트 페이지",
+    "noSearchResults": "검색과 일치하는 스크립트가 없습니다.",
     "clickPlus": "+ 버튼을 눌러 스크립트를 생성하십시오.",
     "uncategorized": "미분류",
     "deleteFolderConfirm": "\"{{folder}}\" 내 정규식 스크립트 {{count}}개를 모두 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
@@ -923,6 +936,8 @@
     "timedOutDetail": "이 스크립트는 정규식 제한 시간에 도달하여 실행 중 건너뛰어졌습니다.",
     "slowDetail": "이 스크립트는 실행에 {{seconds}}초가 걸려 느림으로 표시되었습니다.",
     "quarantinedDisplay": "표시 정규식 \"{{name}}\"이(가) 격리된 실행 환경을 멈추게 하여 실행에서 제외되고 있습니다. 다시 실행하려면 정규식 스크립트에서 격리를 해제하십시오.",
+    "unavailableDisplay": "격리된 실행 환경을 사용할 수 없어 이번 렌더링에서 표시 정규식 \"{{name}}\"을(를) 건너뛰었습니다.",
+    "skippedDisplayTitle": "정규식 스크립트 건너뜀",
     "quarantined": "격리됨",
     "quarantinedDetail": "이 스크립트는 격리된 실행 환경을 멈추게 하여 실행에서 제외되고 있습니다. 다시 실행하려면 격리를 해제하십시오.",
     "clearQuarantine": "다시 실행",
@@ -956,7 +971,8 @@
     "targetWi": "WI",
     "targetCot": "CoT",
     "targetMemory": "기억",
-    "allOptions": "모든 옵션..."
+    "allOptions": "모든 옵션...",
+    "presetLoadFailed": "이 스와이프의 프리셋 정규식을 불러오지 못했습니다. 새로고침하여 다시 시도하세요."
   },
   "personaEditor": {
     "characterCount": "{{count}}자",
@@ -1664,6 +1680,10 @@
       "stateExcluded": "제외됨 — 클릭하여 해제"
     },
     "alternateAvatars": {
+      "addFromGallery": "갤러리에서 추가",
+      "uploadImage": "아바타 업로드",
+      "galleryLoadFailed": "갤러리 이미지를 불러오지 못했습니다.",
+      "uploadFailed": "대체 아바타를 업로드하지 못했습니다.",
       "title": "대체 아바타",
       "helper": "채팅별로 전환할 수 있는 이 캐릭터의 추가 프로필 사진입니다.",
       "selectionHint": "아바타를 누르면 이 채팅에서 사용합니다.",
@@ -2969,6 +2989,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "기기별 컨트롤",
+      "enabled": "기기별 컨트롤 사용",
+      "hint": "활성화하면 아래 설정은 이 기기의 현재 브라우저 또는 앱에만 적용됩니다. 테마를 변경해도 기기별 설정은 유지됩니다. 이 값을 공유하려면 테마를 저장하거나 내보내기 전에 테마에 복사하세요.",
+      "copyToTheme": "기기별 설정을 테마에 복사",
+      "resetFromTheme": "테마에서 기기별 설정 초기화"
+    },
     "lockControls": "컨트롤 잠금",
     "unlockControls": "컨트롤 잠금 해제",
     "lockSliders": "슬라이더 잠금",
@@ -2983,9 +3010,15 @@
     "fontScale": "글꼴 크기 비율",
     "uiScale": "UI 크기 비율",
     "glassEffects": "유리 효과",
+    "liquidGlass": {
+      "label": "리퀴드 글래스",
+      "hint": "표면 뒤의 배경을 굴절시키고 흐리게 합니다. 글래스 효과가 필요합니다.",
+      "requiresGlass": "먼저 글래스 효과를 켜세요"
+    },
     "renderingMode": {
       "label": "렌더링",
       "hint": "효율 모드는 흐림 효과를 제거하며, 품질 모드는 데스크톱 창을 다시 시작한 후 지원되는 macOS 디스플레이에서 고주사율 렌더링을 활성화합니다.",
+      "restartRequired": "창 투명도 변경을 적용하려면 데스크톱 앱을 다시 시작하세요.",
       "efficiency": "효율",
       "balanced": "균형",
       "quality": "품질"
@@ -3643,6 +3676,8 @@
         "persona_description": "사용자 페르소나",
         "scenario": "시나리오",
         "dialogue_examples": "예시 메시지",
+        "system_prompt": "캐릭터 시스템 프롬프트",
+        "post_history_instructions": "캐릭터 대화 기록 후 지침",
         "main_prompt": "메인 프롬프트",
         "enhance_definitions": "정의 강화",
         "jailbreak": "채팅 내역 이후 지침",
@@ -3951,7 +3986,7 @@
   "decisionConnectionManager": {
     "loading": "의사결정 연결 불러오는 중...",
     "newConnection": "새 의사결정 연결",
-    "empty": "아직 의사결정 연결이 없습니다. 시작하려면 OpenRouter 또는 TypeSafe를 추가하십시오.",
+    "empty": "아직 의사결정 연결이 없습니다. 시작하려면 OpenRouter, NanoGPT 또는 TypeSafe를 추가하십시오.",
     "deleteTitle": "의사결정 연결 삭제",
     "deleteMessage": "\"{{name}}\"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
     "deleteConfirm": "삭제"
@@ -3978,7 +4013,16 @@
     "checking": "샘플 의사결정 실행 중…",
     "removeKey": "저장된 API 키 제거",
     "saveFailed": "의사결정 연결을 저장하지 못했습니다",
-    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다."
+    "unsupportedModel": "이 모델은 의사결정 연결에 사용할 수 없습니다.",
+    "providerSignIn": "제공업체 로그인",
+    "signIn": "{{provider}}로 로그인",
+    "signingIn": "로그인 중…",
+    "signInHintCreate": "로그인하여 이 Decision 연결을 만들고 API 키를 저장하세요.",
+    "signInHintExisting": "로그인하여 이 Decision 연결의 새 API 키를 저장하세요.",
+    "signInDefaultUrl": "로그인하려면 제공업체의 기본 API URL을 사용하세요. 사용자 지정 URL을 사용하려면 API 키를 입력하세요.",
+    "signInSaveFirst": "로그인하기 전에 제공업체 및 API URL 변경 사항을 저장하세요.",
+    "signInSaved": "로그인했습니다. API 키가 저장되었습니다.",
+    "signInFailed": "로그인하지 못했습니다. 다시 시도하세요."
   },
   "multiplayerPanel": {
     "freeformWindowClosed": "입력 시간 종료",

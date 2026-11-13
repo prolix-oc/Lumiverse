@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
 } from 'fs'
@@ -49,8 +50,9 @@ function buildFilesInPromotionOrder(buildDir: string): string[] {
 
   const priority = (path: string): number => {
     const name = relative(buildDir, path).replaceAll('\\', '/')
-    if (name === 'sw.js') return 2
-    if (name === 'index.html') return 1
+    if (name === 'sw.js') return 3
+    if (name.endsWith('.html')) return 2
+    if (name === 'importmap.json') return 1
     return 0
   }
   return files.sort((a, b) => priority(a) - priority(b) || a.localeCompare(b))
@@ -104,6 +106,34 @@ function assertUsableBuild(buildDir: string): void {
   const assetsDir = join(buildDir, 'assets')
   if (!existsSync(assetsDir) || !statSync(assetsDir).isDirectory() || readdirSync(assetsDir).length === 0) {
     throw new Error('Frontend build is incomplete: assets directory is empty')
+  }
+
+  for (const entry of ['index.html', 'widget.html']) {
+    const path = join(buildDir, entry)
+    if (!existsSync(path)) continue
+    const html = readFileSync(path, 'utf8')
+    const maps = [...html.matchAll(/<script\b[^>]*\btype=["']importmap["'][^>]*>([\s\S]*?)<\/script>/gi)]
+    if (maps.length === 0) continue // Explicit compatibility build.
+    const mapPath = join(buildDir, 'importmap.json')
+    if (!existsSync(mapPath)) throw new Error('Frontend build is incomplete: missing importmap.json')
+    const emitted = JSON.parse(readFileSync(mapPath, 'utf8'))
+    for (const [, json] of maps) {
+      const inline = JSON.parse(json)
+      if (JSON.stringify(inline) !== JSON.stringify(emitted)) {
+        throw new Error(`Frontend build is incomplete: ${entry} import map differs from importmap.json`)
+      }
+      if (!inline.imports || typeof inline.imports !== 'object') {
+        throw new Error(`Frontend build is incomplete: invalid ${entry} import map`)
+      }
+      for (const target of Object.values(inline.imports)) {
+        if (typeof target !== 'string' || !target.startsWith('/assets/')) {
+          throw new Error(`Frontend build is incomplete: invalid import map target ${target}`)
+        }
+        const asset = resolve(buildDir, `.${target}`)
+        if (!relative(assetsDir, asset).startsWith('..') && existsSync(asset) && statSync(asset).isFile()) continue
+        throw new Error(`Frontend build is incomplete: missing import map asset ${target}`)
+      }
+    }
   }
 }
 

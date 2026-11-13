@@ -32,6 +32,7 @@ function resolveGStreamerDirectory(
 }
 
 export function requestedAppImage(args: string[]): boolean {
+  if (args.includes("--no-bundle")) return false;
   const equalsForm = args.find((arg) => arg.startsWith("--bundles="));
   const flagIndex = args.indexOf("--bundles");
   const value = equalsForm?.slice("--bundles=".length)
@@ -58,7 +59,7 @@ export function tauriBuildEnvironment(
   resolveGStreamer: GStreamerDirectoryResolver = (variable) =>
     resolveGStreamerDirectory(variable, env),
 ): NodeJS.ProcessEnv {
-  if (platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
+  if (platform !== "linux" || !["build", "bundle"].includes(args[0] || "") || !requestedAppImage(args)) {
     return env;
   }
 
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
     process.platform === "darwin" && args[0] === "build",
   );
 
-  if (process.platform !== "linux" || args[0] !== "build" || !requestedAppImage(args)) {
+  if (process.platform !== "linux" || !["build", "bundle"].includes(args[0] || "") || !requestedAppImage(args)) {
     return;
   }
 

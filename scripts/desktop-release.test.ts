@@ -58,6 +58,11 @@ test("nightly skips unrelated commits and rebuilds when shipped source changes",
   expect(sourceFingerprint(cwd)).toBe(fingerprint);
   expect((await prepare()).build).toBe(false);
   mkdirSync(join(cwd, "scripts"));
+  const beforeCrossBuilder = sourceFingerprint(cwd);
+  writeFileSync(join(cwd, "scripts/linux-arm64-cross.ts"), "changed ARM64 artifact validation");
+  git("add", "."); git("commit", "-m", "Cross-builder change");
+  expect(sourceFingerprint(cwd)).not.toBe(beforeCrossBuilder);
+  expect((await prepare()).build).toBe(true);
   writeFileSync(join(cwd, "scripts/appimage-apprun.sh"), "changed launcher environment policy");
   git("add", "."); git("commit", "-m", "Launcher change");
   expect((await prepare()).build).toBe(true);

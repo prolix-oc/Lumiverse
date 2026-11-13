@@ -23,6 +23,7 @@ mock.module('@/api/openrouter', () => ({
   buildOpenRouterOAuthCallbackUrl: () => 'http://localhost/callback',
   openrouterApi: {
     credits: async () => null,
+    completeAuth: async () => ({ created: true, profile: oauthProfile }),
     providers: async () => ({ providers: [{ name: 'OpenAI', slug: 'openai' }, { name: 'Azure', slug: 'azure' }] }),
     endpoints: async (connectionId: string, model: string) => {
       endpointCalls.push({ connectionId, model })
@@ -31,8 +32,20 @@ mock.module('@/api/openrouter', () => ({
   },
 }))
 mock.module('@/api/connections', () => ({ connectionsApi: { previewModels: async () => ({ models: ['openai/gpt-5.4'] }) } }))
-const store = { profiles: [], reasoningSettings: {}, promptBias: '' }
-mock.module('@/store', () => ({ useStore: (selector: (value: typeof store) => unknown) => selector(store) }))
+const oauthProfile: ConnectionProfile = {
+  id: 'oauth-created', name: 'OAuth connection', provider: 'openrouter', api_url: '', model: '',
+  has_api_key: true, is_default: false, preset_id: null, metadata: {}, created_at: 0, updated_at: 0,
+}
+mock.module('@/lib/providerOAuthPopup', () => ({
+  startProviderOAuthPopup: () => ({ result: Promise.resolve({ sessionToken: 'session', code: 'code' }), cancel: () => {} }),
+}))
+const store = {
+  profiles: [] as ConnectionProfile[], reasoningSettings: {}, promptBias: '', fullSettingsLoaded: true,
+  connectionLibraries: { llm: { folders: [{ id: 'cloud', name: 'Cloud' }], folderOrder: ['cloud', ''], assignments: {} as Record<string, string> } },
+  setSetting: (_key: string, value: typeof store.connectionLibraries) => { store.connectionLibraries = value },
+}
+const useStore = Object.assign((selector: (value: typeof store) => unknown) => selector(store), { getState: () => store })
+mock.module('@/store', () => ({ useStore }))
 
 const endpoints = [
   { name: 'OpenAI', slug: 'openai' },
@@ -165,3 +178,20 @@ test('Flex-only settings are saved by the connection form and restored when reop
   await settle()
   expect(field('Only These Providers').textContent).toContain('OpenAI — Flex')
 });
+
+
+test('OpenRouter sign-in keeps the selected folder for the created connection', async () => {
+  const created: ConnectionProfile[] = []
+  await mount(<Form providers={[]} initialProvider="openrouter" onSave={() => {}} onCancel={() => {}} onOAuthCreated={profile => created.push(profile)} />)
+  const input = host.querySelector<HTMLInputElement>(`input[placeholder="${panels.connectionForm.connectionName}"]`)!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(input, 'OAuth connection')
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  const folder = field(panels.connections.folder)
+  await act(async () => folder.querySelector<HTMLButtonElement>('button')!.click())
+  await act(async () => [...folder.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Cloud')!.click())
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === panels.openRouterSettings.signIn)!.click())
+  expect(created.map(profile => profile.id)).toEqual(['oauth-created'])
+  expect(store.connectionLibraries.llm.assignments['oauth-created']).toBe('cloud')
+})

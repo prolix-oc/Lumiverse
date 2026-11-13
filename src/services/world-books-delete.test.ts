@@ -14,6 +14,8 @@ let cleanupStarted: (() => void) | null = null;
 let cleanupBarrier: Promise<void> | null = null;
 
 mock.module("./embeddings.service", () => ({
+  getChatMemoryDistanceThreshold: async () => 0.6,
+  isChatMemoryVectorizationEnabled: () => false,
   deleteWorldBookEmbeddingsBeforeSourceDelete: async <T>(
     userId: string,
     worldBookIds: string[],

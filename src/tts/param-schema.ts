@@ -28,6 +28,7 @@ export interface TtsProviderCapabilities {
   /** "static" = baked-in voice list, "dynamic" = live API fetch */
   voiceListStyle: "static" | "dynamic";
   staticVoices?: TtsVoice[];
+  supportsVoiceLibrary?: boolean;
   /** "static" = baked-in model list, "dynamic" = live API fetch */
   modelListStyle: "static" | "dynamic";
   staticModels?: Array<{ id: string; label: string }>;

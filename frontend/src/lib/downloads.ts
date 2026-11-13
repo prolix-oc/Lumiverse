@@ -1,15 +1,32 @@
-/**
- * Triggers a browser download of a Blob with the given filename.
- */
-export function triggerBlobDownload(blob: Blob, filename: string): void {
+interface NativeDownloads {
+  saveBlob: (blob: Blob, filename: string) => Promise<void>
+  saveUrl: (url: string, filename: string) => Promise<void>
+}
+
+function nativeDownloads(): NativeDownloads | undefined {
+  return typeof window === 'undefined' ? undefined : (window as Window & { lumiverseNativeDownloads?: NativeDownloads }).lumiverseNativeDownloads
+}
+
+export function hasNativeDownloadCompletion(): boolean { return !!nativeDownloads() }
+
+/** Resolves after Android publishes the file, or after a browser download starts. */
+export async function triggerBlobDownload(blob: Blob, filename: string): Promise<void> {
+  const native = nativeDownloads()
+  if (native) return native.saveBlob(blob, filename)
   const url = URL.createObjectURL(blob)
+  try { await triggerUrlDownload(url, filename) }
+  finally { URL.revokeObjectURL(url) }
+}
+
+export async function triggerUrlDownload(url: string, filename: string): Promise<void> {
+  const native = nativeDownloads()
+  if (native && /^https?:/i.test(new URL(url, window.location.href).protocol)) return native.saveUrl(url, filename)
   const a = document.createElement('a')
   a.href = url
   a.download = filename
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
 }
 
 const EXTENSION_BY_TYPE: Record<string, string> = {
@@ -45,5 +62,5 @@ export async function downloadImageFromUrl(src: string, filename?: string): Prom
   const res = await fetch(src)
   if (!res.ok) throw new Error(`Failed to fetch image (${res.status})`)
   const blob = await res.blob()
-  triggerBlobDownload(blob, filename || deriveImageFilename(src, blob.type))
+  await triggerBlobDownload(blob, filename || deriveImageFilename(src, blob.type))
 }

@@ -1,5 +1,5 @@
 /**
- * Opt-in end-to-end memory benchmark for the largest supported backup shape.
+ * Opt-in end-to-end memory benchmark for multi-gigabyte backups.
  *
  * Run only this file so it has exclusive ownership of the process-wide import
  * slot and temporary data directory:
@@ -142,11 +142,11 @@ afterEach(async () => {
 });
 
 test.skipIf(!process.env.IMPORT_BENCHMARK_GB)(
-  "imports a 4–6 GiB ZIP with bounded process memory",
+  "imports a multi-GiB ZIP with bounded process memory",
   async () => {
     const targetGiB = Number(process.env.IMPORT_BENCHMARK_GB);
-    if (!Number.isInteger(targetGiB) || targetGiB < 4 || targetGiB > 6) {
-      throw new Error("IMPORT_BENCHMARK_GB must be an integer from 4 through 6");
+    if (!Number.isSafeInteger(targetGiB) || targetGiB < 1 || !Number.isSafeInteger(targetGiB * GIB)) {
+      throw new Error("IMPORT_BENCHMARK_GB must be a positive integer with a safe byte count");
     }
     const mode = process.env.IMPORT_BENCHMARK_MODE === "store" ? "store" : "deflate";
     const payloadBytes = targetGiB * GIB;

@@ -1,4 +1,5 @@
 import { getUiScale } from '@/lib/uiScale'
+import { isMobileViewportOrDevice } from '@/lib/mobile'
 
 export interface SpindleModalGeometryOptions {
   width?: number
@@ -9,6 +10,7 @@ export interface SpindleModalViewport {
   width: number
   height: number
   uiScale: number
+  mobile?: boolean
 }
 
 export interface SpindleModalGeometry {
@@ -41,14 +43,15 @@ export function resolveSpindleModalGeometry(
   viewport: SpindleModalViewport,
 ): SpindleModalGeometry {
   const uiScale = validScale(viewport.uiScale)
-  const layoutViewportWidth = Math.max(0, positiveFinite(viewport.width, 0) / uiScale)
-  const layoutViewportHeight = Math.max(0, positiveFinite(viewport.height, 0) / uiScale)
-  const availableWidth = Math.max(0, layoutViewportWidth - SPINDLE_MODAL_VIEWPORT_GUTTER)
-  const availableHeight = Math.max(0, layoutViewportHeight - SPINDLE_MODAL_VIEWPORT_GUTTER)
+  const gutter = viewport.mobile ? 24 : SPINDLE_MODAL_VIEWPORT_GUTTER
+  const availableWidth = Math.max(0, (positiveFinite(viewport.width, 0) - gutter) / uiScale)
+  const availableHeight = Math.max(0, (positiveFinite(viewport.height, 0) - gutter) / uiScale)
+  // Mobile dialogs keep their requested footprint while their controls scale.
+  const sizeScale = viewport.mobile ? uiScale : 1
 
   return {
-    width: Math.min(positiveFinite(options?.width, DEFAULT_SPINDLE_MODAL_WIDTH), availableWidth),
-    maxHeight: Math.min(positiveFinite(options?.maxHeight, DEFAULT_SPINDLE_MODAL_MAX_HEIGHT), availableHeight),
+    width: Math.min(positiveFinite(options?.width, DEFAULT_SPINDLE_MODAL_WIDTH) / sizeScale, availableWidth),
+    maxHeight: Math.min(positiveFinite(options?.maxHeight, DEFAULT_SPINDLE_MODAL_MAX_HEIGHT) / sizeScale, availableHeight),
   }
 }
 
@@ -71,5 +74,6 @@ export function resolveCurrentSpindleModalGeometry(
     width: readViewportPixelVar('--app-viewport-width', fallbackWidth),
     height: readViewportPixelVar('--app-viewport-height', fallbackHeight),
     uiScale: getUiScale(),
+    mobile: isMobileViewportOrDevice(),
   })
 }

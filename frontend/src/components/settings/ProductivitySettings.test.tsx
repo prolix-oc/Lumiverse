@@ -52,6 +52,7 @@ Object.assign(globalThis, {
 const { createRoot } = await import('react-dom/client')
 
 mock.module('@/store', () => ({ useStore }))
+mock.module('@/hooks/useCharacterCatalog', () => ({ useCharacterCatalog: () => (state as typeof state & { characters?: unknown[] }).characters ?? [] }))
 // ProductivityFeatureToggles only needs tab metadata to build its location
 // options. Keep this Bun renderer test out of the registry's Vite-only i18n
 // resource graph (`import.meta.glob`).

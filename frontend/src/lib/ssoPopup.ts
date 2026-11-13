@@ -1,4 +1,7 @@
 import { ssoProvidersApi } from '@/api/sso-providers'
+import { uuidv4 } from '@/lib/uuid'
+import { hasTauriDesktopBridge, isTauriMobile } from '@/lib/desktopWebView'
+import { getSafeHttpOrHttpsUrl } from '@/lib/navigationSafety'
 import {
   closeAuthorizationPopup,
   navigateAuthorizationPopup,
@@ -32,26 +35,54 @@ function popupFeatures(): string {
   return `popup=yes,width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
 }
 
-function completionUrl(flow: SsoFlow, providerId: string, flowId: string, returnTo: string): string {
+function completionUrl(flow: SsoFlow, providerId: string, flowId: string, returnTo: string, redirect: boolean): string {
   const url = new URL('/sso-complete', window.location.origin)
   url.searchParams.set('flow', flow)
   url.searchParams.set('provider', providerId)
   url.searchParams.set('flowId', flowId)
   url.searchParams.set('returnTo', returnTo)
+  if (redirect) url.searchParams.set('mode', 'redirect')
   return url.toString()
+}
+
+function usesSameWindowSso(): boolean {
+  if (isTauriMobile() || hasTauriDesktopBridge()) return false
+  const nav = window.navigator as Navigator & { standalone?: boolean }
+  const ios = /iPad|iPhone|iPod/.test(nav.userAgent)
+    || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
+  return ios && (nav.standalone === true
+    || window.matchMedia?.('(display-mode: standalone)').matches === true
+    || window.matchMedia?.('(display-mode: fullscreen)').matches === true)
 }
 
 function isResult(value: unknown, flowId: string): value is SsoPopupResult {
   return !!value && typeof value === 'object' && (value as SsoPopupResult).flowId === flowId
 }
 
-export function startSsoPopup({ providerId, flow, returnTo = '/' }: SsoPopupOptions): Promise<SsoPopupResult> {
-  const flowId = crypto.randomUUID()
+/** A null result means the current page is redirecting to the provider. */
+export function startSsoPopup({ providerId, flow, returnTo = '/' }: SsoPopupOptions): Promise<SsoPopupResult | null> {
+  const flowId = uuidv4()
+  const redirect = usesSameWindowSso()
+  const callbackURL = completionUrl(flow, providerId, flowId, returnTo, redirect)
+
+  // Home Screen WebKit can lose or externalize a reserved popup. Keep the
+  // authorization and callback in the PWA's own browsing context instead.
+  if (redirect) {
+    const starter = flow === 'login'
+      ? ssoProvidersApi.getLoginUrl(providerId, callbackURL)
+      : ssoProvidersApi.getLinkUrl(providerId, callbackURL)
+    return starter.then(({ url }) => {
+      const target = getSafeHttpOrHttpsUrl(url)
+      if (!target) throw new Error('SSO provider returned an invalid authorization URL.')
+      window.location.assign(target)
+      return null
+    })
+  }
+
   const popup = reserveAuthorizationPopup({
     name: `lumiverse_sso_${flow}_${providerId}`,
     features: popupFeatures(),
   })
-  const callbackURL = completionUrl(flow, providerId, flowId, returnTo)
   const storageKey = `${STORAGE_PREFIX}${flowId}`
 
   return new Promise((resolve, reject) => {
@@ -140,6 +171,9 @@ export function startSsoPopup({ providerId, flow, returnTo = '/' }: SsoPopupOpti
         fail(new Error('SSO provider returned an invalid authorization URL.'))
       } else if (navigation.status === 'blocked') {
         window.location.assign(navigation.url)
+        settled = true
+        cleanup()
+        resolve(null)
       }
     }).catch((err) => {
       fail(err instanceof Error ? err : new Error('Failed to start SSO authorization.'))

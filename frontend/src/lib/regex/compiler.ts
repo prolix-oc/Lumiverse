@@ -393,6 +393,9 @@ function applyDisplayActions(
 }
 
 export interface ApplyDisplayRegexContext {
+  presetContext?: import('@/types/regex').MessagePresetContext
+  presetRegexIds?: string[]
+  swipeIndex?: number
   processingState?: string
   isUser: boolean
   depth: number
@@ -464,6 +467,7 @@ export async function applyDisplayRegexOnBackend(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         content,
+        preprocessed: true,
         scripts,
         resolved_find_patterns: mapToRecord(context.resolvedFindPatterns),
         resolved_replacements: mapToRecord(context.resolvedReplacements),
@@ -475,6 +479,7 @@ export async function applyDisplayRegexOnBackend(
           is_user: context.isUser,
           depth: context.depth,
           ...(context.messageId ? { message_id: context.messageId } : {}),
+          ...(context.presetContext ? { use_message_preset: true, swipe_index: context.swipeIndex } : {}),
           ...(typeof context.messageIndex === 'number' ? { message_index: context.messageIndex } : {}),
           ...(context.role ? { role: context.role } : {}),
         },
@@ -657,6 +662,7 @@ function toSpindleDisplayContext(context: ApplyDisplayRegexContext): SpindleDisp
     ...(typeof context.messageIndex === 'number' ? { messageIndex: context.messageIndex } : {}),
     ...(context.role ? { role: context.role } : {}),
     ...(context.dynamicMacros ? { dynamicMacros: context.dynamicMacros } : {}),
+    ...(context.presetContext ? { presetContext: context.presetContext, presetRegexIds: context.presetRegexIds } : {}),
   }
 }
 

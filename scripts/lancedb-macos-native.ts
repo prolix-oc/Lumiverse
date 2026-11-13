@@ -4,15 +4,15 @@ import { join } from "node:path";
 
 // Updating the npm dependency requires rebuilding and testing this exact source.
 export const INTEL_LANCEDB = {
-  version: "0.37.1",
-  sourceCommit: "b89f87f206abd79a069833cee01f0c029ddb1397",
+  version: "0.41.0",
+  sourceCommit: "3936a8b3bcce8f8e073f3ec6a47e4ca4d3381b92",
   target: "x86_64-apple-darwin",
   rustToolchain: "1.97.0",
   minimumMacOS: "13.0",
   cpu: "x86-64",
   binaryName: "lancedb.darwin-x64.node",
   // Bump only for compilation changes not represented by the policy below.
-  buildRevision: 1,
+  buildRevision: 2,
 } as const;
 
 export const INTEL_LANCEDB_RELEASE_PROFILE = {

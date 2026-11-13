@@ -39,6 +39,15 @@
     "assistant": "助手"
   },
   "input": {
+    "formatting": {
+      "label": "消息格式",
+      "bold": "粗体",
+      "italic": "斜体",
+      "underline": "下划线",
+      "quotes": "引号",
+      "singleQuotes": "单引号",
+      "parentheses": "圆括号"
+    },
     "placeholder": "输入消息…",
     "backHome": "返回主页",
     "regenerate": "重新生成",
@@ -259,6 +268,22 @@
     "showFewer": "显示更少"
   },
   "chatView": {
+    "cortexFailedBatches": "失败批次：{{count}}",
+    "cortexBatchProgress": "{{current}}/{{total}} 批次 · {{queued}} 个排队中",
+    "cortexElapsed": "已用 {{seconds}} 秒",
+    "cortexBatchActivity": "批次 {{batch}} · {{phase}}",
+    "cortexBatchChunks": "分块数：{{count}}",
+    "cortexActiveBatches": "活动记忆批次",
+    "cortexActivity": {
+      "queued": "排队中",
+      "waiting": "等待服务商响应",
+      "thinking": "思考中",
+      "responding": "响应中",
+      "reviewing": "审核中",
+      "preparing": "准备中",
+      "saving": "保存中",
+      "consolidating": "整合中"
+    },
     "togglePortraitPanel": "切换肖像面板",
     "exitSelectionMode": "退出选择模式",
     "selectMessages": "选择消息",

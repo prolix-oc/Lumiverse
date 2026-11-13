@@ -325,12 +325,16 @@ export async function* wrapDelimitedReasoningStream(
       .filter((value): value is string => !!value)
       .join("");
 
-    if (parsed.content || reasoning || chunk.usage || chunk.tool_calls) {
+    // Native reasoning blocks are separate from tagged text; keep them next to
+    // the tool calls they precede so continuations can replay them.
+    if (parsed.content || reasoning || chunk.usage || chunk.tool_calls || chunk.thinking_blocks || chunk.reasoning_details) {
       yield {
         token: parsed.content,
         ...(reasoning ? { reasoning } : {}),
         ...(chunk.usage ? { usage: chunk.usage } : {}),
         ...(chunk.tool_calls ? { tool_calls: chunk.tool_calls } : {}),
+        ...(chunk.thinking_blocks ? { thinking_blocks: chunk.thinking_blocks } : {}),
+        ...(chunk.reasoning_details ? { reasoning_details: chunk.reasoning_details } : {}),
       };
     }
 

@@ -299,6 +299,12 @@ const BUILT_IN_PATTERNS = [
   // DeepSeek V4 family — V4.1 and Pro first so they don't fall through to
   // the looser V4 Flash pattern.
   { id: "pat-deepseek-v4-1-flash", tokenizer_id: "deepseek-v4-1-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?1[-.]?flash", priority: 90 },
+  // `deepseek-flash` is DeepSeek's canonical, unversioned API model id and is
+  // currently served by DeepSeek-V4.1-Flash-1017, so it resolves to the V4.1
+  // Flash tokenizer. Versioned ids keep their own entries: `deepseek-v4-flash`
+  // and dated releases below still use the V4 Flash tokenizer, which is the
+  // accurate encoding for those pinned checkpoints.
+  { id: "pat-deepseek-flash", tokenizer_id: "deepseek-v4-1-flash", pattern: "(?:^|[/:.])deepseek-?flash", priority: 90 },
   { id: "pat-deepseek-v4-pro", tokenizer_id: "deepseek-v4-pro", pattern: "(?:^|[/:.])deepseek-?v4[-.]?pro", priority: 85 },
   { id: "pat-deepseek-v4-flash", tokenizer_id: "deepseek-v4-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?flash", priority: 80 },
   { id: "pat-fallback", tokenizer_id: "approximate-4", pattern: ".*", priority: -1 },

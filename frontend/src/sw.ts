@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
+import { isCurrentChatNavigation } from './lib/notificationNavigation'
 import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
 import { registerRoute, NavigationRoute } from 'workbox-routing'
 import { CacheFirst, NetworkFirst, NetworkOnly } from 'workbox-strategies'
@@ -209,18 +210,21 @@ self.addEventListener('notificationclick', (event) => {
       // Focus an existing app client first. Awaiting focus keeps the service
       // worker alive until the app is foregrounded, which is especially
       // important for a suspended PWA receiving a notification click.
-      const client = clients.find((candidate) => {
+      const appClients = clients.filter((candidate) => {
         try {
           return new URL(candidate.url).origin === self.location.origin
         } catch {
           return false
         }
       })
+      const client = appClients.find(candidate => isCurrentChatNavigation(candidate.url, url)) ?? appClients[0]
 
       if (client) {
         try {
           const focusedClient = await client.focus()
-          focusedClient.postMessage({ type: 'NAVIGATE', url })
+          if (!isCurrentChatNavigation(focusedClient.url, url)) {
+            focusedClient.postMessage({ type: 'NAVIGATE', url })
+          }
           return
         } catch {
           // A discarded client can still appear in matchAll(). Open a fresh

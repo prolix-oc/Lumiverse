@@ -420,6 +420,9 @@ describe('CharacterGrid image identity', () => {
     const images = [...mounted.host.querySelectorAll('img')]
     await act(async () => {
       for (const image of images) image.dispatchEvent(new domWindow.Event('load'))
+      // LazyImage reveals a decoded element after two painted frames.
+      await Promise.resolve()
+      await new Promise<void>(resolve => domWindow.requestAnimationFrame(() => domWindow.requestAnimationFrame(() => resolve())))
     })
     const sources = images.map((image) => image.getAttribute('src'))
     const changedSources: Node[] = []

@@ -1,44 +1,27 @@
+import { themeReferenceBuild } from './scripts/theme-reference-build.ts'
 import { defineConfig } from 'vite'
-import react, { reactCompilerPreset } from '@vitejs/plugin-react'
-import babel from '@rolldown/plugin-babel'
+import { createReactCompilerPlugins } from './scripts/react-compiler.ts'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import pkg from './package.json' with { type: 'json' }
 
+const chunkImportMap = process.env.LUMIVERSE_CHUNK_IMPORT_MAP !== '0'
+
 export default defineConfig({
+  experimental: { bundledDev: process.env.LUMIVERSE_BUNDLED_DEV !== '0' },
   plugins: [
-    babel({
-      presets: [
-        reactCompilerPreset({
-          target: '19',
-          // Gradual adoption: only compile components/hooks annotated with
-          // "use memo". This keeps build times fast while we opt files in
-          // one at a time. Switch to compilationMode: 'all' once the codebase
-          // is clean and the wins are proven.
-          compilationMode: 'annotation',
-        }),
-      ],
-      // Only run the React Compiler on files that can contain components/hooks.
-      // .tsx files are component/JSX code; src/hooks/*.ts are shared hooks.
-      // Specific hook files outside these directories are listed explicitly.
-      include: [
-        /\.tsx$/,
-        /src\/hooks\/[^/]+\.ts$/,
-        /src\/store\/index\.ts$/,
-        /src\/ws\/useWebSocket\.ts$/,
-        /src\/lib\/dndUiScale\.ts$/,
-        /src\/lib\/oocAvatarLookup\.ts$/,
-        /src\/lib\/wallpaperVideoCache\.ts$/,
-        /src\/lib\/i18n\/worldBookEntryLabels\.ts$/,
-        /src\/lib\/i18n\/loomOptionLabels\.ts$/,
-        /src\/lib\/spindle\/components-helper\.tsx$/,
-      ],
-      exclude: [
-        /node_modules/,
-        /src\/lib\/generated(?:ComponentCss|ComponentProps|CssVariables)\.ts$/,
-      ],
-    }),
-    react(),
+    themeReferenceBuild(),
+    {
+      name: 'lumiverse-bundled-refresh-order',
+      config(config, { command }) {
+        if (command !== 'serve' || !config.experimental?.bundledDev) return
+        // The app and widget share React chunks. Preserve initialization order
+        // so their refresh wrappers run after the preamble in bundled dev.
+        // https://github.com/vitejs/vite-plugin-react/issues/1191
+        return { build: { rolldownOptions: { output: { strictExecutionOrder: true } } } }
+      },
+    },
+    ...createReactCompilerPlugins(),
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src',
@@ -50,13 +33,27 @@ export default defineConfig({
       manifest: false,
       includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
+        globPatterns: [
+          '**/*.{js,css,html,ico,png,svg,webp,woff,woff2}',
+          // Keep the emitted map with the matching precached HTML/assets.
+          ...(chunkImportMap ? ['importmap.json'] : []),
+        ],
         // Main app chunk is ~5MB; locale JSON are separate lazy chunks (see src/i18n/resources.ts).
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
       integration: {
         configureCustomSWViteBuild(config) {
-          const output = config.build?.rollupOptions?.output as
+          const build = config.build
+          if (!build) return
+          // Workers cannot use document import maps. Only application HTML
+          // gets a map; the custom worker stays a single self-contained file.
+          build.chunkImportMap = false
+          // vite-plugin-pwa still generates the deprecated option name.
+          const options = build.rolldownOptions ?? build.rollupOptions
+          if (!options) return
+          build.rolldownOptions = options
+          delete build.rollupOptions
+          const output = options.output as
             | Record<string, unknown>
             | undefined
           if (output) {
@@ -71,6 +68,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   resolve: {
+    // Shared source lives outside frontend/; resolve its Spindle runtime from
+    // this application's dependencies even when the backend copy is older.
+    dedupe: ['lumiverse-spindle-types', 'fflate'],
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
     },
@@ -89,6 +89,9 @@ export default defineConfig({
     },
   },
   build: {
+    // Standard builds use stable chunk references. Set the environment
+    // variable to 0 only when diagnosing an older browser/runtime.
+    chunkImportMap,
     // Vite 8 defaults build.cssMinify to 'lightningcss', which requires the
     // lightningcss-<platform>-<arch> native binding to load at build time.
     // On Termux/Android arm64 the binding install is unreliable, and when it
@@ -96,16 +99,21 @@ export default defineConfig({
     // step uses a binding we ship and can rely on across platforms.
     cssMinify: 'esbuild',
     chunkSizeWarningLimit: 6000,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: path.resolve(import.meta.dirname, './index.html'),
         widget: path.resolve(import.meta.dirname, './widget.html'),
       },
       output: {
-        manualChunks(id) {
-          const normalized = id.replace(/\\/g, '/')
-          const m = normalized.match(/\/i18n\/locales\/([^/]+)\//)
-          if (m) return `i18n-${m[1]}`
+        codeSplitting: {
+          groups: [{
+            debugName: 'i18n-locales',
+            name(id) {
+              const normalized = id.replace(/\\/g, '/')
+              const match = normalized.match(/\/i18n\/locales\/([^/]+)\//)
+              return match ? `i18n-${match[1]}` : null
+            },
+          }],
         },
         chunkFileNames(chunkInfo) {
           const name = chunkInfo.name ?? ''

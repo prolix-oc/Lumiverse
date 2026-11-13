@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { getDb } from "../db/connection";
+import { remapSwipeVariableOwnerWithDb } from "../db/swipe-variable-state";
 import * as svc from "../services/chats.service";
 import * as personasSvc from "../services/personas.service";
 import * as charactersSvc from "../services/characters.service";
@@ -12,21 +14,19 @@ import {
   messageContentProcessorChain,
   type MessageContentProcessorCtx,
 } from "../spindle/message-content-processor";
-import { resolveRenderedMessageContent } from "../services/chat-macro-render.service";
-import { shieldMessageLiterals } from "../macros/message-literals";
-import { contentHasMacroHints } from "../services/vectorization-content.service";
+import { preprocessDisplayMessage } from "../services/display-message-preprocess.service";
+import { createDisplayRenderContext, type DisplayRenderContext } from "../services/chat-macro-render.service";
+import type { DisplayMessageSource, Message } from "../types/message";
 import { computeMessageTokenCount } from "../services/message-token-count";
-import {
-  getActivatedWorldInfoEntriesForChat,
-  resolveWorldInfoOutlets,
-} from "../services/prompt-assembly.service";
-import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import { resolveRegexActionEffects, getMessageDisplayScripts } from "../services/associative-regex-effects.service";
 import {
   personaHasAddon,
   withChatPersonaAddonState,
 } from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
 import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
+import { getMessagePresetContext } from "../services/message-preset-context.service";
+import { isValidRegexActionSignature } from "../utils/regex-action-signature";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -89,9 +89,6 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
-/** Matches an outlet macro so display resolution can populate Lorebook
- * outlets when a directly or indirectly referenced persona outlet needs one. */
-const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
 const DISPLAY_PREPROCESS_BATCH_MAX = 100;
 
 interface DisplayPreprocessItem {
@@ -99,6 +96,7 @@ interface DisplayPreprocessItem {
   messageIndex?: number;
   role?: string;
   rawContent: string;
+  swipeIndex?: number;
 }
 
 function parseDisplayPreprocessItem(input: unknown): DisplayPreprocessItem | null {
@@ -108,11 +106,13 @@ function parseDisplayPreprocessItem(input: unknown): DisplayPreprocessItem | nul
     messageIndex?: unknown;
     role?: unknown;
     rawContent?: unknown;
+    swipeIndex?: unknown;
   };
   if (typeof body.rawContent !== "string") return null;
 
   return {
     rawContent: body.rawContent,
+    ...(Number.isInteger(body.swipeIndex) ? { swipeIndex: body.swipeIndex as number } : {}),
     ...(typeof body.messageId === "string" ? { messageId: body.messageId } : {}),
     ...(typeof body.messageIndex === "number" ? { messageIndex: body.messageIndex } : {}),
     ...(typeof body.role === "string" ? { role: body.role } : {}),
@@ -124,50 +124,28 @@ async function runDisplayPreprocessItem(
   chatId: string,
   item: DisplayPreprocessItem,
   signal?: AbortSignal,
+  sources?: Map<string, DisplayMessageSource>,
+  context?: DisplayRenderContext,
 ) {
-  const hasContentProcessor = messageContentProcessorChain.hasForUser(userId);
-  const processed = hasContentProcessor
-    ? await messageContentProcessorChain.run({
-        chatId,
-        content: item.rawContent,
-        isUser: item.role === "user",
-        origin: "render",
-        userId,
-        ...(item.messageId ? { messageId: item.messageId } : {}),
-        extra: {
-          ...(typeof item.messageIndex === "number" ? { messageIndex: item.messageIndex } : {}),
-          ...(item.role ? { role: item.role, is_user: item.role === "user" } : {}),
-        },
-      }, userId, signal)
-    : { content: item.rawContent };
-
-  let content = processed.content ?? item.rawContent;
-  const savedMessage = item.messageId ? svc.getMessage(userId, item.messageId) : null;
-  if (savedMessage?.chat_id === chatId) content = shieldMessageLiterals(content, savedMessage);
-  if (contentHasMacroHints(content)) {
-    const env = svc.buildMacroEnvForChat(userId, chatId);
-    if (env) {
-      // {{outlet::name}} is only populated during prompt assembly; mirror it
-      // here so displayed messages match what the model actually receives.
-      if (OUTLET_MACRO_RE.test(content)) {
-        try {
-          const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
-          await resolveWorldInfoOutlets(entries, env, signal);
-        } catch {
-          // Leave outlets unresolved — base macro resolution still runs.
-        }
-      }
-      content = await resolveRenderedMessageContent(content, env, true);
-    }
-  }
+  const savedMessage = item.messageId
+    ? (sources && !messageContentProcessorChain.hasForUser(userId)
+        ? sources.get(item.messageId) : svc.getMessage(userId, item.messageId))
+    : null;
+  const processed = await preprocessDisplayMessage({
+    userId, chatId, content: item.rawContent, message: savedMessage ?? undefined,
+    messageId: item.messageId, messageIndex: item.messageIndex, role: item.role,
+    swipeIndex: item.swipeIndex, signal, context,
+  });
 
   return {
     messageId: item.messageId,
-    content,
+    content: processed.content,
+    touchedVars: [...processed.touchedVars],
+    cacheable: processed.cacheable,
     // Lets the client paint an append-only plain-text suffix while its next
     // coalesced preprocess request is pending. Macro-looking suffixes remain
     // gated client-side, and any applicable processor disables the fast path.
-    incrementalRawAppendSafe: !hasContentProcessor,
+    incrementalRawAppendSafe: processed.incrementalRawAppendSafe,
   };
 }
 
@@ -442,6 +420,35 @@ app.get("/:id", async (c) => {
   return c.json({ ...chat, character_display_owner, messages });
 });
 
+/** Bounded first-page data; legacy metadata and message routes remain available. */
+app.get("/:id/open", async (c) => {
+  const userId = c.get("userId");
+  const chat = await svc.getChatAsync(userId, c.req.param("id"), { priority: "interactive" });
+  if (!chat) return c.json({ error: "Not found" }, 404);
+  const limit = Math.min(parsePagination(c.req.query("limit"), undefined).limit, 1000);
+  const memberIds = chat.metadata?.group === true && Array.isArray(chat.metadata.character_ids)
+    ? chat.metadata.character_ids.filter((id): id is string => typeof id === "string")
+    : [];
+  const ids = [...new Set([...(chat.character_id ? [chat.character_id] : []), ...memberIds])];
+  // Member lists originate in metadata. Bound both the response and SQL bindings.
+  const characterMap = await charactersSvc.getCharactersByIdsAsync(userId, ids.slice(0, 100), {
+    priority: "interactive",
+  }).catch((error) => {
+    console.warn("[chats] Open character snapshot unavailable:", error);
+    return new Map();
+  });
+  const characters = [...characterMap.values()];
+  const ownerCandidates = managerSvc.getEnabledExtensionIdentifiers();
+  const character_display_owner = chat.character_id
+    ? charactersSvc.getCharacterDisplayOwner(userId, chat.character_id, ownerCandidates)
+    : null;
+  return c.json({
+    chat: { ...chat, character_display_owner },
+    messages: svc.listMessagesTail(userId, chat.id, limit, { light: true }),
+    characters,
+  });
+});
+
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const chat = await svc.getChatAsync(userId, c.req.param("id"));
@@ -549,6 +556,7 @@ app.post("/import", async (c) => {
     }));
 
     const msgCount = svc.bulkInsertMessages(chat.id, bulkMessages, userId);
+    remapSwipeVariableOwnerWithDb(getDb(), userId, chat.id);
 
     return c.json({ chat_id: chat.id, name: chat.name, message_count: msgCount }, 201);
   } catch (err: any) {
@@ -792,6 +800,16 @@ app.get("/:chatId/messages", async (c) => {
   // by swipe actions, which re-fetch the full message. ?full=true opts out.
   const light = c.req.query("full") !== "true";
 
+  if (c.req.query("beforeIndex") !== undefined) {
+    const index = Number(c.req.query("beforeIndex"));
+    const id = c.req.query("beforeId");
+    if (!Number.isSafeInteger(index) || index < 0 || !id) {
+      return c.json({ error: "beforeIndex and beforeId must identify a message boundary" }, 400);
+    }
+    const limit = Math.min(parsePagination(c.req.query("limit"), undefined).limit, 1000);
+    return c.json(await svc.listMessagesBefore(userId, chatId, { index, id }, limit, { light }));
+  }
+
   // tail=true fetches the last N messages efficiently (single index scan from end)
   if (c.req.query("tail") === "true") {
     const requestedLimit = parsePagination(c.req.query("limit"), undefined).limit;
@@ -912,6 +930,7 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
     const scriptId = typeof raw?.script_id === "string" ? raw.script_id : "";
     const actionId = typeof raw?.action_id === "string" ? raw.action_id : "";
     const instanceId = typeof raw?.instance_id === "string" ? raw.instance_id : "";
+    if (!isValidRegexActionSignature(raw?.action_signature)) return c.json({ error: "invalid regex action signature" }, 400);
     if (!messageId || !scriptId || !actionId || !instanceId ||
       !instanceId.startsWith(`${scriptId}:`) ||
       !/^\d+:\d+$/.test(instanceId.slice(scriptId.length + 1))) {
@@ -919,15 +938,20 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
     }
     const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
     const action = script?.actions.find((candidate) => candidate.id === actionId);
-    if (!script || script.disabled || !script.target.includes("display") || !action) {
+    const presetContext = getMessagePresetContext(userId, chatId, messageId);
+    if (!script || !action || (presetContext
+      ? !getMessageDisplayScripts(userId, chatId, messageId).some(s => s.id === scriptId)
+      : script.disabled || !script.target.includes("display"))) {
       return c.json({ error: "regex action is no longer available" }, 404);
     }
     if (!action.multi_select && action.type !== "send") {
       return c.json({ error: "only Send actions can trigger a mixed batch claim" }, 400);
     }
     let stateEffects: Array<{ key: string; value: string }> | undefined;
-    if (action.effects?.length) {
-      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+    let instanceAliases: string[] | undefined;
+    let usageInstanceId: string | undefined;
+    if (action.effects?.length || raw.action_signature !== undefined) {
+      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId, raw.action_signature);
       if (resolved.status === "user_source") {
         return c.json({ error: "composable effects require an assistant source message" }, 403);
       }
@@ -937,12 +961,16 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
       stateEffects = resolved.effects
         .filter((effect) => effect.type === "set_state")
         .map(({ key, value }) => ({ key, value }));
+      instanceAliases = resolved.instanceAliases;
+      usageInstanceId = resolved.usageInstanceId;
     }
     selections.push({
       messageId,
       scriptId,
       actionId,
       instanceId,
+      ...(instanceAliases ? { instanceAliases } : {}),
+      ...(usageInstanceId ? { usageInstanceId } : {}),
       multiSelect: action.multi_select,
       ...(stateEffects ? { stateEffects } : {}),
     });
@@ -965,6 +993,7 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
   const scriptId = typeof body?.script_id === "string" ? body.script_id : "";
   const actionId = typeof body?.action_id === "string" ? body.action_id : "";
   const instanceId = typeof body?.instance_id === "string" ? body.instance_id : "";
+  if (!isValidRegexActionSignature(body?.action_signature)) return c.json({ error: "invalid regex action signature" }, 400);
   if (!scriptId || !actionId || !instanceId) {
     return c.json({ error: "script_id, action_id, and instance_id are required" }, 400);
   }
@@ -974,7 +1003,10 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   const script = await regexScriptsSvc.getRegexScriptAsync(userId, scriptId);
   const action = script?.actions.find((candidate) => candidate.id === actionId);
-  if (!script || script.disabled || !script.target.includes("display") || !action) {
+  const presetContext = getMessagePresetContext(userId, chatId, messageId);
+  if (!script || !action || (presetContext
+    ? !getMessageDisplayScripts(userId, chatId, messageId).some(s => s.id === scriptId)
+    : script.disabled || !script.target.includes("display"))) {
     return c.json({ error: "regex action is no longer available" }, 404);
   }
   if (action.multi_select) {
@@ -983,8 +1015,10 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   let resolvedEffects: RegexActionEffect[] = [];
   let stateEffects: Array<{ key: string; value: string }> | undefined;
-  if (action.effects?.length) {
-    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+  let instanceAliases: string[] | undefined;
+  let usageInstanceId: string | undefined;
+  if (action.effects?.length || body.action_signature !== undefined) {
+    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId, body.action_signature);
     if (resolved.status === "user_source") {
       return c.json({ error: "composable effects require an assistant source message" }, 403);
     }
@@ -992,6 +1026,8 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
       return c.json({ error: "regex action could not be verified from its source message" }, 404);
     }
     resolvedEffects = resolved.effects;
+    instanceAliases = resolved.instanceAliases;
+    usageInstanceId = resolved.usageInstanceId;
     stateEffects = resolvedEffects
       .filter((effect) => effect.type === "set_state")
       .map(({ key, value }) => ({ key, value }));
@@ -999,6 +1035,8 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
 
   const result = svc.claimAssociativeRegexAction(userId, chatId, messageId, {
     instanceId,
+    ...(instanceAliases ? { instanceAliases } : {}),
+    ...(usageInstanceId ? { usageInstanceId } : {}),
     scriptId,
     actionId,
     multiSelect: false,
@@ -1080,7 +1118,8 @@ app.put("/:chatId/messages/:id", async (c) => {
     }
   }
 
-  const msg = svc.updateMessage(userId, messageId, body);
+  const { is_user: _isUser, ...update } = body;
+  const msg = svc.updateMessage(userId, messageId, update);
   if (!msg) return c.json({ error: "Not found" }, 404);
   return c.json(msg);
 });
@@ -1209,9 +1248,15 @@ app.post("/:chatId/display-preprocess", async (c) => {
       return c.json({ error: "each item requires rawContent (string)" }, 400);
     }
 
+    // A processor can synchronously edit a later source before its turn starts.
+    // Preserve those per-item reads for extension-controlled batches.
+    const sources = messageContentProcessorChain.hasForUser(userId) ? undefined
+      : await svc.getDisplayMessageSourcesByIds(userId, chatId,
+        (items as DisplayPreprocessItem[]).flatMap((item) => item.messageId ? [item.messageId] : []));
+    const context = createDisplayRenderContext(userId, chatId);
     const processed = await Promise.all(
       (items as DisplayPreprocessItem[]).map((item) =>
-        runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal)
+        runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal, sources, context)
       )
     );
 
@@ -1224,7 +1269,7 @@ app.post("/:chatId/display-preprocess", async (c) => {
   }
 
   const processed = await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal);
-  return c.json({ content: processed.content });
+  return c.json({ content: processed.content, touchedVars: processed.touchedVars, cacheable: processed.cacheable });
 });
 
 export { app as chatsRoutes };

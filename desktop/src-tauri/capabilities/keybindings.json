@@ -1,0 +1,6 @@
+{
+  "identifier": "keybindings",
+  "local": true,
+  "windows": ["main", "keybindings"],
+  "permissions": ["core:default", "core:window:allow-close", "desktop-keybindings-settings"]
+}

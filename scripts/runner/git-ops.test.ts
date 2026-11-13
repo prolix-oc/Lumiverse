@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawnAsync } from "./lib/spawn-async.js";
@@ -183,6 +183,9 @@ test("validates backend and frontend dependencies with the same Termux runtime w
   expect(probe.slice(0, 2)).toEqual(["grun", env.LUMIVERSE_BUN_PATH]);
   expect(probe.at(-1)).toContain("import('better-auth')");
   expect(probe.at(-1)).toContain("import('@better-auth/oauth-provider')");
+  expect(probe.at(-1)).toContain("configureSharpNativeOverride()");
+  expect(probe.at(-1)).toContain("import('sharp')");
+  expect(probe.at(-1)).toContain(".png().toBuffer()");
   expect(probe.at(-1)).not.toMatch(/\s/);
 
   const frontendProbe = frontendDependencyProbeCmd(env);
@@ -205,6 +208,9 @@ test("Better Auth validation detects a missing exported core subpath", () => {
   writeFileSync(contextPath, "export const context = {};\n");
   installEsmPackage(dir, "better-auth", "import '@better-auth/core/context';\n");
   installEsmPackage(dir, "@better-auth/oauth-provider", "import '@better-auth/core/context';\n");
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src/sharp-preflight.ts"), "export async function configureSharpNativeOverride() {}\n");
+  installEsmPackage(dir, "sharp", "export default () => ({ png: () => ({ toBuffer: async () => Buffer.from('png') }) });\n");
 
   const runProbe = () => Bun.spawnSync({
     cmd: backendDependencyProbeCmd({}),
@@ -216,6 +222,16 @@ test("Better Auth validation detects a missing exported core subpath", () => {
   expect(runProbe().exitCode).toBe(0);
   rmSync(contextPath);
   expect(runProbe().exitCode).not.toBe(0);
+});
+
+test("backend validation rejects an installed Sharp package whose native engine cannot load", () => {
+  const dir = makeTempDir();
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src/sharp-preflight.ts"), "export async function configureSharpNativeOverride() {}\n");
+  installEsmPackage(dir, "sharp", "throw new Error('Could not load sharp using the android-arm64 runtime');\n");
+  const probe = Bun.spawnSync({ cmd: backendDependencyProbeCmd({}), cwd: dir, stdout: "pipe", stderr: "pipe" });
+  expect(probe.exitCode).not.toBe(0);
+  expect(probe.stderr.toString()).toContain("Could not load sharp");
 });
 
 test("frontend dependency validation detects a missing transitive Better Auth module", () => {
@@ -282,6 +298,15 @@ test("detects dependency inputs newer than the last completed install", () => {
   expect(dependencyInstallStampIsStale(dir)).toBe(true);
 });
 
+test("runner rebuilds run every package generation step before bundling", () => {
+  const { scripts } = JSON.parse(readFileSync(join(import.meta.dir, "../../frontend/package.json"), "utf8"));
+  const generationCommands = scripts.generate.split(/\s*&&\s*/).map((command: string) => {
+    const name = command.replace(/^bun run /, "");
+    return scripts[name].split(/\s+/);
+  });
+  expect(FRONTEND_BUILD_STEPS.slice(0, -1).map((step) => [...step.command])).toEqual(generationCommands);
+});
+
 test("reports frontend build phases separately while preserving their order", () => {
   expect(FRONTEND_BUILD_STEPS.map(({ label, command }) => ({ label, command }))).toEqual([
     {
@@ -291,6 +316,10 @@ test("reports frontend build phases separately while preserving their order", ()
     {
       label: "frontend CSS variable extraction",
       command: ["bun", "run", "scripts/extract-css-vars.ts"],
+    },
+    {
+      label: "frontend theme reference generation",
+      command: ["bun", "run", "scripts/generate-theme-reference.ts"],
     },
     {
       label: "frontend Vite bundling",
@@ -311,6 +340,7 @@ test("runs frontend build entrypoints directly through the selected Termux Bun w
   )).toEqual([
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/extract-props.ts"],
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/extract-css-vars.ts"],
+    ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/generate-theme-reference.ts"],
     ["grun", env.LUMIVERSE_BUN_PATH, "run", "scripts/build-frontend.ts"],
   ]);
 });
@@ -378,6 +408,25 @@ test("repairs Termux native bindings before a source-only frontend rebuild", () 
     installFrontend: false,
     repairTermuxFrontendNativeDeps: true,
   });
+});
+
+test("Termux repair paths install the same native bindings as the frontend lock inputs", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../frontend/package.json", import.meta.url), "utf8"));
+  const repairSources = ["./git-ops.ts", "../../start.sh"].map((path) => (
+    readFileSync(new URL(path, import.meta.url), "utf8")
+  ));
+
+  for (const [engine, binding] of [
+    ["oxc-transform-react", "@oxc-transform-react/binding-android-arm64"],
+    ["rolldown", "@rolldown/binding-android-arm64"],
+    ["lightningcss", "lightningcss-android-arm64"],
+  ]) {
+    const version = manifest.optionalDependencies[binding];
+    expect(version).toBe(manifest.overrides[engine] ?? manifest.devDependencies[engine]);
+    for (const source of repairSources) {
+      expect(source).toContain(`"${binding}@${version}"`);
+    }
+  }
 });
 
 test("does not duplicate the Termux binding repair after a frontend install", () => {

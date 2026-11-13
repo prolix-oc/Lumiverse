@@ -74,6 +74,7 @@ let registryUpdates: Array<Record<string, unknown>> = []
 
 const storeState = {
   activeLoomPresetId: presetId,
+  loomRegistryLoaded: true,
   loomRegistry: { [presetId]: { name: persistedPreset.name, blockCount: 2, updatedAt: 1, isDefault: false } },
   setActiveLoomPreset: (_id: string | null) => {},
   setLoomRegistry: (registry: Record<string, unknown>) => {
@@ -111,7 +112,7 @@ const presetsApiMock = {
       cache_revision: 2,
     }
   },
-  listRegistry: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
+  listRegistryAll: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
     events.push('registry:start')
     await new Promise<void>((resolve) => { resolveRegistry = resolve })
     events.push('registry:end')
@@ -162,12 +163,12 @@ interface LoomBuilderTestSurface {
 let hookSurface: LoomBuilderTestSurface
 // Test harness intentionally performs non-reactive assignments to module-level
 // test state so the suite can inspect hook outputs. This is safe only in tests.
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/globals */
 function HookHarness() {
   hookSurface = useLoomBuilder()
   return null
 }
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/globals */
 
 
 async function waitForEvent(event: string): Promise<void> {

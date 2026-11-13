@@ -183,6 +183,27 @@ export class WorkerHostPresentationApi {
 
   // ─── Logging ─────────────────────────────────────────────────────────
 
+  async handleLiveActivity(message: import("./live-activities-contract").LiveActivityWorkerMessage): Promise<void> {
+    try {
+      if (!this.hasPermission("push_notification")) throw new Error(`${PERMISSION_DENIED_PREFIX} push_notification — Push notification permission not granted`);
+      const userId = this.resolveEffectiveUserId(message.userId);
+      if (!userId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(userId);
+      const service = await import("../services/spindle-live-activities.service");
+      let result: unknown;
+      switch (message.operation) {
+        case "status": result = service.spindleLiveActivityStatus(userId); break;
+        case "start": result = await service.startSpindleLiveActivity(this.extensionId, this.manifest.name, userId, message.input as import("./live-activities-contract").LiveActivityStartInput); break;
+        case "update": result = await service.updateSpindleLiveActivity(this.extensionId, userId, message.id ?? "", message.input); break;
+        case "end": result = service.endSpindleLiveActivity(this.extensionId, userId, message.id ?? ""); break;
+        default: throw new Error("Unknown Live Activity operation");
+      }
+      this.postToWorker({ type: "response", requestId: message.requestId, result });
+    } catch (error) {
+      this.postToWorker({ type: "response", requestId: message.requestId, error: error instanceof Error ? error.message : "Live Activity request failed" });
+    }
+  }
+
   async handlePushSend(
     requestId: string,
     title: string,

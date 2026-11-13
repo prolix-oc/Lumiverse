@@ -74,7 +74,7 @@ export const regexApi = {
     return put<{ success: boolean }>('/regex-scripts/reorder', { ids })
   },
 
-  getActive(params: { target: RegexTarget; character_id?: string; chat_id?: string }) {
+  getActive(params: { target: RegexTarget; character_id?: string; chat_id?: string; preset_id?: string }) {
     return get<RegexScript[]>('/regex-scripts/active', params)
   },
 

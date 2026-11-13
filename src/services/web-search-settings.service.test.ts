@@ -47,6 +47,8 @@ mock.module("./secrets.service", () => ({
 const {
   EXA_WEB_SEARCH_API_KEY_SECRET,
   TAVILY_WEB_SEARCH_API_KEY_SECRET,
+  DEEPSEEK_WEB_SEARCH_API_KEY_SECRET,
+  DEEPSEEK_SEARCH_API_URL,
   WEB_SEARCH_API_KEY_SECRET,
   WEB_SEARCH_SETTINGS_KEY,
   getWebSearchApiKey,
@@ -64,6 +66,7 @@ describe("web-search settings credentials", () => {
     ["searxng", WEB_SEARCH_API_KEY_SECRET],
     ["exa", EXA_WEB_SEARCH_API_KEY_SECRET],
     ["tavily", TAVILY_WEB_SEARCH_API_KEY_SECRET],
+    ["deepseek", DEEPSEEK_WEB_SEARCH_API_KEY_SECRET],
   ] as const)("stores the %s credential as a user-scoped encrypted secret", async (provider, secretKey) => {
     const result = await putWebSearchSettings("user-a", {
       provider,
@@ -84,10 +87,46 @@ describe("web-search settings credentials", () => {
   test("keeps each provider credential and clears only the selected provider", async () => {
     await putWebSearchSettings("user-a", { provider: "exa", apiKey: "exa-key" });
     await putWebSearchSettings("user-a", { provider: "tavily", apiKey: "tavily-key" });
+    await putWebSearchSettings("user-a", { provider: "deepseek", apiKey: "deepseek-key" });
     await putWebSearchSettings("user-a", { provider: "exa", apiKey: null });
 
     expect(await getWebSearchApiKey("user-a", "exa")).toBeNull();
     expect(await getWebSearchApiKey("user-a", "tavily")).toBe("tavily-key");
+    expect(await getWebSearchApiKey("user-a", "deepseek")).toBe("deepseek-key");
+    await putWebSearchSettings("user-a", { provider: "deepseek", apiKey: null });
+    expect(await getWebSearchApiKey("user-a", "deepseek")).toBeNull();
+    expect(await getWebSearchApiKey("user-a", "tavily")).toBe("tavily-key");
+  });
+
+  test("restores DeepSeek preferences and key status independently of other providers", async () => {
+    await putWebSearchSettings("user-a", {
+      provider: "deepseek",
+      apiUrl: "https://untrusted.example/search",
+      apiKey: "deepseek-key",
+      defaultResultCount: 4,
+      maxPagesToScrape: 2,
+      inlineToolEnabled: true,
+    });
+    await putWebSearchSettings("user-a", {
+      provider: "tavily",
+      defaultResultCount: 1,
+      maxPagesToScrape: 1,
+      inlineToolEnabled: false,
+    });
+    const restored = await putWebSearchSettings("user-a", { provider: "deepseek" });
+    expect(restored).toMatchObject({
+      provider: "deepseek",
+      apiUrl: DEEPSEEK_SEARCH_API_URL,
+      hasApiKey: true,
+      defaultResultCount: 4,
+      maxPagesToScrape: 2,
+      inlineToolEnabled: true,
+      providerProfiles: {
+        deepseek: { apiUrl: DEEPSEEK_SEARCH_API_URL, hasApiKey: true, defaultResultCount: 4 },
+        tavily: { hasApiKey: false, defaultResultCount: 1 },
+      },
+    });
+    expect(JSON.stringify(settings.get(scopedKey("user-a", WEB_SEARCH_SETTINGS_KEY)))).not.toContain("deepseek-key");
   });
 
   test("restores a provider's saved preferences when switching back", async () => {

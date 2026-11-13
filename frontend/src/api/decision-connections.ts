@@ -10,6 +10,16 @@ import type {
 } from '@/types/api'
 
 export const decisionConnectionsApi = {
+  initiateAuth(provider: 'openrouter' | 'nanogpt', callbackUrl: string, target: { connection_id: string } | { connection: CreateDecisionConnectionInput }) {
+    return post<{ auth_url: string; session_token: string }>(`/decision-connections/auth/${provider}`, { callback_url: callbackUrl, ...target })
+  },
+
+  completeAuth(sessionToken: string, code: string) {
+    return post<{ success: boolean; connection_id: string; created: boolean; profile: DecisionConnectionProfile }>('/decision-connections/auth/callback', {
+      session_token: sessionToken, code,
+    })
+  },
+
   list(params?: { limit?: number; offset?: number }) {
     return get<PaginatedResult<DecisionConnectionProfile>>('/decision-connections', params)
   },

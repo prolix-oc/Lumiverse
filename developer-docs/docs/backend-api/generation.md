@@ -124,6 +124,68 @@ Use the same `call_id` returned in `ToolCallDTO` as `tool_use.id` and `tool_resu
 !!! note "Tool result formatting"
     Anthropic requires the `tool_result` parts to come first in the content array of the user message that follows an assistant `tool_use`. The host enforces this; you just need to put them in a dedicated user message that immediately follows.
 
+### Reasoning before a tool call
+
+A reasoning model may think before it calls a tool. The result then carries that reasoning next to `tool_calls`, both in the non-stream response and on the stream's `done` chunk:
+
+| Field | Type | Returned by |
+|---|---|---|
+| `thinking_blocks` | `LlmThinkingBlockDTO[]` | Anthropic: signed `thinking` blocks and encrypted `redacted_thinking` blocks |
+| `reasoning_details` | `Record<string, unknown>[]` | OpenRouter, and other OpenAI-compatible providers that return them |
+
+Put them, unchanged, on the `assistant` message that carries the `tool_use` parts. The host sends them back in the provider's own format: Anthropic blocks open the assistant turn, and `reasoning_details` go on the assistant `tool_calls` message. Anthropic requires the blocks on a tool continuation while thinking is on.
+
+```ts
+import type { GenerationResponseDTO } from 'lumiverse-spindle-types'
+
+// messages, tools and connection_id are prepared by the extension.
+// runTool(call) executes a tool and returns its result as a string.
+const first = await spindle.generate.quiet({
+  type: 'quiet', messages, tools, connection_id,
+}) as GenerationResponseDTO
+
+if (first.finish_reason === 'tool_calls' && first.tool_calls?.length) {
+  const results = await Promise.all(first.tool_calls.map(async call => ({
+    type: 'tool_result' as const,
+    tool_use_id: call.call_id,
+    content: await runTool(call),
+  })))
+  const followup = await spindle.generate.quiet({
+    type: 'quiet',
+    messages: [
+      ...messages,
+      {
+        role: 'assistant',
+        content: [
+          ...(first.content ? [{ type: 'text' as const, text: first.content }] : []),
+          ...first.tool_calls.map(call => ({
+            type: 'tool_use' as const, id: call.call_id, name: call.name, input: call.args,
+            ...(call.thought_signature ? { thought_signature: call.thought_signature } : {}),
+          })),
+        ],
+        thinking_blocks: first.thinking_blocks,
+        reasoning_details: first.reasoning_details,
+      },
+      { role: 'user', content: results },
+    ],
+    tools,
+    connection_id,
+  })
+}
+```
+
+Both fields are opaque: don't edit, reorder, or merge them. Providers that don't use a field ignore it. Gemini keeps its reasoning signature on each tool call instead (`ToolCallDTO.thought_signature`); pass it back as `tool_use.thought_signature`, as above. Some providers, such as DeepSeek, require the plain `reasoning` to be echoed as `reasoning_content` on the assistant message as well.
+
+!!! note "Stream types"
+    In `lumiverse-spindle-types` 0.6.74, the runtime `done` chunk includes these fields but `StreamChunkDTO` does not declare them yet. After narrowing to `type === 'done'`, use a local intersection type until the public types are updated:
+
+    ```ts
+    import type { GenerationResponseDTO, StreamChunkDTO } from 'lumiverse-spindle-types'
+    type ReasoningDone = Extract<StreamChunkDTO, { type: 'done' }>
+      & Pick<GenerationResponseDTO, 'thinking_blocks' | 'reasoning_details'>
+    // const done = chunk as ReasoningDone
+    ```
+
 ### ToolSchemaDTO
 
 | Field | Type | Description |
@@ -350,7 +412,7 @@ A discriminated union with three variants:
 |---|---|---|
 | `"token"` | `token: string` | Incremental content token. |
 | `"reasoning"` | `token: string` | Incremental chain-of-thought token (provider-dependent). |
-| `"done"` | `content: string`, `reasoning?: string`, `finish_reason: string`, `tool_calls?: ToolCallDTO[]`, `usage?: { prompt_tokens, completion_tokens, total_tokens }` | Terminal chunk — emitted exactly once on success. Carries the aggregated response so you don't need to accumulate manually if you don't want to. |
+| `"done"` | `content: string`, `reasoning?: string`, `finish_reason: string`, `tool_calls?: ToolCallDTO[]`, `thinking_blocks?: LlmThinkingBlockDTO[]`, `reasoning_details?: Record<string, unknown>[]`, `usage?: { prompt_tokens, completion_tokens, total_tokens }` | Terminal chunk — emitted exactly once on success. Carries the aggregated response so you don't need to accumulate manually if you don't want to. |
 
 !!! note "No `batchStream`"
     Batch is just a wrapper around N raw calls. If you want parallel streamed responses, run `Promise.all([rawStream(a), rawStream(b)])` and consume each iterator however you like.
@@ -446,6 +508,9 @@ const result = await spindle.generate.dryRun({
 | `connectionId` | `string` | Optional. Use a specific connection profile. |
 | `personaId` | `string` | Optional. Use a specific persona. |
 | `presetId` | `string` | Optional. Use a specific preset. |
+| `forcePresetId` | `boolean` | Default `false`. Set `true` to use `presetId` over the chat's preset and return `variable_state`. Requires host capability `message-preset-context-v1: 1`. |
+| `retainResponseContext` | `boolean` | Default `false`. Return a `responseContextId` and `assistantPrefill` for message generation. The handle belongs to this worker and user, expires after two minutes, and can be used once. |
+| `includeRequestMessages` | `boolean` | Default `false`. Return `request_messages` with media, tool calls and reasoning intact. Requires `generation-request-messages-v1`. |
 | `generationType` | `string` | Optional. One of `"normal"`, `"continue"`, `"regenerate"`, `"swipe"`, `"impersonate"`. |
 | `parameters` | `Record<string, unknown>` | Optional. Override sampler parameters. |
 
@@ -462,6 +527,9 @@ const result = await spindle.generate.dryRun({
 | `messages` | `LlmMessageDTO[]` | The fully assembled message array that would be sent to the LLM. |
 | `breakdown` | `AssemblyBreakdownEntryDTO[]` | Ordered list of prompt blocks showing how the prompt was built. |
 | `parameters` | `Record<string, unknown>` | Final merged sampler parameters. |
+| `variable_state` | `MacroVariableSnapshotDTO` | Variables from prompt assembly. Returned only with `forcePresetId: true`, without saving changes to variables. Save as `variables` in a [per-swipe preset entry](../frontend-api/display-resolver.md#per-swipe-presets) to reuse them during rendering. |
+| `request_messages` | `LlmMessageDTO[]` | Prepared structured host messages, returned with `includeRequestMessages: true`. Use these instead of display-only `messages` when issuing a generation request. Preserves media, tool parts, reasoning, thought signatures, and assistant `partial` markers. Direct provider HTTP calls still require the provider's message format. |
+| `assistantPrefill` | `string` | Optional. Returned with `includeRequestMessages: true` when a prefix was prepared. The prefix is already included in `request_messages`; do not append it again. |
 | `model` | `string` | The model that would be used. |
 | `provider` | `string` | The provider that would be used. |
 | `tokenCount` | `DryRunTokenCountDTO` | Optional. Per-block token counts (if a tokenizer is available). |
@@ -469,6 +537,22 @@ const result = await spindle.generate.dryRun({
 | `contextClipStats` | `ContextClipStats` | Optional. Context-budget and clipping statistics, including `maxContext`, `inputBudget`, `chatHistoryTokensBefore`, `chatHistoryTokensAfter`, `messagesDropped`, and `tokensDropped`. Use `maxContext` here for the configured context limit; it is stripped from provider parameters. |
 | `worldInfoStats` | `ActivationStatsDTO` | Optional. World info activation statistics. |
 | `memoryStats` | `MemoryStatsDTO` | Optional. Long-term memory retrieval statistics. |
+
+### Generate into a saved message
+
+Requires `generation-message-sessions-v1` and the `generation`, `chats`, and `chat_mutation` permissions.
+
+1. Prepare each swipe with `dryRun({ chatId, presetId, forcePresetId: true, retainResponseContext: true })`.
+2. Create an assistant message at the end of the chat with one empty swipe per prompt. Save `{ preset_id: presetId, variables: result.variable_state }` in each `preset_contexts` entry, using that prompt's requested preset.
+3. Call `beginMessage({ chatId, messageId, responseContextIds })`. It returns `{ id }`, starts the normal busy state and Stop button, and saves the prompt variables.
+4. Run your request for each swipe through `rawStream` with `sessionId: id` and its zero-based `swipeIndex`. Save text and reasoning to that swipe, including `assistantPrefill` in the text.
+5. After all streams and saves finish, call `finishMessage(id)`. It applies each preset's response regexes and macros, saves reasoning and variables, and returns `{ messageId, completed }`. Repeated calls return the same result.
+
+The host displays saved swipes during streaming. Stop, worker shutdown, and message deletion cancel the requests. Call `abortMessage(id)` to stop them yourself, then save partial output and call `finishMessage(id)`.
+
+`GENERATION_ENDED` fires once after processing a successful selected reply, even when another swipe failed. A failed or cancelled selected reply emits `GENERATION_STOPPED`. Conflicting edits are preserved and stop completion.
+
+An existing native generation must finish or stop first. Replacing it produces separate start/stop events. Ordinary raw requests emit no chat completion events.
 
 ### AssemblyBreakdownEntryDTO
 
@@ -695,6 +779,8 @@ observer.generationId  // active generation ID, or null if idle
 | `chatId` | `string` | Chat this generation belongs to |
 | `model` | `string` | Model being used |
 | `targetMessageId` | `string` | Optional. ID of the message being generated/regenerated |
+| `targetSwipeId` | `number` | Optional. Swipe slot receiving tokens; may differ from the selected swipe. |
+| `backgroundSwipe` | `boolean` | Optional. True when the new swipe was staged without selecting it. |
 | `characterId` | `string` | Optional. Target character ID |
 | `characterName` | `string` | Optional. Target character name |
 

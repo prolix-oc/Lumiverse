@@ -11,6 +11,8 @@ export interface ActiveGenerationEntry {
   startedAt: number;
   /** Timestamp of the most recently received content or reasoning token. */
   lastTokenAt: number;
+  /** Admission wait is separate from provider inactivity. Stop still applies. */
+  waitingForInference?: boolean;
   /** Resolves after setup and streaming teardown have both completed. */
   completion: Promise<void>;
 }
@@ -79,6 +81,13 @@ export function touchActiveGeneration(
   if (entry) entry.lastTokenAt = now;
 }
 
+export function setActiveGenerationWaitingForInference(generationId: string, waiting: boolean): void {
+  const entry = activeGenerations.get(generationId);
+  if (!entry) return;
+  if (entry.waitingForInference && !waiting) entry.lastTokenAt = Date.now();
+  entry.waitingForInference = waiting;
+}
+
 export function stopGeneration(userId: string, generationId: string): boolean {
   const entry = activeGenerations.get(generationId);
   if (!entry || entry.userId !== userId) return false;
@@ -133,6 +142,7 @@ const GENERATION_IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 export function sweepInactiveGenerations(now = Date.now()): void {
   for (const [generationId, entry] of activeGenerations) {
+    if (entry.waitingForInference) continue;
     const idleForMs = now - entry.lastTokenAt;
     if (idleForMs <= GENERATION_IDLE_TIMEOUT_MS) continue;
     console.warn(

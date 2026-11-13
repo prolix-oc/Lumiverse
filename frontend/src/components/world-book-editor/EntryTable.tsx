@@ -775,7 +775,8 @@ export default function EntryTable({
    *
    * `offsetTop` is layout px, and `.entryTableRegion`/`.entryTableContent` have
    * no padding or border, so the value needs no conversion: it is the same space
-   * as the virtualizer's `scrollTop`, `offsetHeight` and our `translateY`.
+   * as the virtualizer's `scrollTop`, viewport `clientHeight`, row `offsetHeight`
+   * and our `translateY`.
    * `null` means "not measured yet" and is what the reveal below refuses to
    * scroll against.
    */
@@ -801,10 +802,10 @@ export default function EntryTable({
    * of the measured cost of opening the editor on a large book.
    *
    * The default `measureElement` and `observeElementRect` are used unchanged, as
-   * the four other virtualized lists in this app do: this version of
-   * `@tanstack/virtual-core` contains no `getBoundingClientRect` at all and works
-   * in `offsetWidth`/`offsetHeight`/`scrollTop`/`scrollTo({ top })` throughout,
-   * which is already the space `body > * { zoom }` leaves untouched. Overriding
+   * the four other virtualized lists in this app do: `@tanstack/virtual-core`
+   * measures the viewport with `clientWidth`/`clientHeight`, rows with
+   * `offsetWidth`/`offsetHeight`, and scrolling with `scrollTop`/`scrollTo({ top })`.
+   * These share the layout space `body > * { zoom }` leaves untouched. Overriding
    * one measurer and not the other would make it *less* internally consistent,
    * not more.
    */

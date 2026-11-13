@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "Regenerate Response",
-      "description": "Delete the last AI reply and generate a new one"
+      "description": "Generate a new swipe for the last AI reply"
     },
     "action-continue": {
       "label": "Continue Generation",
       "description": "Prompt the AI to continue its last response"
+    },
+    "action-stop-generation": {
+      "label": "Stop Generation",
+      "description": "Stop the reply that is being generated in this chat"
+    },
+    "action-swipe-left": {
+      "label": "Previous Swipe",
+      "description": "Show the previous swipe of the last AI reply"
+    },
+    "action-swipe-right": {
+      "label": "Next Swipe",
+      "description": "Show the next swipe of the last AI reply, or generate a new one after the last swipe"
     },
     "action-new-chat": {
       "label": "New Chat",
@@ -196,7 +208,7 @@
     },
     "settings-webSearch": {
       "label": "Web Search",
-      "description": "Configure SearXNG, Exa, or Tavily web search for council tools"
+      "description": "Configure SearXNG, Exa, Tavily, or DeepSeek web search for council tools"
     },
     "settings-embeddings": {
       "label": "Embeddings",

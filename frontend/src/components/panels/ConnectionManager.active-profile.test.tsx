@@ -63,6 +63,9 @@ Object.assign(globalThis, {
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 mock.module('@/store', () => ({ useStore }))
+mock.module('./connection-manager/ConnectionCollection', () => ({
+  default: ({ profiles, renderProfile }: { profiles: ConnectionProfile[]; renderProfile: (profile: ConnectionProfile) => ReactNode }) => <>{profiles.map(renderProfile)}</>,
+}))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, opts?: { name?: string }) => opts?.name ? `${key}:${opts.name}` : key }),
 }))
@@ -107,8 +110,8 @@ mock.module('./connection-manager/ConnectionItem', () => ({
     </button>
   ),
 }))
-mock.module('./connection-manager/useConnectionDragAndDrop', () => ({
-  useConnectionSensors: () => [],
+mock.module('@/hooks/useSortableList', () => ({
+  useSortableListSensors: () => [],
   useVerticalSortModifier: () => [],
 }))
 mock.module('@/components/shared/ConfirmationModal', () => ({

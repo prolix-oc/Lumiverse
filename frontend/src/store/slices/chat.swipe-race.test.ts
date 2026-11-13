@@ -24,6 +24,19 @@ function setup() {
 }
 
 describe('streaming swipe reconciliation', () => {
+  test('background optimism, missed staging and stale refresh never select the generated swipe', () => {
+    const store = setup()
+    store.getState().beginStreaming('assistant', 'swipe', 1)
+    expect(store.getState().streamingSwipeId).toBe(1)
+    expect(store.getState().messages[0]).toMatchObject({ swipe_id: 0, content: 'original' })
+    store.getState().startStreaming('background', 'assistant', 'swipe')
+    store.getState().setStreamingSwipeId(1, true)
+    expect(store.getState().messages[0]).toMatchObject({ swipe_id: 0, content: 'original', swipes: ['original', ''] })
+    store.getState().setMessages([message()])
+    expect(store.getState().messages[0]).toMatchObject({ swipe_id: 0, content: 'original', swipes: ['original', ''] })
+    store.getState().endStreaming()
+    expect(store.getState().messages[0].swipe_id).toBe(0)
+  })
   for (const type of ['swipe', 'regenerate']) {
     test(`${type} recovery stages a missing swipe atomically with its stream anchor`, () => {
       const store = setup()

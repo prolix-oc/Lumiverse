@@ -1,8 +1,7 @@
 import { betterAuth } from "better-auth";
-import { createOAuthAccountIssuer } from "better-auth/db";
 import { username, admin, bearer, genericOAuth, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
-import { getDb } from "../db/connection";
+import { getDatabasePath, getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
 import { seedDefaultPreset } from "./default-preset";
@@ -128,10 +127,8 @@ export const auth = betterAuth({
       ? [genericOAuth({
           config: ssoConfigs.map((provider) => ({
             providerId: provider.providerId,
-            // Preserve Better Auth 1.6's provider-scoped account identity.
-            // Without this explicit namespace, 1.7 discovery providers use
-            // their protocol issuer and can merge aliases for one authority.
-            accountIssuer: createOAuthAccountIssuer(provider.providerId),
+            // Account identity is scoped by this stable provider ID. Keep
+            // configured aliases distinct even when they share an OIDC issuer.
             clientId: provider.clientId,
             clientSecret: provider.clientSecret,
             discoveryUrl: provider.discoveryUrl,
@@ -151,14 +148,8 @@ export const auth = betterAuth({
       loginPage: "/login",
       consentPage: "/oauth/consent",
       scopes: ["openid", "profile", "offline_access", DESKTOP_STATUS_SCOPE],
-      resources: [{
-        identifier: DESKTOP_OAUTH_RESOURCE,
-        name: "Lumiverse Desktop API",
-        allowedScopes: ["openid", "profile", "offline_access", DESKTOP_STATUS_SCOPE],
-        accessTokenTtl: 5 * 60,
-        refreshTokenTtl: 30 * 24 * 60 * 60,
-      }],
-      resourceSeedMode: "overwrite",
+      // Seed our server-owned resource below. The plugin now defers failed
+      // seeds to the first request; Lumiverse must fail startup instead.
       cachedResources: new Set([DESKTOP_OAUTH_RESOURCE]),
       cachedTrustedClients: new Set([DESKTOP_OAUTH_CLIENT_ID]),
       // The only client is installed by migration below. Keeping registration
@@ -220,5 +211,52 @@ export const auth = betterAuth({
     },
   },
 });
+
+// betterAuth() starts initialization eagerly but returns before its plugins
+// finish. Make module loading a readiness barrier so startup observes failures
+// and completes the OAuth resource seed before enabling background DB writes.
+try {
+  const context = await auth.$context;
+  const resource = await context.adapter.findOne({
+    model: "oauthResource",
+    where: [{ field: "identifier", value: DESKTOP_OAUTH_RESOURCE }],
+  });
+  const policy = {
+    name: "Lumiverse Desktop API",
+    allowedScopes: ["openid", "profile", "offline_access", DESKTOP_STATUS_SCOPE],
+    accessTokenTtl: 5 * 60,
+    refreshTokenTtl: 30 * 24 * 60 * 60,
+    signingAlgorithm: null,
+    signingKeyId: null,
+    customClaims: null,
+    dpopBoundAccessTokensRequired: false,
+    disabled: false,
+    policyVersion: 1,
+    metadata: null,
+    updatedAt: new Date(),
+  };
+  if (resource) {
+    await context.adapter.update({
+      model: "oauthResource",
+      where: [{ field: "identifier", value: DESKTOP_OAUTH_RESOURCE }],
+      update: policy,
+    });
+  } else {
+    await context.adapter.create({
+      model: "oauthResource",
+      data: { ...policy, identifier: DESKTOP_OAUTH_RESOURCE, createdAt: new Date() },
+    });
+  }
+} catch (error) {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) {
+    throw new Error(
+      `[Auth] Authentication initialization could not acquire the SQLite write lock for ${getDatabasePath()}. `
+      + "Close other Lumiverse instances or database tools using this data directory, then restart.",
+      { cause: error },
+    );
+  }
+  throw error;
+}
 
 export type Auth = typeof auth;

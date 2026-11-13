@@ -1,3 +1,5 @@
+import { getKeyboardViewport, KEYBOARD_VIEWPORT_EVENT } from './keyboardViewport'
+
 /** The mirror shares textarea metrics and ends in a zero-width space so empty
  * and trailing blank lines also have a measurable, collapsed caret range. */
 export function getExpandedEditorCaretRect(textarea: HTMLTextAreaElement, mirror: HTMLElement): DOMRect | null {
@@ -27,14 +29,17 @@ interface CaretRevealOptions {
   getScrollContainer?: () => HTMLElement | null
 }
 
-/** Scroll only enough to expose the active selection end, never the whole field. */
+/** Reveal a collapsed caret; native selection owns scrolling between two handles. */
 export function revealExpandedEditorCaret(textarea: HTMLTextAreaElement, mirror: HTMLElement, options: CaretRevealOptions = {}): void {
+  // WebKit can keep reporting a forward selection while its upper handle is
+  // dragged upward. Revealing selectionEnd then repeatedly scrolls back down
+  // against native selection autoscroll. Neither endpoint alone describes the
+  // visible handle, so leave ranges to the browser, including during resizing.
+  if (textarea.selectionStart !== textarea.selectionEnd) return
   options.prepare?.()
   const rect = textarea.getBoundingClientRect()
   if (rect.height <= 0 || textarea.offsetHeight <= 0) return
-  const viewport = window.visualViewport
-  const viewportTop = viewport?.offsetTop ?? 0
-  const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight)
+  const { top: viewportTop, bottom: viewportBottom } = getKeyboardViewport()
   const scale = rect.height / textarea.offsetHeight
   const gutter = 12 * scale
   const container = options.getScrollContainer?.()
@@ -87,7 +92,10 @@ export function installExpandedEditorCaretReveal(textarea: HTMLTextAreaElement, 
   let lastFieldSize = ''
   let revealRequested = true
   let lastValue: string | null = null
-  const viewportKey = () => `${window.visualViewport?.offsetTop ?? 0}:${window.visualViewport?.height ?? window.innerHeight}`
+  const viewportKey = () => {
+    const { top, bottom } = getKeyboardViewport()
+    return `${top}:${bottom}`
+  }
   const fieldSizeKey = () => `${textarea.offsetWidth}:${textarea.offsetHeight}`
   const geometryKey = () => {
     const rect = textarea.getBoundingClientRect()
@@ -150,6 +158,7 @@ export function installExpandedEditorCaretReveal(textarea: HTMLTextAreaElement, 
   container?.addEventListener('scroll', adoptScrollPosition, { passive: true })
   window.visualViewport?.addEventListener('resize', schedule)
   window.visualViewport?.addEventListener('scroll', schedule)
+  window.addEventListener(KEYBOARD_VIEWPORT_EVENT, schedule)
   schedule()
   // No textarea scroll listener: scrolling to read must not snap to the caret.
   return () => {
@@ -166,5 +175,6 @@ export function installExpandedEditorCaretReveal(textarea: HTMLTextAreaElement, 
     container?.removeEventListener('scroll', adoptScrollPosition)
     window.visualViewport?.removeEventListener('resize', schedule)
     window.visualViewport?.removeEventListener('scroll', schedule)
+    window.removeEventListener(KEYBOARD_VIEWPORT_EVENT, schedule)
   }
 }

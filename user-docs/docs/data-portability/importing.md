@@ -50,18 +50,27 @@ This means re-importing the same archive is safe: nothing duplicates, nothing is
 
 ## What Happens During Import
 
-The import runs as a background job. You can keep using Lumiverse while it runs, but **don't close the tab** until you see the completion summary.
+The import runs as a server background job. You can keep using Lumiverse while it runs. After the upload finishes, closing the settings panel or reopening the app does not lose its progress.
+
+### Android local hosting
+
+The Android app keeps a local backup restore running when you switch apps or turn the screen off. Its **Backup restores** notification shows progress and offers **Cancel restore**. Allow notifications when prompted to see these controls. Tap the notification to return to Data Portability on your local server.
+
+If Android stops the process, you force-stop the app, or the device restarts, reopen **Settings → Data Portability** and choose **Resume import**. Lumiverse reprocesses the saved archive and keeps data already restored. You do not need to upload it again. An interrupted upload must be selected again because the archive was not fully received.
+
+Resuming can repeat extraction, so allow enough free storage for both the archive and its extracted contents. Decryption tickets are kept only in memory; provide the ticket again after a restart if you want to restore API keys. Android also limits background processing time; a restore interrupted by that limit can be resumed after reopening the app.
 
 ### Phases
 
 1. **Uploading** — the archive streams from your browser to the server's import staging directory.
 2. **Verifying archive** — the server checks the ZIP magic bytes during upload, then reads only the manifest entry to confirm it's a real Lumiverse archive (this is fast — milliseconds, even for multi-GB files).
-3. **Awaiting ticket** *(optional)* — if the archive carries encrypted secrets, the import pauses for you to upload the matching decryption ticket. See [API Keys & Tickets](api-keys-and-tickets.md).
-4. **Applying rows** — database rows are inserted in topological order so foreign keys resolve cleanly.
+3. **Extracting archive** — files are verified and extracted with progress measured in bytes. Large archives can spend most of their time here.
+4. **Awaiting ticket** *(optional)* — if the archive carries encrypted secrets, the import pauses for you to upload the matching decryption ticket. See [API Keys & Tickets](api-keys-and-tickets.md).
 5. **Restoring files** — images, thumbnails, avatars, theme assets, databank documents, and your notification sound are copied into place.
-6. **Restoring vectors** *(if present)* — LanceDB vectors are restored when the embedding config matches; otherwise marked for re-vectorization.
-7. **Restoring secrets** *(if a ticket was provided)* — encrypted secrets are decrypted with the ticket, then re-encrypted under your instance's identity key.
-8. **Complete** — summary shown in the panel.
+6. **Applying rows** — database rows are inserted in topological order so foreign keys resolve cleanly.
+7. **Restoring vectors** *(if present)* — LanceDB vectors are restored when the embedding config matches; otherwise marked for re-vectorization.
+8. **Restoring secrets** *(if a ticket was provided)* — encrypted secrets are decrypted with the ticket, then re-encrypted under your instance's identity key.
+9. **Complete** — summary shown in the panel.
 
 ### Cancellation
 
@@ -84,12 +93,11 @@ A few things to verify:
 
 | Cap | Value |
 |-----|-------|
-| Maximum compressed archive size | 5 GB |
-| Maximum decompressed size during import | 20 GB |
+| Archive and total extracted size | Available disk space, within the supported safe integer range |
 | Maximum NDJSON record size | 64 MiB |
 | Maximum entries in the archive | 500 000 |
 
-These caps protect against zip bombs and malformed archives. Real archives, including 1.9 GB galleries with vectors, comfortably fit.
+The importer bounds memory use while reading the archive, verifies file sizes and checksums, and rejects malformed paths. A valid multi-GB archive still needs enough free disk space for staging and the restored data.
 
 ### What Gets Rejected
 
@@ -99,7 +107,7 @@ These caps protect against zip bombs and malformed archives. Real archives, incl
 | Archive exceeds compressed cap | 413 — rejected before processing |
 | Archive contains `..` or absolute paths in entry names | Entire import aborted |
 | Manifest claims a different producer or unsupported version | 422 — rejected during verify |
-| Decompressed size exceeds 20 GB | Aborted mid-extraction |
+| A file's extracted size or checksum does not match the ZIP directory | Aborted during extraction |
 
 ---
 

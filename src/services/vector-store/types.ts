@@ -106,7 +106,7 @@ export interface ProviderCapabilities {
   nativeLexical: boolean;
   /** Point ids must be UUID/integer (Qdrant) — composite string hashed to UUIDv5. */
   requiresUuidIds: boolean;
-  /** Writes are not durably queryable until an explicit flush (Milvus). */
+  /** Orchestration should request a maintenance flush after ingestion. */
   requiresExplicitFlush: boolean;
   /** Collection must be loaded into memory before search/delete (Milvus). */
   requiresLoadBeforeQuery: boolean;

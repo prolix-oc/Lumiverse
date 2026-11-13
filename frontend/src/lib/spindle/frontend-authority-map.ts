@@ -61,14 +61,18 @@ const DRAWER_TAB_IDS = [
 
 const SETTINGS_TAB_IDS = [
   'productivity', 'account', 'display', 'chat', 'extensions', 'guided', 'quickReplies', 'extensionPools',
-  'webSearch', 'embeddings', 'memoryCortex', 'notifications', 'voice', 'mcpServers',
+  'webSearch', 'embeddings', 'memoryCortex', 'inference', 'notifications', 'voice', 'mcpServers',
   'advanced', 'lumihub', 'illarin', 'dataPortability', 'diagnostics', 'streamDeck', 'ssoProviders', 'operator',
-  'tokenizers', 'users', 'migration',
+  'tokenizers', 'users', 'migration', 'keyBindings',
 ] as const
 
 const CORE_ACTION_ROWS: readonly AuthorityRow[] = [
   gated('generation', { surface: 'host_action', id: 'command:action-regenerate', source: 'generation.regenerate', gatedBecause: 'Rule-B clause (a): starts credentialed provider generation' }),
   gated('generation', { surface: 'host_action', id: 'command:action-continue', source: 'generation.continue', gatedBecause: 'Rule-B clause (a): starts credentialed provider generation' }),
+  gated('generation', { surface: 'host_action', id: 'command:action-stop-generation', source: 'generation.stop', gatedBecause: 'Rule-B clause (a): ends a credentialed provider generation of the active chat' }),
+  gated('chats', { surface: 'host_action', id: 'command:action-swipe-left', source: 'chats.message.swipe', gatedBecause: 'Rule-B clause (b): durable swipe selection write via messagesApi.swipe' }),
+  gated('generation', { surface: 'host_action', id: 'command:action-background-swipe', source: 'generation.swipe', gatedBecause: 'Starts credentialed swipe generation while preserving the selected response' }),
+  gated('generation', { surface: 'host_action', id: 'command:action-swipe-right', source: 'generation.swipe', gatedBecause: 'Rule-B clause (a): past the last swipe it starts credentialed provider generation' }),
   free({ surface: 'host_action', id: 'command:action-new-chat', source: 'nav.route:/', freeBecause: 'pure-host-action: navigates to an allowlisted landing route' }),
   free({ surface: 'host_action', id: 'command:action-character-browser', source: 'nav.route:/characters', freeBecause: 'pure-host-action: navigates to an allowlisted character route' }),
   gated('characters', { surface: 'host_action', id: 'command:action-import-character', source: 'characters.import', gatedBecause: 'Rule-B clause (b): durable character write after a user file selection' }),
@@ -104,6 +108,10 @@ const HOST_ACTION_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'host_action', id: 'input_bar_action:self', source: 'ui.inputBarAction.self', freeBecause: 'pure-host-action: invokes the caller extension’s own registered handler' }),
   gated('app_manipulation', { surface: 'host_action', id: 'input_bar_action:cross_extension', source: 'ui.inputBarAction.crossExtension', gatedBecause: 'Rule-B clause (c): invokes another extension’s handler under its owner boundary' }),
   free({ surface: 'host_action', id: 'ext_command:self', source: 'ui.extCommand.self', freeBecause: 'pure-host-action: invokes the caller extension’s own backend command' }),
+  gated('personas', { surface: 'host_action', id: 'entity_action:switch_persona', source: 'personas.switchActive', gatedBecause: 'Rule-B clause (b): durable active-persona write (on the chat when a saved chat is open)' }),
+  gated('presets', { surface: 'host_action', id: 'entity_action:switch_preset', source: 'presets.setActive', gatedBecause: 'Rule-B clause (b): durable active-preset setting write' }),
+  gated('app_manipulation', { surface: 'host_action', id: 'entity_action:apply_theme', source: 'theme.applyUserTheme', gatedBecause: 'Rule-B clause (c): replaces the user theme setting and clears extension theme overrides' }),
+  gated('chats', { surface: 'host_action', id: 'entity_action:character_chat', source: 'chats.openForCharacter', gatedBecause: 'Rule-B clause (b): can create a durable chat' }),
   gated('app_manipulation', { surface: 'host_action', id: 'ext_command:cross_extension', source: 'ui.extCommand.crossExtension', gatedBecause: 'Rule-B clause (c): invokes another extension backend under its owner boundary' }),
 ]
 
@@ -131,8 +139,16 @@ const HOST_SURFACE_ROWS: readonly AuthorityRow[] = [
 ]
 
 const DOMAIN_ROWS: readonly AuthorityRow[] = [
+  ...(['v4', 'v7'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.uuid.${method}`, source: `uuid.${method}`, ctxLeaf: `ctx.uuid.${method}`,
+    freeBecause: 'pure-host-action: generates a local identifier without reading protected data, persisting host state, or contacting a backend',
+  })),
   free({ surface: 'ctx_member', id: 'ctx.client.getInfo', source: 'client.info', ctxLeaf: 'ctx.client.getInfo', freeBecause: 'pure-host-action: reads client identity and callable bridge metadata without invoking commands or prompting' }),
   free({ surface: 'ctx_member', id: 'ctx.stt.listProviders', source: 'stt.providers', ctxLeaf: 'ctx.stt.listProviders', freeBecause: 'pure-host-action: reads speech capability metadata without audio, credentials, or microphone access' }),
+  ...(['onHostActivity', 'isHostCapturing'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: 'stt.hostCapture', ctxLeaf: `ctx.stt.${method}`,
+    freeBecause: 'limb-e: the composer recording indicator shows the same on/off state in the shared DOM; no audio or transcript crosses the boundary',
+  })),
   free({ surface: 'ctx_member', id: 'ctx.systemAudio.isAvailable', source: 'systemAudio.availability', ctxLeaf: 'ctx.systemAudio.isAvailable', freeBecause: 'pure-host-action: reports whether a native adapter exists and is enabled, without opening it or prompting' }),
   gated('system_audio', {
     surface: 'ctx_member', id: 'ctx.systemAudio.start', source: 'systemAudio.start', ctxLeaf: 'ctx.systemAudio.start',
@@ -142,8 +158,15 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
     surface: 'ctx_member' as const, id: `ctx.stt.${method}`, source: `stt.${method}`, ctxLeaf: `ctx.stt.${method}`,
     gatedBecause: 'Rule-B clause (c): invokes host-managed speech processing; capture additionally requires browser microphone consent',
   })),
-  free({ surface: 'ctx_member', id: 'ctx.connections.list', source: 'connections.list', ctxLeaf: 'ctx.connections.list', freeBecause: 'rest: GET /api/v1/connections returns credential-redacted profiles for the authenticated session' }),
-  free({ surface: 'ctx_member', id: 'ctx.connections.getActive', source: 'connections.active', ctxLeaf: 'ctx.connections.getActive', freeBecause: 'rest: GET /api/v1/connections returns the authenticated active-profile projection' }),
+  ...(['get', 'watch'] as const).map(method => free({ surface: 'ctx_member' as const, id: `ctx.connections.organization.${method}`, source: `connections.organization.${method}`, ctxLeaf: `ctx.connections.organization.${method}`, freeBecause: 'rest: GET /api/v1/connections/organization/:kind returns only authenticated user organization and credential-free summaries' })),
+  free({ surface: 'ctx_member', id: 'ctx.connections.list', source: 'connections.list', ctxLeaf: 'ctx.connections.list', freeBecause: [
+    'rest: GET /api/v1/connections returns credential-redacted profiles for the authenticated session',
+    'rest: GET /api/v1/{image-gen,tts,stt,decision}-connections and /api/v1/embeddings/config return credential-redacted profiles; list({ kind }) projects only id, name, provider, model, TTS voice and the active flag',
+  ] }),
+  free({ surface: 'ctx_member', id: 'ctx.connections.getActive', source: 'connections.active', ctxLeaf: 'ctx.connections.getActive', freeBecause: [
+    'rest: GET /api/v1/connections returns the authenticated active-profile projection',
+    'limb-e: getActive(kind) is the active row of the same list({ kind }) projection',
+  ] }),
   free({ surface: 'ctx_member', id: 'ctx.connections.subscribe', source: 'connections.active', ctxLeaf: 'ctx.connections.subscribe', freeBecause: 'limb-e: subscription observes the same active-profile projection as ctx.connections.getActive' }),
   gated('generation', { surface: 'ctx_member', id: 'ctx.connections.models', source: 'connections.models', ctxLeaf: 'ctx.connections.models', gatedBecause: 'Rule-B clause (a): model lookup spends the stored provider credential on outbound egress' }),
   gated('generation', { surface: 'ctx_member', id: 'ctx.connections.setActive', source: 'connections.setActive', ctxLeaf: 'ctx.connections.setActive', gatedBecause: 'Rule-B clause (c): the store action persists generation-routing side effects' }),
@@ -158,6 +181,12 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
   free({ surface: 'ctx_member', id: 'ctx.worldBooks.entries', source: 'worldBooks.entries', ctxLeaf: 'ctx.worldBooks.entries', freeBecause: 'rest: GET /api/v1/world-books/:id/entries is session-authenticated' }),
   free({ surface: 'ctx_member', id: 'ctx.messages.getContent', source: 'messages.content', ctxLeaf: 'ctx.messages.getContent', freeBecause: 'limb-e: shipped ctx.messages.listMessageIds already enumerates the same shared message store' }),
   free({ surface: 'ctx_member', id: 'ctx.messages.getRecent', source: 'messages.recent', ctxLeaf: 'ctx.messages.getRecent', freeBecause: 'limb-e: shared message DOM and shipped message-id readers observe the same recent messages' }),
+  gated('media', { surface: 'ctx_member', id: 'ctx.tts.speak', source: 'tts.speak', ctxLeaf: 'ctx.tts.speak', gatedBecause: 'Rule-B clause (c): plays audio and spends the stored TTS provider credential; message playback may save audio like the Play button' }),
+  gated('media', { surface: 'ctx_member', id: 'ctx.tts.stop', source: 'tts.stop', ctxLeaf: 'ctx.tts.stop', gatedBecause: 'Rule-B clause (c): stops host-managed audio playback, including chat auto-play' }),
+  ...(['isSpeaking', 'subscribe'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.tts.${method}`, source: 'tts.playbackState', ctxLeaf: `ctx.tts.${method}`,
+    freeBecause: 'limb-e: whether host TTS is playing is observable in the shared DOM (message Stop buttons and audio players); no text, audio, or credential crosses the boundary',
+  })),
   ...(['countText', 'countMessages', 'countChat', 'countTextBatch'] as const).map((method) => free({
     surface: 'ctx_member' as const,
     id: `ctx.tokens.${method}`,
@@ -165,6 +194,18 @@ const DOMAIN_ROWS: readonly AuthorityRow[] = [
     ctxLeaf: `ctx.tokens.${method}`,
     freeBecause: 'rest: public authenticated tokenizer routes count bounded caller-supplied text without provider egress',
   })),
+  ...(['getState', 'onChange'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.draft', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'limb-e: the draft is the value of the host chat textarea, which is readable in the shared document',
+  })),
+  ...(['setText', 'insertText', 'focus'] as const).map((method) => free({
+    surface: 'ctx_member' as const, id: `ctx.composer.${method}`, source: 'composer.edit', ctxLeaf: `ctx.composer.${method}`,
+    freeBecause: 'pure-host-action: changes the transient draft or focus of the host chat textarea; nothing is sent or stored on the server until the user sends',
+  })),
+  gated('generation', {
+    surface: 'ctx_member', id: 'ctx.composer.send', source: 'composer.send', ctxLeaf: 'ctx.composer.send',
+    gatedBecause: 'Rule-B clause (a): runs the host send path, which writes the user message and starts credentialed provider generation',
+  }),
 ]
 
 const GEOMETRY_ROWS: readonly AuthorityRow[] = [
@@ -201,6 +242,7 @@ const LEGACY_ROWS: readonly AuthorityRow[] = [
 ]
 
 const THEME_AUTHORING_ROWS: readonly AuthorityRow[] = [
+  gated('app_manipulation', { surface: 'ctx_member', id: 'ctx.theme.inspect', source: 'theme.inspect', ctxLeaf: 'ctx.theme.inspect', gatedBecause: 'Reads bounded layout and style metadata from the host document.' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.getActiveBundleId', source: 'theme.assets.activeBundleId', ctxLeaf: 'ctx.theme.assets.getActiveBundleId', freeBecause: 'rest: exposes only the active user-scoped theme asset bundle identifier' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.createBundle', source: 'theme.assets.bundleId', ctxLeaf: 'ctx.theme.assets.createBundle', freeBecause: 'pure-host-action: generates an inert bundle UUID without persisting host state' }),
   free({ surface: 'ctx_member', id: 'ctx.theme.assets.list', source: 'theme.assets.read', ctxLeaf: 'ctx.theme.assets.list', freeBecause: 'rest: returns the authenticated user-scoped theme asset projection' }),

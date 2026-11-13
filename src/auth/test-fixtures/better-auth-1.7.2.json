@@ -1,0 +1,54 @@
+{
+  "generatedWith": "better-auth@1.7.2",
+  "secret": "lumiverse-auth-upgrade-regression-test-secret",
+  "password": "auth-upgrade-fixture-password",
+  "cookie": "better-auth.session_token=NM5EbEyaWgBV0tw7k4fuKVU7kcm8WFen.thvyIPdNM%2Ba8mGZ%2BGjEzBrKRTI4zQGmCS7j5KXfo1Yk%3D",
+  "users": [
+    {
+      "id": "bCvsxtzV1AbonEWu0JevRac87pV2k2xv",
+      "name": "Existing Owner",
+      "email": "existing-owner@example.test",
+      "emailVerified": 0,
+      "image": null,
+      "createdAt": "2026-10-28T22:29:08.635Z",
+      "updatedAt": "2026-10-28T22:29:08.635Z",
+      "username": "existingowner",
+      "displayUsername": "existingowner",
+      "role": "user",
+      "banned": 0,
+      "banReason": null,
+      "banExpires": null
+    }
+  ],
+  "accounts": [
+    {
+      "id": "NnXrGtazsb05GLz9s7AwORpoZHoX5lJZ",
+      "issuer": "local:credential",
+      "accountId": "bCvsxtzV1AbonEWu0JevRac87pV2k2xv",
+      "providerId": "credential",
+      "userId": "bCvsxtzV1AbonEWu0JevRac87pV2k2xv",
+      "accessToken": null,
+      "refreshToken": null,
+      "idToken": null,
+      "accessTokenExpiresAt": null,
+      "refreshTokenExpiresAt": null,
+      "scope": null,
+      "password": "6c2f8ad38b9e33690a55476c1aa4e24e:244e608c466b3f891302d0a0acb57a493f6e2a6882b1339c43098afac2800c63cd6284e86da7b3c2770c7680fe61cedb44236400ec087d647b315f9930085185",
+      "createdAt": "2026-10-28T22:29:08.637Z",
+      "updatedAt": "2026-10-28T22:29:08.637Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "f5XutTGseUecBOLns2ShGzOtNmQPh9e4",
+      "expiresAt": "2100-01-01T00:00:00.000Z",
+      "token": "NM5EbEyaWgBV0tw7k4fuKVU7kcm8WFen",
+      "createdAt": "2026-10-28T22:29:08.637Z",
+      "updatedAt": "2026-10-28T22:29:08.637Z",
+      "ipAddress": "",
+      "userAgent": "",
+      "userId": "bCvsxtzV1AbonEWu0JevRac87pV2k2xv",
+      "impersonatedBy": null
+    }
+  ]
+}

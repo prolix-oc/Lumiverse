@@ -1,0 +1,53 @@
+/* Glass Container Styles */
+.glass-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.glass-container-circle {
+  aspect-ratio: 1 / 1; /* Force perfect square ratio */
+  flex-shrink: 0;
+  flex-grow: 0;
+}
+
+.glass-container-pill {
+  flex-shrink: 0;
+  flex-grow: 0;
+}
+
+/* Glass Button Styles */
+.glass-button {
+  position: relative;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  pointer-events: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box; /* Ensure padding doesn't affect size calculations */
+}
+
+.glass-button-circle {
+  aspect-ratio: 1 / 1; /* Force perfect square ratio */
+  flex-shrink: 0;
+  flex-grow: 0;
+}
+
+.glass-button-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  pointer-events: none;
+  font-weight: normal;
+  color: white;
+  font-family: system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+}

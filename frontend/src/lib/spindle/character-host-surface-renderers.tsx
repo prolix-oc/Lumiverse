@@ -644,7 +644,10 @@ const characterPreviewPanelRenderer: HostSurfaceRenderer = (props, context) => (
   />
 )
 
-registerHostSurfaceRenderer('character_card', characterCardRenderer)
-registerHostSurfaceRenderer('character_library_grid', characterLibraryGridRenderer)
-registerHostSurfaceRenderer('character_preview_panel', characterPreviewPanelRenderer)
-registerHostSurfaceRenderer('homepage_character_library', () => <HomepageCharacterLibrary />)
+const unregisterRenderers = [
+  registerHostSurfaceRenderer('character_card', characterCardRenderer),
+  registerHostSurfaceRenderer('character_library_grid', characterLibraryGridRenderer),
+  registerHostSurfaceRenderer('character_preview_panel', characterPreviewPanelRenderer),
+  registerHostSurfaceRenderer('homepage_character_library', () => <HomepageCharacterLibrary />),
+]
+if (import.meta.hot) import.meta.hot.dispose(() => unregisterRenderers.forEach(unregister => unregister()))

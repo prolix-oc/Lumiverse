@@ -23,6 +23,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
 | [Decision Models](decisions.md) | `decisions` | Evaluate typed questions using saved Decision connections |
+| [Embeddings](embeddings.md) | `embeddings` | Embed text with the user's embedding connections |
 | [Image Generation](image-generation.md) | `image_gen` | Generate images via image gen connection profiles |
 | [Images](images.md) | `images` | Read, upload, filter, and delete stored image/video assets |
 | [Media](media.md) | `media` | Convert audio/video, transcode with custom parameters, mux tracks, and compose still-image videos |
@@ -63,3 +64,4 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Commands](commands.md) | Free | Register custom commands in the command palette (Cmd/Ctrl+K) |
 | [UI Automation](ui-automation.md) | Free | Enumerate drawer / settings tabs and navigate the user to a specific surface |
 | [Version](version.md) | Free | Read the backend and frontend semantic versions |
+| [UUIDs](uuid.md) | Free | Generate UUID v4 or v7 strings through the backend |

@@ -689,6 +689,23 @@
   font-variant-numeric: tabular-nums;
 }
 
+.orderInput {
+  width: 7ch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.orderInput:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .orderBadge svg {
   flex-shrink: 0;
 }

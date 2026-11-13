@@ -41,6 +41,20 @@ cd ~/Lumiverse
 
 If runtime or setup errors persist, try the Ubuntu fallback below. PRoot supplies a Linux userland but still uses your Android kernel, so it cannot resolve every device restriction.
 
+## Sharp cannot load the android-arm64 runtime
+
+Native Android Bun needs an Android Sharp binding; the standard Linux packages use a different C library. The launcher now downloads a version-matched Sharp/libvips engine from an immutable Lumiverse release, verifies its archive and libraries, and tests image processing before marking backend dependencies installed. The same preflight runs before server startup and during Termux updates, including updates with unchanged package manifests.
+
+After updating to a revision containing this fix, restart normally:
+
+```bash
+cd ~/Lumiverse
+git pull --ff-only
+./start.sh -b
+```
+
+The first launch needs access to GitHub release downloads. Native libraries are cached under `vendor/sharp-android/`, outside `node_modules`, and damaged or missing files are downloaded again. A checksum or download failure stops dependency validation with the actual error; it does not require removing your data or lockfiles. Ubuntu/PRoot runtimes continue to use the standard Linux Sharp package.
+
 ## Ubuntu / proot-distro fallback
 
 These steps create a separate Lumiverse install inside Ubuntu. They do not automatically move data from your existing Termux checkout.

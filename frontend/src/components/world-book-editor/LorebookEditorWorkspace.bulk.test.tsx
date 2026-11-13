@@ -72,6 +72,17 @@ Object.assign(dom.window, { ResizeObserver: FakeResizeObserver })
  * suite needs to reach a mounted row.
  */
 const TEST_VIEWPORT_HEIGHT = 900
+Object.defineProperty(dom.window.HTMLElement.prototype, 'clientHeight', {
+  configurable: true,
+  get() {
+    const element = this as HTMLElement
+    return element.classList.contains('entryScrollList') ? TEST_VIEWPORT_HEIGHT : 32
+  },
+})
+Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', {
+  configurable: true,
+  get() { return 960 },
+})
 Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetHeight', {
   configurable: true,
   get() {

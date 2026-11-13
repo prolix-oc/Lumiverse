@@ -701,7 +701,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
         dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
         appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),
         inputBarActions: state.inputBarActions.filter((a) => a.extensionId !== extensionId),
-        extensionCommands: state.extensionCommands.filter((e) => e.extensionId !== extensionId),
+        // Worker command registrations outlive frontend placements and are updated by WS.
         tabLocations: nextTabLocations,
         pendingActiveTabReset: removedDrawerTabIds.has(state.pendingActiveTabReset ?? '')
           ? null

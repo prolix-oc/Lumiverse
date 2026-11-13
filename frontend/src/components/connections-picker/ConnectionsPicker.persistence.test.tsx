@@ -3,6 +3,8 @@ import { JSDOM } from 'jsdom'
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConnectionProfile } from '@/types/api'
+import type { SurfaceRectPrefs } from '@/types/store'
+import { CONNECTIONS_PICKER_RECTS_STORAGE_KEY } from '@/lib/connectionsPicker'
 import { DEFAULT_CONNECTIONS_PICKER_SETTINGS } from '@/lib/uiProductivityDefaults'
 
 const modelsCalls: Array<{ id: string; cacheBust: boolean }> = []
@@ -105,13 +107,12 @@ mock.module('@/api/client', () => ({
     return modelsImpl(id, Boolean(params?._ts))
   },
 }))
+let frameProps: { rect: SurfaceRectPrefs; onCommit: (rect: SurfaceRectPrefs) => void }
 mock.module('@/components/shared/ResizablePanelFrame', () => ({
-  ResizablePanelFrame: ({ children, toolbar }: { children?: ReactNode; toolbar?: ReactNode }) => (
-    <div>
-      {toolbar}
-      {children}
-    </div>
-  ),
+  ResizablePanelFrame: (props: { children?: ReactNode; toolbar?: ReactNode; rect: SurfaceRectPrefs; onCommit: (rect: SurfaceRectPrefs) => void }) => {
+    frameProps = props
+    return <div>{props.toolbar}{props.children}</div>
+  },
 }))
 
 const { ConnectionsPicker, filterModelsForQuery, shouldApplyModelsResponse } = await import('./ConnectionsPicker')
@@ -126,6 +127,7 @@ beforeAll(() => {
 })
 
 afterEach(async () => {
+  dom.window.localStorage.clear()
   modelsCalls.length = 0
   setActiveCalls.length = 0
   settingPatches.length = 0
@@ -158,6 +160,19 @@ async function renderPicker() {
 }
 
 describe('ConnectionsPicker persistence', () => {
+  test('keeps each variant’s latest committed frame when switching', async () => {
+    await renderPicker()
+    const split = { x: 50, y: 40, width: 720, height: 520 }
+    await act(async () => frameProps.onCommit(split))
+    expect(frameProps.rect).toEqual(split)
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Variant C"]')!.click())
+    await renderPicker()
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Variant B"]')!.click())
+    await renderPicker()
+    expect(frameProps.rect).toEqual(split)
+    expect(JSON.parse(dom.window.localStorage.getItem(CONNECTIONS_PICKER_RECTS_STORAGE_KEY)!).split).toEqual(split)
+  })
+
   test('cold-starts from hydrated activeProfileId and persists picker-local selection', async () => {
     await renderPicker()
     const portal = document.querySelector('[data-component="ConnectionsPicker"]')

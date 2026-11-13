@@ -1,12 +1,16 @@
 import type { ProviderRequestSnapshot, ProviderResponseSnapshot, RequestOrigin } from "../llm/request-observer";
 import { redactRequestValue } from "../utils/redact-request";
 import { redactResponseBody } from "../utils/redact-response";
+import { omitCaptureMedia } from "../utils/omit-capture-media";
 
 export const REQUEST_HISTORY_SETTING = "requestHistoryEnabled";
 export const REQUEST_HISTORY_LIMIT = 20;
 // Multimodal prompts can contain many megabytes of base64. Keep the row, but
 // explicitly mark oversized bodies unavailable instead of truncating JSON.
 export const REQUEST_HISTORY_MAX_BODY_BYTES = 8 * 1024 * 1024;
+// Capture uploads already contain bounded media. Allow sanitization before the
+// history size check, so a large video cannot hide its small textual prompt.
+export const REQUEST_HISTORY_MAX_CAPTURE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
 
 export interface RequestHistoryContext {
   origin: RequestOrigin;
@@ -66,20 +70,18 @@ export class RequestHistoryStore {
     let bodyJson: string | null = null;
     let bodyUnavailable: RequestHistorySummary["bodyUnavailable"];
     let redacted = false;
-    if (context.origin.sensitiveMedia) {
-      bodyUnavailable = "unavailable";
-      redacted = true;
-    } else if (bodyBytes > REQUEST_HISTORY_MAX_BODY_BYTES) {
+    if (bodyBytes > (context.origin.sensitiveMedia ? REQUEST_HISTORY_MAX_CAPTURE_SNAPSHOT_BYTES : REQUEST_HISTORY_MAX_BODY_BYTES)) {
       bodyUnavailable = "too_large";
     } else {
       try {
         if (typeof snapshot.body !== "string") throw new Error("Non-JSON body");
         const body: unknown = JSON.parse(snapshot.body);
-        const envelope = redactRequestValue({ metadata, body }, snapshot.credentials) as { metadata: typeof metadata; body: unknown };
+        const sanitized = context.origin.sensitiveMedia ? omitCaptureMedia(body) : body;
+        const envelope = redactRequestValue({ metadata, body: sanitized }, snapshot.credentials) as { metadata: typeof metadata; body: unknown };
         safeContext = envelope.metadata;
         const safe = envelope.body;
         bodyJson = JSON.stringify(safe, null, 2);
-        redacted = JSON.stringify(safe) !== JSON.stringify(body);
+        redacted = !!context.origin.sensitiveMedia || JSON.stringify(safe) !== JSON.stringify(body);
         if (Buffer.byteLength(bodyJson) > REQUEST_HISTORY_MAX_BODY_BYTES) {
           bodyJson = null;
           bodyUnavailable = "too_large";
@@ -126,14 +128,15 @@ export class RequestHistoryStore {
       if (snapshot.error && !entry.origin.sensitiveMedia) responseError = (redactRequestValue(snapshot.error, credentials) as string).slice(0, 2000);
     } catch { /* Never display an unsanitized transport error. */ }
     try {
-      if (entry.origin.sensitiveMedia) {
+      if (entry.origin.sensitiveMedia && (snapshot.outcome === "failed" || (response.status ?? 0) >= 400)) {
+        // Failed providers can echo opaque request fragments in arbitrary text.
         response.bodyUnavailable = "unavailable";
         response.redacted = true;
       } else if (snapshot.body !== null && !snapshot.bodyUnavailable) {
         if (Buffer.byteLength(snapshot.body) > REQUEST_HISTORY_MAX_BODY_BYTES) {
           response.bodyUnavailable = "too_large";
         } else {
-          const safe = redactResponseBody(snapshot.body, credentials);
+          const safe = redactResponseBody(snapshot.body, credentials, entry.origin.sensitiveMedia ? omitCaptureMedia : undefined);
           response.format = safe.format;
           response.redacted = safe.redacted;
           if (safe.terminal && snapshot.outcome === "interrupted") response.partial = false;
@@ -143,7 +146,11 @@ export class RequestHistoryStore {
           }
           if (safe.failed) response.state = "failed";
           else if (snapshot.outcome === "interrupted" && safe.terminal) response.state = "complete";
-          if (Buffer.byteLength(safe.text) > REQUEST_HISTORY_MAX_BODY_BYTES) response.bodyUnavailable = "too_large";
+          if (safe.failed && entry.origin.sensitiveMedia) {
+            // A provider can report an error inside a successful HTTP response.
+            response.bodyUnavailable = "unavailable";
+            response.redacted = true;
+          } else if (Buffer.byteLength(safe.text) > REQUEST_HISTORY_MAX_BODY_BYTES) response.bodyUnavailable = "too_large";
           else responseBody = safe.text;
         }
       }

@@ -1,3 +1,6 @@
+import { connectionFolderName } from '@/lib/connectionLibrary'
+import { rememberConnection, useConnectionRecents } from '@/hooks/useConnectionRecents'
+import { useConnectionLibrary } from '@/hooks/useConnectionLibrary'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/store'
 import type { AppStore } from '@/types/store'
@@ -20,6 +23,7 @@ interface ConnectionLike {
 /** Store-slice selector per kind; exhaustive, so a new kind won't compile until added here. */
 const PROFILE_SELECTOR_MAP: Record<ConnectionKind, (s: AppStore) => ConnectionLike[]> = {
   llm: (s) => s.profiles,
+  decision: (s) => s.decisionProfiles,
   imageGen: (s) => s.imageGenProfiles,
   tts: (s) => s.ttsProfiles,
   stt: (s) => s.sttProfiles,
@@ -91,16 +95,19 @@ export default function ConnectionSelect({
   modelAppearance,
 }: ConnectionSelectProps) {
   const profiles = useStore(PROFILE_SELECTOR_MAP[kind])
+  const library = useConnectionLibrary(kind)
+  const recentIds = useConnectionRecents(kind)
 
   const options: SearchableSelectOption[] = useMemo(
     () =>
       profiles.map((p) => ({
         value: p.id,
+        group: connectionFolderName(library.library, p.id),
         label: p.name,
         sublabel: p.model ? `${p.provider} / ${p.model}` : p.provider,
         leading: <ProviderIcon kind={kind} provider={p.provider} fill />,
       })),
-    [profiles, kind],
+    [profiles, kind, library.library],
   )
 
   const [models, setModels] = useState<string[]>([])
@@ -158,8 +165,11 @@ export default function ConnectionSelect({
   const select = (
     <SearchableSelect
       value={value}
-      onChange={onChange}
+      onChange={id => { onChange(id); rememberConnection(kind, id) }}
       options={options}
+      groupOrder={library.folders.map(folder => folder.name)}
+      recentValues={recentIds}
+      forceSearch
       placeholder={placeholder}
       searchPlaceholder={searchPlaceholder}
       emptyMessage={emptyMessage}

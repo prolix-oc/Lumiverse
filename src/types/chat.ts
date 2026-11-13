@@ -46,6 +46,18 @@ export interface UpdateChatInput {
   metadata?: Record<string, any>;
 }
 
+export interface ConditionalChatMetadataInput {
+  expected_metadata: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  expected_last_message_id?: string | null;
+  expected_message?: {
+    id: string;
+    swipe_id: number;
+    swipes: string[];
+    metadata: Record<string, unknown>;
+  };
+}
+
 export type ChatAppearanceAction =
   | { type: "avatar"; avatar_entry_id: string; character_id?: string }
   | { type: "field"; field: "description" | "personality" | "scenario"; variant_id: string | null; character_id?: string }

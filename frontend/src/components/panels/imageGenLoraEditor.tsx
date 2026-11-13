@@ -8,7 +8,7 @@ import { Button, FormField, TextInput } from '@/components/shared/FormComponents
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
 import type { ImageGenConnectionModelsResult, ImageGenConnectionProfile } from '@/types/api'
-import { useConnectionSensors, useVerticalSortModifier } from './connection-manager/useConnectionDragAndDrop'
+import { useSortableListSensors, useVerticalSortModifier } from '@/hooks/useSortableList'
 import styles from './ImageGenPanel.module.css'
 
 const LORA_WEIGHT_MIN = 0
@@ -458,7 +458,7 @@ export function LoraRowsEditor({
   discoveryState: LoraDiscoveryState
 }): ReactNode {
   const { t } = useTranslation('panels')
-  const sensors = useConnectionSensors()
+  const sensors = useSortableListSensors()
   const loraRowsRef = useRef<HTMLDivElement>(null)
   const restrictLoraSort = useVerticalSortModifier(loraRowsRef)
   const [reorderAnnouncement, setReorderAnnouncement] = useState('')

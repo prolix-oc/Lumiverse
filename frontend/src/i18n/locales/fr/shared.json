@@ -83,6 +83,7 @@
     "confirm": "Confirmer"
   },
   "searchableSelect": {
+    "recentlyUsed": "Récemment utilisées",
     "placeholder": "Sélectionner…",
     "searchPlaceholder": "Recherche…",
     "emptyMessage": "Aucune option disponible",

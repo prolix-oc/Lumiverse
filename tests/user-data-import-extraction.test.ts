@@ -1,13 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strToU8, zipSync } from "fflate";
+import { Readable } from "node:stream";
+import { Hono } from "hono";
 import { closeDatabase, getDb, initDatabase } from "../src/db/connection";
 import { env } from "../src/env";
 import { buildExportStream } from "../src/services/user-data/export.service";
 import { cancelJob, getJob, startImport } from "../src/services/user-data/import.service";
 import { NDJSON_MAX_RECORD_BYTES } from "../src/services/user-data/manifest";
+import { eventBus } from "../src/ws/bus";
+import { EventType } from "../src/ws/events";
+import { userDataRoutes } from "../src/routes/user-data.routes";
 
 const USER_ID = "bounded-import-user";
 
@@ -154,6 +160,102 @@ describe("user-data import bounded extraction", () => {
       getDb().query("SELECT value FROM settings WHERE key = ? AND user_id = ?").get("bounded_import", USER_ID),
     ).toEqual({ value: "true" });
     expect(existsSync(join(workDir, "images", "11111111-1111-1111-1111-111111111111.png"))).toBe(true);
+  });
+
+  test("keeps extraction bytes and entry progress available through status polling", async () => {
+    const archivePath = join(workDir, "progress.lvbak");
+    const entries = {
+      "manifest.json": strToU8(JSON.stringify(manifest())),
+      "files/databank/progress.bin": new Uint8Array(256 * 1024).fill(42),
+    };
+    writeFileSync(archivePath, zipSync(entries));
+    const snapshots: any[] = [];
+    const responses: Promise<Response>[] = [];
+    const app = new Hono();
+    app.use("*", async (c, next) => { c.set("userId", USER_ID); await next(); });
+    app.route("/user-data", userDataRoutes);
+    const listener = spyOn(eventBus, "emit").mockImplementation((event, payload) => {
+      if (event !== EventType.USER_IMPORT_PROGRESS || payload.phase !== "extracting") return;
+      snapshots.push({ ...payload });
+      responses.push(app.request(`http://localhost/user-data/import/${payload.jobId}/status`));
+    });
+    try {
+      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      expect((await waitForTerminal(job.jobId)).status).toBe("complete");
+      const totalBytes = Object.values(entries).reduce((sum, entry) => sum + entry.byteLength, 0);
+      expect(snapshots[0]).toMatchObject({ processed: 0, total: 2, bytesProcessed: 0, bytesTotal: totalBytes });
+      expect(snapshots.at(-1)).toMatchObject({ processed: 2, total: 2, bytesProcessed: totalBytes, bytesTotal: totalBytes });
+      const statuses = await Promise.all(responses.map(async response => (await response).json()));
+      expect(statuses[0].progress).toMatchObject({ phase: "extracting", bytesProcessed: 0, bytesTotal: totalBytes });
+      expect(statuses.at(-1).progress).toMatchObject({ phase: "extracting", bytesProcessed: totalBytes });
+    } finally { listener.mockRestore(); }
+  });
+
+  test("commits large database rows before reaching the row-count limit", async () => {
+    const archivePath = join(workDir, "large-rows.lvbak");
+    const description = "x".repeat(2 * 1024 * 1024);
+    const rows = Array.from({ length: 10 }, (_, i) => ({ id: `large-row-${i}`, name: `Large row ${i}`, description, user_id: "source" }));
+    writeFileSync(archivePath, zipSync({
+      "manifest.json": strToU8(JSON.stringify(manifest())),
+      "database/characters.ndjson": strToU8(rows.map(row => JSON.stringify(row)).join("\n") + "\n"),
+    }));
+    const batches: number[] = [];
+    const listener = spyOn(eventBus, "emit").mockImplementation((event, payload) => {
+      if (event === EventType.USER_IMPORT_PROGRESS && payload.phase === "table" && payload.table === "characters") batches.push(payload.processed);
+    });
+    try {
+      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      expect((await waitForTerminal(job.jobId)).status).toBe("complete");
+      expect(batches).toEqual([3, 6, 9]);
+      expect(getDb().query("SELECT COUNT(*) AS n FROM characters WHERE user_id = ? AND length(description) = ?").get(USER_ID, description.length)).toEqual({ n: 10 });
+    } finally { listener.mockRestore(); }
+  });
+
+  test("fails a compressed import when the archive reader errors instead of hanging", async () => {
+    const archivePath = join(workDir, "read-error.lvbak");
+    writeFileSync(archivePath, zipSync({ "manifest.json": strToU8(JSON.stringify(manifest())) }));
+    const reader = spyOn(fs, "createReadStream").mockImplementation(() => new Readable({
+      read() { this.destroy(new Error("simulated archive read failure")); },
+    }) as fs.ReadStream);
+    try {
+      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const finished = await waitForTerminal(job.jobId, 1000);
+      expect(finished.status).toBe("failed");
+      expect(finished.error).toContain("simulated archive read failure");
+    } finally { reader.mockRestore(); }
+  });
+
+  test("cancels a compressed import even while its reader is stalled", async () => {
+    const archivePath = join(workDir, "stalled.lvbak");
+    writeFileSync(archivePath, zipSync({ "manifest.json": strToU8(JSON.stringify(manifest())) }));
+    let reading!: () => void;
+    const startedReading = new Promise<void>(resolve => { reading = resolve; });
+    const reader = spyOn(fs, "createReadStream").mockImplementation(() => {
+      const stream = new Readable({ read() { reading(); } });
+      return stream as fs.ReadStream;
+    });
+    try {
+      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      await startedReading;
+      expect(cancelJob(job.jobId)).toBe(true);
+      expect((await waitForTerminal(job.jobId, 1000)).status).toBe("cancelled");
+    } finally { reader.mockRestore(); }
+  });
+
+  test("rejects a multi-chunk entry with the wrong CRC32", async () => {
+    const archivePath = join(workDir, "bad-crc.lvbak");
+    const payload = new Uint8Array(256 * 1024).fill(42);
+    const archive = zipSync({
+      "manifest.json": strToU8(JSON.stringify(manifest())),
+      "files/databank/checksum.bin": payload,
+    });
+    payload[0] = 43;
+    patchCentralDirectoryEntry(archive, "files/databank/checksum.bin", payload);
+    writeFileSync(archivePath, archive);
+    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const finished = await waitForTerminal(job.jobId);
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toContain("CRC32 disagrees");
   });
 
   test("round-trips a ZIP64 export containing a record larger than 4 MiB", async () => {

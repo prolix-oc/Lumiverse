@@ -6,6 +6,8 @@ title: First Steps
 
 This guide walks you through everything you need to go from a fresh install to your first conversation.
 
+The login page detects your browser language and has its own language picker. Your choice there is remembered in that browser. After signing in, **Settings → Language** saves your interface language to your account, so the same choice follows you across devices. Accounts without a saved language start in English, including accounts that previously kept their language only in browser storage.
+
 ---
 
 ## Step 1: Create a Connection

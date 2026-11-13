@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "./sharp-config";
+import type { Metadata } from "sharp";
 import { detectImageContentType } from "./image-signature";
 import {
   convertImageToPng,
@@ -92,7 +93,7 @@ describe("Bun-native image pipeline", () => {
     const nativeMetadata = spyOn(Bun.Image.prototype, "metadata")
       .mockRejectedValue(new Error("Native metadata unavailable"));
     const fallbackMetadata = spyOn(sharp.prototype, "metadata")
-      .mockResolvedValue({ format: "heif", compression, width: 1, height: 1 } as sharp.Metadata);
+      .mockResolvedValue({ format: "heif", compression, width: 1, height: 1 } as Metadata);
     try {
       expect(await readImageMetadata(onePixelPng)).toEqual({ width: 1, height: 1, format: "heif" });
     } finally {

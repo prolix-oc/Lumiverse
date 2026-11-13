@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "desktop-keybindings-settings"
+description = "Allows only bundled desktop controls to open or edit owner-configured key bindings."
+commands.allow = ["desktop_keybindings_show", "desktop_keybindings_get", "desktop_keybindings_save"]
+
+[[permission]]
+identifier = "desktop-keybindings-frontend"
+description = "Lets the primary frontend configure its current account's bindings. Global changes require a persisted native owner opt-in; no direct plugin access is granted."
+commands.allow = ["desktop_keybindings_publish", "desktop_keybindings_trigger", "desktop_keybindings_frontend_get", "desktop_keybindings_frontend_save", "desktop_keybindings_global_permission", "desktop_keybindings_editing"]

@@ -5,6 +5,7 @@ import {
   decideMemorySummarizationFallback,
   generateConsolidationSummary,
   maybeConsolidate,
+  consolidateBacklog,
   runMemorySummarizationSidecar,
   type ConsolidationSidecarOptions,
 } from "./consolidation";
@@ -332,6 +333,42 @@ describe("maybeConsolidate secondary fallback writes", () => {
     expect(calls.every((call) => call.maxTokens === 16384 && call.prompt.includes("200 tokens"))).toBe(true);
     expect(listConsolidations()).toHaveLength(2);
     expect(phases).toEqual(["scene", "arc"]);
+  });
+
+  test("retries pending arcs without requiring another scene batch", async () => {
+    const config = { ...consolidationConfig(), arcThreshold: 1 };
+    const options = sidecarOpts({ sidecarReliability: { fallback: "skip" } });
+    await maybeConsolidate("user-1", "chat-1", config, async (request) => ({ content:
+      request.requestPurpose === "arc summarization" ? "" : JSON.stringify({ title: "Arrival", summary: "Elena entered the lantern-lit courtyard." }),
+    }), "primary-conn", 5000, undefined, undefined, options);
+    expect(getDb().query("SELECT tier FROM memory_consolidations").all()).toEqual([{ tier: 1 }]);
+    const purposes: string[] = [];
+    expect(await consolidateBacklog("user-1", "chat-1", config, async (request) => {
+      purposes.push(request.requestPurpose!);
+      return { content: JSON.stringify({ title: "The Courtyard", summary: "Elena reached the courtyard after passing the iron gate." }) };
+    }, "primary-conn", 5000, undefined, undefined, options)).toBe(0);
+    expect(purposes).toEqual(["arc summarization"]);
+    expect(getDb().query("SELECT tier FROM memory_consolidations ORDER BY tier").all()).toEqual([{ tier: 1 }, { tier: 2 }]);
+  });
+
+  test("overlapping checks do not generate duplicate scenes or arcs", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const config = { ...consolidationConfig(), arcThreshold: 1 };
+    const generate = async () => {
+      calls++;
+      await held;
+      return { content: JSON.stringify({ title: "Arrival", summary: "Elena entered the lantern-lit courtyard." }) };
+    };
+    const first = consolidateBacklog("user-1", "chat-1", config, generate, "primary-conn", 5000, undefined, undefined, sidecarOpts());
+    try {
+      expect(await maybeConsolidate("user-1", "chat-1", config, generate, "primary-conn")).toBe(false);
+      expect(await consolidateBacklog("user-1", "chat-1", config, generate, "primary-conn")).toBe(0);
+    } finally { release(); }
+    expect(await first).toBe(1);
+    expect(calls).toBe(2);
+    expect(listConsolidations()).toHaveLength(2);
   });
 
   test("writes the secondary summary after primary generate fails", async () => {

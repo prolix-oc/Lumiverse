@@ -335,6 +335,7 @@ export interface ExtractedRelationship {
   type: RelationType;
   label: string;
   sentiment: number;
+  evidence?: string[];
 }
 
 export interface SidecarFontColor {
@@ -350,22 +351,6 @@ export interface DiscoveredAlias {
   evidence?: string;
 }
 
-/** Sidecar verdict on heuristic candidates and existing graph records for a chunk.
- *  Only populated when the sidecar was given a candidate list to grade. */
-export interface SidecarGradedHeuristics {
-  /** Heuristic entity names the sidecar judged as not real entities in this chunk. */
-  rejectedHeuristicEntities: string[];
-  /** Heuristic name -> sidecar's canonical name. Heuristic entries are renamed,
-   *  then deduped against the sidecar's own entitiesPresent list. */
-  transformedHeuristicEntities: Array<{ from: string; to: string }>;
-  /** Heuristic relationships the sidecar judged as unsupported by the passage. */
-  rejectedHeuristicRelationships: Array<{ source: string; target: string; type: string }>;
-  /** Existing graph entities (already persisted from prior chunks) the sidecar
-   *  judged as not real entities. Subject to gradesExistingRecords gating and
-   *  user-edit preservation. */
-  rejectedExistingEntities: string[];
-}
-
 export interface SidecarExtractionResult {
   score: number;
   emotionalTags: EmotionalTag[];
@@ -376,7 +361,6 @@ export interface SidecarExtractionResult {
   relationshipsShown: ExtractedRelationship[];
   fontColors: SidecarFontColor[];
   discoveredAliases: DiscoveredAlias[];
-  gradedHeuristics?: SidecarGradedHeuristics;
 }
 
 // ─── Retrieval Types ───────────────────────────────────────────
@@ -390,6 +374,8 @@ export interface CortexQuery {
   emotionalContext?: EmotionalTag[];
   generationType: string;
   topK: number;
+  /** Maximum cosine distance; 0 disables filtering. Resolved before retrieval. */
+  maxDistance?: number;
   includeConsolidations: boolean;
   includeRelationships: boolean;
   /** Message IDs to exclude from retrieval (e.g., regeneration target) */
@@ -401,6 +387,8 @@ export interface CortexMemory {
   sourceId: string;
   content: string;
   finalScore: number;
+  /** Raw measured cosine distance, distinct from the fused ranking score. */
+  vectorDistance?: number;
   components: {
     semantic: number;
     salience: number;
@@ -488,6 +476,13 @@ export interface InterlinkCortexData {
 export interface LinkedCortexResult {
   vaults: VaultCortexData[];
   interlinks: InterlinkCortexData[];
+}
+
+/** Per-request transfer of main-process warm results into prompt assembly workers. */
+export interface CortexCacheSnapshot {
+  chatId: string;
+  local: { result: CortexResult; queriedAt: number; excludeMessageIds: string[] } | null;
+  linked: { result: LinkedCortexResult; queriedAt: number } | null;
 }
 
 // ─── Ingestion Pipeline Types ──────────────────────────────────

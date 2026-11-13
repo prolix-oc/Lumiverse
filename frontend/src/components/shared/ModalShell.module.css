@@ -9,12 +9,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: calc(20px / var(--lumiverse-ui-scale, 1));
   background: var(--lumiverse-modal-backdrop, rgba(0, 0, 0, 0.6));
 }
 
 :global([data-glass]) .backdrop {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
 }
 
 .modal {
@@ -41,12 +41,25 @@
   box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5));
 }
 
-@media (max-width: 480px) {
+@media (max-width: 600px), (pointer: coarse) {
   .backdrop {
-    padding: 12px;
+    padding-top: calc((12px + var(--app-interactive-safe-top, env(safe-area-inset-top, 0px))) / var(--lumiverse-ui-scale, 1));
+    padding-right: calc((12px + env(safe-area-inset-right, 0px)) / var(--lumiverse-ui-scale, 1));
+    padding-bottom: calc((12px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px))) / var(--lumiverse-ui-scale, 1));
+    padding-left: calc((12px + env(safe-area-inset-left, 0px)) / var(--lumiverse-ui-scale, 1));
   }
 }
 
-.fullscreenBackdrop { padding: 0; }
-.fullscreenModal { width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; }
-@media (max-width: 480px) { .fullscreenBackdrop { padding: 0; } }
+.fullscreenBackdrop {
+  padding: 0;
+  /* Keyboard occlusion belongs to the form's scrolling content. */
+  height: calc(var(--app-fullscreen-height, var(--app-shell-height, 100dvh)) / var(--lumiverse-ui-scale, 1));
+}
+.fullscreenModal {
+  width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0;
+  padding-top: calc(var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) / var(--lumiverse-ui-scale, 1));
+  padding-right: calc(env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1));
+  padding-bottom: calc(max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)) / var(--lumiverse-ui-scale, 1));
+  padding-left: calc(env(safe-area-inset-left, 0px) / var(--lumiverse-ui-scale, 1));
+}
+@media (max-width: 600px), (pointer: coarse) { .fullscreenBackdrop { padding: 0; } }

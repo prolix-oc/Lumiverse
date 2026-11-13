@@ -1,3 +1,4 @@
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { sttConnectionsApi } from '@/api/stt-connections'
@@ -14,11 +15,12 @@ import styles from '../ConnectionManager.module.css'
 interface Props {
   providers: SttProviderInfo[]
   profile?: SttConnectionProfile
-  onSave: (input: CreateSttConnectionInput) => void
+  onSave: (input: CreateSttConnectionInput, folderId?: string) => void
   onCancel: () => void
 }
 
 export default function STTConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+  const folder = useConnectionFolderDraft('stt', profile?.id)
   const { t } = useTranslation('panels')
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'openai')
@@ -83,14 +85,15 @@ export default function STTConnectionForm({ providers, profile, onSave, onCancel
       api_url: apiUrl.trim() || undefined,
       model: model.trim() || undefined,
       is_default: isDefault,
-    })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, onSave])
+    }, folder.value)
+  }, [name, provider, apiKey, apiUrl, model, isDefault, folder.value, onSave])
 
   return (
     <div className={styles.form}>
       <FormField label={t('sttConnectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('sttConnectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
+      <ConnectionFolderField kind="stt" {...folder} />
 
       <FormField label={t('sttConnectionForm.provider')}>
         <Select value={provider} onChange={setProvider} options={providerOptions} />

@@ -1,4 +1,6 @@
-import type { ComponentType, ReactNode } from 'react'
+import { Suspense, type ComponentType, type ReactNode } from 'react'
+import DrawerPanelLoading from '@/components/panels/DrawerPanelLoading'
+import { lazyWithPreload } from './lazy-with-preload'
 import { createRoot } from 'react-dom/client'
 import {
   User, Wand2, GitFork, Link2, Package, Zap, Gamepad2,
@@ -11,44 +13,41 @@ import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import i18n from '@/i18n'
 import type { Command, CommandScope } from '@/lib/commands'
+import { hasEnabledCommandExtensionId } from './spindle/frontend-extension-availability'
 import type { DrawerTabState, ExtensionCommandState } from '@/store/slices/spindle-placement'
 import { CORE_DRAWER_TAB_IDS } from './core-drawer-tab-ids'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import { RouterContextBridge } from './router-bridge'
-import CharacterProfile from '@/components/panels/CharacterProfile'
-import CharacterBrowser from '@/components/panels/CharacterBrowser'
-import PersonaManager from '@/components/panels/PersonaManager'
-import ConnectionManager from '@/components/panels/ConnectionManager'
-import EmbeddingConnectionManager from '@/components/panels/embedding-connections/EmbeddingConnectionManager'
-import ImageGenConnectionManager from '@/components/panels/image-gen-connections/ImageGenConnectionManager'
-import STTConnectionManager from '@/components/panels/stt-connections/STTConnectionManager'
-import DecisionConnectionManager from '@/components/panels/decision-connections/DecisionConnectionManager'
-import TTSConnectionManager from '@/components/panels/tts-connections/TTSConnectionManager'
-import PresetManager from '@/components/panels/PresetManager'
-import LoomBuilder from '@/components/panels/LoomBuilder'
-import WeaverPanel from '@/components/panels/WeaverPanel'
-import SummaryEditor from '@/components/panels/SummaryEditor'
-import ThemePanel from '@/components/panels/ThemePanel'
-import WorldBookPanel from '@/components/panels/world-book/WorldBookPanel'
-import SpindlePanel from '@/components/panels/SpindlePanel'
-import PackBrowser from '@/components/panels/pack-browser/PackBrowser'
-import ContentWorkshop from '@/components/panels/creator-workshop/ContentWorkshop'
-import PromptPanel from '@/components/panels/PromptPanel'
-import CouncilWorkspace from '@/components/panels/CouncilWorkspace'
 import { councilViewForTab, resolveCouncilTabId } from './council-navigation'
-import WorldInfoFeedback from '@/components/panels/WorldInfoFeedback'
-import ImageGenPanel from '@/components/panels/ImageGenPanel'
-import WallpaperPanel from '@/components/panels/WallpaperPanel'
-import BranchTreePanel from '@/components/panels/BranchTreePanel'
-import RegexPanel from '@/components/panels/RegexPanel'
-import MemoryCortexPanel from '@/components/panels/memory-cortex/MemoryCortexPanel'
-import DatabankPanel from '@/components/panels/databank/DatabankPanel'
-import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
 import type { GuideDefinition } from '@/lib/guides/types'
 import { adaptSpindleGuide } from './guides/adapt-spindle-guide'
 import { createDynamicExtensionIcon } from '@/components/icons/DynamicExtensionIcon'
 import { hasEnabledFrontendExtensionId } from '@/lib/spindle/frontend-extension-availability'
+
+const ConnectionsPanel = lazyWithPreload(() => import('@/components/panels/ConnectionsPanel'))
+const CharacterProfile = lazyWithPreload(() => import('@/components/panels/CharacterProfile'))
+const CharacterBrowser = lazyWithPreload(() => import('@/components/panels/CharacterBrowser'))
+const PersonaManager = lazyWithPreload(() => import('@/components/panels/PersonaManager'))
+const PresetManager = lazyWithPreload(() => import('@/components/panels/PresetManager'))
+const LoomBuilder = lazyWithPreload(() => import('@/components/panels/LoomBuilder'))
+const WeaverPanel = lazyWithPreload(() => import('@/components/panels/WeaverPanel'))
+const SummaryEditor = lazyWithPreload(() => import('@/components/panels/SummaryEditor'))
+const ThemePanel = lazyWithPreload(() => import('@/components/panels/ThemePanel'))
+const WorldBookPanel = lazyWithPreload(() => import('@/components/panels/world-book/WorldBookPanel'))
+const SpindlePanel = lazyWithPreload(() => import('@/components/panels/SpindlePanel'))
+const PackBrowser = lazyWithPreload(() => import('@/components/panels/pack-browser/PackBrowser'))
+const ContentWorkshop = lazyWithPreload(() => import('@/components/panels/creator-workshop/ContentWorkshop'))
+const PromptPanel = lazyWithPreload(() => import('@/components/panels/PromptPanel'))
+const CouncilWorkspace = lazyWithPreload(() => import('@/components/panels/CouncilWorkspace'))
+const WorldInfoFeedback = lazyWithPreload(() => import('@/components/panels/WorldInfoFeedback'))
+const ImageGenPanel = lazyWithPreload(() => import('@/components/panels/ImageGenPanel'))
+const WallpaperPanel = lazyWithPreload(() => import('@/components/panels/WallpaperPanel'))
+const BranchTreePanel = lazyWithPreload(() => import('@/components/panels/BranchTreePanel'))
+const RegexPanel = lazyWithPreload(() => import('@/components/panels/RegexPanel'))
+const MemoryCortexPanel = lazyWithPreload(() => import('@/components/panels/memory-cortex/MemoryCortexPanel'))
+const DatabankPanel = lazyWithPreload(() => import('@/components/panels/databank/DatabankPanel'))
+const MultiplayerPanel = lazyWithPreload(() => import('@/components/panels/multiplayer/MultiplayerPanel'))
 
 export interface DrawerTabEntry {
   id: string
@@ -68,6 +67,8 @@ export interface DrawerTabEntry {
   keywords: string[]
   /** Optional scope restriction for command palette filtering */
   scope?: CommandScope
+  /** Download/evaluate code without mounting the panel or starting its data reads. */
+  preload?: () => Promise<unknown>
   /**
    * Mount the tab content into a persistent root element.
    * Returns a cleanup function. Called once by ensureRegistryRoot on
@@ -117,7 +118,7 @@ function mountReactComponent(root: HTMLElement, element: ReactNode, tabId?: stri
   // call useNavigate()/useParams() (e.g. the character gallery) don't crash.
   reactRoot.render(
     <RouterContextBridge>
-      <ErrorBoundary label={tabId}>{element}</ErrorBoundary>
+      <ErrorBoundary label={tabId}><Suspense fallback={<DrawerPanelLoading />}>{element}</Suspense></ErrorBoundary>
     </RouterContextBridge>,
   )
   return () => { reactRoot.unmount() }
@@ -135,6 +136,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'characters/index.md',
 },
     keywords: ['character', 'avatar', 'info', 'edit', 'card', 'description', 'bio', 'greeting', 'first message'],
+    preload: CharacterProfile.preload,
     mount: (root) => mountReactComponent(root, <CharacterProfile />),
   },
   {
@@ -149,6 +151,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Reasoning',
     keywords: ['reasoning', 'cot', 'chain of thought', 'thinking', 'reasoning effort', 'api reasoning', 'prompt bias', 'start reply with', 'prefix', 'suffix'],
+    preload: PresetManager.preload,
     mount: (root) => mountReactComponent(root, <PresetManager />),
   },
   {
@@ -163,6 +166,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'presets/index.md',
 },
     keywords: ['preset', 'presets', 'narrative', 'story', 'lore', 'structure', 'beats', 'loom', 'pacing', 'plot', 'sovereign hand', 'director'],
+    preload: LoomBuilder.preload,
     mount: (root) => mountReactComponent(root, <LoomBuilder compact />),
   },
   {
@@ -176,6 +180,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'weaver/index.md',
 },
     keywords: ['weaver', 'dream', 'character', 'create', 'ai'],
+    preload: WeaverPanel.preload,
     mount: (root) => mountReactComponent(root, <WeaverPanel />),
   },
   {
@@ -190,31 +195,8 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Connections',
     keywords: ['api', 'provider', 'key', 'openai', 'anthropic', 'model', 'endpoint', 'google', 'vertex', 'claude', 'gemini', 'openrouter', 'deepseek', 'url', 'secret'],
-    mount: (root) => mountReactComponent(root, (
-      <div className="connections-stack" style={{ paddingBottom: 16 }}>
-        <ConnectionManager />
-        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>{i18n.t('connections.decisionModels', { ns: 'panels' })}</h3>
-          <DecisionConnectionManager />
-        </div>
-        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>{i18n.t('connections.embeddings', { ns: 'panels' })}</h3>
-          <EmbeddingConnectionManager />
-        </div>
-        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>{i18n.t('connections.imageGeneration', { ns: 'panels' })}</h3>
-          <ImageGenConnectionManager />
-        </div>
-        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>{i18n.t('connections.speechToText', { ns: 'panels' })}</h3>
-          <STTConnectionManager />
-        </div>
-        <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--lumiverse-border)' }}>
-          <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--lumiverse-text-secondary)' }}>{i18n.t('connections.textToSpeech', { ns: 'panels' })}</h3>
-          <TTSConnectionManager />
-        </div>
-      </div>
-    )),
+    preload: ConnectionsPanel.preload,
+    mount: (root) => mountReactComponent(root, <ConnectionsPanel />),
   },
   {
     id: 'browser',
@@ -228,6 +210,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Browser',
     keywords: ['packs', 'content', 'download', 'browse', 'browser', 'install', 'marketplace', 'library', 'search'],
+    preload: PackBrowser.preload,
     mount: (root) => mountReactComponent(root, <PackBrowser />),
   },
   {
@@ -242,6 +225,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Characters',
     keywords: ['character', 'list', 'import', 'card', 'browse', 'export', 'png', 'charx', 'gallery', 'switch', 'select'],
+    preload: CharacterBrowser.preload,
     mount: (root) => mountReactComponent(root, <CharacterBrowser />),
   },
   {
@@ -255,6 +239,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'personas/index.md',
 },
     keywords: ['persona', 'identity', 'user', 'avatar', 'name', 'sender', 'you', 'addons'],
+    preload: PersonaManager.preload,
     mount: (root) => mountReactComponent(root, <PersonaManager />),
   },
   {
@@ -265,6 +250,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabIcon: Gamepad2,
     tabHeaderTitle: 'Multiplayer',
     keywords: ['multiplayer', 'room', 'party', 'friends', 'group', 'coop', 'co-op', 'join', 'host', 'invite', 'turn'],
+    preload: MultiplayerPanel.preload,
     mount: (root) => mountReactComponent(root, <MultiplayerPanel />),
   },
   {
@@ -279,6 +265,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Lorebook',
     keywords: ['lorebook', 'world', 'lore', 'book', 'entries', 'worldbook', 'world info', 'wi', 'keywords', 'triggers', 'knowledge'],
+    preload: WorldBookPanel.preload,
     mount: (root) => mountReactComponent(root, <WorldBookPanel />),
   },
   {
@@ -293,6 +280,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Memory',
     keywords: ['memory', 'cortex', 'embeddings', 'recall', 'brain', 'entities', 'relationships', 'salience', 'vector', 'long term', 'ltcm', 'facts'],
+    preload: MemoryCortexPanel.preload,
     mount: (root) => mountReactComponent(root, <MemoryCortexPanel />),
   },
   {
@@ -307,6 +295,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Databank',
     keywords: ['databank', 'knowledge', 'documents', 'upload', 'files', 'bank', 'reference', 'data', 'rag'],
+    preload: DatabankPanel.preload,
     mount: (root) => mountReactComponent(root, <DatabankPanel />),
   },
   {
@@ -317,6 +306,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabIcon: PenTool,
     tabHeaderTitle: 'Create',
     keywords: ['create', 'workshop', 'editor', 'build', 'new', 'lumia', 'loom', 'author', 'write', 'draft', 'custom'],
+    preload: ContentWorkshop.preload,
     mount: (root) => mountReactComponent(root, <ContentWorkshop />),
   },
   {
@@ -327,6 +317,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabIcon: FileText,
     tabHeaderTitle: 'Composition',
     keywords: ['composition', 'compose', 'lumia', 'loom', 'sovereign hand', 'context filters', 'narrative', 'selection', 'modes'],
+    preload: PromptPanel.preload,
     mount: (root) => mountReactComponent(root, <PromptPanel />),
   },
 {
@@ -340,6 +331,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     path: 'council/index.md',
   },
   keywords: ['council', 'tools', 'agents', 'lumia', 'functions', 'tool use', 'sidecar', 'function calling', 'ooc', 'feedback'],
+  preload: CouncilWorkspace.preload,
   mount: (root) => mountReactComponent(root, <CouncilWorkspace />),
 },
   {
@@ -353,6 +345,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'chatting/loom-summary.md',
 },
     keywords: ['summary', 'context', 'truncation', 'compress', 'summarize', 'shorten', 'overflow', 'window', 'limit'],
+    preload: SummaryEditor.preload,
     mount: (root) => mountReactComponent(root, <SummaryEditor />),
   },
   {
@@ -367,6 +360,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'World Info',
     keywords: ['world info', 'activation', 'lorebook', 'active', 'entries', 'triggered', 'wi', 'matched', 'fired'],
+    preload: WorldInfoFeedback.preload,
     mount: (root) => mountReactComponent(root, <WorldInfoFeedback />),
   },
   {
@@ -381,6 +375,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Image Gen',
     keywords: ['image', 'generation', 'scene', 'art', 'picture', 'ai', 'background', 'novelai', 'nai', 'dalle', 'illustration'],
+    preload: ImageGenPanel.preload,
     mount: (root) => mountReactComponent(root, <ImageGenPanel />),
   },
   {
@@ -394,6 +389,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'customization/wallpapers.md',
 },
     keywords: ['wallpaper', 'background', 'backdrop', 'image', 'video', 'animated', 'mp4', 'webm', 'gif', 'scenery', 'chat background'],
+    preload: WallpaperPanel.preload,
     mount: (root) => mountReactComponent(root, <WallpaperPanel />),
   },
   {
@@ -408,6 +404,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Regex',
     keywords: ['regex', 'find', 'replace', 'script', 'transform', 'filter', 'pattern', 'substitution', 'text', 'output', 'display', 'rewrite', 'format'],
+    preload: RegexPanel.preload,
     mount: (root) => mountReactComponent(root, <RegexPanel />),
   },
   {
@@ -422,6 +419,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Branches',
     keywords: ['branch', 'fork', 'history', 'tree', 'navigate', 'alternate', 'swipe', 'undo', 'timeline', 'rewind', 'path'],
+    preload: BranchTreePanel.preload,
     mount: (root) => mountReactComponent(root, <BranchTreePanel />),
   },
   {
@@ -435,6 +433,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
   path: 'customization/themes.md',
 },
     keywords: ['theme', 'colors', 'accent', 'appearance', 'dark', 'light', 'glass', 'radius', 'font', 'css', 'style', 'customize', 'ui', 'mode'],
+    preload: ThemePanel.preload,
     mount: (root) => mountReactComponent(root, <ThemePanel />),
   },
   {
@@ -449,6 +448,7 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Extensions',
     keywords: ['extensions', 'spindle', 'plugins', 'addons', 'install', 'manage', 'enable', 'disable', 'uninstall', 'github'],
+    preload: SpindlePanel.preload,
     mount: (root) => mountReactComponent(root, <SpindlePanel />),
   },
 ]
@@ -492,6 +492,7 @@ export const COUNCIL_DRAWER_ALIASES: DrawerTabEntry[] = [
   path: 'chatting/ooc.md',
 },
     keywords: ['ooc', 'out of character', 'comments', 'irc', 'social', 'chat', 'meta', 'parentheses', 'brackets'],
+    preload: CouncilWorkspace.preload,
     mount: (root) => mountReactComponent(root, <CouncilWorkspace />),
   },
 
@@ -507,6 +508,7 @@ export const COUNCIL_DRAWER_ALIASES: DrawerTabEntry[] = [
 },
     tabHeaderTitle: 'Feedback',
     keywords: ['feedback', 'council', 'results', 'tools', 'output', 'debug', 'log', 'response', 'execution', 'trace'],
+    preload: CouncilWorkspace.preload,
     mount: (root) => mountReactComponent(root, <CouncilWorkspace />),
   },
 ]
@@ -519,6 +521,11 @@ export const COUNCIL_DRAWER_ALIASES: DrawerTabEntry[] = [
 
 const _registryRoots = new Map<string, HTMLElement>()
 const _registryCleanups = new Map<string, () => void>()
+
+/** Cleanup and ownership checks must not mount an unopened panel. */
+export function getRegistryRoot(tabId: string): HTMLElement | undefined {
+  return _registryRoots.get(resolveCouncilTabId(tabId))
+}
 
 /**
  * Mount a single built-in tab's persistent root on first request, then
@@ -552,6 +559,12 @@ export function ensureRegistryRoot(tabId: string): HTMLElement | undefined {
     _registryRoots.delete(tabId)
     return undefined
   }
+}
+
+/** Best-effort code warming; the panel stays unmounted until it is opened. */
+export function preloadDrawerTab(tabId: string): void {
+  const tab = DRAWER_TABS.find(entry => entry.id === resolveCouncilTabId(tabId))
+  void tab?.preload?.().catch(() => { /* Opening the panel owns visible error handling. */ })
 }
 
 /** Generate Panel commands from the registry for the command palette. */
@@ -601,9 +614,9 @@ export function extensionCommandsToCommands(entries: ExtensionCommandState[]): C
         keywords: ['extension', entry.extensionName, ...(cmd.keywords ?? [])],
         group: 'extensions',
         scope: cmd.scope as CommandScope | undefined,
-        run: () => {
+        run: (_navigate, trigger) => {
           const state = useStore.getState()
-          if (!hasEnabledFrontendExtensionId(state.extensions, entry.extensionId)) return
+          if (!hasEnabledCommandExtensionId(state.extensions, entry.extensionId)) return
           wsClient.send({
             type: 'SPINDLE_COMMAND_INVOKE',
             extensionId: entry.extensionId,
@@ -613,6 +626,7 @@ export function extensionCommandsToCommands(entries: ExtensionCommandState[]): C
               chatId: state.activeChatId ?? undefined,
               characterId: state.activeCharacterId ?? undefined,
               isGroupChat: state.isGroupChat ?? false,
+              ...(trigger ? { trigger } : {}),
             },
           })
         },

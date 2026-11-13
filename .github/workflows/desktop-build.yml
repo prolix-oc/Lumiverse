@@ -162,6 +162,10 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
+      - name: Test shared native surface policy
+        run: >-
+          cargo test --locked --lib --manifest-path desktop/src-tauri/Cargo.toml desktop_surface::
+
       - name: Test Windows native capture and WebView lifecycle
         if: matrix.target == 'x86_64-pc-windows-msvc'
         working-directory: desktop

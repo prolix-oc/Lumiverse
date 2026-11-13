@@ -39,6 +39,15 @@
     "assistant": "アシスタント"
   },
   "input": {
+    "formatting": {
+      "label": "メッセージの書式設定",
+      "bold": "太字",
+      "italic": "斜体",
+      "underline": "下線",
+      "quotes": "引用符",
+      "singleQuotes": "一重引用符",
+      "parentheses": "丸括弧"
+    },
     "placeholder": "メッセージを入力...",
     "backHome": "ホームに戻る",
     "regenerate": "再生成",
@@ -251,6 +260,22 @@
     "showFewer": "表示を減らす"
   },
   "chatView": {
+    "cortexFailedBatches": "失敗したバッチ: {{count}}",
+    "cortexBatchProgress": "バッチ {{current}}/{{total}} · {{queued}} 件待機中",
+    "cortexElapsed": "経過 {{seconds}}秒",
+    "cortexBatchActivity": "バッチ {{batch}} · {{phase}}",
+    "cortexBatchChunks": "チャンク数: {{count}}",
+    "cortexActiveBatches": "処理中のメモリバッチ",
+    "cortexActivity": {
+      "queued": "待機中",
+      "waiting": "プロバイダーの応答待ち",
+      "thinking": "思考中",
+      "responding": "応答中",
+      "reviewing": "審査中",
+      "preparing": "準備中",
+      "saving": "保存中",
+      "consolidating": "統合中"
+    },
     "togglePortraitPanel": "ポートレートパネルを切り替える",
     "exitSelectionMode": "選択モード",
     "selectMessages": "メッセージ選択",

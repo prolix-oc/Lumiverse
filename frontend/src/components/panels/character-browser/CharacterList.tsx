@@ -86,6 +86,7 @@ export default function CharacterList({
         style={{
           height: virtualizer.getTotalSize(),
           position: 'relative',
+          overflowAnchor: 'none',
         }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {

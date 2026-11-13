@@ -27,6 +27,16 @@ describe('display regex no-match gate', () => {
     expect(cannotMatchRegex('\u212aELVIN', 'KELVIN', 'i')).toBe(true)
   })
 
+  test('space cleanup scripts skip frames without their required character', () => {
+    for (const pattern of ['⠀', '[⠀]', String.raw`\u2800`, String.raw`[\u2800]`, String.raw`\u{2800}`]) {
+      expect(cannotMatchRegex('ordinary prose', pattern, 'gu')).toBe(true)
+      expect(cannotMatchRegex('braille⠀space', pattern, 'gu')).toBe(false)
+    }
+    expect(cannotMatchRegex('A', '[a]', 'i')).toBe(false)
+    expect(cannotMatchRegex(' ', String.raw`\x20`, 'g')).toBe(false)
+    expect(cannotMatchRegex('😀', String.raw`[\u{1f600}]`, 'u')).toBe(false)
+  })
+
   test('skipping preserves work independent of a current match', () => {
     expect(canSkipDisplayRegex('text', { ...script, trim_strings: ['', 'absent'] })).toBe(true)
     expect(canSkipDisplayRegex('text', { ...script, trim_strings: ['text'] })).toBe(false)
@@ -53,8 +63,10 @@ describe('display regex no-match gate', () => {
   test('a negative gate agrees with native matching across representative syntax and stream splits', () => {
     const patterns = [script.find_regex, 'foo([a-z]+)ENDING', '(?:foo|bar)ENDING',
       '(?<word>foo)\\k<word>ENDING', '(?=foo)fooENDING', 'foo.*ENDING', 'foo|barENDING',
-      'foo\\x45NDING', '[^x]+ENDING', '(?:fooENDING)?', 'fooENDING{0,2}', '^fooENDING$']
-    const bodies = ['fooENDING', 'barENDING', 'foofooENDING', '[STATUS]value[/STATUS]', 'ending', 'fooENDIN']
+      'foo\\x45NDING', '[^x]+ENDING', '(?:fooENDING)?', 'fooENDING{0,2}', '^fooENDING$',
+      '[⠀]', String.raw`\u2800`, String.raw`[\u2800]`, String.raw`\u{2800}`,
+      '[a-z]', '[^a]', '[ab]', '[a]?', '[a]*', String.raw`[\s]`, String.raw`[\u{1f600}]`]
+    const bodies = ['fooENDING', 'barENDING', 'foofooENDING', '[STATUS]value[/STATUS]', 'ending', 'fooENDIN', '⠀ a z', '😀']
     for (const pattern of patterns) for (const flags of ['', 'g', 'i', 'iu', 'y']) {
       for (const body of bodies) for (let end = 0; end <= body.length; end++) {
         const input = body.slice(0, end)

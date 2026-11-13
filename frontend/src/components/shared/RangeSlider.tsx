@@ -369,7 +369,7 @@ export function DualRangeSlider({
     const raw = posToRawValue(clientX)
     const handle = nearestNumericRangeHandle(currentValue, raw)
     activeHandleRef.current = handle
-    const next = updateNumericRange(currentValue, handle, raw, options)
+    const next = updateNumericRange(currentValue, handle, raw, { min, max, step, integer })
     dragValueRef.current = next
     setLocalValue(next)
     onDragValue?.(next)
@@ -377,7 +377,7 @@ export function DualRangeSlider({
 
   const moveTo = useCallback((clientX: number) => {
     const base = dragValueRef.current ?? currentValue
-    const next = updateNumericRange(base, activeHandleRef.current, posToRawValue(clientX), options)
+    const next = updateNumericRange(base, activeHandleRef.current, posToRawValue(clientX), { min, max, step, integer })
     dragValueRef.current = next
     setLocalValue(next)
     onDragValue?.(next)
@@ -594,6 +594,7 @@ export function LabeledDualRangeSlider({
   ...rangeProps
 }: LabeledDualRangeSliderProps) {
   const [liveValue, setLiveValue] = useState<[number, number] | null>(null)
+  const [committedStart, committedEnd] = rangeProps.value
   const committed = snapNumericRange(rangeProps.value, {
     min: rangeProps.min,
     max: rangeProps.max,
@@ -605,7 +606,7 @@ export function LabeledDualRangeSlider({
 
   useEffect(() => {
     setLiveValue(null)
-  }, [rangeProps.value[0], rangeProps.value[1]])
+  }, [committedStart, committedEnd])
 
   const handleDragValue = useCallback(
     (val: [number, number] | null) => {

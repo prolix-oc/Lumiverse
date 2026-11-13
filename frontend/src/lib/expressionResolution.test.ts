@@ -107,7 +107,7 @@ describe('expression message-avatar resolution', () => {
   test('both display and message surface consume the shared resolution boundary', () => {
     const display = readFileSync(new URL('../components/chat/expressions/ExpressionDisplay.tsx', import.meta.url), 'utf8')
     const message = readFileSync(new URL('../hooks/useMessageCard.ts', import.meta.url), 'utf8')
-    expect(display).toContain('resolveExpression(exprConfig)')
+    expect(display).toContain('resolveExpression(exprConfig,')
     expect(display).toContain('resolveExpression(groupConfigs.get(charId), groupExpressions[charId])')
     expect(message).toContain('resolveMessageExpressionImageId(')
     expect(message).toContain('const expressionAvatarImageId = useStore(')

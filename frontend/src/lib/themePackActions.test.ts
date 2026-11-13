@@ -43,6 +43,7 @@ let selectedFile: File | null
 let inputs: InputMock[]
 let downloads: Array<{ filename: string; blob: Blob }>
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
 const originalCreateURL = URL.createObjectURL
 const originalRevokeURL = URL.revokeObjectURL
 
@@ -59,6 +60,7 @@ beforeEach(() => {
   URL.revokeObjectURL = () => {}
   // Minimal in-memory DOM boundary. No browser, rendering, or server involved.
   Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+    body: { appendChild() {}, removeChild() {} },
     createElement(tag: string) {
       if (tag === 'a') {
         return { href: '', download: '', click() {
@@ -82,6 +84,8 @@ beforeEach(() => {
 afterEach(() => {
   if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument)
   else Reflect.deleteProperty(globalThis, 'document')
+  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+  else Reflect.deleteProperty(globalThis, 'window')
   URL.createObjectURL = originalCreateURL
   URL.revokeObjectURL = originalRevokeURL
 })
@@ -206,6 +210,47 @@ describe('shared LumiTheme entry points', () => {
     expect(io.applied).toHaveLength(2)
     expect(io.applied[1].bundleId).not.toBe(pack.bundleId)
     expect(inputs[1].value).toBe('')
+  })
+
+  test.each(['success', 'failure'])('Android theme exports await native publication: %s', async (outcome) => {
+    let finish!: () => void
+    let fail!: (error: Error) => void
+    const completion = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject })
+    const saveBlob = mock((_blob: Blob, _filename: string) => completion)
+    const saveUrl = mock(async () => {})
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+      lumiverseNativeDownloads: { saveBlob, saveUrl },
+    } })
+    const io = setup()
+    let completed = false
+    const exporting = io.handleExportPack().then(() => { completed = true })
+    // Allow asset loading/encoding to finish while the native save stays pending.
+    await Bun.sleep(0)
+    expect(saveBlob).toHaveBeenCalledTimes(1)
+    expect(saveUrl).not.toHaveBeenCalled()
+    expect(downloads).toHaveLength(0)
+    expect(completed).toBe(false)
+    expect(io.toast.success).not.toHaveBeenCalled()
+    const [blob, filename] = saveBlob.mock.calls[0]
+    expect(filename).toBe('bundle-fixture.lumitheme')
+    expect(blob.type).toBe('application/zip')
+    const archive = unzipSync(new Uint8Array(await blob.arrayBuffer()))
+    const manifest = JSON.parse(strFromU8(archive['theme.json']))
+    expect(manifest.name).toBe(fixture.name)
+    expect(manifest.globalCSS).toBe(fixture.globalCSS)
+    expect(manifest.components).toEqual(fixture.components)
+    expect(archive['assets/001-pixel.png']).toEqual(Uint8Array.from(atob(fixture.assets[0].dataBase64), c => c.charCodeAt(0)))
+
+    if (outcome === 'success') finish()
+    else fail(new Error('Storage full'))
+    await exporting
+    if (outcome === 'success') {
+      expect(io.toast.success).toHaveBeenCalledWith('exportSuccess')
+      expect(io.toast.error).not.toHaveBeenCalled()
+    } else {
+      expect(io.toast.error).toHaveBeenCalledWith('Storage full')
+      expect(io.toast.success).not.toHaveBeenCalled()
+    }
   })
 
   test.each([1, 2])('retains canonical legacy version %i support', async format => {

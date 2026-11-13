@@ -1,3 +1,4 @@
+import { applyOrganizationEdits } from '../../../../src/shared/connection-organization-edits'
 /// <reference types="bun-types" />
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -8,6 +9,7 @@ import { createConnectionsSlice } from './connections'
 import { createGenerationSlice } from './generation'
 import { createSettingsSlice, flushSettingsNow, REASONING_DEFAULTS, resetSettingsPersistence } from './settings'
 
+const originalFetch = globalThis.fetch
 const originalApi = { ...settingsApi }
 let rows: Map<string, unknown>
 
@@ -64,6 +66,11 @@ function store(): AppStore {
 
 beforeEach(() => {
   rows = new Map()
+  globalThis.fetch = (async (_input, init) => {
+    const next = applyOrganizationEdits(Object.fromEntries(rows), JSON.parse(String(init?.body)))
+    for (const [key, value] of Object.entries(next)) rows.set(key, value)
+    return Response.json(next)
+  }) as typeof fetch
   settingsApi.getAll = async () => [...rows].map(([key, value]) => ({ key, value, updated_at: 1 }))
   settingsApi.put = async (key, value) => {
     rows.set(key, value)
@@ -79,6 +86,7 @@ afterEach(async () => {
   await flushSettingsNow()
   resetSettingsPersistence()
   Object.assign(settingsApi, originalApi)
+  globalThis.fetch = originalFetch
 })
 
 describe('unbound reasoning preferences', () => {

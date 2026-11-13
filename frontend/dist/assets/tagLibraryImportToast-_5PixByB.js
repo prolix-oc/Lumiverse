@@ -1,0 +1,2 @@
+function e(e,t){return[e(`migration.tagLibraryToastMatched`,{count:t.matchedCharacters}),e(`migration.tagLibraryToastBySource`,{count:t.matchedBy.source_filename}),e(`migration.tagLibraryToastByAvatar`,{count:t.matchedBy.image_original_filename}),e(`migration.tagLibraryToastByName`,{count:t.matchedBy.normalized_name}),e(`migration.tagLibraryToastUnmatched`,{count:t.unmatchedMappings})].join(`
+`)}export{e as t};

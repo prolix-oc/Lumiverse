@@ -375,10 +375,10 @@ describe("temporary character-less chats", () => {
     expect(serialized).not.toContain("{{entities}}");
   });
 
-  test("macro resolve API seeds Memory Cortex context for input-bar previews", async () => {
+  test("cold macro previews select saved Cortex graph records relevant to the conversation", async () => {
     const character = charactersSvc.createCharacter(USER_ID, { name: "Aerith" });
     const chat = chatsSvc.createChat(USER_ID, { character_id: character.id });
-    chatsSvc.createMessage(chat.id, { is_user: true, name: "User", content: "What do we know?" }, USER_ID);
+    const message = chatsSvc.createMessage(chat.id, { is_user: true, name: "User", content: "What do we know?" }, USER_ID);
 
     memoryCortex.putCortexConfig(USER_ID, {
       enabled: true,
@@ -472,12 +472,19 @@ describe("temporary character-less chats", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.text).toContain("yes");
-    expect(body.text).toContain("[KNOWN ENTITIES]");
-    expect(body.text).toContain("Kael guards the silver bridge");
-    expect(body.text).toContain("[ACTIVE RELATIONSHIPS]");
-    expect(body.text).toContain("Kael -> Aerith: ally");
-    expect(body.text).not.toContain("{{entities}}");
+    expect(body.text).toBe("no\n\n");
+
+    db.query("UPDATE messages SET content = 'What does Kael remember?' WHERE id = ?").run(message.id);
+    const relevant = await app.request("/macros/resolve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: chat.id, template: "{{cortexActive}}\n{{entities}}\n{{relationships}}" }),
+    });
+    expect(relevant.status).toBe(200);
+    const text = (await relevant.json()).text;
+    expect(text).toStartWith("yes\n");
+    expect(text).toContain("Kael guards the silver bridge");
+    expect(text).toContain("trusted guide");
   });
 
   test("no_preset temp chats ignore presets even when one is requested", async () => {

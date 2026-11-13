@@ -20,6 +20,9 @@ import {
   processChunkFontColors,
   formatColorMapForPrompt,
   getColorMap,
+  recordColorAttribution,
+  lookupColor,
+  mergeColorAttributions,
   type ExtractedColorBlock,
 } from "./font-attribution";
 import { stripNonProseTags } from "../../utils/content-sanitizer";
@@ -536,6 +539,126 @@ describe("edge cases", () => {
 });
 
 describe("processChunkFontColors", () => {
+  test("thought wrappers inside and outside color tags override quotation marks", () => {
+    const samples = [
+      '<font color=#abc>*"I should leave."*</font>',
+      '*<font color=#abc>"I should leave."</font>*',
+      '_<font color=#abc>"I should leave."</font>_',
+      '<font color=#abc><i>"I should leave."</i></font>',
+      '<em><font color=#abc>"I should leave."</font></em>',
+      '<thinking><font color=#abc>"I should leave."</font></thinking>',
+      '<font color=#abc><thinking>"I should leave."</thinking></font>',
+    ];
+    for (const content of samples) {
+      const sanitized = stripNonProseTags(content, { keepFontTags: true, preserveFontInnerTags: ["thinking"] });
+      expect(extractColorBlocks(sanitized, THOUGHT_DELIMITERS).map((block) => block.usageType)).toEqual(["thought"]);
+    }
+    expect(extractColorBlocks('"<font color=#abc>I should leave.</font>"')[0].usageType).toBe("speech");
+    expect(extractColorBlocks('<font color=#abc>**Emphasis only.**</font>')[0].usageType).toBe("narration");
+    expect(extractColorBlocks('<font color=#abc>\\*Escaped stars.\\*</font>')[0].usageType).toBe("narration");
+  });
+
+  test("one color retains speech and thought without overwriting either channel", () => {
+    const chatId = "mixed-channels";
+    getDb().query("INSERT INTO memory_entities (id, chat_id, name) VALUES ('melina', ?, 'Melina')").run(chatId);
+    const content = '[CHARACTER | Melina]\n<font color=#abc>"I will stay." *"I should leave."*</font>';
+    const ids = new Map([["melina", "melina"]]);
+    processChunkFontColors(chatId, content, ["Melina"], ids);
+    processChunkFontColors(chatId, content, ["Melina"], ids);
+    expect(getColorMap(chatId).map((mapping) => mapping.usageType).sort()).toEqual(["speech", "thought"]);
+    expect(getColorMap(chatId).map((mapping) => mapping.sampleCount)).toEqual([2, 2]);
+    expect(formatColorMapForPrompt(chatId)).toContain("- Speech: #aabbcc\n- Thoughts: #aabbcc");
+  });
+
+  test("each block uses its own message owner when a chunk contains several messages", () => {
+    const content = '[CHARACTER | Melina]\n*<font color=#abc>I must keep going.</font>*\n[CHARACTER | Kael]\n*<font color=#def>I should turn back.</font>*';
+    const result = processChunkFontColors("owners", content, ["Melina", "Kael"], new Map(), undefined, false);
+    expect(result.attributions.map((attr) => attr.entityName)).toEqual(["Melina", "Kael"]);
+    expect(result.attributions.map((attr) => attr.usageType)).toEqual(["thought", "thought"]);
+  });
+
+  test("explicit thought attribution beats a nearby addressee or message author", () => {
+    const content = '[CHARACTER | Melina]\nKael thought: *<font color=#abc>"Melina, please help me."</font>*';
+    const result = processChunkFontColors("thought-owner", content, ["Melina", "Kael"], new Map(), undefined, false);
+    expect(result.attributions[0]).toMatchObject({ entityName: "Kael", usageType: "thought", confidence: 0.92 });
+  });
+
+  test("a standalone first-person thought retains its viewpoint in a multi-character restaurant scene", () => {
+    const content = `[CHARACTER | Melina]: The spoon slipped from my fingers and cracked against the bowl. Kama shoved his head through my collar.
+
+*<font color=#D987FF>A bed. A locked door. Hours without an audience or another game to hide behind. My mouth had better catch up before he decides the spoon spoke for me.</font>*
+
+I set the utensil across the rim and pressed my palm flat against the tabletop.
+
+<font color=#F498D4>“I want the rest of the night with you, Prolix.”</font>
+
+Auntie Mei arrived carrying a paper bag.
+
+<font color=#FFB347>“Pork buns. For later.”</font>`;
+    const prepared = stripNonProseTags(content, { keepFontTags: true });
+    const result = processChunkFontColors("restaurant", prepared, ["Melina", "Kama", "Prolix", "Auntie Mei"], new Map(), undefined, false);
+    const thought = result.attributions.find((attr) => attr.hexColor === "#d987ff");
+    expect(thought).toMatchObject({ entityName: "Melina", usageType: "thought", confidence: 0.8 });
+    expect(mergeColorAttributions(prepared, result.attributions, [])).toContainEqual(expect.objectContaining({
+      hexColor: "#d987ff", entityName: "Melina", usageType: "thought",
+    }));
+  });
+
+  test("first-person thought evidence stays inside its message and explicit thinkers still win", () => {
+    for (const pronoun of ["My", "my", "MY"]) {
+      const content = `[CHARACTER | Melina]: I set my spoon down beside Kael.\n\n*<font color=#abc>${pronoun} hands are shaking.</font>*\n\nKael thought: *<font color=#def>${pronoun} secret is safe.</font>*\n[CHARACTER | Voss]: The room was quiet.\n\n*<font color=#123>My secret is safe.</font>*`;
+      const result = processChunkFontColors("viewpoints", content, ["Melina", "Kael", "Voss"], new Map(), undefined, false);
+      expect(result.attributions[0]).toMatchObject({ entityName: "Melina", confidence: 0.8 });
+      expect(result.attributions[1]).toMatchObject({ entityName: "Kael", confidence: 0.92 });
+      expect(result.attributions[2]).toMatchObject({ entityName: "Voss", confidence: 0.7 });
+    }
+  });
+
+  test("a quoted first-person speaker does not establish the message author's narrative viewpoint", () => {
+    const content = '[CHARACTER | Melina]: Kael said, "I hid my secret."\n\n*<font color=#abc>My secret is safe.</font>*';
+    const result = processChunkFontColors("unestablished-viewpoint", content, ["Melina", "Kael"], new Map(), undefined, false);
+    expect(result.attributions[0]!.confidence).toBeLessThan(0.6);
+    expect(mergeColorAttributions(content, result.attributions, [])).toEqual([]);
+  });
+
+  test("characters described within speech or thought do not override its explicit owner", () => {
+    for (const content of [
+      'Melina said, "<font color=#abc>Kael walked away.</font>"',
+      'Melina said, <font color=#abc>"Kael walked away."</font>',
+      'Melina thought: *<font color=#abc>Kael walked away.</font>*',
+    ]) {
+      const result = processChunkFontColors("quoted-subject", content, ["Melina", "Kael"], new Map(), undefined, false);
+      expect(result.attributions[0].entityName).toBe("Melina");
+    }
+    const ambiguous = processChunkFontColors("unknown-speaker", '<font color=#abc>"Kael walked away."</font>', ["Kael"], new Map(), undefined, false);
+    expect(ambiguous.attributions[0].entityName).toBeNull();
+  });
+
+  test("historical mappings cannot override explicit evidence or reinforce themselves", () => {
+    const chatId = "history";
+    const ids = new Map([["melina", "melina"], ["kael", "kael"]]);
+    for (const name of ["Melina", "Kael"]) getDb().query("INSERT INTO memory_entities (id, chat_id, name) VALUES (?, ?, ?)").run(name.toLowerCase(), chatId, name);
+    recordColorAttribution(chatId, "#abc", "melina", "speech", null, 0.9);
+    const reused = processChunkFontColors(chatId, '<font color=#abc>"Nothing is certain."</font>', ["Melina", "Kael"], ids);
+    expect(reused.attributions[0].fromHistory).toBe(true);
+    expect(getColorMap(chatId)[0].sampleCount).toBe(1);
+    processChunkFontColors(chatId, 'Kael said, <font color=#abc>"I disagree."</font>', ["Melina", "Kael"], ids);
+    expect(getColorMap(chatId).map((mapping) => mapping.entityId).sort()).toEqual(["kael", "melina"]);
+    expect(lookupColor(chatId, "#aabbcc", "speech")).toBeNull();
+  });
+
+  test("sidecar claims must match observed colors and channels and count once", () => {
+    const content = '<font color=#abc>*"I cannot stay."*</font>';
+    const claims = mergeColorAttributions(content, [{ hexColor: "#aabbcc", entityName: "Mel", usageType: "thought", confidence: 0.7 }], [
+      { hexColor: "#abc", characterName: "Melina", usageType: "thought" },
+      { hexColor: "#abc", characterName: "Melina", usageType: "speech" },
+      { hexColor: "#123456", characterName: "Melina", usageType: "thought" },
+    ], undefined, (name) => name === "Mel" ? "Melina" : name);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]).toMatchObject({ hexColor: "#aabbcc", entityName: "Melina", usageType: "thought", confidence: 0.8 });
+    expect(claims[0].evidence).toContain(content);
+  });
+
   test("classifies a configured thought color after non-prose sanitization", () => {
     const chatId = "chat-sanitized-thought-color";
     const db = getDb();

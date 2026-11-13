@@ -68,8 +68,10 @@ import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
+import { hasNativeDownloadCompletion } from '@/lib/downloads'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { galleryImageMarkdown } from '@/lib/galleryImageReference'
+import { getTauriMobilePlatform } from '@/lib/desktopWebView'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { Button } from '@/components/shared/FormComponents'
@@ -98,6 +100,7 @@ import CharacterLoraTab from './CharacterLoraTab'
 import AlternateFieldEditor from './AlternateFieldEditor'
 import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
+import { uploadAlternateAvatar } from '@/lib/alternateAvatarUpload'
 import CharacterTokenReportModal, { type CharacterTokenReportItem } from './CharacterTokenReportModal'
 import { GuideViewer } from '@/components/shared/GuideViewer'
 import {
@@ -708,7 +711,8 @@ export default function CharacterEditorPage() {
     estimateSize: () => galleryRowEstimate,
     overscan: GALLERY_OVERSCAN,
     anchorTo: 'start',
-    useFlushSync: false,
+    // Android flings must commit the visible range before the next paint.
+    useFlushSync: getTauriMobilePlatform() === 'android',
     getItemKey: (index) => {
       const start = index * galleryColumns
       const end = Math.min(start + galleryColumns, galleryItems.length)
@@ -1499,29 +1503,21 @@ export default function CharacterEditorPage() {
 
   const { cropModalProps, openCropFlow } = useImageCropFlow(handleCropComplete)
 
-  // Separate crop flow for alternate avatar uploads
+  // Both local files and gallery selections use the same avatar save path.
   const handleAltAvatarCropComplete = useCallback(
-    async (croppedFile: File, originalFile: File) => {
+    async (croppedFile: File, originalFile: File | CharacterGalleryItem) => {
       if (!editingCharacterId || !character) return
       setAltAvatarUploadProgress(0)
       try {
-        // Upload original (full aspect ratio) for lightbox
-        const originalImage = await imagesApi.upload(originalFile, (p) => setAltAvatarUploadProgress(Math.round(p * 0.4)))
-        // Upload cropped for display
-        const image = await imagesApi.upload(croppedFile, (p) => setAltAvatarUploadProgress(40 + Math.round(p * 0.6)))
-        const newId = uuidv7()
-        const entry: AlternateAvatarEntry = {
-          id: newId,
-          image_id: image.id,
-          original_image_id: originalImage.id,
-          label: t('characterEditor.newAvatar'),
-        }
+        const entry = await uploadAlternateAvatar(croppedFile, originalFile, t('characterEditor.newAvatar'), setAltAvatarUploadProgress)
+        if (editingCharacterIdRef.current !== editingCharacterId) return
         mutateExtensions((ext) => {
           const currentAlts = (ext.alternate_avatars || []) as AlternateAvatarEntry[]
           return { ...ext, alternate_avatars: [...currentAlts, entry] }
         }, true)
       } catch (err) {
         console.error('[AltAvatar] Upload failed:', err)
+        toast.error(t('characterBrowser.alternateAvatars.uploadFailed'))
       } finally {
         setAltAvatarUploadProgress(null)
       }
@@ -1808,6 +1804,7 @@ export default function CharacterEditorPage() {
     characterId: string
     characterName: string
     toastId: string
+    awaitsNativeSave: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -1829,6 +1826,7 @@ export default function CharacterEditorPage() {
         return
       }
       if (payload.phase === 'complete') {
+        if (active.awaitsNativeSave) return
         toast.dismiss(active.toastId)
         activeCharxExportRef.current = null
         setExporting(false)
@@ -1862,10 +1860,18 @@ export default function CharacterEditorPage() {
         characterId: editingCharacterId,
         characterName: character.name,
         toastId,
+        awaitsNativeSave: hasNativeDownloadCompletion(),
       }
       try {
-        charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+        await charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+        if (activeCharxExportRef.current?.exportId === exportId && activeCharxExportRef.current.awaitsNativeSave) {
+          activeCharxExportRef.current = null
+          setExporting(false)
+          toast.dismiss(toastId)
+          toast.success(t('characterEditor.exportSuccess', { name: character.name, format: 'CHARX' }))
+        }
       } catch (err) {
+        if (activeCharxExportRef.current?.exportId !== exportId) return
         activeCharxExportRef.current = null
         setExporting(false)
         toast.dismiss(toastId)
@@ -2522,6 +2528,8 @@ export default function CharacterEditorPage() {
                         </div>
                       </div>
                       <AlternateAvatarManager
+                        key={editingCharacterId}
+                        characterId={editingCharacterId!}
                         primaryImageId={character?.image_id || null}
                         alternates={(workingExtensions.alternate_avatars || []) as AlternateAvatarEntry[]}
                         onChange={handleAlternateAvatarsChange}
@@ -2530,6 +2538,7 @@ export default function CharacterEditorPage() {
                         greetingCount={1 + alternateGreetings.length}
                         onBindingsChange={handleAvatarBindingsChange}
                         openCropFlow={openAltAvatarCropFlow}
+                        onGalleryCropComplete={handleAltAvatarCropComplete}
                         activeChatAvatarId={activeChatId ? activeChatAvatarId : undefined}
                         onAvatarSelect={activeChatId ? handleAvatarSelect : undefined}
                         uploadProgress={altAvatarUploadProgress}

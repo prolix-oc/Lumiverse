@@ -1,4 +1,6 @@
 import { BASE_URL } from '@/api/client'
+import { useSyncExternalStore } from 'react'
+import { isNativeCacheDocument } from './nativeCache'
 
 export type SafeThemeSource = 'url' | 'server' | 'both' | null
 
@@ -11,6 +13,16 @@ const DISABLED_QUERY_VALUES = new Set(['0', 'false', 'no', 'off'])
 const RUNTIME_CONFIG_TIMEOUT_MS = 2_000
 
 let state: SafeThemeState = { active: false, source: null }
+const subscribers = new Set<() => void>()
+
+export function subscribeSafeThemeState(listener: () => void): () => void {
+  subscribers.add(listener)
+  return () => { subscribers.delete(listener) }
+}
+
+export function useSafeThemeState(): SafeThemeState {
+  return useSyncExternalStore(subscribeSafeThemeState, getSafeThemeState, getSafeThemeState)
+}
 
 export function hasSafeThemeQuery(search: string): boolean {
   const value = new URLSearchParams(search).get('safe-theme')
@@ -33,13 +45,16 @@ export function resolveSafeThemeState(search: string, serverEnabled: boolean): S
 }
 
 function applyState(next: SafeThemeState): void {
+  const changed = state.active !== next.active || state.source !== next.source
   state = next
-  if (typeof document === 'undefined') return
-  if (next.active) {
-    document.documentElement.setAttribute('data-safe-theme', next.source ?? '')
-  } else {
-    document.documentElement.removeAttribute('data-safe-theme')
+  if (typeof document !== 'undefined') {
+    if (next.active) {
+      document.documentElement.setAttribute('data-safe-theme', next.source ?? '')
+    } else {
+      document.documentElement.removeAttribute('data-safe-theme')
+    }
   }
+  if (changed) subscribers.forEach(listener => listener())
 }
 
 export function getSafeThemeState(): SafeThemeState {
@@ -62,7 +77,29 @@ export async function initializeSafeThemeMode(): Promise<SafeThemeState> {
     return next
   }
 
-  let serverEnabled = false
+  // The native shell must paint without an online startup dependency. Cache
+  // only this public UI bootstrap field in the real origin's WebKit storage;
+  // an unknown value enables the conservative safe interface until refreshed.
+  if (isNativeCacheDocument()) {
+    let enabled = true
+    try { enabled = localStorage.getItem('lumiverse.native-cache.safe-theme') !== '0' } catch { /* Unavailable storage uses the safe default. */ }
+    const next = resolveSafeThemeState(search, enabled)
+    applyState(next)
+    void fetchServerSafeTheme().then(serverEnabled => {
+      if (serverEnabled === null) return
+      try { localStorage.setItem('lumiverse.native-cache.safe-theme', serverEnabled ? '1' : '0') } catch { /* Optional bootstrap snapshot. */ }
+      applyState(resolveSafeThemeState(search, serverEnabled))
+    })
+    return next
+  }
+
+  const next = resolveSafeThemeState(search, (await fetchServerSafeTheme()) ?? false)
+  applyState(next)
+  return next
+}
+
+async function fetchServerSafeTheme(): Promise<boolean | null> {
+  let serverEnabled: boolean | null = null
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), RUNTIME_CONFIG_TIMEOUT_MS)
   try {
@@ -80,7 +117,5 @@ export async function initializeSafeThemeMode(): Promise<SafeThemeState> {
     clearTimeout(timeout)
   }
 
-  const next = resolveSafeThemeState(search, serverEnabled)
-  applyState(next)
-  return next
+  return serverEnabled
 }

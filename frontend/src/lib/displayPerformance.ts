@@ -5,6 +5,7 @@ export interface DisplayPerformanceSnapshot {
   longTasks: { count: number; totalDuration: number; maxDuration: number }
   interactions: { count: number; maxDuration: number }
   milestones: Record<string, number>
+  apiReads: Record<string, { count: number; failed: number; totalDuration: number; inFlight: number }>
 }
 
 interface DisplayPerformanceDiagnostics {
@@ -24,12 +25,31 @@ let longFrames = { count: 0, totalDuration: 0, maxDuration: 0, totalBlockingDura
 let longTasks = { count: 0, totalDuration: 0, maxDuration: 0 }
 let interactions = { count: 0, maxDuration: 0 }
 const milestones: Record<string, number> = {}
+const apiReads: DisplayPerformanceSnapshot['apiReads'] = Object.create(null)
+
+export function beginApiRead(path: string): (failed: boolean) => void {
+  const resource = path.split(/[/?#]/)[1] || 'root'
+  const key = Object.hasOwn(apiReads, resource) || Object.keys(apiReads).length < 40 ? resource : 'other'
+  const record = apiReads[key] ??= { count: 0, failed: 0, totalDuration: 0, inFlight: 0 }
+  const started = performance.now()
+  record.count += 1
+  record.inFlight += 1
+  let finished = false
+  return failed => {
+    if (finished) return
+    finished = true
+    record.inFlight -= 1
+    record.failed += Number(failed)
+    record.totalDuration += performance.now() - started
+  }
+}
 
 function reset(): void {
   longFrames = { count: 0, totalDuration: 0, maxDuration: 0, totalBlockingDuration: 0 }
   longTasks = { count: 0, totalDuration: 0, maxDuration: 0 }
   interactions = { count: 0, maxDuration: 0 }
   for (const key of Object.keys(milestones)) delete milestones[key]
+  for (const key of Object.keys(apiReads)) delete apiReads[key]
 }
 
 export function getDisplayPerformanceSnapshot(): DisplayPerformanceSnapshot {
@@ -40,6 +60,7 @@ export function getDisplayPerformanceSnapshot(): DisplayPerformanceSnapshot {
     longTasks: { ...longTasks },
     interactions: { ...interactions },
     milestones: { ...milestones },
+    apiReads: structuredClone(apiReads),
   }
 }
 
@@ -72,6 +93,12 @@ export function installDisplayPerformanceTelemetry(surface: DisplayPerformanceSn
   if (installed) return
   installed = true
   markDisplayMilestone('bootstrap')
+  // Navigation timing starts before the initial static module graph evaluates.
+  const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+  if (navigation) {
+    milestones.navigationStart = navigation.startTime
+    milestones.documentResponseEnd = navigation.responseEnd
+  }
 
   observe('long-animation-frame', (entries) => {
     for (const entry of entries) {

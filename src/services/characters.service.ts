@@ -1,6 +1,7 @@
 import { getDb } from "../db/connection";
-import { executeDatabaseOperation } from "../db/execution";
+import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
 import { readDatabaseRow, readDatabaseRows } from "../db/queries";
+import { mutateChatWithDb } from "../db/chat-operations";
 import {
   InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope,
   explicitCharacterInputScope, canonicalCharacterExtensions,
@@ -342,12 +343,12 @@ export function listCharacterSummaries(
       }
   }
 
+  // Sorting joins do not change membership. Keep them out of COUNT so a
+  // second chat-recency/group-membership aggregation is not needed per page.
   return paginatedQuery(
     `SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} ${extraJoin} WHERE ${whereStr} ${orderBy}`,
-    `SELECT COUNT(*) as count FROM ${fromClause} ${extraJoin} WHERE ${whereStr}`,
-    queryParams,
-    pagination,
-    rowToSummary
+    `SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`,
+    queryParams, pagination, rowToSummary, whereParams,
   );
 }
 
@@ -674,11 +675,11 @@ function clearRemovedChatAvatarReferences(userId: string, removedImageIds: Itera
       else delete metadata.group_active_avatar_entry_ids;
     }
     if (!changed) continue;
-    const now = Math.floor(Date.now() / 1000);
-    getDb().query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
-      .run(JSON.stringify(metadata), now, row.id, userId);
+    const partial = Object.fromEntries(["active_avatar_id", "active_avatar_entry_id", "group_active_avatar_ids", "group_active_avatar_entry_ids"].map(key => [key, metadata[key]]));
+    const result = mutateChatWithDb(getDb(), { action: "merge", userId, id: row.id, partial });
+    if (!result) continue;
     eventBus.emit(EventType.CHAT_CHANGED, {
-      chat: { ...row, metadata, updated_at: now },
+      chat: result.after,
       changedFields: ["metadata.active_avatar_id", "metadata.group_active_avatar_ids"],
     }, userId);
   }
@@ -731,6 +732,18 @@ export function listCharacters(userId: string, pagination: PaginationParams): Pa
     [userId],
     pagination,
     rowToCharacter
+  );
+}
+
+/** Complete picker/folder index without greetings, prompt text or extensions. */
+type CharacterIndexItem = Pick<Character, 'id' | 'name' | 'avatar_path' | 'image_id' | 'creator' | 'folder' | 'library_scope' | 'tags' | 'created_at' | 'updated_at'> & { avatar_crop_image_id: string | null };
+export function listCharacterIndex(userId: string, pagination: PaginationParams): PaginatedResult<CharacterIndexItem> {
+  return paginatedQuery<any, CharacterIndexItem>(
+    `SELECT id, name, avatar_path, image_id, creator, folder, library_scope, tags, created_at, updated_at,
+      CASE WHEN json_valid(extensions) THEN json_extract(extensions, '$.avatar_crop_image_id') END AS avatar_crop_image_id
+     FROM characters WHERE user_id = ? AND deleting = 0 ORDER BY id`,
+    'SELECT COUNT(*) AS count FROM characters WHERE user_id = ? AND deleting = 0',
+    [userId], pagination, row => ({ ...row, tags: JSON.parse(row.tags) }),
   );
 }
 
@@ -855,6 +868,14 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
   const result = new Map<string, Character>();
   for (const row of rows) result.set(row.id, rowToCharacter(row));
   return result;
+}
+
+export async function getCharactersByIdsAsync(userId: string, ids: string[], options: { excludeDeleting?: boolean } & DatabaseExecutionOptions = {}): Promise<Map<string, Character>> {
+  if (ids.length === 0) return new Map();
+  const rows = await readDatabaseRows<any>(
+    `SELECT * FROM characters WHERE id IN (${ids.map(() => "?").join(",")}) AND user_id = ?${options.excludeDeleting ? ' AND deleting = 0' : ''}`, [...ids, userId], options,
+  );
+  return new Map(rows.map((row) => [row.id, rowToCharacter(row)]));
 }
 
 export interface CreateCharacterOptions {

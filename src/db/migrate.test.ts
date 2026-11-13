@@ -36,6 +36,112 @@ describe("database migrations", () => {
     }
   });
 
+  test("fresh bootstrap records Live Activity migrations without replaying stored stage progress", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+
+      const columns = db.query("PRAGMA table_info('ios_live_activities')").all() as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>;
+      expect(columns.find((column) => column.name === "delivered_stage")).toMatchObject({
+        type: "INTEGER",
+        notnull: 1,
+        dflt_value: "-1",
+      });
+      const migrationNames = ["128_ios_live_activities.sql", "129_ios_activity_stage_sounds.sql"];
+      for (const name of migrationNames) {
+        expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?").get(name))
+          .toEqual({ count: 1 });
+      }
+
+      db.run(`INSERT INTO "user" (id, name, email) VALUES ('owner', 'Owner', 'owner@example.test')`);
+      db.run("INSERT INTO chats (id, user_id) VALUES ('chat', 'owner')");
+      db.run(`INSERT INTO ios_live_activities (
+        id, user_id, chat_id, generation_id, device_id, bundle_id, environment,
+        server_origin, credential_hash, expires_at, desired_phase, delivered_phase
+      ) VALUES (
+        'activity', 'owner', 'chat', 'generation', 'device', 'app', 'development',
+        'https://example.test', 'hash', 100, 'streaming', 'assembling'
+      )`);
+      expect(db.query("SELECT delivered_stage FROM ios_live_activities WHERE id = 'activity'").get())
+        .toEqual({ delivered_stage: -1 });
+
+      // The high-water mark can exceed the current phase after a regression.
+      // Replaying migration 129 would incorrectly replace it with stage zero.
+      db.run("UPDATE ios_live_activities SET delivered_stage = 2 WHERE id = 'activity'");
+      await runMigrations(db);
+      expect(db.query("SELECT delivered_phase, delivered_stage FROM ios_live_activities WHERE id = 'activity'").get())
+        .toEqual({ delivered_phase: "assembling", delivered_stage: 2 });
+      for (const name of migrationNames) {
+        expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?").get(name))
+          .toEqual({ count: 1 });
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh bootstrap records the widget migration once and preserves account-scoped registrations", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+
+      db.run(`INSERT INTO "user" (id, name, email) VALUES
+        ('owner', 'Owner', 'owner@example.test'),
+        ('tenant', 'Tenant', 'tenant@example.test')`);
+      const insert = db.query(`INSERT INTO ios_widget_registrations
+        (id, user_id, device_id, credential_hash, expires_at) VALUES (?, ?, ?, ?, ?)`);
+      insert.run("owner-widget", "owner", "shared-device", "owner-hash", 100);
+      insert.run("tenant-widget", "tenant", "shared-device", "tenant-hash", 200);
+      expect(() => insert.run("duplicate", "owner", "shared-device", "duplicate-hash", 300))
+        .toThrow("UNIQUE constraint failed");
+      expect(() => insert.run("orphan", "missing", "other-device", "orphan-hash", 300))
+        .toThrow("FOREIGN KEY constraint failed");
+
+      await runMigrations(db);
+      expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?")
+        .get("132_ios_widgets.sql")).toEqual({ count: 1 });
+      expect(db.query("PRAGMA index_info('idx_ios_widget_registrations_expiry')").all())
+        .toMatchObject([{ name: "expires_at" }]);
+      expect(db.query("SELECT * FROM ios_widget_registrations ORDER BY id").all()).toEqual([
+        { id: "owner-widget", user_id: "owner", device_id: "shared-device", credential_hash: "owner-hash", expires_at: 100 },
+        { id: "tenant-widget", user_id: "tenant", device_id: "shared-device", credential_hash: "tenant-hash", expires_at: 200 },
+      ]);
+
+      db.run(`DELETE FROM "user" WHERE id = 'owner'`);
+      expect(db.query("SELECT id FROM ios_widget_registrations").all())
+        .toEqual([{ id: "tenant-widget" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh bootstrap records the Android relay migration once without replaying its columns", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+      db.run(`INSERT INTO "user" (id, name, email) VALUES ('owner', 'Owner', 'owner@example.test')`);
+      db.run(`INSERT INTO android_push_destinations
+        (id, user_id, device_id, transport, server_origin, token_hash, registered_at, delivery_mode, enrollment_id)
+        VALUES ('relay', 'owner', 'device', 'fcm', 'https://example.test', 'hash', 1, 'relay', 'enrollment')`);
+
+      await runMigrations(db);
+      expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name = ?")
+        .get("133_android_notification_relay.sql")).toEqual({ count: 1 });
+      expect(db.query("SELECT delivery_mode, enrollment_id FROM android_push_destinations WHERE id = 'relay'")
+        .get()).toEqual({ delivery_mode: "relay", enrollment_id: "enrollment" });
+    } finally {
+      db.close();
+    }
+  });
+
   test("assigns the legacy instance link to the historical owner", async () => {
     const db = new Database(":memory:");
     try {

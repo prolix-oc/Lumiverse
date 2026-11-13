@@ -4,7 +4,7 @@ import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
 import { rewriteThemeAssetUrls } from '@/lib/themeAssetCss'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
-import { isSafeThemeMode } from '@/lib/safeThemeMode'
+import { useSafeThemeState } from '@/lib/safeThemeMode'
 
 const STYLE_ID = 'lumiverse-user-css'
 
@@ -24,7 +24,7 @@ function getOrCreateStyleElement(): HTMLStyleElement {
  * can override the app's unlayered CSS modules without requiring !important.
  */
 export function useCustomCSSApplicator() {
-  const safeThemeMode = isSafeThemeMode()
+  const safeThemeMode = useSafeThemeState().active
   const customCSS = useStore((s) => s.customCSS)
   const componentOverrides = useStore((s) => s.componentOverrides)
   const toggleCustomCSS = useStore((s) => s.toggleCustomCSS)

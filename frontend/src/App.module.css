@@ -66,6 +66,18 @@
   padding-bottom: var(--spindle-dock-bottom, 0px);
 }
 
+:global(html[data-tauri-mobile='ios']) .app:not(.duoApp) {
+  padding-left: calc(var(--spindle-dock-left, 0px) + env(safe-area-inset-left, 0px) / var(--lumiverse-ui-scale, 1));
+  padding-right: calc(var(--spindle-dock-right, 0px) + env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1));
+}
+
+/* Match the body to measured WKWebView bounds rather than iOS viewport units.
+   The full shell stays stable while InputArea owns keyboard clearance. */
+:global(html[data-tauri-mobile='ios']) .app {
+  height: calc(var(--app-shell-height) / var(--lumiverse-ui-scale, 1));
+  max-height: calc(var(--app-shell-height) / var(--lumiverse-ui-scale, 1));
+}
+
 /* Same treatment for Chromium/Android PWAs. Since Chrome 135 the Android
    viewport goes edge-to-edge by default, so env(safe-area-inset-bottom) is
    the gesture-navigation-bar height (large on foldables like the Galaxy
@@ -76,7 +88,8 @@
    pads its own interactive content above the nav bar instead (see
    InputArea / MessageSelectBar). No-op on desktop Chromium PWAs where the
    inset is 0. */
-:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .app {
+:global(html[data-pwa]:not([data-ios-pwa]):not([data-tauri-mobile='ios'])) .app,
+:global(html[data-tauri-mobile='android']) .app {
   padding-bottom: var(--spindle-dock-bottom, 0px);
 }
 
@@ -100,4 +113,20 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+.app.duoApp {
+  padding: 0;
+}
+
+.main.duoMain {
+  position: absolute;
+  flex: none;
+  min-width: 0;
+  overflow: clip;
+  /* Keep fixed chat docks within the chat half as well as ordinary flex content. */
+  contain: layout;
+  container: duo-chat / inline-size;
+  --chat-drawer-left: 0px;
+  --chat-drawer-right: 0px;
 }

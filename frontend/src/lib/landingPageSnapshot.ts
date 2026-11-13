@@ -1,5 +1,6 @@
 import type { GroupedRecentChat } from '@/types/api'
 import type { LandingPageTab } from '@/lib/landingPageTabs'
+import type { LandingVirtualSnapshot } from '@/lib/landingVirtualSnapshot'
 
 export type LandingPageSortField = 'name' | 'recent' | 'created'
 
@@ -20,6 +21,8 @@ export interface LandingPageSnapshot {
   viewportHeight: number
   /** Ordered avatar/perspective URLs to predecode during chat -> home. */
   imageUrls?: string[]
+  /** Plain measured row sizes; older snapshots fall back to estimates. */
+  virtualRows?: LandingVirtualSnapshot
 }
 
 // Route transitions unmount the landing page. Keep its light data/UI state in

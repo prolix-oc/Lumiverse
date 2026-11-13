@@ -9,7 +9,16 @@ Read and modify chat messages directly. Use this for extensions that need to inj
 ```ts
 // Read all messages in a chat
 const messages = await spindle.chat.getMessages(chatId)
-// [{ id, role, content, extra, metadata, swipe_id, swipes, swipe_dates }, ...]
+// [{ id, role, content, extra, hidden, metadata, swipe_id, swipes, swipe_dates }, ...]
+
+// Read only the last 20 messages, active swipe only, without `extra`,
+// and with only this extension's own metadata entry
+const recent = await spindle.chat.getMessages(chatId, {
+  tail: 20,
+  light: true,
+  includeExtra: false,
+  ownMetadataOnly: true,
+})
 
 // Append a new message
 const { id } = await spindle.chat.appendMessage(chatId, {
@@ -43,8 +52,15 @@ await spindle.chat.appendMessage(chatId, { role: 'user', content: 'Your turn.' }
 // Update an existing message's content (mirrors into swipes[swipe_id])
 await spindle.chat.updateMessage(chatId, messageId, {
   content: 'Updated content here.',
-  metadata: { edited_by: 'my_extension' },
+  metadata: { edited_by: 'my_extension' }, // replaces the whole spindle_metadata bag
 })
+
+// Set only this extension's own spindle_metadata entry; other entries are kept
+await spindle.chat.updateMessage(chatId, messageId, {
+  ownMetadata: { summarized: true },
+})
+// Remove this extension's own entry
+await spindle.chat.updateMessage(chatId, messageId, { ownMetadata: null })
 
 // Rewrite the entire swipe array (dates auto-pad with `now` for new slots)
 await spindle.chat.updateMessage(chatId, messageId, {
@@ -55,12 +71,18 @@ await spindle.chat.updateMessage(chatId, messageId, {
 // Navigate to a different swipe without rewriting content
 await spindle.chat.updateMessage(chatId, messageId, { swipe_id: 1 })
 
-// Set or clear reasoning / reasoning_duration independently
+// Set or clear reasoning and its duration independently
 await spindle.chat.updateMessage(chatId, messageId, {
   reasoning: { text: 'Chain-of-thought transcript…', duration: 1842 },
 })
 await spindle.chat.updateMessage(chatId, messageId, {
   reasoning: { text: null, duration: null }, // clear both
+})
+
+// Save reasoning for all swipes without changing the selected swipe.
+// Requires spindle.host.capabilities['chat-swipe-reasoning-v1'].
+await spindle.chat.updateMessage(chatId, messageId, {
+  swipe_reasoning: [{ text: 'First thought', duration: 1842 }, null, { text: 'Third thought' }],
 })
 
 // Advanced: persist a maintenance rewrite without rebuilding chat chunks
@@ -86,8 +108,8 @@ const isHidden = await spindle.chat.isMessageHidden(chatId, messageId)
 
 | Method | Returns | Description |
 |---|---|---|
-| `getMessages(chatId)` | `Promise<ChatMessage[]>` | Get all messages in a chat |
-| `appendMessage(chatId, message, options?)` | `Promise<{ id: string; generationId?: string }>` | Add a new message. Fields: `{ role, content, metadata? }`. Pass `true` or `{ triggerGeneration: true }` as `options` to start a normal reply. |
+| `getMessages(chatId, options?)` | `Promise<ChatMessage[]>` | Get the messages in a chat, all of them by default. See [Lean Reads](#lean-reads). |
+| `appendMessage(chatId, message, options?)` | `Promise<{ id: string; generationId?: string }>` | Add a new message. Fields: `{ role, content, metadata?, name?, characterId? }`. See [Role Mapping](#role-mapping) for identity fields. Pass `true` or `{ triggerGeneration: true }` as `options` to start a normal reply. |
 | `updateMessage(chatId, messageId, patch)` | `Promise<void>` | Edit a message. See [Update Patch Shape](#update-patch-shape). |
 | `deleteMessage(chatId, messageId)` | `Promise<void>` | Remove a message |
 | `setMessageHidden(chatId, messageId, hidden)` | `Promise<void>` | Toggle the `hidden` flag on one message |
@@ -130,12 +152,41 @@ type AppendGenerationOptions = {
 
 The generated assistant reply is delivered through the normal generation event stream (`GENERATION_STARTED`, token events, and `GENERATION_ENDED`). Use [`spindle.generate.observe(chatId)`](generation.md#spindlegenerateobservechatid) if your extension needs to watch the result.
 
+## Lean Reads
+
+By default `getMessages(chatId)` returns every message with every swipe's text, the whole `extra` bag (including per-swipe arrays such as `reasoningBySwipe`), and every extension's metadata. On long chats with stored reasoning that is a large payload. Pass `options` to ask for less. All options are opt-in; without them the output is unchanged apart from the additive top-level `hidden` flag.
+
+```ts
+type GetMessagesOptions = {
+  /** Page size, 1–1000. Reads messages in chat order starting at `offset`. */
+  limit?: number
+  /** Messages to skip before the page. Requires `limit`. Default 0. */
+  offset?: number
+  /** Return only the last N messages (1–1000), in chat order. Cannot be combined with `limit`/`offset`. */
+  tail?: number
+  /** Keep only the active swipe's text and drop per-swipe `extra` arrays. */
+  light?: boolean
+  /** `false` omits `extra` entirely. `hidden` is still returned. Default `true`. */
+  includeExtra?: boolean
+  /** `metadata` holds only this extension's own entry. */
+  ownMetadataOnly?: boolean
+}
+```
+
+- **`light`** keeps `swipes.length` and `swipe_id` intact but sets every non-active slot to `null`, so `swipes[swipe_id]` is the only text. The active swipe's values stay on the top-level `extra` keys (`reasoning`, `reasoningDuration`, …); the `*BySwipe` arrays are dropped. Read a message without `light` before rewriting its whole `swipes` array.
+- **`includeExtra: false`** removes the `extra` field from each message. Use the top-level `hidden` flag instead of `extra.hidden`.
+- **`ownMetadataOnly`** returns `metadata` as `{ [identifier]: value }` for this extension's manifest identifier, or `undefined` when the message has no entry for it. Other extensions' entries are not sent.
+
+The host rejects the call if an integer option is out of range or not an integer, if a flag is not a boolean, if `tail` is combined with `limit` or `offset`, or if `offset` is given without `limit`. The host advertises `chat-lean-messages-v1: 1` in `spindle.host.capabilities` when these options and the `ownMetadata` patch key are supported; older hosts ignore them.
+
 ## Update Patch Shape
 
 ```ts
 type UpdateMessagePatch = {
   content?: string
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>  // replaces the whole spindle_metadata bag
+  ownMetadata?: unknown               // sets only this extension's entry; null removes it
+  metadata_patch?: Record<string, unknown>
   swipes?: string[]
   swipe_id?: number
   swipe_dates?: number[]
@@ -143,27 +194,33 @@ type UpdateMessagePatch = {
     text?: string | null       // null clears extra.reasoning
     duration?: number | null   // null clears extra.reasoningDuration
   }
+  swipe_reasoning?: ({ text: string | null; duration?: number | null } | null)[]
   skipChunkRebuild?: boolean
 }
 ```
 
 All fields are optional; `undefined` leaves the field untouched. Precedence rules:
 
+- **Metadata.** `metadata` replaces all extension metadata. `metadata_patch` merges only the supplied top-level fields into the latest stored metadata. Nested values are replaced and `null` is stored as a value. Do not combine the two. Patching requires host capability `chat-metadata-patch-v1`.
 - **`content` wins.** If you supply `content`, it overwrites both `message.content` and `swipes[swipe_id]` (the active slot).
 - **Swipes without content.** Supply `swipes` alone and the new active content is derived from `swipes[swipe_id]` (either the supplied `swipe_id` or the existing one if you didn't patch it).
 - **Navigation-only.** Supply `swipe_id` alone to cycle the active slot; content is re-derived from the existing `swipes` array.
 - **`swipe_dates` auto-align.** If you rewrite `swipes` without supplying `swipe_dates`, the host pads new slots with the current timestamp and truncates trailing dates if the array shrank. If you want precise control, supply both.
 - **Reasoning is independent.** `reasoning.text` and `reasoning.duration` are cleared independently with `null` — they are not forced to move together.
+- **Per-swipe reasoning.** `swipe_reasoning` replaces reasoning for every resulting swipe in order. Supply one entry per swipe; `null` clears a slot. Omitted durations clear the saved duration. Durations must be finite, non-negative milliseconds. Do not combine this field with `reasoning`.
 - **Chunk rebuilds are default behavior.** When the active message content changes, the host invalidates chat-memory cache and rebuilds `chat_chunks` so retrieval stays aligned with canonical stored content.
+- **`metadata` replaces, `ownMetadata` merges.** `metadata` overwrites the whole `spindle_metadata` bag, including other extensions' entries. `ownMetadata` sets `spindle_metadata[<your manifest identifier>]` on the host and leaves every other key untouched; `null` removes your entry. `ownMetadata` is applied after either `metadata` or `metadata_patch`; the existing restriction against combining those two remains.
 - **`skipChunkRebuild` is an advanced escape hatch.** Set `skipChunkRebuild: true` only for extension/host maintenance rewrites where you intentionally do not want that content edit to churn chat chunks.
 
 ### Validation
 
 The host throws a per-request error (surfaced to the caller) if:
 
+- `metadata_patch` is not a non-null, non-array object, or is supplied with `metadata`
 - `swipes` is empty after the patch is applied
 - `swipe_id` is out of range (`< 0` or `>= swipes.length`, or non-finite)
 - `swipes.length !== swipe_dates.length` after the patch and auto-align
+- `swipe_reasoning` has an invalid entry, the wrong length, or is supplied with `reasoning`
 
 These throw rather than silently clamp — partial writes would drift `swipes` / `swipe_dates` / `swipe_id` out of sync, and recovery is easier when the call fails loudly.
 
@@ -178,7 +235,7 @@ These throw rather than silently clamp — partial writes would drift `swipes` /
 
 `reasoning` targets the host-owned `extra.reasoning` (text) and `extra.reasoningDuration` (ms) fields projected for the active swipe. Supplying `reasoning: { text: "..." }` overwrites the active swipe's text without touching the duration; supplying `reasoning: { duration: null }` clears the active swipe's duration without touching the text.
 
-A reasoning patch with no `metadata` patch still persists — the host writes the mutated `extra` bag whenever either `metadata` or `reasoning` touched it.
+Reasoning saves without a `metadata` patch. Both reasoning fields use the native per-swipe storage and survive navigation and forks.
 
 ### Chat-chunk side effects
 
@@ -191,6 +248,14 @@ By default, `spindle.chat.updateMessage()` keeps retrieval data in sync with can
 `skipChunkRebuild: true` suppresses that rebuild path for the current update only. This is intended for advanced maintenance scenarios such as extension-owned normalization, metadata-preserving rewrites, or legacy-format repair where the canonical stored message must change but retrieval should remain untouched.
 
 Use it sparingly. If you suppress rebuilds for semantic content edits, retrieval and memory-cortex data can drift away from the stored transcript until some later operation rebuilds the chat.
+
+## Variables per swipe
+
+Native generation saves each swipe's starting and resulting variables. Regeneration uses the starting state; continuation uses the current state. Older swipe selections leave current variables unchanged until later messages are deleted or a branch is created. Manual variable edits are preserved. Existing replies without saved state cannot be reconstructed.
+
+For extension-generated replies, `spindle.chat.setSwipeVariables(chatId, messageId, input)` initializes the swipes of a new assistant message at the end of the chat. Requires `chats`, `chat_mutation`, and `chat-swipe-variables-v1`.
+
+Pass `expected_variables: { global, chat }` from before prompt assembly, `expected_revision: chat.variable_revision ?? null`, the current `expected_swipes`, and the resulting `variables` as `{ global, chat }` string maps in swipe order. Returns `false` when the expected state changed; prepare again before retrying. Each message can be initialized once. Use this API instead of writing internal variable records.
 
 ## Hidden Messages
 
@@ -220,12 +285,14 @@ The bulk variant cap of 500 IDs per call mirrors the underlying service limit an
    * on `metadata`). Carries reasoning text/duration, attachments, hidden flag,
    * and any host-owned housekeeping fields.
    */
-  extra: Record<string, unknown>
+  extra?: Record<string, unknown>  // present unless `includeExtra: false`
+  /** Mirrors `extra.hidden`. Always present. */
+  hidden: boolean
   metadata?: Record<string, unknown>
   /** Active swipe index. `0` for messages with no alternates. */
   swipe_id: number
-  /** All swipe variants for this message. `swipes[swipe_id]` equals `content`. */
-  swipes: string[]
+  /** All swipe variants for this message. `swipes[swipe_id]` equals `content`. With `light`, non-active slots are `null`. */
+  swipes: Array<string | null>     // null slots only with `light: true`
   /** Per-swipe creation timestamps (unix epoch seconds), aligned with `swipes`. */
   swipe_dates: number[]
 }
@@ -233,15 +300,17 @@ The bulk variant cap of 500 IDs per call mirrors the underlying service limit an
 
 ## Role Mapping
 
-Messages created via `appendMessage` use the `role` field to set `is_user` and `name`:
+Messages created via `appendMessage` use `role` to set `is_user` and the default saved `name`:
 
-| Role | `is_user` | `name` |
+| Role | `is_user` | `name` when omitted |
 |------|-----------|--------|
-| `"user"` | `true` | From active persona |
-| `"assistant"` | `false` | From chat's character |
+| `"user"` | `true` | `"User"` |
+| `"assistant"` | `false` | `"Assistant"` |
 | `"system"` | `false` | `"System"` |
 
-Extension metadata is stored in the message's `extra.spindle_metadata` field.
+Optional `name` and `characterId` require host capability `chat-append-identity-v1`. `name` overrides the saved name. `characterId` is stored in `extra.character_id` and is allowed only for assistant messages referencing a character owned by the chat's user. The destination chat is still selected by `chatId`.
+
+Extension metadata is stored in the message's `extra.spindle_metadata` field. An extension's own entry is `extra.spindle_metadata[<manifest identifier>]`; write it with the `ownMetadata` patch key so concurrent writes from other extensions are preserved. Host-owned keys such as `preset_contexts` cannot be used as an own entry.
 
 ## Per-Chat Style Mode
 

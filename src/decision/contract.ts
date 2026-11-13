@@ -1,8 +1,10 @@
-/** Shared Decision contract supplied by the published Spindle SDK. */
+/** Shared Decision contract supplied by the pinned Spindle SDK. */
 export type {
   DecisionJsonValue,
   DecisionDescription,
   DecisionState,
+  DecisionImageAsset,
+  DecisionBox,
   DecisionQuestion,
   DecisionAnswer,
   DecisionAnswerFor,

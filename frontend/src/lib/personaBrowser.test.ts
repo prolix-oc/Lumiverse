@@ -4,7 +4,9 @@ import {
   derivePersonaBrowserPage,
   groupPersonasByFolder,
   includeEmptyPersonaFolders,
+  selectRecentPersonaIds,
 } from './personaBrowser'
+import type { AppStore } from '@/types/store'
 
 interface TestPersona {
   id: string
@@ -12,6 +14,15 @@ interface TestPersona {
 }
 
 describe('persona browser derivation', () => {
+  test('the hidden-persona selector stays stable across history changes without deleting history', () => {
+    const state = { showRecentPersonas: false, recentPersonaIds: ['one'] } as AppStore
+    const hidden = selectRecentPersonaIds(state)
+    expect(hidden).toEqual([])
+    expect(selectRecentPersonaIds({ ...state, recentPersonaIds: ['two', 'one'] })).toBe(hidden)
+    expect(state.recentPersonaIds).toEqual(['one'])
+    expect(selectRecentPersonaIds({ ...state, showRecentPersonas: true })).toBe(state.recentPersonaIds)
+  })
+
   test('recent personas remain in their canonical folder page', () => {
     const personas: TestPersona[] = [
       { id: 'recent-foldered', folder: 'Friends' },

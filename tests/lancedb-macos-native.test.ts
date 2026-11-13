@@ -23,7 +23,7 @@ function artifact() {
   binary.writeUInt32LE(1, 40);
   binary.writeUInt32LE(13 << 16, 44);
   const manifest: IntelLanceDbManifest = {
-    format: 1, version: INTEL_LANCEDB.version, sourceCommit: INTEL_LANCEDB.sourceCommit,
+    format: 1, buildId: intelLanceDbBuildId(), version: INTEL_LANCEDB.version, sourceCommit: INTEL_LANCEDB.sourceCommit,
     target: INTEL_LANCEDB.target, rustToolchain: INTEL_LANCEDB.rustToolchain,
     minimumMacOS: INTEL_LANCEDB.minimumMacOS, cpu: INTEL_LANCEDB.cpu,
     sha256: createHash("sha256").update(binary).digest("hex"),
@@ -66,8 +66,15 @@ test("dependency identity follows source and compilation policy without hashing 
   }
   expect(intelLanceDbBuildId(INTEL_LANCEDB, { ...INTEL_LANCEDB_RELEASE_PROFILE, lto: "off" })).not.toBe(original);
   expect(intelLanceDbBuildId(INTEL_LANCEDB, { ...INTEL_LANCEDB_RELEASE_PROFILE, codegenUnits: 32 })).not.toBe(original);
-  // The pre-release-cache migration remains usable only under the original recipe.
-  expect(original).toBe("437cd5aee067c3949e41f3f64eacae668b1e011fbeae1203f0050fe496528c12");
+  // Only the original 0.37.1 recipe may adopt artifacts without a build ID.
+  expect(original).not.toBe("437cd5aee067c3949e41f3f64eacae668b1e011fbeae1203f0050fe496528c12");
+});
+
+test("rejects a new dependency artifact without its exact build identity", () => {
+  const fixture = artifact();
+  const { buildId, ...withoutIdentity } = fixture.manifest;
+  writeFileSync(join(fixture.directory, "manifest.json"), JSON.stringify(withoutIdentity));
+  expect(() => readIntelLanceDbArtifact(fixture.directory, INTEL_LANCEDB.version)).toThrow("build policy");
 });
 
 test("rejects the wrong architecture, newer macOS requirements, and truncated Mach-O files", () => {

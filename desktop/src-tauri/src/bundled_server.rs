@@ -182,6 +182,40 @@ pub fn bundled_server_alive(
     require_window(&window, "main")?;
     Ok(state.running.lock().unwrap().is_some())
 }
+
+async fn network_access(app: AppHandle, mode: &'static str) -> Reply {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = command(&app)?
+            .args(["--network-access", mode])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| format!("Could not read or save network access: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("Invalid network access response: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn bundled_server_network_access(app: AppHandle, window: WebviewWindow) -> Reply {
+    require_window(&window, "main")?;
+    network_access(app, "status").await
+}
+
+#[tauri::command]
+pub async fn bundled_server_set_network_access(
+    app: AppHandle,
+    window: WebviewWindow,
+    enabled: bool,
+) -> Reply {
+    require_window(&window, "main")?;
+    network_access(app, if enabled { "on" } else { "off" }).await
+}
+
 /// Share the profile's path and environment overrides with read-only queries.
 pub(crate) fn command(app: &AppHandle) -> Result<Command, String> {
     let executable = binary().ok_or("This desktop build does not include a server executable.")?;

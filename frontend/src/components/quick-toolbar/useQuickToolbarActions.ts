@@ -26,7 +26,7 @@ import { resolveToolbarIntent, type ToolbarSurface, type ToolbarUiState } from '
 import { moveWithinFiltered } from '@/lib/toolbarActionSearch'
 import { DEFAULT_QUICK_TOOLBAR_SETTINGS } from '@/lib/uiProductivityDefaults'
 // Host-surface toolbars render in detached roots without RouterProvider context.
-import { router } from '@/router'
+import { navigateApp } from '@/lib/app-navigation'
 import { useStore } from '@/store'
 import type { QuickToolbarSettings } from '@/types/store'
 import type { DrawerTabState, InputBarActionState } from '@/store/slices/spindle-placement'
@@ -543,7 +543,7 @@ export function useQuickToolbarActions() {
       keywords: command.keywords,
       icon: command.icon,
       surface: { kind: 'command' },
-      run: () => runSurface({ kind: 'command' }, () => void command.run(router.navigate)),
+      run: () => runSurface({ kind: 'command' }, () => void command.run(navigateApp)),
     }))
     const extensionInputActions: ToolbarAction[] = enabledInputBarActions
       // These named Lumiverse Suite actions are registered by extension-owned
@@ -575,7 +575,7 @@ export function useQuickToolbarActions() {
       owners: {
         ...owners,
         openModal: owners.openModal ?? openModal,
-        navigate: router.navigate,
+        navigate: navigateApp,
       },
       scope: {
         activeCharacterId,

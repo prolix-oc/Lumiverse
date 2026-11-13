@@ -1,9 +1,45 @@
+import { bodyLimit } from 'hono/body-limit';
 import { Hono } from "hono";
 import * as svc from "../services/connections.service";
 import { parsePagination } from "../services/pagination";
 import { withReadableApiKeyStatus, withReadableApiKeyStatuses } from "../services/connection-secret-status";
+import { getConnectionOrganization } from '../services/connection-organization.service';
+import { assertOrganizationKind } from '../shared/connection-organization';
+import { validateOrganizationEdits } from '../shared/connection-organization-edits';
+import { executeDatabaseOperation } from '../db/execution';
+import { eventBus } from '../ws/bus';
+import { EventType } from '../ws/events';
+import { getSettingsByKeysAsync } from '../services/settings.service';
+import { ORGANIZATION_KEYS } from '../shared/connection-organization-edits';
 
 const app = new Hono();
+
+app.get('/organization', async c => {
+  const values = await getSettingsByKeysAsync(c.get('userId'), [...ORGANIZATION_KEYS]);
+  return c.json(Object.fromEntries(ORGANIZATION_KEYS.map(key => [key, values.get(key) ?? {}])));
+});
+
+app.post('/organization/edit', bodyLimit({ maxSize: 256 * 1024 }), async c => {
+  const edits: unknown = await c.req.json();
+  try {
+    validateOrganizationEdits(edits);
+    const settings = await executeDatabaseOperation<Record<string, unknown>>({ kind: 'connection-organization-edit', userId: c.get('userId'), edits });
+    eventBus.emit(EventType.SETTINGS_UPDATED, { keys: Object.keys(settings) }, c.get('userId'));
+    return c.json(settings);
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code === 'CONNECTION_ORGANIZATION_CONFLICT') return c.json({ error: 'Organization changed; reload and retry', code }, 409);
+    if (code === 'CONNECTION_ORGANIZATION_INVALID') return c.json({ error: 'Invalid organization edit', code }, 400);
+    throw error;
+  }
+});
+
+app.get('/organization/:kind', c => {
+  const kind = c.req.param('kind');
+  try { assertOrganizationKind(kind); }
+  catch { return c.json({ error: 'Invalid connection kind', code: 'CONNECTION_KIND_INVALID' }, 400); }
+  return c.json(getConnectionOrganization(c.get('userId'), kind));
+});
 
 app.get("/", async (c) => {
   const userId = c.get("userId");

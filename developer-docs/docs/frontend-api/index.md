@@ -37,6 +37,8 @@ Frontend UI can follow two supported rendering paths:
 | Category | Permission | Description |
 |----------|-----------|-------------|
 | [Client Detection](client-info.md) | Free | Identify browser tabs, PWAs, desktop apps, and iOS/Android apps, with native bridge discovery |
+| [UUIDs](uuid.md) | Free | Generate UUID v4 or v7 strings synchronously, including over plain HTTP |
+| [Chat Composer](composer.md) | Free (`send` needs `generation`) | Read, replace or insert the chat draft and send it through the host's send path |
 | [DOM Helper](dom-helper.md) | Free | Inject sanitized HTML/CSS in the host DOM, target specific chat messages with virtualizer-safe replay, and create host-managed sandbox frames |
 | [UI Event Helpers](ui-events-helper.md) | Free | Keyboard/Drawer/Settings state and DOM Action delegation |
 | [HTML Islands](html-islands.md) | Free | Auto-isolation of styled HTML in messages, and how to opt out |
@@ -50,5 +52,7 @@ Frontend UI can follow two supported rendering paths:
 | [Message Previews](message-preview.md) | Free | Render an active-chat swipe or source range through the native display pipeline in a preview-only host surface |
 | [File Uploads](file-uploads.md) | Free | Open file picker and read selected files |
 | [Theme Authoring](theme-authoring.md) | Varies | Work with native theme assets, safe `.lumitheme` drafts, the component/variable catalog, and native Theme Editor navigation |
+| [Connection Profiles](connections.md) | Free (switching the LLM profile needs `generation`) | List the user's LLM, image, TTS, STT, embedding, and Decision profiles without credentials |
 | [Speech-to-text](speech-to-text.md) | `media` (discovery is free) | Record or transcribe audio through the host speech stack, including bundled on-device Whistle |
+| [Text-to-speech](text-to-speech.md) | `media` (playback state is free) | Speak text or chat messages through the user's TTS connections, and know when host TTS is playing |
 | [System audio](system-audio.md) | `system_audio` (discovery is free) | Combined and optional stereo spectrum and loudness of the sound the device is playing; analysis only, with explicit host consent (optionally remembered) and a host indicator while it runs. Needs a native desktop adapter |

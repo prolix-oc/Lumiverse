@@ -125,8 +125,8 @@ test('preserves fullscreen sizing and classes alongside optional portal theme ho
   const modal = document.querySelector('[data-component="FullscreenFixture"]') as HTMLElement
   expect(modal.classList.contains('fixture_fullscreenModal')).toBe(true)
   expect(modal.classList.contains('fixture_scrollable')).toBe(true)
-  expect(modal.style.maxWidth).toBe('')
-  expect(modal.style.maxHeight).toBe('')
+  expect(modal.style.maxWidth).toBe('none')
+  expect(modal.style.maxHeight).toBe('none')
   expect(modal.parentElement?.classList.contains('fixture_fullscreenBackdrop')).toBe(true)
   expect(modal.parentElement?.getAttribute('data-modal')).toBe('FullscreenFixture')
 })

@@ -424,9 +424,9 @@ export const SECRET_SETTING_KEY_PATTERNS: readonly RegExp[] = [
   /^embedding_api_key_/,
   /^pollinations_app_key$/,
   // Web-search provider credentials live in the encrypted `secrets` table.
-  // Keep legacy SearXNG and the provider-specific Exa/Tavily names out of
+  // Keep legacy SearXNG and the provider-specific hosted API names out of
   // settings exports/imports in case an older client ever wrote one there.
-  /^web_search_(?:exa_|tavily_)?api_key$/,
+  /^web_search_(?:exa_|tavily_|deepseek_)?api_key$/,
 ];
 
 /** LanceDB tables that participate in optional vector export. */

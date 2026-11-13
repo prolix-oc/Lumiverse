@@ -75,6 +75,7 @@ let pendingRegistryRefresh: Promise<void> | null = null
 
 const storeState = {
   activeLoomPresetId: presetId,
+  loomRegistryLoaded: true,
   loomRegistry: { [presetId]: { name: persistedPreset.name, blockCount: 1, updatedAt: 1, isDefault: false } },
   setActiveLoomPreset: (_id: string | null) => {},
   setLoomRegistry: (_registry: Record<string, unknown>) => {},
@@ -111,7 +112,7 @@ const presetsApiMock = {
       cache_revision: 2,
     }
   },
-  listRegistry: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
+  listRegistryAll: async (): Promise<{ data: PresetRegistryItem[]; total: number }> => {
     events.push('registry:refresh')
     if (holdRegistryRefresh) {
       const refreshGate = new Promise<void>((resolve) => { resolveRegistryRefresh = resolve })
@@ -184,13 +185,13 @@ const mountedRoots = new Set<Root>()
 let renderCount = 0
 // Test harness intentionally performs non-reactive assignments to module-level
 // test state so the suite can inspect hook outputs. This is safe only in tests.
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/globals */
 function HookHarness() {
   renderCount += 1
   hookSurface = useLoomBuilder() as unknown as LoomBuilderTestSurface
   return null
 }
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/globals */
 
 async function renderHook(): Promise<{ host: HTMLDivElement; root: Root }> {
   const host = document.createElement('div')

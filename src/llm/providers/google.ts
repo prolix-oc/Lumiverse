@@ -1,4 +1,5 @@
 import { parseGoogleResponse, readGoogleStream } from "./google-response";
+import { omitDisabledPenalties } from "../generation-parameters";
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../stream-utils";
@@ -11,7 +12,7 @@ import {
   GOOGLE_SEARCH_PARAMETERS,
 } from "./google-search";
 import { splitLeadingSystemMessagePrefix } from "../system-message-prefix";
-import { normalizeGoogleMediaMimeType } from "./google-media";
+import { GOOGLE_MEDIA_HANDLED_PARAMS, GOOGLE_MEDIA_PARAMETERS, normalizeGoogleMediaMimeType, resolveGoogleMediaResolution } from "./google-media";
 
 const GEMINI_SCHEMA_FIELDS = new Set(["type","format","title","description","nullable","enum","maxItems","minItems","properties","required","minProperties","maxProperties","minLength","maxLength","pattern","example","anyOf","propertyOrdering","default","items","minimum","maximum"]);
 
@@ -44,6 +45,7 @@ export class GoogleProvider implements LlmProvider {
       top_k: COMMON_PARAMS.top_k,
       stop: COMMON_PARAMS.stop,
       ...GOOGLE_SEARCH_PARAMETERS,
+      ...GOOGLE_MEDIA_PARAMETERS,
     },
     requiresMaxTokens: false,
     supportsSystemRole: true,
@@ -98,7 +100,7 @@ export class GoogleProvider implements LlmProvider {
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "stream", res);
 
-    yield* readGoogleStream(res, this.displayName, request.parameters?._replay_thought_signatures === true, request.signal);
+    yield* readGoogleStream(res, this.displayName, request.parameters?._replay_thought_signatures === true, request.signal, request.onResponseActivity);
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
@@ -201,10 +203,11 @@ export class GoogleProvider implements LlmProvider {
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
     "responseMimeType", "responseSchema", "responseJsonSchema",
     ...GOOGLE_SEARCH_HANDLED_PARAMS,
+    ...GOOGLE_MEDIA_HANDLED_PARAMS,
   ]);
 
   private buildBody(request: GenerationRequest): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
 
     // Gemini has one top-level systemInstruction, so lift only the contiguous
     // leading prefix. Later system messages are mapped to user-role contents
@@ -241,6 +244,8 @@ export class GoogleProvider implements LlmProvider {
     if (params.top_p !== undefined) generationConfig.topP = params.top_p;
     if (params.top_k !== undefined) generationConfig.topK = params.top_k;
     if (params.stop) generationConfig.stopSequences = params.stop;
+    const mediaResolution = resolveGoogleMediaResolution(params);
+    if (mediaResolution !== undefined) generationConfig.mediaResolution = mediaResolution;
 
     // Thinking configuration for Gemini 2.5+ and 3.x models
     if (params.thinkingConfig) {

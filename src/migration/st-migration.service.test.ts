@@ -31,6 +31,7 @@ function allOffScope(overrides: Partial<MigrationScope> = {}): MigrationScope {
     chats: false,
     groupChats: false,
     connections: false,
+    gallery: false,
     ...overrides,
   };
 }

@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { ttsConnectionsApi } from '@/api/tts-connections'
+import { Button } from '@/components/shared/FormComponents'
 import { getTtsVoiceLabel, getTtsVoiceSublabel } from '@/lib/ttsVoiceLabels'
 import type { TtsVoice, VoiceRef } from '@/types/api'
 import styles from './VoicePicker.module.css'
+
+const VoiceLibraryModal = lazy(() => import('@/components/modals/VoiceLibraryModal'))
 
 interface VoicePickerProps {
   /** Current selection. `null` means "no override / use fallback". */
@@ -56,6 +59,7 @@ export default function VoicePicker({
 
   const [voicesByConnection, setVoicesByConnection] = useState<Record<string, { updatedAt: number; voices: TtsVoice[] }>>({})
   const [voicesLoading, setVoicesLoading] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
 
   const activeConnection = useMemo(
     () => ttsProfiles.find((p) => p.id === value?.connectionId) ?? null,
@@ -65,6 +69,13 @@ export default function VoicePicker({
   const provider = activeConnection
     ? ttsProviders.find((p) => p.id === activeConnection.provider) ?? null
     : null
+
+  const libraryConnection = useMemo(() => activeConnection ? {
+    connection_id: activeConnection.id,
+    provider: activeConnection.provider,
+  } : null, [activeConnection])
+
+  useEffect(() => { setLibraryOpen(false) }, [activeConnection?.id])
 
   // Fetch the active connection's voices when it changes — but only once per
   // session per connection, since voice lists are stable for the lifetime of
@@ -150,6 +161,7 @@ export default function VoicePicker({
       </div>
 
       {activeConnection && (
+        <>
         <div className={styles.row}>
           <span className={styles.label}>{t('voice')}</span>
           <SearchableSelect
@@ -166,7 +178,27 @@ export default function VoicePicker({
             portal={portal}
           />
         </div>
+        {provider?.capabilities.supportsVoiceLibrary && <div className={styles.row}>
+          <span className={styles.label} />
+          <Button size="sm" onClick={() => setLibraryOpen(true)} disabled={disabled}>{t('voiceLibrary')}</Button>
+        </div>}
+        </>
       )}
+      {libraryOpen && libraryConnection && activeConnection && <Suspense fallback={null}><VoiceLibraryModal
+        connection={libraryConnection}
+        value={value?.voice}
+        onClose={() => setLibraryOpen(false)}
+        onSelect={(voice) => {
+          setVoicesByConnection((previous) => ({
+            ...previous,
+            [activeConnection.id]: {
+              updatedAt: activeConnection.updated_at,
+              voices: [...(previous[activeConnection.id]?.voices || []).filter((item) => item.id !== voice.id), voice],
+            },
+          }))
+          handleVoiceChange(voice.id)
+        }}
+      /></Suspense>}
     </div>
   )
 }

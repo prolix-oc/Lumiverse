@@ -97,6 +97,7 @@ type MockSearchableSelectProps = {
   onChange?: (value: string | string[]) => unknown
   portal?: boolean
   portalOwnerId?: string
+  [key: string]: any
 }
 let searchableSelectProps: MockSearchableSelectProps | null = null
 let portalSeedAttributes: { hidden?: string; inert?: string; style?: string } | null = null
@@ -184,6 +185,8 @@ mock.module('@/api/connections', () => ({ connectionsApi: {} }))
 mock.module('@/api/image-gen-connections', () => ({ imageGenConnectionsApi: {} }))
 mock.module('@/api/tts-connections', () => ({ ttsConnectionsApi: {} }))
 const mockPlacementState = {
+  extensions: [] as Array<{ id: string; enabled: boolean }>,
+  extensionCommands: [] as Array<{ extensionId: string; commands: Array<{ id: string }> }>,
   drawerTabs: [] as Array<{ root: HTMLElement; extensionId: string }>,
   characterEditorTabs: [] as Array<{ root: HTMLElement; extensionId: string }>,
   presetEditorTabs: [] as Array<{ root: HTMLElement; extensionId: string }>,
@@ -192,6 +195,11 @@ const mockPlacementState = {
   dockPanels: [] as Array<{ root: HTMLElement; extensionId: string }>,
   appMounts: [] as Array<{ root: HTMLElement; extensionId: string }>,
 }
+let keybindingEditorCommand: { extensionId: string; commandId: string } | undefined
+mock.module('@/components/settings/DesktopKeybindingsSettings', () => ({ default: (props: { extensionCommand: { extensionId: string; commandId: string } }) => {
+  keybindingEditorCommand = props.extensionCommand
+  return createElement('div', { 'data-testid': 'keybinding-editor' })
+} }))
 mock.module('@/store', () => ({
   useStore: Object.assign(() => null, { getState: () => mockPlacementState }),
 }))
@@ -270,6 +278,9 @@ afterEach(() => {
   mockPlacementState.floatWidgets.length = 0
   mockPlacementState.dockPanels.length = 0
   mockPlacementState.appMounts.length = 0
+  mockPlacementState.extensions.length = 0
+  mockPlacementState.extensionCommands.length = 0
+  keybindingEditorCommand = undefined
   controlledLoomProps = null
   numericInputProps = null
   rangeSliderProps = null
@@ -322,6 +333,22 @@ function value(overrides: Partial<SpindleLoomBlockEditorValue> = {}): SpindleLoo
 }
 
 describe('public component bridge lifecycle and ownership', () => {
+  test('inline key binding editors accept only the current extension registered command and owned UI', () => {
+    const extensionId = 'keybinding-owner'
+    const root = ownedRoot(extensionId, 'keybinding-panel')
+    mockPlacementState.extensions.push({ id: extensionId, enabled: true }, { id: 'other', enabled: true })
+    mockPlacementState.extensionCommands.push({ extensionId, commands: [{ id: 'analyze' }] }, { extensionId: 'other', commands: [{ id: 'other-command' }] })
+    const helper = createComponentsHelper(extensionId, extensionId, async () => ({}), generation)
+    expect(() => helper.mountKeybindingEditor(root, { commandId: 'other-command' })).toThrow('KEYBINDING_COMMAND_UNAVAILABLE')
+    expect(() => helper.mountKeybindingEditor(document.body, { commandId: 'analyze' })).toThrow('owned')
+    const handle = helper.mountKeybindingEditor(root, { commandId: 'analyze' })
+    expect(root.querySelector('[data-testid="keybinding-editor"]')).not.toBeNull()
+    expect(keybindingEditorCommand).toEqual({ extensionId, commandId: 'analyze' })
+    handle.destroy()
+    expect(root.childElementCount).toBe(0)
+    mockPlacementState.extensions[0].enabled = false
+    expect(() => helper.mountKeybindingEditor(root, { commandId: 'analyze' })).toThrow('KEYBINDING_COMMAND_UNAVAILABLE')
+  })
   test('filters string targets by current extension ownership before ambiguity checks', () => {
     const first = ownedRoot('bridge-owner-a', 'same-target')
     const second = ownedRoot('bridge-owner-b', 'same-target')
@@ -1492,4 +1519,28 @@ describe('public component bridge lifecycle and ownership', () => {
     expect(reported.flat()).toEqual(expect.arrayContaining(expectedFailures))
   })
 
+})
+
+
+test('single and multi selects forward incremental state and updated callbacks', () => {
+  for (const multi of [false, true]) {
+    const id = `pagination-${multi}`
+    const target = ownedRoot(id, id)
+    const helper = createComponentsHelper(id, id, async () => ({ categories: [] }), generation)
+    const searches: string[] = []
+    let loads = 0
+    const options = { options: [{ value: 'one', label: 'One' }], forceSearch: true, remoteSearch: true,
+      loading: true, hasMore: true, loadMoreOnScroll: true, loadingMessage: 'Fetching', loadMoreLabel: 'More',
+      onSearchChange: (query: string) => searches.push(query), onLoadMore: () => { loads++ } }
+    const handle = multi ? helper.mountMultiSelect(target, options) : helper.mountSelect(target, options)
+    expect(searchableSelectProps).toMatchObject({ forceSearch: true, remoteSearch: true, loading: true, hasMore: true,
+      loadMoreOnScroll: true, loadingMessage: 'Fetching', loadMoreLabel: 'More' })
+    searchableSelectProps?.onSearchChange?.('Mira'); searchableSelectProps?.onLoadMore?.()
+    expect(searches).toEqual(['Mira']); expect(loads).toBe(1)
+    flushSync(() => handle.update({ loading: false, hasMore: false, onSearchChange: (query: string) => searches.push(`updated:${query}`), onLoadMore: () => { loads += 10 } } as any))
+    expect(searchableSelectProps).toMatchObject({ loading: false, hasMore: false })
+    searchableSelectProps?.onSearchChange?.('new'); searchableSelectProps?.onLoadMore?.()
+    expect(searches).toEqual(['Mira', 'updated:new']); expect(loads).toBe(11)
+    handle.destroy()
+  }
 })

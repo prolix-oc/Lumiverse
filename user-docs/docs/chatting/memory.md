@@ -63,7 +63,7 @@ Use **Recompile Memories** after changing chunking or the embedding model to pre
 |---------|---------|
 | **Top-K Results** | Maximum number of retrieved passages; default 4 |
 | **Exclusion Window** | Exclude chunks touching the last N visible, nonempty messages; default 20. Avoids repeating recent history, but does not automatically match your actual context limit. |
-| **Similarity Threshold** | Maximum vector distance allowed. **Lower positive values are stricter**; 0 disables filtering. Keyword-only hits have no vector distance and are excluded when filtering is active. |
+| **Maximum vector distance** | Maximum cosine distance allowed. **Lower positive values are stricter**; 0 disables filtering. For example, 0.35 passes a 0.6 cutoff; 0.7 does not. Keyword-only and recency fallback hits have no measured vector distance and are excluded when filtering is active. |
 | **Query Context Size** | Recent messages used to form the search query; default 6 |
 | **Query Max Tokens** | Caps text used as the **search query**, not the retrieved memory section's token budget |
 
@@ -74,6 +74,8 @@ Use **Recompile Memories** after changing chunking or the embedding model to pre
 - **Weighted Recent** uses recent messages and repeats the newest one to emphasize it.
 
 Cortex uses shared chunk/query settings and adds its own ranking and **Context Token Budget**. See [Cortex controls](memory-cortex.md#formatting-and-retrieval-controls).
+
+The distance cutoff applies before Cortex ranking, including vault/interlink recall. Salience, recency, and other ranking signals cannot promote a passage beyond the distance cutoff. Cached results are checked again against the current cutoff during prompt assembly. Automatic scene/arc history replacement uses complete source spans rather than semantic retrieval, so it is independent of this cutoff.
 
 ## Put Memories in the Prompt
 
@@ -121,6 +123,8 @@ Under **Formatting** in the Advanced tab:
 - **Chunk Separator** separates hits.
 
 For example, use a Header Template containing a heading followed by `{{memories}}`, and a Chunk Template of `{{content}}` for simple labeled passages. A recency or keyword-only hit has no vector score and renders `{{score}}` as `n/a`.
+
+**Scores use different metrics:** with basic recall, `{{score}}` is raw vector distance (lower is closer). With Cortex recall, it is the combined ranking score (higher ranks first), which includes semantic relevance, salience, recency, and other signals. A Cortex score of 0.35 does not mean 35% similarity and is not compared directly with the distance cutoff.
 
 Cortex's **Use Long-Term Chat Memory formatting** preserves these templates for raw retrieved chunks. Cortex's formatter still handles consolidations, entities, relationships, and arcs.
 

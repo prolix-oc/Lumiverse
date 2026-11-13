@@ -71,6 +71,8 @@ Each resolve method receives a `context`:
 | `isUser` | `boolean` | Whether the message is from the user |
 | `depth` | `number` | Message depth |
 | `dynamicMacros` | `Record<string, string>?` | Per-call macro values supplied by the host |
+| `presetContext` | `MessagePresetContextDTO?` | Preset and saved variables for the selected swipe |
+| `presetRegexIds` | `string[]?` | IDs of that preset's regexes, supplied to `resolveTemplates` and `applyScripts` |
 
 The method-specific arguments alongside `context` are: `content` for `resolveBody`, `templates` (a `Record<key, string>`) for `resolveTemplates`, and `content`, `scripts`, plus optional `processingState` for `applyScripts`.
 
@@ -102,6 +104,30 @@ Each mounted message keeps one active body-resolution pass and one active script
 Completed append-only prefixes can advance the visible message while a newer snapshot is pending. Rewrites, new streams, context invalidations and unmounts prevent obsolete completions from being applied. The final authoritative message still passes through preprocessing and script application as needed.
 
 For host-owned display, a missing required terminal literal can prove that a script cannot match before any worker or backend dispatch. This uses a cached literal guard, not execution of the user-authored regex. Patterns outside the recognized subset keep isolated execution. Trimming, repeat-back, macro side effects and ordered replacement chains retain their semantics. Extension-owned resolvers remain authoritative and bypass this host guard.
+
+## Per-swipe presets
+
+Requires host capability `message-preset-context-v1: 1`. Store
+`{ preset_id, variables? }` entries in `message.extra.spindle_metadata.preset_contexts`,
+matching the indexes in `message.swipes`. Use `null` for normal rendering.
+The host keeps entries aligned when swipes are added or deleted.
+
+Each swipe uses its preset's current enabled regexes in place of the active
+preset's regexes. They run in order against the whole message, preserving nested
+replacements, anchors, and lookarounds. Global, character, chat, and extension
+rules keep their scope and order. The active preset and saved rules stay unchanged.
+Deleted or inaccessible presets never fall back to the active preset's regexes.
+
+Save `dryRun.variable_state` as `variables` to reuse the values from prompt
+assembly. It contains `local`, `global`, `chat`, and `prompt_defaults` string
+records, plus `prompt_selections` string-array records. Each field is optional
+in a saved entry.
+
+Custom resolvers receive `presetContext` and must apply its variables themselves.
+Use `presetRegexIds` to identify the preset's rules and keep their variables
+separate from your character state. Copy the saved variables before changing
+them during rendering. Messages without an entry use normal rendering and
+receive neither field.
 
 ## Caching and invalidation
 

@@ -141,4 +141,22 @@ describe("reasoning delimiter helpers", () => {
     expect(chunks.map(c => c.token).join("")).toBe("Partial<thi");
     expect(chunks.at(-1)).toMatchObject({ finish_reason: "refusal", stop_details: details, stop_sequence: null });
   });
+
+  test("keeps native reasoning blocks with the tool calls while parsing tagged CoT", async () => {
+    const toolCalls = [{ name: "lookup", args: { city: "SF" }, call_id: "call_1" }];
+    const thinkingBlocks = [{ type: "thinking" as const, thinking: "Look it up.", signature: "opaque-signature" }];
+    const reasoningDetails = [{ type: "reasoning.encrypted", data: "encrypted-reasoning" }];
+    async function* source() {
+      yield { token: "<thi" };
+      yield { token: "nk>plan</think>Answer" };
+      yield { token: "", finish_reason: "tool_calls", tool_calls: toolCalls, thinking_blocks: thinkingBlocks, reasoning_details: reasoningDetails };
+    }
+    const chunks = [];
+    for await (const chunk of wrapDelimitedReasoningStream(source(), { prefix: "<think>", suffix: "</think>" }, true)) chunks.push(chunk);
+    expect(chunks).toEqual([
+      { token: "Answer", reasoning: "plan" },
+      { token: "", tool_calls: toolCalls, thinking_blocks: thinkingBlocks, reasoning_details: reasoningDetails },
+      { token: "", finish_reason: "tool_calls" },
+    ]);
+  });
 });

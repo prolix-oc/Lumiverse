@@ -1,0 +1,1 @@
+function e(e,t,n,r=!1){return e!==`left`&&e!==`right`?e:n?`top`:r?e:t}export{e as t};

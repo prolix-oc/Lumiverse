@@ -7,6 +7,8 @@ import { Button } from '@/components/shared/FormComponents'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
+import { charactersApi } from '@/api/characters'
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import type { GroupResponseOrder } from '@/lib/groupResponseOrder'
 import Pagination from '@/components/shared/Pagination'
@@ -16,6 +18,8 @@ import clsx from 'clsx'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
 import { getGreetingTitle } from '@/lib/greetingMetadata'
 import { getGreetingCellImageUrl } from '@/lib/greetingImage'
+import { toast } from '@/lib/toast'
+import { readAccountEpoch } from '@/lib/shared-read'
 
 type Step = 'characters' | 'greeting' | 'settings'
 type GroupCardMode = 'swap' | 'merge_ignore_muted' | 'merge'
@@ -42,6 +46,7 @@ export default function GroupChatCreatorModal() {
     deleteChatIdAfterCreate?: string
   } | null
   const characters = useStore((s) => s.characters)
+  const catalog = useCharacterCatalog()
   const [step, setStep] = useState<Step>('characters')
   const [selectedIds, setSelectedIds] = useState<string[]>(modalProps?.initialCharacterIds ?? [])
   const [search, setSearch] = useState('')
@@ -63,13 +68,42 @@ export default function GroupChatCreatorModal() {
     [selectedIds, characters]
   )
 
+  useEffect(() => {
+    const missing = selectedIds.filter(id => !characters.some(character => character.id === id))
+    if (missing.length === 0) return
+    const controller = new AbortController()
+    const epoch = readAccountEpoch()
+    const revision = useStore.getState().characterIndexRevision
+    void (async () => {
+      for (let offset = 0; offset < missing.length; offset += 100) {
+        const ids = missing.slice(offset, offset + 100)
+        const items = await charactersApi.getBatch(ids, { signal: controller.signal })
+        if (controller.signal.aborted || readAccountEpoch() !== epoch) return
+        for (const item of items) {
+          if (!useStore.getState().characters.some(character => character.id === item.id)
+            && (useStore.getState().characterIndexChanges[item.id] ?? 0) <= revision) {
+            useStore.getState().updateCharacter(item.id, item)
+          }
+        }
+        const found = new Set(items.map(item => item.id))
+        if (items.length < ids.length) setSelectedIds(previous => previous.filter(id => !ids.includes(id) || found.has(id)))
+      }
+    })().catch(error => {
+      if (!controller.signal.aborted) {
+        toast.error(error instanceof Error ? error.message : String(error))
+        setSelectedIds(previous => previous.filter(id => !missing.includes(id)))
+      }
+    })
+    return () => controller.abort()
+  }, [selectedIds, characters])
+
   const filteredCharacters = useMemo(() => {
-    if (!search.trim()) return characters
+    if (!search.trim()) return catalog
     const q = search.toLowerCase()
-    return characters.filter(
+    return catalog.filter(
       (c) => c.name.toLowerCase().includes(q) || c.tags?.some((t) => t.toLowerCase().includes(q))
     )
-  }, [characters, search])
+  }, [catalog, search])
 
   // Reset page when search changes
   useEffect(() => {
@@ -209,7 +243,7 @@ export default function GroupChatCreatorModal() {
 
   const canProceed =
     step === 'characters'
-      ? selectedIds.length >= 2
+      ? selectedIds.length >= 2 && selectedCharacters.length === selectedIds.length
       : step === 'greeting'
         ? selectedGreeting !== null
         : true

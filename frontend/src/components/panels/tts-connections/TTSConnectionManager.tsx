@@ -1,16 +1,8 @@
-import { DndContext } from '@/lib/dndUiScale'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import ConnectionCollection from '../connection-manager/ConnectionCollection'
+import { useConnectionLibrary, saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  closestCenter,
-  type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-  arrayMove,
-} from '@dnd-kit/sortable'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
@@ -19,7 +11,6 @@ import TTSConnectionForm from './TTSConnectionForm'
 import TTSConnectionItem from './TTSConnectionItem'
 import type { TtsConnectionProfile, CreateTtsConnectionInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
-import { useConnectionSensors, useVerticalSortModifier } from '../connection-manager/useConnectionDragAndDrop'
 import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 
 export default function TTSConnectionManager() {
@@ -35,9 +26,7 @@ export default function TTSConnectionManager() {
   const setSetting = useStore((s) => s.setSetting)
   const connectionsOrder = useStore((s) => s.connectionsOrder)
 
-  const sensors = useConnectionSensors()
-  const listRef = useRef<HTMLDivElement>(null)
-  const restrictToVerticalAndBounds = useVerticalSortModifier(listRef)
+  const library = useConnectionLibrary('tts')
 
   const orderedProfiles = useMemo(() => {
     const ttsOrder = connectionsOrder?.tts ?? []
@@ -48,8 +37,6 @@ export default function TTSConnectionManager() {
     const missing = profiles.filter((p) => !seen.has(p.id))
     return [...ordered, ...missing]
   }, [profiles, connectionsOrder])
-
-  const orderedIds = useMemo(() => orderedProfiles.map((p) => p.id), [orderedProfiles])
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -92,9 +79,10 @@ export default function TTSConnectionManager() {
     return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleCreate = useCallback(async (input: CreateTtsConnectionInput) => {
+  const handleCreate = useCallback(async (input: CreateTtsConnectionInput, folderId = '') => {
     try {
       const profile = await ttsConnectionsApi.create(input)
+      saveConnectionFolder('tts', profile.id, folderId)
       addProfile(profile)
       if (input.is_default) {
         profiles.forEach((p) => {
@@ -120,16 +108,18 @@ export default function TTSConnectionManager() {
     try {
       const duplicated = await ttsConnectionsApi.duplicate(id)
       addProfile(duplicated)
+      library.copyFolder(id, duplicated.id)
     } catch (err) {
       console.error('[TTSConnectionManager] Failed to duplicate:', err)
     }
-  }, [addProfile])
+  }, [addProfile, library])
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
     try {
       await ttsConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
+      library.forget(deleteTarget.id)
       const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
       const nextOrder = normalizedOrder.tts.filter((id) => id !== deleteTarget.id)
       setSetting('connectionsOrder', { ...normalizedOrder, tts: nextOrder })
@@ -137,18 +127,12 @@ export default function TTSConnectionManager() {
     } catch (err) {
       console.error('[TTSConnectionManager] Failed to delete:', err)
     }
-  }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
+  }, [deleteTarget, removeProfile, connectionsOrder, setSetting, library])
 
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const oldIndex = orderedIds.indexOf(String(active.id))
-    const newIndex = orderedIds.indexOf(String(over.id))
-    if (oldIndex < 0 || newIndex < 0) return
-    const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
-    applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), tts: newOrder })
-  }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
+  const handleReorder = (ids: string[]) => {
+    applyProfileOrder(ids)
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(useStore.getState().connectionsOrder), tts: ids })
+  }
 
   if (loading) {
     return <div className={styles.loading}>{t('ttsConnectionManager.loading')}</div>
@@ -156,40 +140,32 @@ export default function TTSConnectionManager() {
 
   return (
     <div className={styles.manager}>
-      {!creating && (
-        <button type="button" className={styles.createBtn} onClick={() => setCreating(true)}>
-          <Plus size={14} />
-          <span>{t('ttsConnectionManager.newConnection')}</span>
-        </button>
-      )}
-
-      {creating && (
-        <TTSConnectionForm
-          providers={providers}
-          onSave={handleCreate}
-          onCancel={() => setCreating(false)}
-        />
-      )}
-
-      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAndBounds]} onDragEnd={handleDragEnd}>
-        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-          <div ref={listRef} className={styles.list}>
-            {orderedProfiles.map((profile) => (
-              <TTSConnectionItem
-                key={profile.id}
-                profile={profile}
-                providers={providers}
-                onUpdate={handleUpdate}
-                onDuplicate={() => handleDuplicate(profile.id)}
-                onDelete={() => setDeleteTarget(profile)}
-              />
-            ))}
-            {profiles.length === 0 && !creating && (
-              <div className={styles.empty}>{t('ttsConnectionManager.empty')}</div>
-            )}
-          </div>
-        </SortableContext>
-      </DndContext>
+      <ConnectionCollection kind="tts" profiles={orderedProfiles} onReorder={handleReorder}
+        actions={!creating && (
+          <button type="button" className={styles.createBtn} onClick={() => setCreating(true)}>
+            <Plus size={14} />
+            <span>{t('ttsConnectionManager.newConnection')}</span>
+          </button>
+        )}
+        editor={creating && (
+          <TTSConnectionForm
+            providers={providers}
+            onSave={handleCreate}
+            onCancel={() => setCreating(false)}
+          />
+        )}
+        emptyMessage={creating ? '' : t('ttsConnectionManager.empty')}
+        renderProfile={(profile, placement) => (
+          <TTSConnectionItem
+            placement={placement}
+            key={profile.id}
+            profile={profile}
+            providers={providers}
+            onUpdate={handleUpdate}
+            onDuplicate={() => handleDuplicate(profile.id)}
+            onDelete={() => setDeleteTarget(profile)}
+          />
+        )} />
 
       {deleteTarget && (
         <ConfirmationModal

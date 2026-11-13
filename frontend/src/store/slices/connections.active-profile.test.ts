@@ -26,6 +26,7 @@ function settingsSliceExports() {
     persistPendingImageGenerationPatch: () => {},
     resetSettingsPersistence: () => {},
     createSettingsSlice: (_set: unknown, get: () => AppStore) => ({
+      setSetting: (key: string, value: unknown) => Object.assign(get(), { [key]: value }),
       reasoningSettings: { ...reasoningDefaults },
       unboundReasoningSettings: null,
       hydrateStartupSettings: (settings: StartupSettings) => {
@@ -113,6 +114,19 @@ describe('connections activeProfileId persistence', () => {
     expect(app.profiles).toEqual([])
     app.setProfiles([profile('cold-profile'), profile('other')])
     expect(app.activeProfileId).toBe('cold-profile')
+  })
+
+  test('records user selections without treating hydration or edits as recent use', () => {
+    settingsApi.put = (async (key, value) => ({ key, value, updated_at: 1 })) as typeof settingsApi.put
+    const app = store()
+    app.setProfiles([profile('a'), profile('b')])
+    app.setActiveProfile('a', 'bootstrap_reconcile')
+    expect(app.recentConnections?.llm ?? []).toEqual([])
+    app.setActiveProfile('b', 'user_selection')
+    expect(app.recentConnections.llm).toEqual(['b'])
+    app.updateProfile('b', { name: 'Edited' })
+    app.setActiveProfile('a', 'settings_reconcile')
+    expect(app.recentConnections.llm).toEqual(['b'])
   })
 
   test('persists user_selection, deletion, and invalidation but not reconcile reasons', () => {

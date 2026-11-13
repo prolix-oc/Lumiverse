@@ -3,24 +3,15 @@ import "../../../../image-gen/index";
 import type {
   WeaverVisualProvider,
   WeaverVisualAsset,
-  WeaverVisualImageInputMechanism,
   WeaverVisualSourceImage,
 } from "../../../../types/weaver";
 import type { VisualProviderAdapter } from "../provider-adapter";
+import { imageInputMechanism } from "../../../../image-gen/image-input";
 
-type SimpleVisualProvider = Extract<
+type SimpleVisualProvider = Exclude<
   WeaverVisualProvider,
-  "novelai" | "nanogpt" | "google_gemini" | "openrouter" | "sdapi" | "swarmui"
+  "comfyui"
 >;
-
-const IMAGE_INPUT: Record<SimpleVisualProvider, WeaverVisualImageInputMechanism> = {
-  google_gemini: "edit",
-  nanogpt: "edit",
-  novelai: "reference",
-  openrouter: "edit",
-  sdapi: "init",
-  swarmui: "init",
-};
 
 const NAI_REFERENCE_STRENGTH = 0.6;
 const INIT_DENOISE_DEFAULT = 0.5;
@@ -47,7 +38,21 @@ function applySourceImage(
   switch (provider) {
     case "google_gemini":
     case "openrouter":
+    case "openai":
+    case "xai":
+    case "ideogram":
+    case "bfl":
+    case "fal":
+    case "together":
       parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      return;
+    case "stability":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      if (parameters.strength == null) parameters.strength = INIT_DENOISE_DEFAULT;
+      return;
+    case "runware":
+      parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
+      if (parameters.strength == null) parameters.strength = INIT_DENOISE_DEFAULT;
       return;
     case "nanogpt":
       parameters.referenceImages = [{ data: source.data, mimeType: source.mimeType }];
@@ -71,6 +76,8 @@ function applySourceImage(
     case "swarmui":
       parameters.resolvedSourceImages = [{ data: source.data, mimeType: source.mimeType }];
       return;
+    default:
+      return;
   }
 }
 
@@ -88,34 +95,105 @@ function buildProviderSpecificParameters(
   provider: SimpleVisualProvider,
   asset: WeaverVisualAsset,
 ): Record<string, any> {
+  const sizeParams = (asset.provider_state?.params ?? {}) as Record<string, unknown>;
+  const width = sizeParams.width != null ? Number(sizeParams.width) : NaN;
+  const height = sizeParams.height != null ? Number(sizeParams.height) : NaN;
+  const stateWidth = Number.isFinite(width) && width > 0 ? width : asset.width;
+  const stateHeight = Number.isFinite(height) && height > 0 ? height : asset.height;
+  const seed = asset.seed != null ? { seed: asset.seed } : {};
+
   switch (provider) {
     case "novelai":
       return {
         resolution: `${asset.width}x${asset.height}`,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        ...seed,
       };
     case "nanogpt":
       return {
         size: `${asset.width}x${asset.height}`,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        ...seed,
       };
     case "google_gemini":
     case "openrouter":
+    case "fireworks":
+    case "stability":
+    case "civitai_chat":
       return {
         aspectRatio: asset.aspect_ratio,
+        ...seed,
       };
+    // Ideogram 4.5 takes `size` and 3.0/2.x take `aspect_ratio`; send both so
+    // the provider picks per model. 4.0's `resolution` is a fixed enum, so it is
+    // left to the connection default rather than derived from the scene size.
+    case "ideogram":
+      return {
+        size: `${stateWidth}x${stateHeight}`,
+        aspectRatio: asset.aspect_ratio.replace(":", "x"),
+        ...seed,
+      };
+    case "together":
+    case "deepinfra":
+    case "venice_compat":
+    case "recraft":
+    case "custom_openai":
+      return {
+        size: `${stateWidth}x${stateHeight}`,
+        ...seed,
+      };
+    // xAI sizes with aspect_ratio (not `size`); other reference-image providers
+    // that take an aspect ratio are grouped above.
+    case "xai":
+      return {
+        aspectRatio: asset.aspect_ratio,
+        ...seed,
+      };
+    case "venice":
+    case "leonardo":
+    case "runware":
+    case "civitai":
+      return {
+        width: stateWidth,
+        height: stateHeight,
+        ...seed,
+      };
+    case "bfl":
+      // Kontext and Ultra consume aspectRatio instead of width/height.
+      return { width: stateWidth, height: stateHeight, aspectRatio: asset.aspect_ratio, ...seed };
+    case "fal":
+      return {
+        imageSize: falSizePreset(stateWidth, stateHeight),
+        ...seed,
+      };
+    case "replicate":
+      return {
+        aspectRatio: asset.aspect_ratio,
+        ...seed,
+      };
+    case "huggingface":
+      return { ...seed };
+    case "pollinations":
     case "sdapi":
     case "swarmui": {
-      const stateParams = (asset.provider_state?.params ?? {}) as Record<string, unknown>;
-      const stateWidth = stateParams.width != null ? Number(stateParams.width) : NaN;
-      const stateHeight = stateParams.height != null ? Number(stateParams.height) : NaN;
       return {
-        width: Number.isFinite(stateWidth) && stateWidth > 0 ? stateWidth : asset.width,
-        height: Number.isFinite(stateHeight) && stateHeight > 0 ? stateHeight : asset.height,
-        ...(asset.seed != null ? { seed: asset.seed } : {}),
+        width: stateWidth,
+        height: stateHeight,
+        ...seed,
       };
     }
+    default:
+      return {};
   }
+}
+
+function falSizePreset(width: number, height: number): string {
+  const ratio = width / height;
+  const presets: Array<[string, number]> = [
+    ["square_hd", 1], ["landscape_4_3", 4 / 3], ["landscape_16_9", 16 / 9],
+    ["portrait_4_3", 3 / 4], ["portrait_16_9", 9 / 16],
+  ];
+  return presets.reduce((best, next) =>
+    Math.abs(Math.log(ratio / next[1])) < Math.abs(Math.log(ratio / best[1])) ? next : best,
+  )[0];
 }
 
 export function createSimpleProviderAdapter(
@@ -125,7 +203,7 @@ export function createSimpleProviderAdapter(
     provider,
     supportsWorkflowImport: false,
     supportsAdvancedMode: false,
-    imageInput: IMAGE_INPUT[provider],
+    imageInput: imageInputMechanism(provider),
     checkImageInput(connection) {
       if (provider === "novelai" && connection.model.startsWith("nai-diffusion-5")) {
         return {
@@ -134,7 +212,21 @@ export function createSimpleProviderAdapter(
           reason: "NovelAI V5 does not currently support Vibe Transfer or Precise Reference.",
         };
       }
-      return { supported: true, mechanism: IMAGE_INPUT[provider] };
+      // Stability's Core endpoint has no image-to-image mode; Ultra and SD3 do.
+      if (provider === "stability" && connection.model === "core") {
+        return {
+          supported: false,
+          mechanism: null,
+          reason: "Stable Image Core does not accept a source image. Use the Ultra or SD3 model.",
+        };
+      }
+      if (provider === "ideogram" && !/^ideogram-(3|4)/.test(connection.model)) {
+        return { supported: false, mechanism: null, reason: "This Ideogram model does not accept a source image. Use Ideogram 3 or 4." };
+      }
+      if (!imageInputMechanism(provider, connection.model)) {
+        return { supported: false, mechanism: null, reason: "This image provider or model cannot take an image as input." };
+      }
+      return { supported: true, mechanism: imageInputMechanism(provider, connection.model) };
     },
     async validate(asset, connection) {
       const errors: string[] = [];
@@ -147,12 +239,15 @@ export function createSimpleProviderAdapter(
       if (!connection.model?.trim()) {
         errors.push("Connection model is required.");
       }
-      if (provider === "novelai" && connection.model.startsWith("nai-diffusion-5") && asset.source_image) {
-        errors.push("NovelAI V5 does not currently support Vibe Transfer or Precise Reference.");
+      const support = this.checkImageInput!(connection);
+      if (asset.source_image && !support.supported) {
+        errors.push(support.reason!);
       }
       return errors;
     },
     async build(asset, connection) {
+      const support = this.checkImageInput!(connection);
+      if (asset.source_image && !support.supported) throw new Error(support.reason);
       const supportedDefaults = filterSupportedParameters(
         provider,
         connection.default_parameters,

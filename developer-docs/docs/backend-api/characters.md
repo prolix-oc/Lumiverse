@@ -12,6 +12,11 @@ Reading gallery image bytes with `spindle.images.readBinary()` also requires the
 // List characters (paginated)
 const { data, total } = await spindle.characters.list({ limit: 20, offset: 0 })
 
+// Search the full library on supporting hosts, with the same limit/offset pagination.
+if (spindle.host.capabilities['character-search-v1'] >= 1) {
+  const matches = await spindle.characters.list({ limit: 50, offset: 0, search: 'Alice' })
+}
+
 // Get a single character
 const char = await spindle.characters.get('character-id')
 if (char) {
@@ -68,7 +73,7 @@ const deleted = await spindle.characters.delete(newChar.id)
 
 | Method | Returns | Description |
 |---|---|---|
-| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset? }`. Defaults: limit 50, max 200. |
+| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset?, search?, userId? }`. Search is capped at 200 characters and requires `character-search-v1`. Defaults: limit 50, max 200. |
 | `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. |
 | `getGallery(characterId)` | `Promise<CharacterGalleryItemDTO[]>` | List the character's gallery images in gallery order without changing saved character data. Returns `[]` if the character has no gallery or is not found. Optional on older hosts; check support before calling. |
 | `create(input)` | `Promise<CharacterDTO>` | Create a new character. `name` is required. |
@@ -93,6 +98,7 @@ const deleted = await spindle.characters.delete(newChar.id)
   alternate_greetings: string[]
   creator: string
   image_id: string | null
+  avatar_url?: string | null // Host-resolved thumbnail; Characters permission is sufficient.
   /** IDs of world books attached directly to this character. */
   world_book_ids: string[]
   /** Raw extensions object. Extensions should namespace their keys. */
@@ -176,3 +182,5 @@ Reading the attached world book *contents* still goes through the regular `spind
 
 !!! note
     For user-scoped extensions, the user context is inferred automatically. For operator-scoped extensions, the user ID is resolved from the extension context. Characters are always scoped to a single user.
+
+Use `avatar_url` directly in a shared select's `{ type: 'image', src, fallback: { text } }` leading cell. It is resolved by the host for the character owner's image; a missing thumbnail returns `null`. Older hosts may omit the field. Reading arbitrary image bytes still requires `images` permission.

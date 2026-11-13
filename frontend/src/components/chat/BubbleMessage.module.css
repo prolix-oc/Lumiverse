@@ -98,7 +98,7 @@
 /* Only apply backdrop-filter when glass is enabled AND there's a non-solid
    background (image/video/scene). Blurring a solid color is pure GPU waste. */
 :global([data-glass][data-chat-bg]) .card {
-  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
+  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2) var(--lcs-liquid-filter, );
 }
 
 .card.streaming {
@@ -714,6 +714,20 @@
   }
 }
 
+@container duo-chat (max-width: 768px) {
+  .card { padding-top: 34px; }
+  .header { padding: 12px 12px 0; gap: 8px; }
+  .headerLeft,
+  .user:not(.userLeft) .headerLeft {
+    align-items: flex-start;
+    max-width: 100%;
+  }
+  .content { padding: 10px 12px 14px; }
+  .actionsPill { top: 8px; right: 12px; }
+  .user .actionsPill { left: 12px; }
+  .userLeft.user .actionsPill { right: 12px; left: auto; }
+}
+
 @media (hover: none) and (pointer: coarse) {
   .card,
   .hidden {
@@ -742,20 +756,13 @@
   }
 }
 
-/* ── Scroll-time CSS suppression ──
-   While the user is actively scrolling, strip the most expensive card effects
-   (blur, heavy shadow) and freeze hover-driven art opacity changes.
-   We intentionally keep the bubble background art mounted: removing it made
-   the user-facing "show art in bubble backgrounds" setting look broken
-   because the image visibly blinked on and off while scrolling. */
+/* Keep glass/shadows and artwork opacity stable during scroll. Rebuilding
+   backdrop layers at gesture boundaries can flash WebKit's text raster.
+   Rows are already virtualized; only suppress hover transition work here. */
 :global([data-scrolling]) .card {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: 0 0 0 0.5px var(--lcs-glass-border) !important;
   transition: none !important;
 }
 
 :global([data-scrolling]) .avatarBgImg {
-  opacity: 0.28 !important;
   transition: none !important;
 }

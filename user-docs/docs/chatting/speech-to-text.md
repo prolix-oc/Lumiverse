@@ -113,7 +113,9 @@ Lumiverse recognizes a small set of spoken commands while normalizing STT transc
 |-----|--------|
 | `send message` at the end | Sends the dictated message immediately instead of only queueing it |
 
-`send message` only works as a command at the end of the transcript. If you say it in the middle, it remains part of the message text.
+`send message` only works as a command at the end of the completed transcript. Trailing punctuation is allowed, so `Send message.` also works. If you keep speaking afterward, the earlier phrase remains part of the message text. Saying only `send message` can also send text already in the input bar.
+
+This action requires the exact words `send message`; similar phrases such as `sent message` or `send massage` do not trigger it.
 
 ### Formatting and Punctuation
 
@@ -123,10 +125,13 @@ Lumiverse recognizes a small set of spoken commands while normalizing STT transc
 | `quote end` | `"` |
 | `open quote` | `"` |
 | `close quote` | `"` |
+| `start quote` or `begin quote` | `"` |
+| `end quote` | `"` |
 | `single quote` | `'` |
 | `apostrophe` | `'` |
 | `thought start` | `*` or `**` |
 | `begin thought` | `*` or `**` |
+| `start thought` | `*` or `**` |
 | `thought end` | `*` or `**` |
 | `end thought` | `*` or `**` |
 | `asterisk` | `*` |
@@ -134,8 +139,16 @@ Lumiverse recognizes a small set of spoken commands while normalizing STT transc
 
 Thought markers nest. The first `thought start` inserts `*`; a second nested thought inserts `**`. Matching `thought end` commands unwind that nesting.
 
+Opening and closing markers attach directly to their contents. Paired `single quote` or `asterisk` commands also attach correctly. Use `apostrophe` for contractions or possessives, such as `it apostrophe s` → `it's` and `James apostrophe book` → `James' book`.
+
+Formatting commands tolerate capitalization, plurals, punctuation between command words, and small transcription errors in words such as `quote`, `thought`, and `asterisk`. For example, `open qoute`, `thoughts start`, and `M dash` are recognized. Action words such as `start`, `end`, `open`, and `close` must still match; this avoids turning ordinary prose such as `thought stars` into formatting. Commands can span recognition results during continuous dictation.
+
+Punctuation after an opening command is ignored. Sentence punctuation after a closing command is placed inside the closing marker, unless the contents already end with sentence punctuation. Other text keeps its punctuation and line breaks.
+
 !!! example
     Saying `thought start I should be careful thought end` becomes `*I should be careful*`.
+
+    Saying `asterisk I open the door asterisk. Open quote Hello close quote.` becomes `*I open the door.* "Hello."`.
 
 ---
 

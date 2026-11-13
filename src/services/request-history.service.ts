@@ -1,8 +1,9 @@
 import type { ProviderRequestObserver, ProviderRequestSnapshot, ProviderResponseObserver, RequestOrigin } from "../llm/request-observer";
 import { collectRequestCredentials } from "../utils/redact-request";
+import { omitCaptureMedia } from "../utils/omit-capture-media";
 import { SYSTEM_SECRET_PRINCIPAL } from "./secrets.service";
 import { getSetting, putSetting } from "./settings.service";
-import { REQUEST_HISTORY_LIMIT, REQUEST_HISTORY_MAX_BODY_BYTES, REQUEST_HISTORY_SETTING, requestHistoryStore, type RequestHistoryContext } from "./request-history-store";
+import { REQUEST_HISTORY_LIMIT, REQUEST_HISTORY_MAX_BODY_BYTES, REQUEST_HISTORY_MAX_CAPTURE_SNAPSHOT_BYTES, REQUEST_HISTORY_SETTING, requestHistoryStore, type RequestHistoryContext } from "./request-history-store";
 
 function enabled(userId: string): boolean {
   const active = getSetting(userId, REQUEST_HISTORY_SETTING)?.value === true;
@@ -41,8 +42,11 @@ export function createRequestObserver(
     let secrets = [...credentials, ...snapshot.credentials];
     const id = requestHistoryStore.record(userId, { ...context, origin }, { ...snapshot, credentials: secrets });
     if (!id) return;
-    if (typeof snapshot.body === "string" && Buffer.byteLength(snapshot.body) <= REQUEST_HISTORY_MAX_BODY_BYTES) {
-      try { secrets = collectRequestCredentials(JSON.parse(snapshot.body), secrets); } catch { /* Resolved transport credentials still apply. */ }
+    if (typeof snapshot.body === "string" && Buffer.byteLength(snapshot.body) <= (origin.sensitiveMedia ? REQUEST_HISTORY_MAX_CAPTURE_SNAPSHOT_BYTES : REQUEST_HISTORY_MAX_BODY_BYTES)) {
+      try {
+        const body: unknown = JSON.parse(snapshot.body);
+        secrets = collectRequestCredentials(origin.sensitiveMedia ? omitCaptureMedia(body) : body, secrets);
+      } catch { /* Resolved transport credentials still apply. */ }
     }
     let settled = false;
     const isActive = () => {

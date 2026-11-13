@@ -1,6 +1,6 @@
 import { get, post, put, patch, del, upload, type RequestOptions } from './client'
 import type {
-  Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
+  Chat, Character, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
   GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
@@ -84,6 +84,12 @@ export const chatsApi = {
 
   get(id: string, params?: { messages?: boolean }) {
     return get<Chat>(`/chats/${id}`, params)
+  },
+
+  open(id: string, limit: number, options?: RequestOptions) {
+    return get<{ chat: Chat; messages: PaginatedResult<Message>; characters: Character[] }>(
+      `/chats/${id}/open`, { limit }, options,
+    )
   },
 
   create(input: CreateChatInput) {
@@ -239,6 +245,11 @@ export const chatsApi = {
 }
 
 export const messagesApi = {
+  before(chatId: string, boundary: { index: number; id: string }, limit: number, options?: RequestOptions) {
+    return get<{ data: Message[]; has_more: boolean; limit: number }>(`/chats/${chatId}/messages`, {
+      beforeIndex: boundary.index, beforeId: boundary.id, limit,
+    }, options)
+  },
   list(chatId: string, params?: { limit?: number; offset?: number; tail?: boolean }, options?: RequestOptions) {
     return get<PaginatedResult<Message>>(`/chats/${chatId}/messages`, params, options)
   },
@@ -259,6 +270,7 @@ export const messagesApi = {
     script_id: string
     action_id: string
     instance_id: string
+    action_signature?: string
   }) {
     return post<{
       message: Message
@@ -273,6 +285,7 @@ export const messagesApi = {
     script_id: string
     action_id: string
     instance_id: string
+    action_signature?: string
   }>) {
     return post<{
       messages: Message[]

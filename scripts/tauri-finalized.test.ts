@@ -27,8 +27,20 @@ describe("finalized Tauri build routing", () => {
   });
 
   test("leaves builds without an AppImage alone", () => {
+    expect(requestedAppImage(["build", "--no-bundle"])).toBe(false);
+    expect(requestedAppImage(["build", "--no-bundle", "--bundles=appimage"])).toBe(false);
     expect(requestedAppImage(["build", "--bundles", "deb,rpm"])).toBe(false);
     expect(requestedAppImage(["build", "--bundles=dmg"])).toBe(false);
+  });
+
+  test("prepares standalone AppImage bundling and skips compile-only builds", () => {
+    const env = { KEEP: "yes" };
+    expect(tauriBuildEnvironment(["build", "--no-bundle"], "linux", env)).toBe(env);
+    expect(tauriBuildEnvironment(["bundle", "--bundles=appimage"], "linux", env, () => undefined))
+      .toMatchObject({ KEEP: "yes", APPIMAGE_EXTRACT_AND_RUN: "1", NO_STRIP: "1" });
+    expect(tauriBuildEnvironment(["bundle", "--bundles=deb"], "linux", env)).toBe(env);
+    expect(appImageBundleDirectory(["bundle", "--target=aarch64-unknown-linux-gnu"]))
+      .toEndWith(join("target", "aarch64-unknown-linux-gnu", "release", "bundle", "appimage"));
   });
 
   test("routes target-specific bundles to Tauri's target directory", () => {

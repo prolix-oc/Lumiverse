@@ -1,6 +1,5 @@
 import type { AssemblyResult } from "../llm/types";
 import type { MacroDefinition, MacroEnv, MacroHandler } from "../macros/types";
-import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
 import type { AssemblyWorkerRequest, AssemblyWorkerResponse } from "./prompt-assembly-worker-protocol";
@@ -8,10 +7,9 @@ import { warmTokenizerForModel, getCachedTokenizerIds, invalidate, invalidatePat
 import { setTokenizerResourceOwner } from "./tokenizer-resource-cache";
 
 // Mark this isolate as the assembly worker so assemblePrompt can skip work that
-// only makes sense in the main process — notably the deferred cortex warm task,
-// whose results must populate the *main* process's cache (and which would
-// otherwise spawn a nested cortex worker from in here). Set at module load,
-// before any assemblePrompt() call.
+// only makes sense in the main process. Cortex warm jobs are returned to the
+// host, which schedules retrieval and populates the cache used by later jobs.
+// Set at module load, before any assemblePrompt() call.
 (globalThis as { __LUMIVERSE_ASSEMBLY_WORKER?: boolean }).__LUMIVERSE_ASSEMBLY_WORKER = true;
 
 let initialized: Promise<void> | null = null;
@@ -20,7 +18,6 @@ let lastTokenizerRevision = -1;
 function ensureInitialized(): Promise<void> {
   if (!initialized) {
     initialized = (async () => {
-      await configureLanceDbNativeOverride();
       await initIdentity();
       initDatabase();
     })();

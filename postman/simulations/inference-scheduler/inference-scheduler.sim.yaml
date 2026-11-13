@@ -1,0 +1,6 @@
+simulation: inference-scheduler
+routing: path
+mocks:
+  - name: inference-scheduler
+    routeKey: inference
+    path: postman/mocks/inference-scheduler/config.yaml

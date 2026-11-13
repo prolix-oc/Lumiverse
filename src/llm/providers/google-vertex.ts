@@ -1,4 +1,5 @@
 import { parseGoogleResponse, readGoogleStream } from "./google-response";
+import { omitDisabledPenalties } from "../generation-parameters";
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../stream-utils";
@@ -12,7 +13,7 @@ import {
   GOOGLE_SEARCH_PARAMETERS,
 } from "./google-search";
 import { splitLeadingSystemMessagePrefix } from "../system-message-prefix";
-import { normalizeGoogleMediaMimeType } from "./google-media";
+import { GOOGLE_MEDIA_HANDLED_PARAMS, GOOGLE_MEDIA_PARAMETERS, normalizeGoogleMediaMimeType, resolveGoogleMediaResolution } from "./google-media";
 import { AnthropicProvider } from "./anthropic";
 import { OpenAICompatibleProvider } from "./openai-compatible";
 
@@ -402,6 +403,7 @@ export class GoogleVertexProvider implements LlmProvider {
       top_k: COMMON_PARAMS.top_k,
       stop: COMMON_PARAMS.stop,
       ...GOOGLE_SEARCH_PARAMETERS,
+      ...GOOGLE_MEDIA_PARAMETERS,
     },
     requiresMaxTokens: false,
     supportsSystemRole: true,
@@ -576,7 +578,7 @@ export class GoogleVertexProvider implements LlmProvider {
 
     if (!res.ok) await throwProviderResponseError("Vertex AI", "stream", res);
 
-    yield* readGoogleStream(res, this.displayName, request.parameters?._replay_thought_signatures === true, request.signal);
+    yield* readGoogleStream(res, this.displayName, request.parameters?._replay_thought_signatures === true, request.signal, request.onResponseActivity);
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
@@ -722,10 +724,11 @@ export class GoogleVertexProvider implements LlmProvider {
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
     "responseMimeType", "responseSchema", "responseJsonSchema",
     ...GOOGLE_SEARCH_HANDLED_PARAMS,
+    ...GOOGLE_MEDIA_HANDLED_PARAMS,
   ]);
 
   private buildBody(request: GenerationRequest): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
 
     // Vertex exposes a single systemInstruction. Preserve any system message
     // after the leading prefix in-place as user-role content so configured
@@ -762,6 +765,8 @@ export class GoogleVertexProvider implements LlmProvider {
     if (params.top_p !== undefined) generationConfig.topP = params.top_p;
     if (params.top_k !== undefined) generationConfig.topK = params.top_k;
     if (params.stop) generationConfig.stopSequences = params.stop;
+    const mediaResolution = resolveGoogleMediaResolution(params);
+    if (mediaResolution !== undefined) generationConfig.mediaResolution = mediaResolution;
 
     if (params.thinkingConfig) {
       generationConfig.thinkingConfig = params.thinkingConfig;

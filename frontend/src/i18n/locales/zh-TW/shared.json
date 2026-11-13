@@ -83,6 +83,7 @@
     "confirm": "確認"
   },
   "searchableSelect": {
+    "recentlyUsed": "最近使用",
     "placeholder": "選擇…",
     "searchPlaceholder": "搜索…",
     "emptyMessage": "無可用選項",

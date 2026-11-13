@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "フォルダーを削除する前に、接続の編集を保存またはキャンセルしてください。",
+    "newFolder": "新しいフォルダー",
+    "folder": "フォルダー",
+    "invalidFolderName": "1～64文字の重複しないフォルダー名を入力してください。「未分類」は予約済みです。",
+    "deleteFolderMessage": "「{{name}}」を削除しますか？接続は「未分類」に移動します。",
+    "allFolders": "すべてのフォルダー",
+    "filterFolder": "フォルダーで接続を絞り込む",
+    "search": "接続、プロバイダー、モデル、フォルダーを検索…",
+    "noMatches": "一致する接続がありません。",
     "imageGeneration": "画像の生成に失敗しました",
     "speechToText": "音声からテキストへの変換",
     "textToSpeech": "テキスト読み上げ"
@@ -679,6 +688,10 @@
     "scopeGlobal": "グローバル",
     "scopeThisChar": "このイワナ",
     "noScripts": "正規表現スクリプトはまだありません。",
+    "searchFolder": "このフォルダ内のスクリプトを検索…",
+    "searchFolderAria": "{{folder}}内のスクリプトを検索",
+    "folderPagesAria": "{{folder}}内のスクリプトのページ",
+    "noSearchResults": "検索に一致するスクリプトはありません。",
     "clickPlus": "作成するには、+ をクリックしてください。",
     "uncategorized": "未分類",
     "deleteFolderConfirm": "「{{folder}}」内の {{count}} 正規表現スクリプトをすべて削除しますか?これは元に戻すことはできません。",
@@ -713,6 +726,8 @@
     "timedOutDetail": "このスクリプトは正規表現タイムアウトに達し、実行中にスキップされました。",
     "slowDetail": "このスクリプトは、実行に {{seconds}}s かかった後、遅いというフラグが立てられました。",
     "quarantinedDisplay": "表示正規表現「{{name}}」が分離実行環境をハングさせたため、スキップされています。正規表現スクリプトで隔離を解除すると再実行できます。",
+    "unavailableDisplay": "分離実行環境を利用できなかったため、今回の描画では表示正規表現「{{name}}」をスキップしました。",
+    "skippedDisplayTitle": "正規表現スクリプトをスキップ",
     "quarantined": "隔離中",
     "quarantinedDetail": "このスクリプトは分離実行環境をハングさせたため、スキップされています。隔離を解除すると再実行されます。",
     "clearQuarantine": "再実行する",
@@ -1410,6 +1425,10 @@
       "noTagsFound": "タグが見つかりません"
     },
     "alternateAvatars": {
+      "addFromGallery": "ギャラリーから追加",
+      "uploadImage": "アバターをアップロード",
+      "galleryLoadFailed": "ギャラリーの画像を読み込めませんでした。",
+      "uploadFailed": "代替アバターをアップロードできませんでした。",
       "title": "代替アバター",
       "helper": "このキャラクターの追加のプロフィール写真、ごとに切り替え可能チャット。",
       "selectionHint": "このチャットで使用するには、アバターをタップします。",
@@ -2654,6 +2673,11 @@
     "fontScale": "フォントスケール",
     "uiScale": "UIスケール",
     "glassEffects": "ガラス効果",
+    "liquidGlass": {
+      "label": "リキッドグラス",
+      "hint": "サーフェス背面の背景を屈折・ぼかします。ガラス効果が必要です。",
+      "requiresGlass": "先にガラス効果を有効にしてください"
+    },
     "renderingMode": {
       "label": "描画",
       "hint": "省電力ではぼかしを無効にします。高品質ではデスクトップウィンドウの再起動後、対応する macOS ディスプレイで高リフレッシュレート描画を有効にします。",
@@ -3299,6 +3323,8 @@
         "persona_description": "ユーザーのペルソナ",
         "scenario": "状況例",
         "dialogue_examples": "メッセージの例",
+        "system_prompt": "キャラクターのシステムプロンプト",
+        "post_history_instructions": "キャラクターの履歴後指示",
         "main_prompt": "メイン プロンプト",
         "enhance_definitions": "定義の強化",
         "jailbreak": "履歴後の指示",
@@ -3609,5 +3635,13 @@
     "skipTitle": "Skip",
     "kickTitle": "Kick",
     "banTitle": "Ban"
+  },
+  "decisionConnectionManager": {
+    "loading": "Decision接続を読み込み中...",
+    "newConnection": "新しいDecision接続",
+    "empty": "Decision接続はまだありません。開始するにはOpenRouter、NanoGPT、またはTypeSafeを追加してください。",
+    "deleteTitle": "Decision接続を削除",
+    "deleteMessage": "「{{name}}」を削除しますか？この操作は元に戻せません。",
+    "deleteConfirm": "削除"
   }
 }

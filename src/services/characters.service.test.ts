@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { listCharacterSummaries } from "./characters.service";
+import { getCharactersByIdsAsync, listCharacterIndex, listCharacterSummaries } from "./characters.service";
 
 function initCharactersTestDb(): void {
   closeDatabase();
@@ -17,12 +17,15 @@ function initCharactersTestDb(): void {
     folder TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '[]',
     image_id TEXT,
+    avatar_path TEXT,
     alternate_greetings TEXT NOT NULL DEFAULT '[]',
+    extensions TEXT NOT NULL DEFAULT '{}',
     library_scope TEXT NOT NULL DEFAULT 'mine',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleting INTEGER NOT NULL DEFAULT 0
   )`);
+  db.run("CREATE VIRTUAL TABLE characters_fts USING fts5(name, description, personality, creator, content='characters', content_rowid='rowid', tokenize='trigram')");
 
   db.run(`CREATE TABLE chats (
     id TEXT PRIMARY KEY,
@@ -96,6 +99,34 @@ describe("character discover shuffle", () => {
 });
 
 describe("character recent chat sorting", () => {
+  test('index and demanded details exclude other owners and pending deletions', async () => {
+    const mine = seedCharacter(1, 'Mine', 1);
+    const other = seedCharacter(2, 'Other', 2);
+    const deleting = seedCharacter(3, 'Deleting', 3);
+    getDb().run('UPDATE characters SET user_id = ? WHERE id = ?', ['u2', other]);
+    getDb().run('UPDATE characters SET deleting = 1 WHERE id = ?', [deleting]);
+    const page = listCharacterIndex('u1', { limit: 1, offset: 0 });
+    expect(page.total).toBe(1);
+    expect(page.data.map(item => item.id)).toEqual([mine]);
+    expect(page.data[0]).not.toHaveProperty('description');
+    expect(page.data[0]).not.toHaveProperty('user_id');
+    expect(page.data[0].tags).toEqual([]);
+    const details = await getCharactersByIdsAsync('u1', [mine, other, deleting], { excludeDeleting: true });
+    expect([...details.keys()]).toEqual([mine]);
+  });
+
+  test('count filters remain equivalent across sort-only joins and offsets', () => {
+    seedCharacter(1, 'Match', 1); seedCharacter(2, 'Match', 2); seedCharacter(3, 'Else', 3);
+    getDb().run('UPDATE characters SET tags = ? WHERE id = ?', ['["keep"]', makeUuid(1)]);
+    seedChat('recent', makeUuid(1), 100);
+    getDb().run("INSERT INTO characters_fts(characters_fts) VALUES('rebuild')");
+    for (const sort of ['recent', 'most_chats', 'name', 'discover'] as const) {
+      const page = listCharacterSummaries('u1', { limit: 1, offset: 1 }, { search: 'Match', sort });
+      expect(page.total).toBe(2); expect(page.data).toHaveLength(1);
+      expect(listCharacterSummaries('u1', { limit: 1, offset: 0 }, { tags: ['keep'], sort }).total).toBe(1);
+    }
+  });
+
   test("ranks recently messaged characters above unchatted characters", () => {
     const char1 = seedCharacter(1, "Alpha", 1_000);
     const char2 = seedCharacter(2, "Beta", 1_000);

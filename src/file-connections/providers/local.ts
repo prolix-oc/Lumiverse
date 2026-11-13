@@ -4,7 +4,7 @@
  * for all existing migration code.
  */
 
-import { access, readdir, stat } from "fs/promises";
+import { access, open, readdir, stat } from "fs/promises";
 import { join, dirname, basename, extname } from "path";
 import type { FileSystem, FileEntry, FileStat } from "../types";
 
@@ -57,6 +57,22 @@ export class LocalFileSystem implements FileSystem {
 
   async readFile(path: string): Promise<Buffer> {
     return Buffer.from(await Bun.file(path).arrayBuffer());
+  }
+
+  /**
+   * Positioned read that does not materialize the whole file. Migration and
+   * audit flows use it to pull PNG chunk headers out of multi-megabyte cards.
+   */
+  async readRange(path: string, offset: number, length: number): Promise<Buffer> {
+    if (length <= 0 || offset < 0) return Buffer.alloc(0);
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, offset);
+      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
   }
 
   async readText(path: string): Promise<string> {

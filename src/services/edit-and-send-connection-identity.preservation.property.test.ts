@@ -19,7 +19,7 @@
  * Credential hygiene (requirement 2.8): opaque placeholder values only; every
  * credential assertion references the secret KEY NAME.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, mock, test } from "bun:test";
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { StartEditAndSendGenerationInput } from "./edit-and-send-dispatcher.service";
@@ -494,10 +494,13 @@ describe("Case 2a — interactive paths are invariant under both toggle position
     });
   });
 
-  test("dryRunGeneration has no way to express the origin at all", () => {
-    // The ON path must be unrepresentable there, not merely untrue: it must
-    // never gain the second parameter.
-    expect(generateSvc.dryRunGeneration.length).toBe(1);
+  test("dryRunGeneration accepts a preparation callback but not an Edit-and-Send origin", () => {
+    type DryRunArguments = Parameters<typeof generateSvc.dryRunGeneration>;
+    // The optional callback must not admit the trusted options bag accepted
+    // by startGeneration, nor may origin become a client-controlled input.
+    expectTypeOf<NonNullable<DryRunArguments[1]>>().toBeFunction();
+    expectTypeOf<{ origin: "edit_and_send" }>().not.toMatchTypeOf<DryRunArguments[1]>();
+    expectTypeOf<"origin">().not.toMatchTypeOf<keyof DryRunArguments[0]>();
   });
 });
 

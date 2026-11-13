@@ -1,5 +1,6 @@
 import "../../../image-gen/index";
 import { getImageProvider } from "../../../image-gen/registry";
+import { resolveImageProviderApiUrl } from "../../../image-gen/provider";
 import type { ImageGenConnectionProfile } from "../../../types/image-gen-connection";
 import type {
   WeaverVisualAsset,
@@ -10,6 +11,7 @@ import type {
 } from "../../../types/weaver";
 import { eventBus } from "../../../ws/bus";
 import { EventType } from "../../../ws/events";
+import { withInferenceLease, withLeaseAbort } from "../../inference-scheduler";
 import { getVisualKind } from "./kinds";
 import { getVisualProviderAdapter } from "./provider-registry";
 import { resolveVisualAssetPrompts } from "./prompt-resolution";
@@ -125,43 +127,60 @@ async function generateWithOptionalStreaming(
     buildResult.request.signal = input.signal;
   }
 
-  if (provider.generateStream) {
-    const stream = provider.generateStream(
-      input.apiKey,
-      input.connection.api_url || provider.capabilities.defaultUrl || "",
-      buildResult.request,
-    );
+  const endpoint = resolveImageProviderApiUrl(input.connection.api_url, provider);
+  return withInferenceLease(
+    {
+      userId: job.userId,
+      endpoint,
+      requestClass: "user",
+      purpose: "image-generation",
+      signal: input.signal,
+    },
+    async (lease) => {
+      const request = {
+        ...buildResult.request,
+        signal: withLeaseAbort(buildResult.request.signal, lease),
+      };
 
-    let iteration = await stream.next();
-    while (!iteration.done) {
-      const progress = updateVisualJobProgress(job.id, job.userId, {
-        stage: "generating",
-        message: "Generating image",
-        step: iteration.value.step,
-        totalSteps: iteration.value.totalSteps,
-        preview: iteration.value.preview,
-        nodeId: iteration.value.nodeId,
-      });
-      emitJobEvent(EventType.WEAVER_VISUAL_JOB_PROGRESS, progress);
-      iteration = await stream.next();
-    }
+      if (provider.generateStream) {
+        const stream = provider.generateStream(
+          input.apiKey,
+          endpoint,
+          request,
+        );
 
-    return {
-      image_url: iteration.value.imageDataUrl,
-      settingsSnapshot: finalSettingsSnapshot,
-    };
-  }
+        let iteration = await stream.next();
+        while (!iteration.done) {
+          const progress = updateVisualJobProgress(job.id, job.userId, {
+            stage: "generating",
+            message: "Generating image",
+            step: iteration.value.step,
+            totalSteps: iteration.value.totalSteps,
+            preview: iteration.value.preview,
+            nodeId: iteration.value.nodeId,
+          });
+          emitJobEvent(EventType.WEAVER_VISUAL_JOB_PROGRESS, progress);
+          iteration = await stream.next();
+        }
 
-  const response = await provider.generate(
-    input.apiKey,
-    input.connection.api_url || provider.capabilities.defaultUrl || "",
-    buildResult.request,
+        return {
+          image_url: iteration.value.imageDataUrl,
+          settingsSnapshot: finalSettingsSnapshot,
+        };
+      }
+
+      const response = await provider.generate(
+        input.apiKey,
+        endpoint,
+        request,
+      );
+
+      return {
+        image_url: response.imageDataUrl,
+        settingsSnapshot: finalSettingsSnapshot,
+      };
+    },
   );
-
-  return {
-    image_url: response.imageDataUrl,
-    settingsSnapshot: finalSettingsSnapshot,
-  };
 }
 
 async function executeWeaverVisualJob(

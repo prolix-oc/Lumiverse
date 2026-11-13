@@ -8,7 +8,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { LocalServerClient, resolveLocalServerSource } from "./local-server";
+import { changeNetworkAccess, type BundledNetworkAccess } from "./network-access";
 import { Image } from "@tauri-apps/api/image";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   CheckMenuItem,
   Menu,
@@ -26,6 +28,7 @@ import {
   type UpdateState,
 } from "./runner-client";
 import { loadSettings, saveSetting, type TraySettings } from "./settings";
+import { restoreDesktopCaptureConnection, type DesktopCaptureStatus } from "./desktop-capture";
 import { createDiscordPresenceRefreshQueue } from "./discord-presence";
 import { restoreDesktopSession, type DesktopUpdateResume } from "./update-resume";
 import { installDesktopRelease, type DesktopUpdateChannel, type DesktopUpdateInfo, type DesktopReleaseUpdate } from "./desktop-updates";
@@ -85,6 +88,9 @@ let desktopShellNoticeShown = false;
 let instanceConnection: InstanceConnection = LOCAL_INSTANCE_CONNECTION;
 let remoteSnapshot: RemoteInstanceSnapshot | null = null;
 let openIntegratedBrowserWhenReady = false;
+let bundledNetworkAccess: BundledNetworkAccess | null = null;
+let changingNetworkAccess = false;
+let networkAccessRequest = 0;
 
 // ─── Discord Rich Presence ──────────────────────────────────────────────────
 // The tray fetches the active-chat snapshot on chat switches and polls the
@@ -134,6 +140,7 @@ let statsPidItem: MenuItem;
 let statsUptimeItem: MenuItem;
 let statsBranchItem: MenuItem;
 let statsVersionItem: MenuItem;
+let remoteAccessItem: CheckMenuItem;
 let checkUpdatesItem: MenuItem;
 let applyUpdateItem: MenuItem;
 let rebuildDesktopItem: MenuItem;
@@ -153,15 +160,13 @@ let openDefaultBrowserItem: MenuItem;
 let reloadIntegratedBrowserItem: MenuItem;
 let remoteAuthItem: MenuItem;
 let remoteDisconnectItem: MenuItem;
-let desktopCaptureItem: MenuItem;
+let desktopCaptureItem: CheckMenuItem;
+let desktopCaptureRetryAt = 0;
+let desktopCaptureRestoring = false;
+let desktopCaptureSwitching = 0;
+let desktopCaptureEnabling = false;
+let desktopCaptureRevision = 0;
 let floatingWidgetsItem: Submenu;
-
-interface DesktopCaptureStatus {
-  enabled: boolean;
-  origin: string | null;
-  capabilities: { image: boolean; video: boolean; replay: boolean };
-  error: string | null;
-}
 
 interface DesktopWidgetCatalogEntry {
   id: string;
@@ -267,7 +272,7 @@ function frontendUrl(): string {
 
 async function updateMenu(): Promise<void> {
   const running = serverState === "running";
-  const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null || installingDesktopUpdate;
+  const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null || installingDesktopUpdate || changingNetworkAccess;
   const remote = isRemoteMode();
 
   await statusItem.setText(statusText());
@@ -295,11 +300,17 @@ async function updateMenu(): Promise<void> {
     remote && remoteSnapshot !== null && remoteSnapshot.state !== "disconnected" && remoteSnapshot.state !== "authorizing",
   );
 
+  await restoreDesktopCapture();
   const capture = await invoke<DesktopCaptureStatus>("desktop_capture_status");
-  await desktopCaptureItem.setText(capture.enabled
-    ? "Disable Extension Screen Capture"
-    : "Enable Extension Screen Capture…");
-  await desktopCaptureItem.setEnabled(capture.capabilities.image && !transitioning);
+  if (capture.disabledByUser && settings.desktopCaptureOrigin) {
+    settings.desktopCaptureOrigin = null;
+    await saveSetting("desktopCaptureOrigin", null);
+  }
+  await desktopCaptureItem.setChecked(settings.desktopCaptureOrigin === new URL(frontendUrl()).origin);
+  await desktopCaptureItem.setText(capture.capabilities.image
+    ? "Let Extensions Capture the Screen"
+    : "Extension Screen Capture (not on this OS yet)");
+  await desktopCaptureItem.setEnabled(capture.capabilities.image && !transitioning && !desktopCaptureEnabling);
 
   await statsPortItem.setText(`Port: ${remote ? (remoteSnapshot?.status?.port ?? "—") : port}`);
   await statsPidItem.setText(`PID: ${remote ? (remoteSnapshot?.status?.pid ?? "—") : (lastStatus?.pid ?? "—")}`);
@@ -308,6 +319,10 @@ async function updateMenu(): Promise<void> {
     : (running ? formatUptime(lastStatus?.startedAt ?? null) : "—")}`);
   await statsBranchItem.setText(`Branch: ${remote ? (remoteSnapshot?.status?.branch ?? "—") : (lastStatus?.branch ?? "—")}`);
   await statsVersionItem.setText(`Version: ${remote ? (remoteSnapshot?.status?.version ?? "—") : (lastStatus?.version ?? "—")}`);
+  const access = !remote && usesBundledServer() ? bundledNetworkAccess : null;
+  await remoteAccessItem.setChecked(access?.enabled ?? false);
+  await remoteAccessItem.setText(access?.overridden ? "Allow Remote Access (set by launch override)" : "Allow Remote Access");
+  await remoteAccessItem.setEnabled(Boolean(access?.configured && !access.overridden && !transitioning && !externalRunning));
 
   await checkUpdatesItem.setEnabled(!usesBundledServer() && !remote && !busyMessage && !externalRunning);
   // The rebuild compiles from the configured checkout, so it needs one — but
@@ -380,6 +395,7 @@ async function ensureRunner(): Promise<void> {
 }
 
 async function refreshStatus(): Promise<void> {
+  if (!changingNetworkAccess) await refreshNetworkAccess();
   if (!(await client.alive())) return;
   try {
     const source = client.source;
@@ -397,6 +413,52 @@ async function refreshStatus(): Promise<void> {
   } catch {
     // Runner busy or mid-restart — keep last known state.
   }
+}
+
+async function refreshNetworkAccess(): Promise<void> {
+  const request = ++networkAccessRequest;
+  if (isRemoteMode() || !usesBundledServer()) { bundledNetworkAccess = null; return; }
+  try {
+    const access = await invoke<BundledNetworkAccess>("bundled_server_network_access");
+    if (request === networkAccessRequest && !isRemoteMode() && usesBundledServer()) bundledNetworkAccess = access;
+  } catch {
+    // An unavailable or invalid configuration cannot be represented by a toggle.
+    if (request === networkAccessRequest) bundledNetworkAccess = null;
+  }
+}
+
+function toggleRemoteAccess(): Promise<void> {
+  // Use the same queue as instance selection so a late restart cannot start a
+  // local server after the owner has switched to a remote instance or checkout.
+  const task = connectionChange.then(async () => {
+    if (isRemoteMode() || !usesBundledServer() || busyMessage || installingDesktopUpdate || externalRunning
+      || serverState === "starting" || serverState === "stopping"
+      || !bundledNetworkAccess?.configured || bundledNetworkAccess.overridden) {
+      await updateMenu();
+      return;
+    }
+    const enabled = !bundledNetworkAccess.enabled;
+    const running = serverState === "running";
+    changingNetworkAccess = true;
+    networkAccessRequest++;
+    busyMessage = "Saving remote access…";
+    try {
+      await updateMenu();
+      bundledNetworkAccess = await changeNetworkAccess({
+        enabled, running,
+        save: (enabled) => invoke<BundledNetworkAccess>("bundled_server_set_network_access", { enabled }),
+        stop: stopServer,
+        start: () => startServer(false),
+      });
+    } finally {
+      changingNetworkAccess = false;
+      busyMessage = null;
+      await refreshStatus();
+      await updateMenu();
+    }
+  });
+  connectionChange = task.catch(() => {});
+  return task;
 }
 
 async function startServer(reopenFrontend = true): Promise<void> {
@@ -836,21 +898,72 @@ async function disconnectRemoteInstance(): Promise<void> {
   await updateMenu();
 }
 
-async function toggleDesktopCapture(): Promise<void> {
-  const capture = await invoke<DesktopCaptureStatus>("desktop_capture_status");
-  if (capture.enabled) {
-    await invoke("desktop_capture_disconnect");
-  } else {
-    const origin = new URL(frontendUrl()).origin;
+async function enableDesktopCapture(): Promise<void> {
+  const origin = new URL(frontendUrl()).origin;
+  if (desktopCaptureSwitching || desktopCaptureEnabling || settings.desktopCaptureOrigin === origin) return;
+  const revision = ++desktopCaptureRevision;
+  const current = () => revision === desktopCaptureRevision && !desktopCaptureSwitching && origin === new URL(frontendUrl()).origin;
+  desktopCaptureEnabling = true;
+  try {
+    const allowed = await invoke<boolean>("confirm", {
+      title: "Let extensions capture the screen?",
+      message: "Screen capture stays enabled for this Lumiverse instance until you turn it off. Each permitted extension asks you to choose a source the first time it uses a destination. That source is remembered for later requests. Turning this off stops capture and forgets saved approvals. Canceling a capture keeps your saved permissions. Screen capture never records audio.",
+      okLabel: "Enable Screen Capture", cancelLabel: "Cancel",
+    });
+    if (!allowed || !current()) return;
     const authorization = await invoke<RemoteInstanceSnapshot>("remote_instance_poll", { origin });
+    if (!current()) return;
     if (authorization.state !== "connected" && authorization.state !== "restricted") {
       await connectDesktopAuthorization(origin);
     }
-    if (origin !== new URL(frontendUrl()).origin) return;
+    if (!current()) return;
+    await invoke("desktop_capture_reset_approvals", { forget: true });
+    if (!current()) return;
     await invoke("desktop_capture_connect", { origin });
-    if (origin !== new URL(frontendUrl()).origin) {
-      await invoke("desktop_capture_disconnect");
+    if (!current()) {
+      await invoke("desktop_capture_disconnect", { origin });
+      return;
     }
+    settings.desktopCaptureOrigin = origin;
+    await saveSetting("desktopCaptureOrigin", origin);
+  } finally {
+    desktopCaptureEnabling = false;
+  }
+}
+
+async function disableDesktopCapture(): Promise<void> {
+  desktopCaptureRevision++;
+  settings.desktopCaptureOrigin = null;
+  // Native disable takes effect even if saving the WebView preference fails.
+  try {
+    await invoke("desktop_capture_reset_approvals", { forget: true, disabled: true });
+  } finally {
+    await saveSetting("desktopCaptureOrigin", null);
+  }
+}
+
+async function restoreDesktopCapture(): Promise<void> {
+  const origin = settings.desktopCaptureOrigin;
+  const wanted = () => !desktopCaptureSwitching && settings.desktopCaptureOrigin === origin && origin === new URL(frontendUrl()).origin;
+  if (!origin || !wanted() || serverState === "starting" || serverState === "stopping" || busyMessage !== null || installingDesktopUpdate || desktopCaptureRestoring || Date.now() < desktopCaptureRetryAt) return;
+  desktopCaptureRestoring = true;
+  desktopCaptureRetryAt = Date.now() + 15_000;
+  try {
+    await restoreDesktopCaptureConnection(origin, wanted, {
+      status: () => invoke<DesktopCaptureStatus>("desktop_capture_status"),
+      connect: origin => invoke("desktop_capture_connect", { origin }),
+      disconnect: origin => invoke("desktop_capture_disconnect", { origin }),
+    });
+  } catch { /* Reconnect only with existing native credentials; setup owns interactive authorization. */ }
+  finally { desktopCaptureRestoring = false; }
+}
+
+async function toggleDesktopCapture(): Promise<void> {
+  const capture = await invoke<DesktopCaptureStatus>("desktop_capture_status");
+  if (capture.enabled || settings.desktopCaptureOrigin === new URL(frontendUrl()).origin) {
+    await disableDesktopCapture();
+  } else {
+    await enableDesktopCapture();
   }
   await updateMenu();
 }
@@ -1071,8 +1184,9 @@ async function buildTray(): Promise<void> {
     action: action(disconnectRemoteInstance),
   });
 
-  desktopCaptureItem = await MenuItem.new({
-    text: "Enable Extension Screen Capture…",
+  desktopCaptureItem = await CheckMenuItem.new({
+    text: "Let Extensions Capture the Screen",
+    checked: false,
     enabled: false,
     action: action(toggleDesktopCapture),
   });
@@ -1098,7 +1212,6 @@ async function buildTray(): Promise<void> {
       openDefaultBrowserItem,
       remoteAuthItem,
       remoteDisconnectItem,
-      desktopCaptureItem,
       await PredefinedMenuItem.new({ item: "Separator" }),
       setFrontendUrlItem,
       ...(isLinux ? [await MenuItem.new({ text: "Linux Graphics & Diagnostics…", action: action(async () => { await invoke("show_linux_settings"); }) })] : []),
@@ -1110,9 +1223,14 @@ async function buildTray(): Promise<void> {
   statsUptimeItem = await MenuItem.new({ text: "Uptime: —", enabled: false });
   statsBranchItem = await MenuItem.new({ text: "Branch: —", enabled: false });
   statsVersionItem = await MenuItem.new({ text: "Version: —", enabled: false });
+  remoteAccessItem = await CheckMenuItem.new({
+    text: "Allow Remote Access", checked: false, enabled: false,
+    action: action(toggleRemoteAccess),
+  });
   const statsSubmenu = await Submenu.new({
     text: "Serving Stats",
-    items: [statsPortItem, statsPidItem, statsUptimeItem, statsBranchItem, statsVersionItem],
+    items: [statsPortItem, statsPidItem, statsUptimeItem, statsBranchItem, statsVersionItem,
+      await PredefinedMenuItem.new({ item: "Separator" }), remoteAccessItem],
   });
 
   checkUpdatesItem = await MenuItem.new({
@@ -1203,6 +1321,7 @@ async function buildTray(): Promise<void> {
       autoStartItem,
       discordRpcItem,
       systemAudioItem,
+      desktopCaptureItem,
       loginItem,
       openDataFolderItem,
       await separator(),
@@ -1233,7 +1352,8 @@ async function toggleServer(): Promise<void> {
 
 /** Serialize selections so a slow shutdown cannot overwrite a later choice. */
 function changeInstanceConnection(selection: InstanceConnectionChange): Promise<void> {
-  const task = connectionChange.then(() => applyInstanceConnection(selection));
+  desktopCaptureSwitching++;
+  const task = connectionChange.then(() => applyInstanceConnection(selection)).finally(() => { desktopCaptureSwitching--; });
   connectionChange = task.catch(() => {});
   return task;
 }
@@ -1313,6 +1433,7 @@ async function applyInstanceConnection(selection: InstanceConnectionChange): Pro
 }
 
 async function tick(): Promise<void> {
+  if (changingNetworkAccess) { await updateMenu(); return; }
   if (!settings.instanceConnectionConfigured) { await updateMenu(); return; }
   // Presence rides the shared tick; its polling handles its own errors.
   void refreshDiscordPresence();
@@ -1327,6 +1448,7 @@ async function tick(): Promise<void> {
       await detectExternalServer();
     }
   } else {
+    await refreshNetworkAccess();
     await detectExternalServer();
   }
   await updateMenu();
@@ -1334,6 +1456,21 @@ async function tick(): Promise<void> {
 
 async function boot(): Promise<void> {
   settings = await loadSettings();
+  await listen<string>("desktop-keybinding-action", ({ payload }) => {
+    void (async () => {
+      if (payload === "desktop:toggle-window") {
+        if (await invoke<boolean>("frontend_visible")) await (await WebviewWindow.getByLabel("frontend"))?.hide();
+        else await invoke("show_frontend", { port, customUrl: remoteFrontendUrl() });
+      } else if (payload === "desktop:show-window") {
+        await invoke("show_frontend", { port, customUrl: remoteFrontendUrl() });
+      } else if (payload === "desktop:reload") {
+        await invoke("reload_frontend");
+      } else if (payload === "desktop:stop-capture") {
+        await disableDesktopCapture();
+      }
+      await updateMenu();
+    })().catch(error => console.error("Desktop key binding failed", error));
+  });
   desktopUpdateInfo = await invoke<DesktopUpdateInfo>("desktop_update_info");
   desktopUpdateChannel = settings.desktopUpdateChannel === "stable" || settings.desktopUpdateChannel === "nightly"
     ? settings.desktopUpdateChannel : desktopUpdateInfo.defaultChannel;
@@ -1342,6 +1479,16 @@ async function boot(): Promise<void> {
   bundledServerAvailable = await invoke<boolean>("bundled_server_available");
   settings.localServerSource = resolveLocalServerSource(settings.localServerSource, settings.repoDir, bundledServerAvailable);
 
+  await listen<string>("desktop-capture-setup-requested", ({ payload }) => {
+    void (async () => {
+      try {
+        if (payload !== new URL(frontendUrl()).origin) return;
+        await enableDesktopCapture();
+        await updateMenu();
+      } catch (error) { await alert("Screen capture setup", String(error), true); }
+      finally { await invoke("desktop_capture_setup_finished"); }
+    })();
+  });
   await listen<SystemAudioStatus>("desktop-system-audio-state", ({ payload }) => {
     void renderSystemAudio(payload).catch((error) => console.warn("Unable to show system audio state", error));
   });
@@ -1401,7 +1548,7 @@ async function boot(): Promise<void> {
       // rather than waiting for the next tick.
       void refreshDiscordPresence();
     }
-    if (!installingDesktopUpdate && (state === "running" || state === "stopped" || state === "crashed")) {
+    if (!installingDesktopUpdate && !changingNetworkAccess && (state === "running" || state === "stopped" || state === "crashed")) {
       busyMessage = null;
     }
     // Re-check on every start, not just the first. The checkout can move
@@ -1423,7 +1570,7 @@ async function boot(): Promise<void> {
   client.onExit = () => {
     serverState = "stopped";
     lastStatus = null;
-    if (!installingDesktopUpdate) busyMessage = null;
+    if (!installingDesktopUpdate && !changingNetworkAccess) busyMessage = null;
     void refreshDiscordPresence();
     void updateMenu();
   };
@@ -1441,6 +1588,7 @@ async function boot(): Promise<void> {
   if (repoDir) settings.instanceConnectionConfigured = true;
   if (!usesBundledServer() && !repoDir && !isRemoteMode()) settings.instanceConnectionConfigured = false;
 
+  await refreshNetworkAccess();
   await buildTray();
   await updateMenu();
   void checkDesktopUpdates();

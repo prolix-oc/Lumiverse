@@ -1,3 +1,5 @@
+import { uuidv4 } from '@/lib/uuid'
+
 const CHANNEL_NAME = 'lumiverse:stream-deck-handoff'
 const STORAGE_KEY = 'lumiverse:stream-deck-handoff-event'
 const TAB_ID_KEY = 'lumiverse:stream-deck-tab-id'
@@ -24,14 +26,10 @@ type OpenChatCommit = {
 
 type HandoffMessage = OpenChatRequest | OpenChatAck | OpenChatCommit
 
-function createId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
 function getTabId(): string {
   let id = sessionStorage.getItem(TAB_ID_KEY)
   if (!id) {
-    id = createId()
+    id = uuidv4()
     sessionStorage.setItem(TAB_ID_KEY, id)
   }
   return id
@@ -121,7 +119,7 @@ export function installStreamDeckHandoffReceiver(navigate: (path: string) => voi
 
 /** Ask an existing Lumiverse tab to open a chat, resolving false when none responds. */
 export function handOffChatToExistingTab(chatId: string, timeoutMs = 500): Promise<boolean> {
-  const requestId = createId()
+  const requestId = uuidv4()
   const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL_NAME) : null
 
   return new Promise(resolve => {

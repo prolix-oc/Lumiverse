@@ -97,3 +97,16 @@
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ── Liquid Glass material ──
+   With the material active the track gains a specular rim. The rule keys off
+   the root attribute the theme applicator sets, so it never runs unless the
+   effect is genuinely live.
+
+   The knob deliberately gets no displacement filter. The reference applies its
+   lens to a large translucent thumb with a backdrop to refract; this knob is an
+   opaque 16px circle, so displacing it only softens its own edge (measured:
+   white 255 -> grey 90 at the reference's scale). */
+:global(html[data-liquid-glass]) .switch {
+  box-shadow: inset 0 0 0 1px var(--lcs-liquid-rim, transparent);
+}

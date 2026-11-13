@@ -20,6 +20,11 @@ Lumiverse can speak assistant replies aloud using a configurable text-to-speech 
 
 Once a connection exists, open **Settings → Voice & Speech** and turn on **Enable text-to-speech**. Playback uses the TTS connection marked as default unless you select another connection from the dropdown. Narration and speech use that connection's saved voice unless you set a narrator, character, or chat voice override.
 
+That enable switch controls chat reading. Extensions such as Desk Companion use
+their own speech setting and require the **Media** permission. Their spoken
+replies can play while chat reading is disabled, using your configured TTS
+connections and shared volume and speed.
+
 ---
 
 ## Providers
@@ -50,7 +55,7 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 
 - **API key:** Required (sent as `xi-api-key`).
 - **Default URL:** `https://api.elevenlabs.io`.
-- **Voices:** Fetched live from your ElevenLabs account, including any custom voices you've created.
+- **Voices:** Fetched live from your ElevenLabs account, including any custom voices you've created. Click **Voice Library** in the connection form or any ElevenLabs voice picker to browse community voices in a modal. Search, filter by language or gender, sort, preview a voice, then click **Use voice**. Library voices can be used directly without saving them to your ElevenLabs account. API use requires a paid ElevenLabs plan; voices with a credit multiplier show it beside their name. See [ElevenLabs' Voice Library guide](https://elevenlabs.io/docs/eleven-creative/voices/voice-library).
 - **Models:** Eleven v3 (Most Expressive), Eleven Multilingual v2, Eleven Flash v2.5 (Low Latency).
 - **Parameters:**
 

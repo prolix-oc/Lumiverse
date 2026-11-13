@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { editConnectionOrganizationWithDb } from './connection-organization-operations';
 import { removeGalleryItemWithDb } from './gallery-operations';
 import { startCharacterDeletionWithDb, getDeletionOperationWithDb } from "./deletion-operations";
 import { updateCharacterRowWithDb, updateCharacterTagsWithDb } from "./character-operations";
@@ -50,6 +51,7 @@ function executeStatement(db: Database, operation: SqlStatementOperation): unkno
 /** Complete operations execute in one isolate and never await inside SQLite. */
 export function executeOperation(db: Database, path: string, operation: DatabaseOperation, diagnostics?: ImageReferenceDiagnostics): unknown {
   switch (operation.kind) {
+    case 'connection-organization-edit': return editConnectionOrganizationWithDb(db, operation.userId, operation.edits);
     case "gallery-remove": return removeGalleryItemWithDb(db, operation.userId, operation.characterId, operation.itemId);
     case "character-delete-start": return startCharacterDeletionWithDb(db, operation.userId, operation.id, operation.operationId);
     case "deletion-status": return getDeletionOperationWithDb(db, operation.userId, operation.operationId);
@@ -96,5 +98,5 @@ export function executeOperation(db: Database, path: string, operation: Database
 }
 
 export function isTransactionalOperation(operation: DatabaseOperation): boolean {
-  return ["gallery-remove", "character-delete-start", "deletion-status", "transaction", "pagination", "image-references", "settings-put", "persona-mutation", "global-addon-mutation", "regex-delete", "regex-mutation", "preset-mutation", "chat-mutation", "chat-clear-avatars", "character-tags", "character-update"].includes(operation.kind);
+  return ["connection-organization-edit", "gallery-remove", "character-delete-start", "deletion-status", "transaction", "pagination", "image-references", "settings-put", "persona-mutation", "global-addon-mutation", "regex-delete", "regex-mutation", "preset-mutation", "chat-mutation", "chat-clear-avatars", "character-tags", "character-update"].includes(operation.kind);
 }

@@ -270,7 +270,7 @@
 }
 
 :global([data-glass]) .codeBlock {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
 }
 
 .codeHeader {
@@ -693,17 +693,7 @@
   background: #000;
 }
 
-/* ── Chunk fade for streaming ── */
-.chunkFade {
-  animation: lcs-chunk-fade 180ms ease-out both;
-}
-
 /* ── Scroll-time CSS suppression ── */
-:global([data-scrolling]) .codeBlock {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
 :global([data-part='streaming']) .codeBlock {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -711,4 +701,45 @@
 
 :global([data-scrolling]) .proseImageWrap {
   transition: none !important;
+}
+
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"] .prose p:has(img.proseImage),
+.content[data-chat-image-presentation][data-chat-image-targets~="html"] .prose p:has(img:not(.proseImage)) {
+  width: 100%;
+  max-width: 100%;
+  clear: both;
+}
+
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"] .prose span:has(> img.proseImage),
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"] .prose a:has(img.proseImage),
+.content[data-chat-image-presentation][data-chat-image-targets~="html"] .prose span:has(> img:not(.proseImage)),
+.content[data-chat-image-presentation][data-chat-image-targets~="html"] .prose a:has(img:not(.proseImage)) {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"] .prose img.proseImage,
+.content[data-chat-image-presentation][data-chat-image-targets~="html"] .prose img:not(.proseImage) {
+  display: block !important;
+  float: none !important;
+  margin-left: var(--chat-image-margin-left, 0) !important;
+  margin-right: var(--chat-image-margin-right, auto) !important;
+  object-position: var(--chat-image-object-position, left) !important;
+}
+
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"] .prose .proseImage {
+  max-width: min(100%, var(--prose-image-max-width, 240px));
+}
+
+.content[data-chat-image-presentation][data-chat-image-targets~="markdown"][data-chat-image-size] .prose img.proseImage,
+.content[data-chat-image-presentation][data-chat-image-targets~="html"][data-chat-image-size] .prose img:not(.proseImage) {
+  width: var(--chat-image-width) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: var(--chat-image-max-height) !important;
+  object-fit: contain !important;
 }

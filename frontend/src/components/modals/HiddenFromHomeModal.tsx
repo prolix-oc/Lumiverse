@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EyeOff, MessageSquare, Search, UserRound } from 'lucide-react'
@@ -20,7 +21,7 @@ export default function HiddenFromHomeModal() {
   const { t } = useTranslation('landing')
   const { t: tc } = useTranslation('common')
   const closeModal = useStore((s) => s.closeModal)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const hiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const setSetting = useStore((s) => s.setSetting)
   const [tab, setTab] = useState<Tab>('characters')

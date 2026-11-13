@@ -116,3 +116,38 @@
     max-height: 220px;
   }
 }
+
+/* Explicit presentation preferences override thumbnail frames, including LazyImage's inline sizing. */
+.imageRow {
+  width: 100%;
+  min-width: 0;
+}
+
+.customPresentation .imageThumbUser,
+.customPresentation .inlineImageBtn {
+  margin-left: var(--chat-image-margin-left, 0);
+  margin-right: var(--chat-image-margin-right, auto);
+}
+
+.customSize .imageThumbUser,
+.customSize .inlineImageBtn {
+  width: var(--chat-image-width) !important;
+  max-width: 100%;
+  max-height: none;
+  aspect-ratio: auto !important;
+}
+
+.customSize .imageThumbUser > div,
+.customSize .inlineImageWrap {
+  height: auto !important;
+}
+
+.customSize img {
+  display: block;
+  width: 100% !important;
+  max-width: 100%;
+  height: auto !important;
+  max-height: var(--chat-image-max-height) !important;
+  object-fit: contain;
+  object-position: var(--chat-image-object-position, left) !important;
+}

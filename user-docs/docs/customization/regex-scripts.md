@@ -149,6 +149,8 @@ Only blocks belonging to the linked preset can be targeted. Preset exports inclu
 
 Associative regex actions turn elements in replacement HTML into choices. This is useful for interactive scene cards, CYOA responses, suggested dialogue, loadout selectors, and similar interfaces.
 
+CHARX exports preserve character-bound scripts and their complete action definitions, including multi-select costs, limits, and effects. Re-importing the archive binds those scripts to the imported character.
+
 Actions require a script with the **Display** target. In the replacement HTML, associate a clickable element with an action by giving it a `data-regex-action` value:
 
 ```html

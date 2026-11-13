@@ -10,7 +10,7 @@ import type {
 } from "../types/tts-connection";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
-import type { TtsVoice } from "../tts/types";
+import type { TtsVoice, TtsVoiceLibraryOptions, TtsVoiceLibraryResult } from "../tts/types";
 import { describeProviderError } from "../utils/provider-errors";
 import { QWEN_TTS_PROVIDER, mergeQwenVoiceOptions } from "../tts/providers/qwen3-utils";
 
@@ -405,5 +405,41 @@ export async function listConnectionVoicesPreview(
       provider: providerId,
       error: describeProviderError(err, "Failed to fetch voices"),
     };
+  }
+}
+
+/** Browse a provider's public voice library using saved or draft credentials. */
+export async function listConnectionVoiceLibrary(
+  userId: string,
+  input: TtsConnectionVoicesPreviewInput & TtsVoiceLibraryOptions,
+): Promise<TtsVoiceLibraryResult & { provider: string; error?: string }> {
+  const empty = { voices: [], has_more: false, provider: input.provider };
+  const existing = input.connection_id ? getConnection(userId, input.connection_id) : null;
+  if (input.connection_id && !existing) return { ...empty, error: "Connection not found" };
+  const matching = existing?.provider === input.provider ? existing : null;
+  const provider = getTtsProvider(input.provider, userId);
+  if (!provider?.listVoiceLibrary) return { ...empty, error: "This provider does not have a voice library" };
+
+  const apiUrl = resolveEffectiveTtsApiUrl({
+    provider: input.provider,
+    api_url: input.api_url ?? matching?.api_url ?? "",
+    metadata: input.metadata ?? matching?.metadata ?? {},
+  });
+  const endpoint = (url: string) => (url || provider.capabilities.defaultUrl).replace(/\/+$/, "");
+  if (matching && input.api_key === undefined && endpoint(apiUrl) !== endpoint(resolveEffectiveTtsApiUrl(matching))) {
+    return { ...empty, error: "Enter an API key to browse a different endpoint" };
+  }
+
+  let apiKey = input.api_key;
+  if (apiKey === undefined && matching) {
+    apiKey = (await secretsSvc.getSecret(userId, ttsConnectionSecretKey(matching.id))) || undefined;
+  }
+  if (!apiKey && provider.capabilities.apiKeyRequired) return { ...empty, error: "No API key" };
+
+  try {
+    return { ...await provider.listVoiceLibrary(apiKey || "", apiUrl, input), provider: input.provider };
+  } catch (err) {
+    const message = describeProviderError(err, "Failed to fetch voice library");
+    return { ...empty, error: apiKey ? message.replaceAll(apiKey, "[redacted]") : message };
   }
 }

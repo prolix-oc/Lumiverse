@@ -1,3 +1,6 @@
+import { readGenerationVariableSeed } from "../db/swipe-variable-state";
+import { omitDisabledPenalties } from "../llm/generation-parameters";
+import { withVariableValues } from "../utils/variable-checkpoint";
 import {
   getTextContent,
   type LlmMessage,
@@ -78,6 +81,8 @@ import {
   normalizeWorldInfoSettings,
 } from "./world-info-activation.service";
 import { orderWorldInfoForOutput } from "./world-info-output-order";
+import { resolveChatGenerationConnection } from "./generation/connection-resolution";
+import { getMessageRole } from "../utils/message-role";
 import {
   worldInfoInterceptorChain,
   type WorldInfoInterceptorPlacementDTO,
@@ -111,7 +116,7 @@ import {
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
 import * as globalAddonsSvc from "./global-addons.service";
-import { applyPersonaAddonStates } from "./persona-addon-states";
+import { applyPersonaAddonStates, getChatPersonaAddonStates } from "./persona-addon-states";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as worldBooksSvc from "./world-books.service";
@@ -132,13 +137,15 @@ import * as audioSvc from "./audio.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
 import * as councilProfilesSvc from "./council/council-profiles.service";
 import { readCachedChatMemory } from "./chat-memory-cache.service";
+import { capturePresetHistory, type PresetHistorySnapshot } from "../types/preset-history";
 import { deduplicateWorldInfoEntries } from "./world-info-dedup.service";
 import * as memoryCortex from "./memory-cortex";
 import { buildEmotionalContext } from "./memory-cortex";
-import {
-  canUseCortexWorker,
-  warmCortexInWorker,
-} from "./cortex-warm-worker-client";
+import { buildCortexHistoryPlan, selectCortexHistoryMessages, type CortexHistoryPlan } from "./memory-cortex/history-replacement";
+import { filterCortexMemoriesForPrompt } from "./memory-cortex/prompt-memory-filter";
+import { filterLinkedCortexByDistance, passesMemoryDistanceThreshold } from "./chat-memory-distance";
+import { scheduleCortexPromptWarm } from "./cortex-prompt-warm.service";
+import type { CortexWarmJob } from "./cortex-warm-worker";
 import * as databankSvc from "./databank";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { getSidecarSettings } from "./sidecar-settings.service";
@@ -200,6 +207,7 @@ export type {
 // outbound requests, so the tag never leaks to the LLM.
 
 const CHAT_HISTORY_KEY = "__chatHistorySource";
+const CORTEX_HISTORY_SUMMARY_KEY = "__cortexHistorySummary";
 const WORLD_INFO_KEY = "__worldInfoSource";
 const RUNTIME_WORLD_INFO_PLACEMENT_KEY = "__runtimeWorldInfoPlacementId";
 const SOURCE_ID_KEY = "__sourceMessageId";
@@ -280,7 +288,7 @@ function getStoredReasoningCarrier(message: Message): Pick<
   LlmMessage,
   "reasoning_content" | "thinking_blocks" | "reasoning_details" | "thought_signature"
 > {
-  if (message.is_user) return {};
+  if (getMessageRole(message) !== "assistant") return {};
   const carrier = message.extra?.reasoningCarrier;
   if (!carrier || typeof carrier !== "object" || Array.isArray(carrier)) {
     return {};
@@ -774,11 +782,15 @@ async function applyPromptRegexScriptsBeforeClipping(
 ): Promise<void> {
   if (ctx.skipPromptRegex) return;
 
-  const scripts = regexScriptsSvc.getActiveScripts(ctx.userId, {
+  const options = {
     characterId: characterId ?? undefined,
     chatId: ctx.chatId,
-    target: "prompt",
-  });
+    target: "prompt" as const,
+  };
+  const presetId = macroEnv.extra.presetId;
+  const scripts = ctx.forcePresetId && typeof presetId === "string"
+    ? regexScriptsSvc.getActiveScriptsForPreset(ctx.userId, { ...options, presetId })
+    : regexScriptsSvc.getActiveScripts(ctx.userId, options);
   if (scripts.length === 0) return;
 
   const chatHistoryDepth = new Map<number, number>();
@@ -824,6 +836,7 @@ async function applyPromptRegexScriptsBeforeClipping(
     if (i > 0 && (i & 15) === 0) await yieldAndCheckAbort(ctx.signal);
 
     const msg = result[i];
+    if ((msg as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     const placement =
       msg.role === "user"
         ? ("user_input" as const)
@@ -943,6 +956,7 @@ export async function resolvePromptMacrosAfterRegexPass(
   // pass or a regex script left in a block must not be expanded or healed here.
   for (let i = 0; i < result.length; i++) {
     const msg = result[i];
+    if ((msg as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     if (typeof msg.content === "string") {
       if (!msg.content.includes("{{") && !msg.content.includes("<")) continue;
       const resolved = await withJsonBlocksProtected(msg.content, macroEnv, async (protectedContent) =>
@@ -1247,6 +1261,8 @@ const STRUCTURAL_MARKERS = new Set([
   "persona_description",
   "scenario",
   "dialogue_examples",
+  "system_prompt",
+  "post_history_instructions",
 ]);
 
 const CONTENT_BEARING_MARKERS = new Set([
@@ -1263,6 +1279,8 @@ const MARKER_TO_MACRO: Record<string, string> = {
   persona_description: "{{persona}}",
   scenario: "{{scenario}}",
   dialogue_examples: "{{mesExamples}}",
+  system_prompt: "{{system}}",
+  post_history_instructions: "{{charPostHistoryInstructions}}",
 };
 
 /** Sampler override camelCase → API snake_case mapping. */
@@ -1621,13 +1639,17 @@ const MEMORY_CONTENT_MACROS = new Set([
 ]);
 const DATABANK_CONTENT_MACROS = new Set(["databank", "databankraw"]);
 
-function detectPromptContextMacros(
+function detectPromptContentPlacements(
   blocks: PromptBlock[],
   generationType: GenerationType,
   characterTags: string[],
-): { memory: boolean; databank: boolean } {
-  const usage = { memory: false, databank: false };
+): { memory: boolean; databank: boolean; systemPrompt: boolean; postHistoryInstructions: boolean } {
+  const usage = { memory: false, databank: false, systemPrompt: false, postHistoryInstructions: false };
   for (const block of blocks) {
+    // Explicit character slots own inclusion, even when disabled or filtered.
+    // This lets presets suppress a card field without fallback re-injecting it.
+    if (block.marker === "system_prompt") usage.systemPrompt = true;
+    if (block.marker === "post_history_instructions") usage.postHistoryInstructions = true;
     if (!block.enabled || !block.content) continue;
     if (block.injectionTrigger?.length && !block.injectionTrigger.includes(generationType)) continue;
     if (!promptBlockMatchesCharacterTags(block.characterTagTrigger, characterTags)) continue;
@@ -1641,10 +1663,12 @@ function detectPromptContextMacros(
       if (name === "escape" || name === "comment" || name === "//") continue;
       if (MEMORY_CONTENT_MACROS.has(name)) usage.memory = true;
       if (DATABANK_CONTENT_MACROS.has(name)) usage.databank = true;
+      if (name === "system") usage.systemPrompt = true;
+      if (name === "charposthistoryinstructions") usage.postHistoryInstructions = true;
       for (const argument of node.args) pendingNodes.push(...argument);
       if (node.type === "scoped_macro") pendingNodes.push(...node.body);
     }
-    if (usage.memory && usage.databank) break;
+    if (usage.memory && usage.databank && usage.systemPrompt && usage.postHistoryInstructions) break;
   }
   return usage;
 }
@@ -1822,11 +1846,15 @@ export async function assemblePrompt(
   let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
-  const chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
+  let chat = pf?.chat ?? (await chatsSvc.getChatAsync(ctx.userId, ctx.chatId));
   if (!chat) throw new Error("Chat not found");
 
   const allMessages =
     pf?.messages ?? chatsSvc.getMessages(ctx.userId, ctx.chatId);
+  const variableTarget = allMessages.find(message => message.id === ctx.excludeMessageId);
+  const variableStateSeed = structuredClone(pf?.variableStateSeed ?? readGenerationVariableSeed(chat.metadata, variableTarget?.extra,
+    variableTarget?.swipe_id, ctx.generationType === "regenerate" || ctx.generationType === "swipe"));
+  chat = { ...chat, metadata: withVariableValues(chat.metadata, variableStateSeed.values) };
 
   // Validate the snapshot and live row, then cap history at the committed turn
   // before WI, macros, and MessageLimit. Context errors survive the worker boundary.
@@ -1874,6 +1902,8 @@ export async function assemblePrompt(
   const messages = ctx.excludeMessageId
     ? editedContextMessages.filter((m) => m.id !== ctx.excludeMessageId)
     : editedContextMessages;
+  // Attribution follows the committed branch, including the original selection of a replaced response.
+  const presetHistory = capturePresetHistory(editedContextMessages, ctx.rejectedPresetHistory);
   const contextAnchorMessageId =
     typeof chat.metadata?.context_history_anchor_message_id === "string"
       ? chat.metadata.context_history_anchor_message_id
@@ -1908,7 +1938,7 @@ export async function assemblePrompt(
   if (!pf) {
     // Prefetch already applies add-on states + resolves global add-ons; only do
     // it here for the non-prefetched path so {{persona}} includes global add-ons.
-    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates);
+    persona = applyPersonaAddonStates(persona, ctx.personaAddonStates ?? (ctx.worldInfoQuery ? getChatPersonaAddonStates(chat.metadata, persona?.id) : undefined));
     persona = (await globalAddonsSvc.resolvePersonaGlobalAddonsAsync(ctx.userId, persona));
   }
 
@@ -1916,7 +1946,9 @@ export async function assemblePrompt(
   const connection =
     pf?.connection !== undefined
       ? pf.connection
-      : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
+      : ctx.worldInfoQuery && connectionsSvc.resolveActingConnectionId(ctx.userId)
+        ? resolveChatGenerationConnection(ctx.userId, chat.metadata, ctx.connectionId)
+        : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
 
   // Start cold file loading while the rest of assembly resolves its inputs.
   // Clipping joins this pending load in the same runtime if it is not ready.
@@ -2005,7 +2037,7 @@ export async function assemblePrompt(
   profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
-  if (!blocks.length) {
+  if (!blocks.length && !ctx.worldInfoQuery) {
     const legacyResult = await legacyAssembly(
       messages,
       ctx.generationType,
@@ -2016,9 +2048,11 @@ export async function assemblePrompt(
       ctx.userId,
       ctx.userInput,
       ctx.signal,
+      presetHistory,
     );
     return {
       ...legacyResult,
+      variableStateSeed,
       ...(preset
         ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
         : {}),
@@ -2032,8 +2066,8 @@ export async function assemblePrompt(
   // linked retrieval) never interleaves with the cooperatively-yielding
   // assembly loop on this single thread — where it would otherwise be charged
   // to the assembly-loop phase. Prompt assembly only ever consumes warm-cache
-  // hits from the prefetch on this request path; on a cold miss we fall back
-  // immediately so cortex never blocks generation or dry-run rendering.
+  // hits on this request path; on a cold miss we use saved graph context and
+  // available basic recall so vector retrieval never blocks generation.
   const cortexConfig =
     pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(
@@ -2047,12 +2081,8 @@ export async function assemblePrompt(
     | import("./embeddings.service").PerChatMemoryOverrides
     | null = null;
 
-  // Skip the warm task when assembly runs inside the assembly worker: its
-  // results must land in the MAIN process's cortex cache, and warmCortexInWorker
-  // would otherwise spawn a nested cortex worker from in here. Cortex warming
-  // runs only on the in-process assembly path (where it reaches the real cache),
-  // matching prior behavior — the per-call worker killed this task anyway.
-  if (cortexEnabledForChat && !runningInAssemblyWorker()) {
+  let prepareCortexWarmJob: ((signal?: AbortSignal) => Promise<CortexWarmJob | undefined>) | undefined;
+  if (cortexEnabledForChat && !ctx.worldInfoQuery) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       (await settingsSvc.getSettingAsync(ctx.userId, "chatMemorySettings"))?.value ??
@@ -2064,44 +2094,15 @@ export async function assemblePrompt(
       (chat.metadata?.memory_settings as
         | import("./embeddings.service").PerChatMemoryOverrides
         | undefined) ?? null;
-
-    // Cortex retrieval is best-effort warm-cache work for subsequent
-    // generations. It must stay detached from the hot path.
-    // Resolving the embedding config early is cheap/cached; the actual query
-    // text + retrieval are built inside the deferred task below.
     const embCfgPromise = pf?.embeddingConfig
       ? Promise.resolve(pf.embeddingConfig)
       : embeddingsSvc.getEmbeddingConfig(ctx.userId);
 
-    // Combine the generation's own abort with the chat-scoped background
-    // signal. Either firing tears down the fire-and-forget task: stop on
-    // the current gen OR a newer gen arriving on this chat aborts any
-    // orphan cortex/databank work left over from prior gens.
-    const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
-    const cortexSignal = ctx.signal
-      ? AbortSignal.any([ctx.signal, chatBgSignal])
-      : chatBgSignal;
-
-    // Gate the heavy work behind assembly completion. The task is created and
-    // tracked now (so stop/teardown wiring is in place), but parks on this
-    // gate until the function's finally releases it. By then the hot path is
-    // done, so the work runs during the network-bound streaming window
-    // instead of stealing CPU from the cooperatively-yielding assembly loop.
-    const cortexGate = new Promise<void>((resolve) => {
-      resolveCortexGate = resolve;
-    });
-
-    const cortexBgTask = (async () => {
-      await cortexGate;
-      if (cortexSignal.aborted) return;
+    prepareCortexWarmJob = async (signal) => {
+      if (signal?.aborted) return undefined;
       const embCfg = await embCfgPromise;
-      if (cortexSignal.aborted) return;
-      const effective = cortexChatMemSettings
-        ? embeddingsSvc.resolveEffectiveChatMemorySettings(
-            cortexChatMemSettings,
-            embCfg,
-          )
-        : embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+      if (signal?.aborted) return undefined;
+      const effective = embeddingsSvc.resolveEffectiveChatMemorySettings(cortexChatMemSettings, embCfg);
 
       const cortexQueryText = await buildQueryText(
         messages,
@@ -2128,77 +2129,31 @@ export async function assemblePrompt(
         emotionalContext,
         generationType: ctx.generationType,
         topK: cortexPerChatOverrides?.retrievalTopK ?? effective.retrievalTopK,
+        maxDistance: effective.similarityThreshold,
         includeConsolidations: cortexConfig.consolidation.enabled,
         includeRelationships: cortexConfig.retrieval.relationshipInjection,
         excludeMessageIds,
       };
 
-      // Off-thread the retrieval. queryCortex/queryLinkedCortex perform native
-      // LanceDB vector search + Arrow marshaling that blocks whatever event
-      // loop they run on; on the main thread (the in-process assembly path)
-      // that stalls the WS ping handler long enough to trip the frontend's
-      // pong watchdog and flash a spurious disconnect overlay mid-generation.
-      // The worker computes the results and we mirror them into the host warm
-      // cache here. The worker has no AbortSignal — warm work is best-effort,
-      // so it runs to completion off-thread, but we skip priming if this
-      // generation aborted in the meantime.
-      if (canUseCortexWorker()) {
-        try {
-          const { mainResult, linkedResult } = await warmCortexInWorker({
-            chatId: ctx.chatId,
-            userId: ctx.userId,
-            cortexConfig,
-            mainQuery: mainQueryParams,
-            linkedQueryText: cortexQueryText,
-          });
-          if (cortexSignal.aborted) return;
-          if (mainResult) {
-            memoryCortex.primeCortexCache(
-              ctx.chatId,
-              mainResult,
-              excludeMessageIds,
-            );
-          }
-          if (linkedResult) {
-            memoryCortex.primeLinkedCortexCache(ctx.chatId, linkedResult);
-          }
-          return;
-        } catch (err) {
-          if (cortexSignal.aborted) return;
-          console.warn(
-            "[prompt-assembly] Cortex worker failed; falling back to in-process retrieval:",
-            err,
-          );
-          // Fall through to the in-process path below.
-        }
-      }
-
-      // In-process fallback (worker disabled via env or crashed). The combined
-      // signal is threaded through so a user-initiated stop OR a newer
-      // generation on this chat tears down the embedding API call and LanceDB
-      // retrieval instead of letting the background task live on as an orphan.
-      // These calls self-populate the warm cache as a side effect.
-      const mainQuery = memoryCortex.queryCortex(
-        mainQueryParams,
+      return {
+        chatId: ctx.chatId,
+        userId: ctx.userId,
         cortexConfig,
-        cortexSignal,
-      );
+        mainQuery: mainQueryParams,
+        linkedQueryText: cortexQueryText,
+      };
+    };
 
-      // Linked cortex queries use the same queryText for semantic relevance
-      const linkedQuery = memoryCortex.queryLinkedCortex(
-        ctx.chatId,
-        ctx.userId,
-        cortexConfig,
-        cortexQueryText,
-        cortexSignal,
-      );
-
-      await Promise.all([mainQuery, linkedQuery]);
-    })().catch((err) => {
-      if (cortexSignal.aborted) return;
-      console.warn("[prompt-assembly] Background cortex query failed:", err);
-    });
-    trackChatBackgroundTask(ctx.userId, ctx.chatId, cortexBgTask);
+    if (!runningInAssemblyWorker()) {
+      // Keep retrieval behind assembly completion. Worker assembly returns the
+      // same prepared job below, and the host schedules it in its own process.
+      const cortexGate = new Promise<void>((resolve) => { resolveCortexGate = resolve; });
+      const prepare = prepareCortexWarmJob;
+      scheduleCortexPromptWarm(ctx.userId, ctx.chatId, async (signal) => {
+        await cortexGate;
+        return prepare(signal);
+      }, ctx.signal);
+    }
   }
 
   // ---- Pre-flight: kick off databank retrieval ----
@@ -2246,7 +2201,7 @@ export async function assemblePrompt(
     import("./databank").DatabankRetrievalResult
   > | null = null;
   {
-    if (activeDatabankIds.length > 0) {
+    if (activeDatabankIds.length > 0 && !ctx.worldInfoQuery) {
       const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
       const dbSignal = ctx.signal
         ? AbortSignal.any([ctx.signal, chatBgSignal])
@@ -2327,6 +2282,7 @@ export async function assemblePrompt(
   const interception = await worldInfoInterceptorChain.run(
     wiEntries,
     {
+      purpose: ctx.worldInfoQuery ? "query" : "prompt",
       chatId: ctx.chatId,
       characterId: character.id,
       userId: ctx.userId,
@@ -2339,7 +2295,7 @@ export async function assemblePrompt(
             : undefined;
         return {
           id: m.id,
-          role: m.is_user ? ("user" as const) : ("assistant" as const),
+          role: getMessageRole(m),
           content: m.content,
           is_user: m.is_user,
           is_greeting: isGreeting,
@@ -2358,6 +2314,7 @@ export async function assemblePrompt(
     ctx.userId,
     wiSources.bookSourceMap
   );
+  for (const [bookId, source] of interception.additionalBookSources ?? []) wiSources.bookSourceMap.set(bookId, source);
   const worldInfoSettings: WorldInfoSettings = {
     ...normalizedWorldInfoSettings,
     maxRecursionPasses:
@@ -2366,6 +2323,7 @@ export async function assemblePrompt(
         : normalizedWorldInfoSettings.maxRecursionPasses,
   };
   const intercepted = interception.entries;
+  const rawWiEntries = [...wiEntries, ...(interception.additionalEntries ?? [])];
   const hasCaptureRequests = interception.captureRequests.size > 0;
   const hasCapturedIds = [...interception.captureRequests.values()].some(
     (ids) => ids.size > 0,
@@ -2377,7 +2335,7 @@ export async function assemblePrompt(
   if (activationScanCache) {
     primeWorldInfoActivationScanCache(
       activationScanCache,
-      [intercepted, wiEntries],
+      [intercepted, rawWiEntries],
       worldInfoSettings,
     );
   }
@@ -2410,7 +2368,7 @@ export async function assemblePrompt(
   let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
   let captureVectorQuery: PreparedWorldInfoVectorQuery | undefined;
   const vectorViewsEquivalent = areWorldInfoVectorViewsEquivalent(
-    wiEntries,
+    rawWiEntries,
     intercepted,
   );
   const captureVectorViewCanShareNative =
@@ -2456,7 +2414,7 @@ export async function assemblePrompt(
       if (captureVectorViewCanShareNative) {
         rawVectorActivated = projectVectorActivatedEntries(
           detailed.entries,
-          wiEntries,
+          rawWiEntries,
         );
       }
 
@@ -2521,7 +2479,7 @@ export async function assemblePrompt(
   const outputWorldInfo = orderWorldInfoForOutput(
     mergedWorldInfo.activatedEntries,
     interception.insertionOrderByEntryId,
-    runtimePlacementIds,
+    ctx.worldInfoQuery ? new Set<string>() : runtimePlacementIds,
   );
   const wiCache =
     runtimePlacementIds.size === 0 && outputWorldInfo === mergedWorldInfo.activatedEntries
@@ -2546,7 +2504,7 @@ export async function assemblePrompt(
     const captureKeywordResult = profiler.measureSync(
       "world-info-capture-keyword",
       () => activateWorldInfo({
-        entries: wiEntries,
+        entries: rawWiEntries,
         messages,
         chatTurn: messages.length,
         wiState: captureWiState,
@@ -2564,7 +2522,7 @@ export async function assemblePrompt(
               ctx.userId,
               ctx.chatId,
               wiSources.worldBookIds,
-              wiEntries,
+              rawWiEntries,
               messages,
               ctx.signal,
               worldInfoSettings,
@@ -2680,13 +2638,15 @@ export async function assemblePrompt(
   );
 
   const macroEnv: MacroEnv = buildEnv({
+    userId: ctx.userId,
+    presetHistory,
     character: effectiveCharacter,
     focusedCharacter,
     persona,
     chat,
     messages,
     generationType: ctx.generationType,
-    commit: ctx.macroCommit,
+    commit: ctx.worldInfoQuery ? false : ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
     userInput: ctx.userInput,
@@ -2783,6 +2743,31 @@ export async function assemblePrompt(
   const macroEnvSeed = cloneEnv(macroEnv);
   profiler.addPhase("macro-setup", performance.now() - phaseStartedAt);
 
+  if (ctx.worldInfoQuery) {
+    await resolveWorldInfoOutlets(outputWorldInfo, macroEnv, ctx.signal);
+    const parameters = buildParameters(samplerOverrides, preset, reasoningVal, connection?.provider, connection?.model);
+    const reserve = ctx.worldInfoQuery.reserveTokens;
+    const contextSize = parameters.max_context_length;
+    // Without a context size, prompt clipping has no limit either.
+    const limit = reserve !== undefined && typeof contextSize === "number" && Number.isFinite(contextSize) && contextSize > 0
+      ? contextSize - reserve
+      : Infinity;
+    const counter = limit === Infinity ? null : await resolveCounter(connection?.model || "");
+    const resolved: LlmMessage[] = [];
+    let tokens = 0;
+    for (const [index, entry] of outputWorldInfo.entries()) {
+      if (index % 32 === 0) await yieldAndCheckAbort(ctx.signal);
+      const content = restoreLiteralBraces((await evaluateForPromptAssembly(entry.content, macroEnv)).text).trim();
+      if (!content) continue;
+      const size = counter?.count(content) ?? 0;
+      if (tokens + size > limit) break;
+      tokens += size;
+      const role = interception.placementByEntryId.get(entry.id)?.role ?? entry.role;
+      resolved.push({ content, role: role === "assistant" || role === "user" ? role : "system" });
+    }
+    return { messages: resolved, breakdown: [], parameters, activatedWorldInfo };
+  }
+
   // ---- Impersonate one-liner mode: skip preset blocks, just chat history + impersonation prompt ----
   if (
     ctx.generationType === "impersonate" &&
@@ -2828,120 +2813,36 @@ export async function assemblePrompt(
       | undefined) ??
     null;
 
-  // Memory Cortex: use warm cache hits only. On a cold miss, fall back
-  // immediately to vector retrieval so background cortex work never stalls the
-  // generation path.
-  let cortexResult: memoryCortex.CortexResult | null = null;
+  const effectiveHistoryMessages = selectCortexHistoryMessages(
+    messages,
+    settingsMap.get("summarization") as { messageLimitEnabled?: boolean; messageLimitCount?: number } | undefined,
+    contextAnchorIndex,
+  );
+  const hasActiveHistoryBlock = effectiveBlocks.some((block) => block.enabled && block.marker === "chat_history" &&
+    (!block.injectionTrigger?.length || block.injectionTrigger.includes(ctx.generationType)) &&
+    promptBlockMatchesCharacterTags(block.characterTagTrigger, focusedCharacter.tags));
+  const cortexHistoryPlan = cortexEnabledForChat && hasActiveHistoryBlock
+    ? buildCortexHistoryPlan(chat.id, effectiveHistoryMessages, cortexConfig, contextAnchorIndex, ctx.continueMessageId)
+    : undefined;
 
-  let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
-
-  if (cortexEnabledForChat) {
-    // Fast path: warm cache from a previous generation (synchronous, no I/O).
-    // Require the cached entry to have excluded the current live-context tail
-    // (and regen target, if any), otherwise it may re-inject recent messages as
-    // long-term memory.
-    cortexResult = memoryCortex.getCachedCortexResult(
-      ctx.chatId,
-      buildMemoryExcludeMessageIds(
-        messages,
-        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-        perChatOverrides,
-        ctx.excludeMessageId,
-      ),
-    );
-
-    if (cortexResult) {
-      const cortexMemoryResult = formatCortexForAssembly(
-        cortexResult,
-        cortexConfig,
-        character,
-        macroEnv,
-        ctx.chatId,
-        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-      );
-      if (hasCortexContent(cortexResult, macroEnv)) {
-        memoryResult = cortexMemoryResult;
-      } else {
-        // Genuinely no cortex context (new chat, no chunks, etc.) - fall back to vector retrieval.
-        memoryResult = await safeCollectChatVectorMemory(
-          ctx.userId,
-          ctx.chatId,
-          messages,
-          chatMemSettings,
-          perChatOverrides,
-          ctx.excludeMessageId,
-        );
-      }
-    } else {
-      // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
-      memoryResult = await safeCollectChatVectorMemory(
-        ctx.userId,
-        ctx.chatId,
-        messages,
-        chatMemSettings,
-        perChatOverrides,
-        ctx.excludeMessageId,
-      );
-    }
-  } else {
-    // Existing path: pure vector retrieval
-    memoryResult = await safeCollectChatVectorMemory(
-      ctx.userId,
-      ctx.chatId,
-      messages,
-      chatMemSettings,
-      perChatOverrides,
-      ctx.excludeMessageId,
-    );
-  }
-
-  // Merge linked cortex data (vaults + interlinks) if available
-  const linkedCortexResult = cortexEnabledForChat
-    ? memoryCortex.getCachedLinkedCortexResult(ctx.chatId)
-    : null;
-  let linkedMemoryText = "";
-  if (
-    linkedCortexResult &&
-    (linkedCortexResult.vaults.length > 0 ||
-      linkedCortexResult.interlinks.length > 0)
-  ) {
-    const linkedBudget = Math.floor(cortexConfig.contextTokenBudget * 0.3);
-    const linkedFormatted = memoryCortex.formatLinkedCortexSection(
-      linkedCortexResult.vaults,
-      linkedCortexResult.interlinks,
-      {
-        mode: cortexConfig.formatterMode,
-        tokenBudget: linkedBudget,
-        currentSpeakerName: character?.name,
-      },
-    );
-    linkedMemoryText = linkedFormatted.text;
-  }
-
-  // Store in macroEnv for {{memories}} macro access
-  const combinedFormatted = linkedMemoryText
-    ? memoryResult.formatted
-      ? memoryResult.formatted + "\n\n" + linkedMemoryText
-      : linkedMemoryText
-    : memoryResult.formatted;
-
-  const memoryInjectionStrategy =
-    chatMemSettings?.injectionStrategy ??
-    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
-  const effectiveMemoryEnabled =
-    (memoryResult.enabled || !!linkedMemoryText) && memoryInjectionStrategy !== "disabled";
-  const memoryFallbackAllowed =
-    memoryInjectionStrategy === "fallback" ||
-    !!macroEnv.extra.cortex?.formatted ||
-    !!linkedMemoryText;
-
-  macroEnv.extra.memory = {
-    chunks: memoryResult.chunks,
-    formatted: combinedFormatted,
-    count: memoryResult.count,
-    enabled: effectiveMemoryEnabled,
-    settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
-  };
+  const {
+    memoryResult,
+    combinedFormatted,
+    effectiveMemoryEnabled,
+    memoryFallbackAllowed,
+  } = await populateMemoryMacroContext({
+    userId: ctx.userId,
+    chat,
+    character,
+    messages,
+    macroEnv,
+    chatMemorySettings: chatMemSettings,
+    perChatOverrides,
+    cortexConfig,
+    excludeMessageId: ctx.excludeMessageId,
+    cortexCache: ctx.cortexCache,
+    historyPlan: cortexHistoryPlan ?? null,
+  });
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
 
   // ---- Databank retrieval ----
@@ -2990,7 +2891,12 @@ export async function assemblePrompt(
   };
   profiler.addPhase("databank-retrieval", performance.now() - phaseStartedAt);
 
-  const { memory: macroHandlesMemory, databank: macroHandlesDatabank } = detectPromptContextMacros(
+  const {
+    memory: macroHandlesMemory,
+    databank: macroHandlesDatabank,
+    systemPrompt: hasSystemPromptPlacement,
+    postHistoryInstructions: hasPostHistoryInstructionsPlacement,
+  } = detectPromptContentPlacements(
     effectiveBlocks,
     ctx.generationType,
     focusedCharacter.tags,
@@ -3161,9 +3067,24 @@ export async function assemblePrompt(
   let hasWiBefore = false;
   let hasWiAfter = false;
   let firstChatIdx = -1;
-  let phiMacroReferenced = false;
   let blockYieldCounter = 0;
   phaseStartedAt = performance.now();
+
+  // Older presets have no character-instruction slots. Keep populated card
+  // fields useful by default while allowing explicit markers/macros to place
+  // them (or disabled markers to suppress them).
+  if (!hasSystemPromptPlacement && effectiveCharacter.system_prompt) {
+    const resolved = normalizePromptBlockText(await evaluateHostPromptSource(
+      "{{system}}", macroEnv, "prompt_source:character_wrapper",
+    ));
+    if (resolved) {
+      result.push({ role: "system", content: resolved });
+      breakdown.push({
+        type: "block", name: "Character System Prompt", role: "system",
+        content: resolved, marker: "system_prompt",
+      });
+    }
+  }
   // Marker-pinned WI entries (position-7 entries whose wi_marker targets a
   // specific loom block): splice adjacent to that block rather than joining
   // the legacy {{wi_marker}} macro pool. Group by target marker, then by side.
@@ -3313,35 +3234,9 @@ export async function assemblePrompt(
 
       firstChatIdx = result.length;
 
-      // Apply message limit — keep only the N most recent messages when enabled.
-      // This works independently of summarization; users can use {{loomSummary}}
-      // in their preset to retain context from older messages.
-      const summarizationSettings = settingsMap.get("summarization") as
-        | { messageLimitEnabled?: boolean; messageLimitCount?: number }
-        | undefined;
-      let effectiveMessages = messages;
-      if (
-        summarizationSettings?.messageLimitEnabled &&
-        summarizationSettings.messageLimitCount != null &&
-        summarizationSettings.messageLimitCount > 0
-      ) {
-        const requestedStart = Math.max(
-          0,
-          messages.length - summarizationSettings.messageLimitCount,
-        );
-        const anchorStart = contextAnchorIndex == null
-          ? -1
-          : messages.findIndex(
-              (message) => message.index_in_chat >= contextAnchorIndex,
-            );
-        // An anchor tail always wins over the count-based Message Limit. This
-        // may include more than N messages, but never slices the marked
-        // message or anything newer out of model context.
-        const start = anchorStart >= 0
-          ? Math.min(requestedStart, anchorStart)
-          : requestedStart;
-        effectiveMessages = messages.slice(start);
-      }
+      // Select original turns before compression so a summary cannot pull
+      // history back across the message limit or a regeneration boundary.
+      const effectiveMessages = effectiveHistoryMessages;
       const generatedImageContextPolicy = resolveGeneratedImageContextPolicy(
         settingsMap.get("imageGeneration"),
         effectiveMessages,
@@ -3355,6 +3250,7 @@ export async function assemblePrompt(
       const attachmentSources = new Map<string, MessageAttachment>();
       for (const msg of effectiveMessages) {
         if (msg.extra?.hidden === true) continue;
+        if (cortexHistoryPlan?.replacedMessageIds.has(msg.id)) continue;
         const atts = attachmentsForContext(msg, generatedImageContextPolicy);
         for (const att of atts) {
           if (att.image_id) attachmentSources.set(attachmentCacheKey(att), att);
@@ -3386,7 +3282,16 @@ export async function assemblePrompt(
         } else if (ctx.signal?.aborted) {
           throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
         }
-        const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+        const role = getMessageRole(msg);
+        const replacement = cortexHistoryPlan?.replacements.get(msg.id);
+        if (replacement) {
+          result.push(markAsChatHistory({
+            role, content: replacement.content, [CORTEX_HISTORY_SUMMARY_KEY]: true,
+          } as LlmMessage, { id: msg.id, index_in_chat: msg.index_in_chat }));
+          historyCount++;
+          continue;
+        }
+        if (cortexHistoryPlan?.replacedMessageIds.has(msg.id)) continue;
         // Inline fast-path: most stored messages contain no macro markers.
         // Skip the full evaluate() call (lex → parse → AST walk → diagnostics
         // alloc) when no markers are present. This mirrors the evaluator's own
@@ -3693,14 +3598,6 @@ export async function assemblePrompt(
 
     // Content-bearing markers and regular blocks → resolve block.content
     const content = block.content || "";
-    if (
-      !phiMacroReferenced &&
-      /\{\{\s*(?:jailbreak|charJailbreak|charInstruction|charPostHistoryInstructions)\s*(?:\}\}|::)/i.test(
-        content,
-      )
-    ) {
-      phiMacroReferenced = true;
-    }
     const rawTokenCountContent = await evaluatePromptBlockTokenCountContent(
       content,
       macroEnv,
@@ -3783,7 +3680,7 @@ export async function assemblePrompt(
 
   // ---- Post-history instructions ----
   phaseStartedAt = performance.now();
-  if (!phiMacroReferenced && effectiveCharacter.post_history_instructions) {
+  if (!hasPostHistoryInstructionsPlacement && effectiveCharacter.post_history_instructions) {
     const resolved = (await evaluateHostPromptSource(
       "{{charPostHistoryInstructions}}",
       macroEnv,
@@ -3796,7 +3693,7 @@ export async function assemblePrompt(
         name: "Post-History Instructions",
         role: "system",
         content: resolved,
-        marker: "jailbreak",
+        marker: "post_history_instructions",
       });
     }
   }
@@ -4358,12 +4255,6 @@ export async function assemblePrompt(
   stripEmptyTextParts(result);
   profiler.addPhase("post-assembly-injections", performance.now() - phaseStartedAt);
 
-  // ---- Collapse all messages into a single user message (if enabled) ----
-  const advSettings: AdvancedSettings | undefined = prompts.advancedSettings;
-  if (advSettings?.collapseMessages) {
-    collapseToSingleUserMessage(result);
-  }
-
   // ---- Build parameters from sampler overrides + advanced settings + reasoning + custom body ----
   const parameters = buildParameters(
     samplerOverrides,
@@ -4558,6 +4449,7 @@ export async function assemblePrompt(
       ? { resolvedPreset: { id: preset.id, name: preset.name, metadata: preset.metadata } }
       : {}),
     trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
+    collapseMessages: prompts.advancedSettings?.collapseMessages === true,
     assistantPrefill,
     assistantReasoningPrefill,
     activatedWorldInfo:
@@ -4568,10 +4460,17 @@ export async function assemblePrompt(
     databankStats,
     contextClipStats,
     deferredWiState,
+    deferredCortexWarmJob: runningInAssemblyWorker() && prepareCortexWarmJob
+      ? await prepareCortexWarmJob().catch((err) => {
+          console.warn("[prompt-assembly] Preparing Cortex warm job failed:", err);
+          return undefined;
+        })
+      : undefined,
     deliberationHandledByMacro: !!(macroEnv.extra as any)
       ._deliberationMacroUsed,
     macroEnv,
     macroEnvSeed,
+    variableStateSeed,
   };
   } finally {
     // Release the deferred cortex warm-cache task now that the hot path is
@@ -6100,14 +5999,13 @@ export async function collectVectorActivatedWorldInfo(
  * bridge) and the full `activatedEntries` models (with content + outlet_name),
  * which `resolveWorldInfoOutlets` needs to populate `{{outlet::name}}`.
  */
-async function computeActivatedWorldInfoForChat(
+async function prepareWorldInfoActivationForChat(
   userId: string,
   chatId: string,
-): Promise<MergedWorldInfoEntriesResult> {
+): Promise<() => Promise<MergedWorldInfoEntriesResult>> {
   const chat = await chatsSvc.getChatAsync(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
-  const messages = chatsSvc.getMessages(userId, chatId);
   const character = chat.character_id
     ? (await charactersSvc.getCharacterAsync(userId, chat.character_id))
     : makeAssistantCharacter();
@@ -6137,15 +6035,13 @@ async function computeActivatedWorldInfoForChat(
       | Partial<WorldInfoSettings>
       | undefined) ?? {};
 
-  const wiResult = activateWorldInfo({
-    entries: wiSources.entries,
-    messages,
-    chatTurn: messages.length,
-    wiState,
-    settings: worldInfoSettings,
-  });
-
-  const [vectorActivated, embeddingConfig] = await Promise.all([
+  // Empty sources cannot activate anything. Avoid hydrating all stored swipes
+  // and history, and avoid querying embedding providers, for ordinary chats.
+  if (!wiSources.entries.some((entry) => !entry.disabled)) {
+    return async () => mergeActivatedWorldInfoEntries([], [], worldInfoSettings);
+  }
+  const messages = chatsSvc.getMessages(userId, chatId);
+  const loadVectorInputs = () => Promise.all([
     collectVectorActivatedWorldInfo(
       userId,
       chatId,
@@ -6157,16 +6053,42 @@ async function computeActivatedWorldInfoForChat(
     ),
     embeddingsSvc.getEmbeddingConfig(userId),
   ]);
-  return mergeActivatedWorldInfoEntries(
-    wiResult.activatedEntries,
-    vectorActivated,
-    worldInfoSettings,
-    wiSources.bookSourceMap,
-    wiSources.bookNameMap,
-    undefined,
-    undefined,
-    { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
-  );
+  let vectorInputs: ReturnType<typeof loadVectorInputs> | undefined;
+  return async () => {
+    // Keep chance/group selection and mutable activation state per message.
+    // Only the immutable database and vector inputs are shared by a batch.
+    const wiResult = activateWorldInfo({
+      entries: wiSources.entries,
+      messages,
+      chatTurn: messages.length,
+      wiState: structuredClone(wiState),
+      settings: worldInfoSettings,
+    });
+    const [vectorActivated, embeddingConfig] = await (vectorInputs ??= loadVectorInputs());
+    return mergeActivatedWorldInfoEntries(
+      wiResult.activatedEntries,
+      vectorActivated,
+      worldInfoSettings,
+      wiSources.bookSourceMap,
+      wiSources.bookNameMap,
+      undefined,
+      undefined,
+      { hybridWeightMode: embeddingConfig.hybrid_weight_mode },
+    );
+  };
+}
+
+/** Shares read inputs only within one request; never caches activation results. */
+export function createWorldInfoEntriesLoaderForChat(userId: string, chatId: string) {
+  let prepared: ReturnType<typeof prepareWorldInfoActivationForChat> | undefined;
+  return async () => {
+    prepared ??= prepareWorldInfoActivationForChat(userId, chatId);
+    return (await (await prepared)()).activatedEntries;
+  };
+}
+
+async function computeActivatedWorldInfoForChat(userId: string, chatId: string) {
+  return (await prepareWorldInfoActivationForChat(userId, chatId))();
 }
 
 /**
@@ -6179,6 +6101,16 @@ export async function getActivatedWorldInfoForChat(
   chatId: string,
 ): Promise<ActivatedWorldInfoEntry[]> {
   return (await computeActivatedWorldInfoForChat(userId, chatId)).activatedWorldInfo;
+}
+
+export async function getResolvedWorldInfoForChat(
+  userId: string, chatId: string, reserveTokens?: number,
+): Promise<{ content: string; role: "system" | "user" | "assistant" }[]> {
+  if (reserveTokens !== undefined && !Number.isFinite(reserveTokens)) {
+    throw new TypeError("World info reserve must be a finite number");
+  }
+  const result = await assemblePrompt({ userId, chatId, generationType: "normal", macroCommit: false, worldInfoQuery: { reserveTokens } });
+  return result.messages as { content: string; role: "system" | "user" | "assistant" }[];
 }
 
 /**
@@ -6311,8 +6243,150 @@ function formatMemoryOutput(
 }
 
 /**
+ * Populate combined memory and Cortex macros from the same cached retrieval
+ * context for prompt assembly and macro previews. This does not start Cortex
+ * warming, extraction, or rebuilds. Persisted graph context is available even
+ * with a cold vector cache, alongside available basic recall.
+ */
+export async function populateMemoryMacroContext({
+  userId,
+  chat,
+  character,
+  messages,
+  macroEnv,
+  chatMemorySettings: chatMemSettings,
+  perChatOverrides = (chat.metadata?.memory_settings as
+    import("./embeddings.service").PerChatMemoryOverrides | undefined) ?? null,
+  cortexConfig = memoryCortex.getCortexConfig(userId),
+  excludeMessageId,
+  cortexCache,
+  historyPlan,
+}: {
+  userId: string;
+  chat: Chat;
+  character: Character | null;
+  messages: Message[];
+  macroEnv: MacroEnv;
+  chatMemorySettings: import("./embeddings.service").ChatMemorySettings | null;
+  perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null;
+  cortexConfig?: memoryCortex.MemoryCortexConfig;
+  excludeMessageId?: string;
+  cortexCache?: import("./memory-cortex/types").CortexCacheSnapshot;
+  historyPlan?: CortexHistoryPlan | null;
+}) {
+  const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata);
+  const memorySettings = chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS;
+  const maxDistance = cortexEnabledForChat
+    ? await embeddingsSvc.getChatMemoryDistanceThreshold(userId, chatMemSettings) : 0;
+  if (historyPlan === undefined && cortexEnabledForChat &&
+      (cortexConfig.replaceConsolidatedMessagesInContext || cortexConfig.replaceArcSummariesInContext)) {
+    const anchorId = chat.metadata?.context_history_anchor_message_id;
+    const anchorIndex = messages.find((m) => m.id === anchorId && m.extra?.hidden !== true)?.index_in_chat;
+    historyPlan = buildCortexHistoryPlan(chat.id, selectCortexHistoryMessages(messages,
+      settingsSvc.getSetting(userId, "summarization")?.value, anchorIndex), cortexConfig, anchorIndex);
+  }
+  // Revalidate retrieved sources against this turn's tail; read saved graph
+  // context locally when no usable vector result is cached.
+  const cortexResult = cortexEnabledForChat
+    ? memoryCortex.readCortexPromptContext(
+        {
+          chatId: chat.id,
+          queryText: await buildQueryText(
+            messages, memorySettings, buildMacroEnvForChat(userId, chat.id), getReasoningStripOptions(userId),
+          ),
+        },
+        cortexConfig,
+        buildMemoryExcludeMessageIds(messages, memorySettings, perChatOverrides, excludeMessageId),
+        cortexCache,
+        maxDistance,
+      )
+    : null;
+  if (cortexResult && historyPlan?.replacedMessageIds.size) {
+    cortexResult.memories = filterCortexMemoriesForPrompt(chat.id, cortexResult.memories, [...historyPlan.replacedMessageIds]);
+  }
+  if (cortexResult && historyPlan?.suppressArcContext) cortexResult.arcContext = null;
+  let memoryResult: MemoryRetrievalResult | null = null;
+  if (cortexResult) {
+    const cortexMemoryResult = formatCortexForAssembly(
+      cortexResult,
+      cortexConfig,
+      character,
+      macroEnv,
+      chat.id,
+      chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+    );
+    if (hasCortexContent(cortexResult, macroEnv)) memoryResult = cortexMemoryResult;
+  }
+
+  // Graph-only Cortex context can accompany ordinary cached chunk recall.
+  if (!memoryResult || cortexResult?.memories.length === 0) {
+    const basicRecall = await safeCollectChatVectorMemory(
+      userId, chat.id, messages, chatMemSettings, perChatOverrides, excludeMessageId, historyPlan?.replacedMessageIds,
+    );
+    memoryResult = memoryResult
+      ? {
+          ...basicRecall,
+          enabled: true,
+          formatted: [basicRecall.formatted, memoryResult.formatted].filter(Boolean).join("\n\n"),
+        }
+      : basicRecall;
+  }
+
+  // Merge linked cortex data (vaults + interlinks) if available
+  const cachedLinkedCortexResult = cortexEnabledForChat
+    ? memoryCortex.getCachedLinkedCortexResult(chat.id, cortexCache)
+    : null;
+  const linkedCortexResult = cachedLinkedCortexResult ? filterLinkedCortexByDistance(cachedLinkedCortexResult, maxDistance) : null;
+  let linkedMemoryText = "";
+  if (
+    linkedCortexResult &&
+    (linkedCortexResult.vaults.length > 0 ||
+      linkedCortexResult.interlinks.length > 0)
+  ) {
+    const linkedBudget = Math.floor(cortexConfig.contextTokenBudget * 0.3);
+    const linkedFormatted = memoryCortex.formatLinkedCortexSection(
+      linkedCortexResult.vaults,
+      linkedCortexResult.interlinks,
+      {
+        mode: cortexConfig.formatterMode,
+        tokenBudget: linkedBudget,
+        currentSpeakerName: character?.name,
+      },
+    );
+    linkedMemoryText = linkedFormatted.text;
+  }
+
+  // Store in macroEnv for {{memories}} macro access
+  const combinedFormatted = linkedMemoryText
+    ? memoryResult.formatted
+      ? memoryResult.formatted + "\n\n" + linkedMemoryText
+      : linkedMemoryText
+    : memoryResult.formatted;
+
+  const memoryInjectionStrategy =
+    chatMemSettings?.injectionStrategy ??
+    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
+  const effectiveMemoryEnabled =
+    (memoryResult.enabled || !!linkedMemoryText) && memoryInjectionStrategy !== "disabled";
+  const memoryFallbackAllowed =
+    memoryInjectionStrategy === "fallback" ||
+    !!macroEnv.extra.cortex?.formatted ||
+    !!linkedMemoryText;
+
+  macroEnv.extra.memory = {
+    chunks: memoryResult.chunks,
+    formatted: combinedFormatted,
+    count: memoryResult.count,
+    enabled: effectiveMemoryEnabled,
+    settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+  };
+
+  return { memoryResult, combinedFormatted, effectiveMemoryEnabled, memoryFallbackAllowed };
+}
+
+/**
  * Format a CortexResult into a MemoryRetrievalResult and populate the macro
- * environment. Used by both the warm-cache and await-cortex branches.
+ * environment for the shared memory context setup.
  */
 function formatCortexForAssembly(
   cortexResult: memoryCortex.CortexResult,
@@ -6452,7 +6526,8 @@ export async function collectChatVectorMemory(
   perChatOverrides?:
     | import("./embeddings.service").PerChatMemoryOverrides
     | null,
-  _excludeMessageId?: string,
+  excludeMessageId?: string,
+  additionalExcludedMessageIds?: ReadonlySet<string>,
 ): Promise<MemoryRetrievalResult> {
   const result = await readCachedChatMemory(
     userId,
@@ -6460,22 +6535,23 @@ export async function collectChatVectorMemory(
     messages,
     chatMemorySettings ?? null,
     perChatOverrides ?? null,
+    excludeMessageId,
   );
 
-  if (_excludeMessageId && result.chunks.length > 0) {
+  if (result.chunks.length > 0) {
+    const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
+    const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(chatMemorySettings ?? null, cfg);
+    const excludedIds = new Set(buildMemoryExcludeMessageIds(messages, settings, perChatOverrides, excludeMessageId));
+    for (const id of additionalExcludedMessageIds ?? []) excludedIds.add(id);
     const filteredChunks = result.chunks.filter((chunk) => {
       const messageIds = Array.isArray(chunk.metadata?.messageIds)
         ? (chunk.metadata.messageIds as string[])
         : null;
-      return !(messageIds && messageIds.includes(_excludeMessageId));
+      return passesMemoryDistanceThreshold(chunk.score, settings.similarityThreshold) &&
+        !messageIds?.some((id) => excludedIds.has(id));
     });
 
     if (filteredChunks.length !== result.chunks.length) {
-      const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-      const settings = embeddingsSvc.resolveEffectiveChatMemorySettings(
-        chatMemorySettings ?? null,
-        cfg,
-      );
       return {
         chunks: filteredChunks,
         formatted: formatMemoryOutput(filteredChunks, settings),
@@ -6683,7 +6759,8 @@ function mergeConsecutiveUserMessages(
   let remaining = count;
   let i = startIdx;
   while (i < startIdx + remaining - 1) {
-    if (result[i].role === "user" && result[i + 1]?.role === "user") {
+    if (result[i].role === "user" && result[i + 1]?.role === "user" &&
+        !(result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY] && !(result[i + 1] as any)[CORTEX_HISTORY_SUMMARY_KEY]) {
       const a = result[i].content;
       const b = result[i + 1].content;
 
@@ -6804,6 +6881,7 @@ function stripReasoningFromChatHistory(
   let reasoningBlocksSeen = 0;
 
   for (let i = endIdx - 1; i >= firstChatIdx; i--) {
+    if ((result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     if (result[i].role !== "assistant") continue;
     const content = result[i].content;
     const stripped =
@@ -6987,6 +7065,7 @@ function applyContextFilters(
   const endIdx = firstChatIdx + historyCount;
 
   for (let i = firstChatIdx; i < endIdx; i++) {
+    if ((result[i] as any)[CORTEX_HISTORY_SUMMARY_KEY]) continue;
     const content = result[i].content;
     if (typeof content !== "string") continue;
 
@@ -7162,7 +7241,7 @@ function applyCompletionSettings(
  *
  * Mutates the `result` array in place.
  */
-function collapseToSingleUserMessage(result: LlmMessage[]): void {
+export function collapseToSingleUserMessage(result: LlmMessage[]): void {
   if (result.length <= 1) return;
 
   const textChunks: string[] = [];
@@ -7744,7 +7823,7 @@ export function buildParameters(
     applyProviderReasoningOffSwitch(params, providerName, modelName);
   }
 
-  return params;
+  return omitDisabledPenalties(params);
 }
 
 /**
@@ -8102,6 +8181,9 @@ async function onelinerImpersonation(
       )?.index_in_chat
     : undefined;
 
+  const cortexConfig = memoryCortex.getCortexConfig(ctx.userId);
+  const historyPlan = memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata)
+    ? buildCortexHistoryPlan(chat.id, messages, cortexConfig, contextAnchorIndex) : null;
   // Chat history
   let messageCount = 0;
   let impHistYieldCounter = 0;
@@ -8112,7 +8194,15 @@ async function onelinerImpersonation(
     } else if (ctx.signal?.aborted) {
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
-    const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
+    const role = getMessageRole(msg);
+    const replacement = historyPlan?.replacements.get(msg.id);
+    if (replacement) {
+      result.push(markAsChatHistory({ role, content: replacement.content,
+        [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: msg.id, index_in_chat: msg.index_in_chat }));
+      messageCount++;
+      continue;
+    }
+    if (historyPlan?.replacedMessageIds.has(msg.id)) continue;
     const visibleResolvedContent = await withJsonBlocksProtected(shieldMessageLiterals(msg.content, msg), macroEnv, async (protectedContent) =>
       healFormattingArtifacts((await evaluate(protectedContent, macroEnv, registry)).text),
     );
@@ -8290,9 +8380,14 @@ async function legacyAssembly(
   userId?: string,
   userInput?: string,
   signal?: AbortSignal,
+  presetHistory?: PresetHistorySnapshot,
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
+  const cortexConfig = userId ? memoryCortex.getCortexConfig(userId) : null;
+  const anchorIndex = messages.find((m) => m.id === chat?.metadata?.context_history_anchor_message_id && m.extra?.hidden !== true)?.index_in_chat;
+  const historyPlan = chat && cortexConfig && memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata)
+    ? buildCortexHistoryPlan(chat.id, messages, cortexConfig, anchorIndex) : null;
 
   // Initialize macros for legacy path too
   initMacros();
@@ -8334,6 +8429,8 @@ async function legacyAssembly(
       : resolveCharacterWithAlternateFields(character as Character, chatObj);
 
     macroEnv = buildEnv({
+      userId,
+      presetHistory,
       character: legacyEffectiveChar,
       focusedCharacter: legacyFocusedChar,
       persona: persona ?? null,
@@ -8441,6 +8538,7 @@ async function legacyAssembly(
       userId,
       chat.id,
       messages,
+      undefined, undefined, undefined, historyPlan?.replacedMessageIds,
     );
     if (legacyMemoryResult.count > 0) {
       const memoryContent = legacyMemoryResult.formatted;
@@ -8464,6 +8562,7 @@ async function legacyAssembly(
   const legacyAttachmentSources = new Map<string, MessageAttachment>();
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
+    if (historyPlan?.replacedMessageIds.has(m.id)) continue;
     const atts = attachmentsForContext(m, legacyGeneratedImageContextPolicy);
     for (const att of atts) {
       if (att.image_id) legacyAttachmentSources.set(attachmentCacheKey(att), att);
@@ -8484,6 +8583,14 @@ async function legacyAssembly(
   let legacyHistYieldCounter = 0;
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
+    const replacement = historyPlan?.replacements.get(m.id);
+    if (replacement) {
+      llmMessages.push(markAsChatHistory({ role: getMessageRole(m), content: replacement.content,
+        [CORTEX_HISTORY_SUMMARY_KEY]: true } as LlmMessage, { id: m.id, index_in_chat: m.index_in_chat }));
+      legacyHistoryCount++;
+      continue;
+    }
+    if (historyPlan?.replacedMessageIds.has(m.id)) continue;
     if ((legacyHistYieldCounter++ & 15) === 0) {
       await yieldAndCheckAbort(signal);
     } else if (signal?.aborted) {
@@ -8521,7 +8628,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: parts.length > 0 ? parts : resolved,
             ...getStoredReasoningCarrier(m),
           },
@@ -8536,7 +8643,7 @@ async function legacyAssembly(
       llmMessages.push(
         markAsChatHistory(
           {
-            role: (m.is_user ? "user" : "assistant") as LlmMessage["role"],
+            role: getMessageRole(m),
             content: resolved,
             ...getStoredReasoningCarrier(m),
           },

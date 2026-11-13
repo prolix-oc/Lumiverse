@@ -1,13 +1,16 @@
 import type React from 'react'
 import { compileComponentAst, formatAstDiagnostic } from './componentAstCompiler'
 import { createTrustedOverrideComponent } from './componentAstRuntime'
+import { TextBudgetCache } from './textBudgetCache'
 
 export interface TranspileResult {
   component: React.ComponentType<any> | null
   error: string | null
 }
 
-const compileCache = new Map<string, Promise<TranspileResult>>()
+// Editing previews create a new source/AST/component for every revision.
+// Mounted components own their current program independently of this cache.
+const compileCache = new TextBudgetCache<Promise<TranspileResult>>(32, 512 * 1024, () => 0)
 
 /**
  * Compile user-authored TSX into a trusted React wrapper.

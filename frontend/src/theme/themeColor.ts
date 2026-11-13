@@ -73,6 +73,7 @@ function parseAlphaComponent(value: string): number {
 }
 
 function parseThemeColor(token: string): Rgba | null {
+  token = token.trim()
   if (token.startsWith('#')) return parseHexColor(token)
 
   const component = '(-?(?:\\d*\\.\\d+|\\d+\\.?\\d*)%?)'
@@ -89,7 +90,7 @@ function parseThemeColor(token: string): Rgba | null {
     }
   }
 
-  const hslMatch = token.match(/hsla?\(\s*(-?\d*\.?\d+)\s*,\s*(-?\d*\.?\d+)%\s*,\s*(-?\d*\.?\d+)%(?:\s*,\s*(-?\d*\.?\d+))?\s*\)/i)
+  const hslMatch = token.match(/^hsla?\(\s*(-?\d*\.?\d+)\s*,\s*(-?\d*\.?\d+)%\s*,\s*(-?\d*\.?\d+)%(?:\s*,\s*(-?\d*\.?\d+))?\s*\)$/i)
   if (hslMatch) {
     return hslToRgba(
       Number(hslMatch[1]),
@@ -102,10 +103,16 @@ function parseThemeColor(token: string): Rgba | null {
   return null
 }
 
+/** Unknown/variable CSS colors cannot promise an opaque native surface. */
+export function isOpaqueThemeColor(color: string): boolean {
+  const parsed = parseThemeColor(color.trim())
+  return Boolean(parsed && Object.values(parsed).every(Number.isFinite) && parsed.a === 1)
+}
+
 /** Convert a CSS RGB(A) value to the opaque color needed by native PWA chrome. */
 export function toOpaqueRgbChannels(color: string): [number, number, number] | null {
   const parsed = parseThemeColor(color)
-  if (!parsed) return null
+  if (!parsed || !Object.values(parsed).every(Number.isFinite)) return null
 
   // Native window chrome expects an opaque color. Composite translucent theme
   // tokens against black, matching the app's deep shell background.

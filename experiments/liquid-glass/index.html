@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Liquid Glass Lab - experimental</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#lab">Skip to lab</a>
+  <main id="lab">
+    <header class="lab-header">
+      <h1>Liquid Glass Lab</h1>
+      <p class="lab-note">Staging-only experiment. No shipped UI. SVG filters and CSS fallbacks scoped to this page. Move, drag, toggle, slide - degrades to plain translucent cards when backdrop-filter or SVG filters are unavailable.</p>
+    </header>
+    <svg class="sr-only" aria-hidden="true" focusable="false">
+      <defs>
+        <filter id="container-glass" x="0%" y="0%" width="100%" height="100%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.008 0.008" numOctaves="2" seed="92" result="noise" />
+          <feGaussianBlur in="noise" stdDeviation="0.02" result="blur" />
+          <feDisplacementMap in="SourceGraphic" in2="blur" scale="77" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+        <filter id="goo">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="13" result="b" />
+          <feColorMatrix in="b" type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 13 -10" result="c" />
+          <feComposite in="c" in2="SourceGraphic" operator="atop" />
+        </filter>
+        <filter id="knockout" color-interpolation-filters="sRGB">
+          <feColorMatrix type="matrix" result="k" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 -1 -1 -1 1 0" />
+          <feComponentTransfer><feFuncR type="linear" slope="3" intercept="-1" /><feFuncG type="linear" slope="3" intercept="-1" /><feFuncB type="linear" slope="3" intercept="-1" /></feComponentTransfer>
+          <feComponentTransfer><feFuncR type="table" tableValues="0 0 0 0 0 1 1 1 1 1" /><feFuncG type="table" tableValues="0 0 0 0 0 1 1 1 1 1" /><feFuncB type="table" tableValues="0 0 0 0 0 1 1 1 1 1" /></feComponentTransfer>
+        </filter>
+        <filter id="remove-black" color-interpolation-filters="sRGB">
+          <feColorMatrix type="matrix" result="b" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 -255 -255 -255 0 1" />
+          <feMorphology in="b" operator="dilate" radius="0.5" result="s" />
+          <feComposite in="SourceGraphic" in2="s" operator="out" />
+        </filter>
+        <filter id="mini-liquid-lens" x="-50%" y="-50%" width="200%" height="200%">
+          <feImage x="0" y="0" result="map" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'&gt;&lt;defs&gt;&lt;radialGradient id='g' cx='50%25' cy='50%25' r='75%25'&gt;&lt;stop offset='0%25' stop-color='rgb(128,128,255)'/&gt;&lt;stop offset='90%25' stop-color='rgb(255,255,255)'/&gt;&lt;/radialGradient&gt;&lt;/defs&gt;&lt;rect width='100%25' height='100%25' fill='url(%23g)'/&gt;&lt;/svg&gt;" />
+          <feDisplacementMap in="SourceGraphic" in2="map" scale="-200" xChannelSelector="R" yChannelSelector="G" result="d" />
+          <feMerge><feMergeNode in="d" /></feMerge>
+        </filter>
+      </defs>
+    </svg>
+    <section class="lab-grid">
+      <article class="glass-card" aria-labelledby="glass-card-title">
+        <h2 id="glass-card-title">Container lens</h2>
+        <p>Backdrop blur plus turbulence displacement. Hover to feel the lens shift.</p>
+        <button class="glass-action" type="button">Open</button>
+      </article>
+      <article class="lab-card" aria-labelledby="toggle-title">
+        <h2 id="toggle-title">Liquid toggle</h2>
+        <button class="liquid-toggle" type="button" aria-label="Toggle" aria-pressed="false">
+          <div class="liquid-goo" aria-hidden="true"></div>
+          <div class="liquid-indicator" aria-hidden="true"></div>
+          <span class="liquid-toggle__label">off</span>
+        </button>
+      </article>
+      <article class="lab-card" aria-labelledby="slider-title">
+        <h2 id="slider-title">Liquid slider</h2>
+        <div class="slider" id="slider">
+          <div class="slider__progress" id="slider-progress"></div>
+          <div class="slider__thumb" id="slider-thumb" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="40" tabindex="0"></div>
+        </div>
+      </article>
+      <article class="distortion-card" aria-labelledby="distortion-title">
+        <h2 id="distortion-title">Distortion card</h2>
+        <p>Hover for a gentle entrance. Filter-less fallback keeps it readable.</p>
+      </article>
+    </section>
+    <footer class="lab-footer">
+      <p>Sources: liquid-glass-js, freefrontend Liquid Glass collection. Filters and assets are inlined or procedural; no third-party scripts or trackers.</p>
+    </footer>
+  </main>
+  <script src="./script.js" defer></script>
+</body>
+</html>

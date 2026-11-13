@@ -8,6 +8,7 @@ import { healCorruptDatabase } from "./maintenance";
  * The baseline replaces replaying these individually on fresh databases.
  */
 const BASELINE_MIGRATIONS: readonly string[] = [
+  "136_spindle_live_activities.sql",
   "001_settings.sql",
   "002_characters.sql",
   "003_chats.sql",
@@ -139,6 +140,14 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "125_deletion_operations.sql",
   "126_image_references.sql",
   "127_ios_push_destinations.sql",
+  "128_ios_live_activities.sql",
+  "129_ios_activity_stage_sounds.sql",
+  "130_android_push_destinations.sql",
+  "131_ios_notification_delivery.sql",
+  "132_ios_widgets.sql",
+  "133_android_notification_relay.sql",
+  "134_better_auth_provider_account_identity.sql",
+  "135_auth_session_impersonation.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);
@@ -218,6 +227,10 @@ function repairDreamWeaverBaselineDrift(db: Database): void {
 // effect is already in place and the runner should record it as applied
 // without re-running.
 function isBaselineDriftAlreadyApplied(db: Database, file: string): boolean {
+  if (file === "135_auth_session_impersonation.sql") {
+    const columns = db.query("PRAGMA table_info('session')").all() as Array<{ name: string }>;
+    return columns.some((column) => column.name === "impersonatedBy");
+  }
   if (file === "072_world_books_folder.sql") {
     const columns = db.query("PRAGMA table_info('world_books')").all() as Array<{ name: string }>;
     return columns.some((column) => column.name === "folder");
@@ -321,6 +334,25 @@ function assertBetterAuthAccountMigrationReady(db: Database): void {
   }
 }
 
+function assertProviderAccountIdentityReady(db: Database): void {
+  const collision = db.query(`
+    SELECT COUNT(*) AS accountCount, COUNT(DISTINCT userId) AS userCount
+    FROM account
+    GROUP BY providerId, accountId
+    HAVING COUNT(*) > 1
+    LIMIT 1
+  `).get() as { accountCount: number; userCount: number } | null;
+  if (collision) {
+    // Never guess which user's login should win or silently discard tokens.
+    // Do not log provider subjects or credentials in a startup diagnostic.
+    throw new Error(
+      "Better Auth account migration found duplicate provider/account links "
+      + `(${collision.accountCount} rows across ${collision.userCount} users). `
+      + "The account table has not been changed. Resolve the duplicate links before restarting.",
+    );
+  }
+}
+
 export async function runMigrations(db: Database, migrationsDir?: string): Promise<void> {
   const dir = migrationsDir || join(import.meta.dir, "migrations");
 
@@ -412,6 +444,10 @@ export async function runMigrations(db: Database, migrationsDir?: string): Promi
 
     if (file === "113_better_auth_1_7_accounts.sql") {
       assertBetterAuthAccountMigrationReady(db);
+    }
+
+    if (file === "134_better_auth_provider_account_identity.sql") {
+      assertProviderAccountIdentityReady(db);
     }
 
     if (FOREIGN_KEYS_OFF_MIGRATIONS.has(file)) {

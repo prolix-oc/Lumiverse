@@ -108,7 +108,7 @@ for (const name of (process.env.WORKSPACE_BROWSERS ?? 'chromium,firefox,webkit')
     assert.equal(await page.locator('[data-entry-id="b1-e0"]').isVisible(), false, 'mobile detail replaces list')
     const bounds = await page.locator('[data-spindle-mount="modal_header_actions"]').evaluate(el => { const r = el.parentElement.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,maxWidth:el.parentElement.style.maxWidth,maxHeight:el.parentElement.style.maxHeight } })
     assert.ok(Math.abs(bounds.width-width)<2 && Math.abs(bounds.height-915)<2, 'mobile modal fills viewport')
-    assert.equal(bounds.maxWidth, ''); assert.equal(bounds.maxHeight, '')
+    assert.equal(bounds.maxWidth, 'none'); assert.equal(bounds.maxHeight, 'none')
     await page.setViewportSize({ width, height: 500 }); await field.fill('Keyboard viewport draft'); assert.equal(await field.isVisible(), true); await page.setViewportSize({ width, height: 915 })
    }
    await page.getByRole('button', { name: '‹ Entries', exact: true }).click()

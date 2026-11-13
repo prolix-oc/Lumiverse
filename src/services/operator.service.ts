@@ -1,4 +1,5 @@
 import { RingBuffer } from "../utils/ring-buffer";
+import { formatLogArguments } from "../utils/log-format";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { env } from "../env";
@@ -78,11 +79,16 @@ class OperatorService {
 
   private interceptConsole(): void {
     const origLog = console.log;
+    const origInfo = console.info;
     const origWarn = console.warn;
     const origError = console.error;
 
     console.log = (...args: any[]) => {
       origLog(...args);
+      this.captureEntry("stdout", args);
+    };
+    console.info = (...args: any[]) => {
+      origInfo(...args);
       this.captureEntry("stdout", args);
     };
     console.warn = (...args: any[]) => {
@@ -95,10 +101,8 @@ class OperatorService {
     };
   }
 
-  private captureEntry(source: "stdout" | "stderr", args: any[]): void {
-    const text = args
-      .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-      .join(" ");
+  private captureEntry(source: "stdout" | "stderr", args: unknown[]): void {
+    const text = formatLogArguments(args);
     const entry: LogEntry = { timestamp: Date.now(), source, text };
     this.logBuffer.push(entry);
 

@@ -223,13 +223,13 @@ export class WorkerHostFilesApi {
     let reservation: StagedFile | undefined;
     const releases: Array<() => void> = [];
     try {
-      reservation = createStagedFile(owner, "extraction", maximum);
+      reservation = createStagedFile(owner, "extraction", 0);
       releases.push(pinStagedFile(reservation));
       const destinationDir = dirname(reservation.directory);
       let nameBytes = 0;
       await extractSelectedZipEntries({
         archivePath: source.path, destinationDir, signal, maxDecompressedBytes: maximum,
-        selectEntry(name) {
+        selectEntry(name, uncompressedSize) {
           signal.throwIfAborted();
           if (selection && !selection.has(name)) return null;
           assertArchiveName(name);
@@ -238,7 +238,7 @@ export class WorkerHostFilesApi {
           if (!child) {
             nameBytes += Buffer.byteLength(name);
             if (nameBytes > 1024 * 1024) throw new Error("Archive entry names are too large");
-            child = createStagedFile(owner, name.split("/").pop()!, 0);
+            child = createStagedFile(owner, name.split("/").pop()!, uncompressedSize);
             releases.push(pinStagedFile(child));
             children.set(name, child);
           }
@@ -251,10 +251,6 @@ export class WorkerHostFilesApi {
       signal.throwIfAborted();
       const result = [];
       for (const [name, child] of children) {
-        // Move the reservation into each finished child without double-counting.
-        const size = Bun.file(child.path).size;
-        reservation.budget -= size;
-        child.budget = size;
         result.push({ name, file: finishStagedFile(child) });
       }
       return result;

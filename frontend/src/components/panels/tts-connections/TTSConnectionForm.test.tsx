@@ -8,6 +8,13 @@ import { FishAudioTtsProvider } from '../../../../../src/tts/providers/fish-audi
 const modelComboboxProps: Array<Record<string, any>> = []
 const voicePreviewInputs: Array<Record<string, any>> = []
 const voicePreviewOptions: Array<{ signal?: AbortSignal } | undefined> = []
+let libraryProps: Record<string, any> | undefined
+mock.module('@/components/modals/VoiceLibraryModal', () => ({
+  default: (props: Record<string, any>) => {
+    libraryProps = props
+    return <button onClick={() => { props.onSelect({ id: 'community-voice', name: 'Community narrator' }); props.onClose() }}>Choose library voice</button>
+  },
+}))
 let previewVoicesImpl = async (_input: Record<string, any>) => ({ voices: [] })
 
 function deferred<T>() {
@@ -41,6 +48,12 @@ dom.window.matchMedia = () => ({
 }) as any
 
 const t = (key: string, opts?: any) => opts?.file ? `${key}${opts.file}` : key
+// Folder save/cancel behavior is exercised with real managers in the browser test.
+mock.module('@/components/panels/connection-manager/ConnectionFolderField', () => ({
+  default: () => null,
+  useConnectionFolderDraft: () => ({ value: '', onChange: () => {} }),
+}))
+mock.module('@/hooks/useConnectionLibrary', () => ({ saveConnectionFolder: () => {} }))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t }),
   Trans: ({ children }: { children?: unknown }) => children ?? null,
@@ -177,6 +190,25 @@ test('exposes service account JSON file input and region for Google Vertex TTS',
   expect(saved[0].api_url).toBeUndefined()
   expect(saved[0].metadata?.vertex_region).toBe('europe-west1')
   expect(saved[0].metadata?.sa_file_name).toBe('test-key.json')
+})
+
+test('the ElevenLabs library uses draft credentials and saves its selected voice ID', async () => {
+  saved = []
+  const eleven = { ...providers[0], id: 'elevenlabs', name: 'ElevenLabs', capabilities: { ...providers[0].capabilities, voiceListStyle: 'dynamic' as const, supportsVoiceLibrary: true } }
+  await render(<Form providers={[eleven]} profile={ttsProfile({ provider: 'elevenlabs', api_url: 'https://proxy.example', voice: '', metadata: {} })} onSave={(input) => saved.push(input)} onCancel={() => {}} />)
+  const key = container.querySelector<HTMLInputElement>('input[type="password"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(key, 'draft-key')
+    key.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  const open = [...container.querySelectorAll('button')].find((button) => button.textContent === 'shared:voicePicker.voiceLibrary')!
+  await act(async () => { open.click(); await Bun.sleep(10) })
+  expect(libraryProps?.connection).toMatchObject({ connection_id: 'p1', provider: 'elevenlabs', api_url: 'https://proxy.example', api_key: 'draft-key' })
+  const choose = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Choose library voice')!
+  await act(async () => choose.click())
+  const save = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('save'))!
+  await act(async () => save.click())
+  expect(saved[0]?.voice).toBe('community-voice')
 })
 
 test('renders standard API key and API url inputs for other providers', async () => {

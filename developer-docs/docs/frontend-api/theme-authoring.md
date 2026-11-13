@@ -1,6 +1,6 @@
 # Theme Authoring
 
-`ctx.theme` is the persistent/native theme-authoring counterpart to the backend `spindle.theme` presentation API. Use `spindle.theme` for extension-scoped live variable overrides; use `ctx.theme` for native assets, `.lumitheme` packs, catalog inspection, and navigation into Lumiverse's Theme Editor.
+`ctx.theme` provides browser-side native assets, `.lumitheme` packs, catalog inspection, and navigation into Lumiverse's Theme Editor. Backend extensions can use `spindle.theme.authoring` for saved-theme edits and archives without a browser. The existing `spindle.theme.apply` API provides transient extension-scoped presentation overrides.
 
 Each subtree is independently versioned. Feature-detect the host capability before using it:
 
@@ -83,3 +83,18 @@ Every named part also has a CSS-module class, available in the component CSS ref
 | Actions | `card-actions`, `apply`, `delete`, `footer`, `load-more` |
 
 Cards expose `data-current="true|false"` and `data-media-type="image|video"`. Metadata rows expose `data-field="uploaded|size|resolution"`; state messages expose `data-state="loading|empty"`. Conditional parts appear only when their content is present. These selectors apply to both global and chat wallpaper selection.
+## Rendered element inspection
+
+Feature-detect `ctx.host.capabilities` for `theme-inspection-v1` before using `ctx.theme.inspect`. This synchronous frontend method requires `app_manipulation` and an active extension context.
+
+```ts
+const result = ctx.theme.inspect({
+  selector: '[data-component="BubbleMessage"]',
+  properties: ['color', 'font-size', 'padding'],
+  limit: 5,
+})
+```
+
+The result contains the total match count and bounded matches with a tag, visibility flag, rectangle and computed styles. It does not return text or DOM handles. Selectors support classes, IDs, tags, simple combinators, exact `data-component` and `data-part` attributes, and basic positional pseudo-classes. Arbitrary attribute probes are rejected. Only presentation properties are accepted, excluding resource URLs, generated content and custom properties. Limits are 30 elements and 40 properties.
+
+Inspection observes the current browser, including device-local controls and transient overlays. Saved-theme edits and archive operations are available through backend `spindle.theme.authoring` without a browser.

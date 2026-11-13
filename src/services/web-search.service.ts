@@ -71,6 +71,15 @@ interface TavilySearchResponse {
   results?: TavilySearchResult[];
 }
 
+interface DeepSeekSearchResult {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  summary?: string;
+  content?: string;
+  rerank_score?: number;
+}
+
 function resolveSearchEndpoint(apiUrl: string): string {
   const parsed = new URL(apiUrl);
   if (!parsed.pathname || parsed.pathname === "/") {
@@ -124,6 +133,18 @@ function normalizeTavilyResult(row: TavilySearchResult): WebSearchResult | null 
     url: row.url,
     snippet,
     ...(typeof row.score === "number" ? { score: row.score } : {}),
+  };
+}
+
+function normalizeDeepSeekResult(row: DeepSeekSearchResult): WebSearchResult | null {
+  if (!row || typeof row.url !== "string" || !row.url.trim()) return null;
+  const title = typeof row.title === "string" && row.title.trim() ? row.title.trim() : row.url;
+  const snippet = typeof row.snippet === "string" ? row.snippet.trim() : "";
+  return {
+    title,
+    url: row.url,
+    snippet,
+    ...(typeof row.rerank_score === "number" ? { score: row.rerank_score } : {}),
   };
 }
 
@@ -348,6 +369,65 @@ async function fetchTavilyResults(
   return { results, documents };
 }
 
+async function fetchDeepSeekResults(
+  query: string,
+  requestedCount: number,
+  settings: WebSearchSettings,
+  apiKey: string | null,
+  includeContent: boolean,
+): Promise<{ results: WebSearchResult[]; documents: WebSearchDocument[] }> {
+  if (!apiKey) {
+    throw new Error("A DeepSeek API key is required");
+  }
+  // DeepSeek counts Unicode characters, including astral characters as one.
+  // Reject oversized queries instead of silently changing their search syntax.
+  if (Array.from(query).length > 128) {
+    throw new Error("DeepSeek search queries must be at most 128 Unicode characters. Shorten the search query and try again.");
+  }
+
+  const count = Math.min(requestedCount, settings.maxResultCount, 50);
+  const response = await safeFetch(settings.apiUrl, {
+    method: "POST",
+    body: JSON.stringify({ query, count, need_content: includeContent }),
+    timeoutMs: settings.requestTimeoutMs,
+    maxBytes: 5 * 1024 * 1024,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`DeepSeek returned HTTP ${response.status}`);
+  }
+
+  const payload = await response.json() as { results?: DeepSeekSearchResult[] };
+  const rows = (Array.isArray(payload.results) ? payload.results : [])
+    .flatMap((row) => {
+      const result = normalizeDeepSeekResult(row);
+      return result ? [{ row, result }] : [];
+    })
+    .slice(0, count);
+  const results = rows.map(({ result }) => result);
+  if (!includeContent) return { results, documents: [] };
+
+  // Search supplies content directly. Use its model-oriented summary when
+  // content is unavailable, without issuing an additional paid Fetch request.
+  const documents = rows.slice(0, settings.maxPagesToScrape).map(({ row, result }): WebSearchDocument => {
+    const source = [row.content, row.summary, row.snippet]
+      .find((value): value is string => typeof value === "string" && !!value.trim())
+      ?.trim();
+    return {
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      ...(source ? { content: clipText(source, settings.maxCharsPerPage), contentLength: source.length } : {}),
+    };
+  });
+  return { results, documents };
+}
+
 export async function searchWeb(
   userId: string,
   query: string,
@@ -376,23 +456,18 @@ export async function searchWebWithConfig(
   }
 
   const count = Math.max(1, Math.min(requestedCount ?? settings.defaultResultCount, settings.maxResultCount));
-  if (settings.provider === "exa") {
-    const exa = await fetchExaResults(trimmedQuery, count, settings, apiKey, options?.scrape !== false);
+  if (settings.provider !== "searxng") {
+    const fetchResults = {
+      exa: fetchExaResults,
+      tavily: fetchTavilyResults,
+      deepseek: fetchDeepSeekResults,
+    }[settings.provider];
+    const { results, documents } = await fetchResults(trimmedQuery, count, settings, apiKey, options?.scrape !== false);
     return {
       query: trimmedQuery,
-      results: exa.results,
-      documents: exa.documents,
-      context: options?.scrape === false ? "" : buildContextBlock(trimmedQuery, exa.documents, settings),
-    };
-  }
-
-  if (settings.provider === "tavily") {
-    const tavily = await fetchTavilyResults(trimmedQuery, count, settings, apiKey, options?.scrape !== false);
-    return {
-      query: trimmedQuery,
-      results: tavily.results,
-      documents: tavily.documents,
-      context: options?.scrape === false ? "" : buildContextBlock(trimmedQuery, tavily.documents, settings),
+      results,
+      documents,
+      context: options?.scrape === false ? "" : buildContextBlock(trimmedQuery, documents, settings),
     };
   }
 

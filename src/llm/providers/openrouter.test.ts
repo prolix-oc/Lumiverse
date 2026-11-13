@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { clearOpenRouterMetadataCache, normalizeOpenRouterEndpointModel, OpenRouterProvider } from "./openrouter";
 import { injectConnectionMetadataFlags } from "../../services/generation/connection-metadata";
+import type { StreamChunk } from "../types";
 
 const provider = new OpenRouterProvider();
 let fetchSpy: ReturnType<typeof spyOn> | undefined;
@@ -73,4 +74,52 @@ describe("OpenRouter Flex routing at dispatch", () => {
       expect(sent.stream).toBe(stream);
     });
   }
+});
+
+describe("OpenRouter reasoning_details on tool calls", () => {
+  const question = { role: "user" as const, content: "Weather in SF?" };
+  const reasoningDetails: Record<string, unknown>[] = [
+    { type: "reasoning.text", text: "Look it up.", signature: "opaque-signature", format: "anthropic-claude-v1", index: 0 },
+    { type: "reasoning.encrypted", data: "encrypted-reasoning", format: "anthropic-claude-v1", index: 1 },
+  ];
+
+  test("streamed reasoning_details are rebuilt per block onto the tool-call terminal chunk", async () => {
+    const events = [
+      { choices: [{ delta: { reasoning: "Look ", reasoning_details: [{ type: "reasoning.text", text: "Look ", format: "anthropic-claude-v1", index: 0 }] } }] },
+      { choices: [{ delta: { reasoning: "it up.", reasoning_details: [{ type: "reasoning.text", text: "it up.", index: 0 }] } }] },
+      { choices: [{ delta: { reasoning_details: [{ type: "reasoning.text", signature: "opaque-signature", index: 0 }] } }] },
+      { choices: [{ delta: { reasoning_details: [{ type: "reasoning.encrypted", data: "encrypted-reasoning", format: "anthropic-claude-v1", index: 1 }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "lookup", arguments: '{"city":"SF"}' } }] }, finish_reason: "tool_calls" }] },
+    ];
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (_url, _init) => new Response(
+      events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+      { headers: { "Content-Type": "text/event-stream" } },
+    )) as typeof fetch);
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of provider.generateStream("placeholder", "", { model: "anthropic/claude-sonnet-4.5", messages: [question] })) chunks.push(chunk);
+    expect(chunks.map((chunk) => chunk.reasoning || "").join("")).toBe("Look it up.");
+    expect(chunks.at(-1)).toMatchObject({ finish_reason: "tool_calls", tool_calls: [{ name: "lookup", args: { city: "SF" }, call_id: "call_1" }] });
+    expect(chunks.at(-1)?.reasoning_details).toEqual(reasoningDetails);
+  });
+
+  test("assistant reasoning_details are sent back unchanged on the tool_calls message", () => {
+    const body = provider["buildBody"]({
+      model: "anthropic/claude-sonnet-4.5",
+      messages: [
+        question,
+        { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "lookup", input: { city: "SF" } }], reasoning_details: reasoningDetails },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "72F" }] },
+      ],
+      parameters: {},
+    }, false);
+    expect(body.messages.slice(1)).toEqual([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: '{"city":"SF"}' } }],
+        reasoning_details: reasoningDetails,
+      },
+      { role: "tool", tool_call_id: "call_1", content: "72F" },
+    ]);
+  });
 });

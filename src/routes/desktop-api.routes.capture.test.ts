@@ -31,6 +31,34 @@ function fixture(clientId = "lumiverse-desktop") {
 }
 
 describe("native-only desktop capture transport", () => {
+  test("display metadata updates require the matching native account and lease", async () => {
+    const setup = fixture();
+    const native = await setup.register();
+    const displays = ["a", "b", "c"].map((id, index) => ({ id: id.repeat(64), name: `Display ${index + 1}`, width: 1920, height: 1080, primary: index === 0 }));
+    const endpoint = `/capture/devices/${native.device.id}/displays`;
+    const body = JSON.stringify(displays);
+    for (const headers of [{ authorization: "Bearer bob", "X-Lumiverse-Capture-Lease": native.transportToken }, { authorization: "Bearer alice", "X-Lumiverse-Capture-Lease": "forged" }]) {
+      expect((await setup.app.request(endpoint, { method: "POST", headers, body })).status).toBe(401);
+    }
+    expect((await setup.app.request(endpoint, { method: "POST", headers: { authorization: "Bearer alice", "X-Lumiverse-Capture-Lease": native.transportToken }, body })).status).toBe(200);
+    expect(setup.broker.listDevices("alice")[0].displays).toEqual(displays);
+  });
+  test("approval replies require the native account and matching lease and return only metadata", async () => {
+    const setup = fixture();
+    const native = setup.broker.register("alice", { name: "Desktop", platform: "macos", approvalStatus: true, capabilities: { image: true, video: false, replay: false } });
+    const owner = { runtimeId: "runtime", extensionId: "extension", identifier: "test", name: "Test", userId: "alice" };
+    const status = setup.broker.inspect(owner, { deviceId: native.device.id, kind: "image", connectionId: "connection" },
+      { connectionId: "connection", revision: "revision", provider: "google", model: "vision", endpointOrigin: "provider-default" }, () => true);
+    const command = setup.broker.poll("alice", native.device.id, native.transportToken)[0];
+    const body = JSON.stringify({ requestId: command.requestId, approval: "paused", source: "unknown" });
+    const endpoint = `/capture/devices/${native.device.id}/approval-status`;
+    const wrongAccount = await setup.app.request(endpoint, { method: "POST", headers: { authorization: "Bearer bob", "X-Lumiverse-Capture-Lease": native.transportToken }, body });
+    expect(wrongAccount.status).toBe(401);
+    const response = await setup.app.request(endpoint, { method: "POST", headers: { authorization: "Bearer alice", "X-Lumiverse-Capture-Lease": native.transportToken }, body });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await status).toMatchObject({ approval: "paused", source: "unknown" });
+  });
   test("does not accept an ordinary browser cookie or another OAuth client's token", async () => {
     const body = JSON.stringify({ name: "Native Desktop", platform: "linux", capabilities: { image: true, video: false, replay: false } });
     const browser = await fixture().app.request("/capture/devices", { method: "POST", headers: { cookie: "session=browser" }, body });

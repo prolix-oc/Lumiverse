@@ -1,8 +1,10 @@
+import { acquireIOSMediaImage, type IOSMediaLease } from './ios-media-cache'
+
 /**
  * Short-lived image decode coordinator for virtualized lists.
  *
- * Compressed image bytes belong in the browser HTTP cache, and decoded bitmap
- * eviction belongs to the browser's native image cache. Keeping detached
+ * Compressed storage belongs to the browser HTTP cache or the optional iOS
+ * media cache; decoded bitmap eviction belongs to the browser. Keeping detached
  * HTMLImageElements in JavaScript pins their decoded pixels and prevents the
  * browser from responding to memory pressure.
  *
@@ -28,6 +30,7 @@ const queued = new Set<string>()
 const transitionHeld = new Map<string, {
   image: HTMLImageElement
   timer: ReturnType<typeof setTimeout>
+  lease?: IOSMediaLease | null
 }>()
 let prefetchQueue: string[] = []
 let activePrefetches = 0
@@ -40,6 +43,7 @@ function releaseTransitionImage(src: string) {
   clearTimeout(held.timer)
   held.image.onload = null
   held.image.onerror = null
+  held.lease?.release()
   transitionHeld.delete(src)
 }
 
@@ -102,14 +106,16 @@ function decodeImage(src: string): Promise<boolean> {
   const generation = cacheGeneration
   const image = new Image()
   image.decoding = 'async'
-  image.src = src
-
-  const decode = typeof image.decode === 'function'
-    ? image.decode()
-    : new Promise<void>((resolve, reject) => {
+  const lease = acquireIOSMediaImage(src)
+  const start = (url: string) => {
+    if (generation !== cacheGeneration) return Promise.reject(new Error('Image prefetch expired'))
+    image.src = url
+    return typeof image.decode === 'function' ? image.decode() : new Promise<void>((resolve, reject) => {
         image.onload = () => resolve()
         image.onerror = () => reject(new Error('Image failed to load'))
       })
+  }
+  const decode = lease ? lease.ready.then(start) : start(src)
 
   const task = decode
     .then(() => {
@@ -121,6 +127,7 @@ function decodeImage(src: string): Promise<boolean> {
     .finally(() => {
       image.onload = null
       image.onerror = null
+      lease?.release()
       if (pending.get(src) === task) pending.delete(src)
       notify(src)
     })
@@ -208,20 +215,23 @@ export function holdImagesForTransition(srcs: string[], holdMs = TRANSITION_HOLD
     const image = new Image()
     image.decoding = 'async'
     if ('fetchPriority' in image) image.fetchPriority = 'high'
-    image.src = src
-
-    const decode = typeof image.decode === 'function'
-      ? image.decode()
-      : new Promise<void>((resolve, reject) => {
+    const lease = acquireIOSMediaImage(src)
+    const start = (url: string) => {
+      // A transition may have expired while its cache lookup was pending.
+      if (generation !== cacheGeneration || transitionHeld.get(src)?.image !== image) return Promise.reject(new Error('Transition expired'))
+      image.src = url
+      return typeof image.decode === 'function' ? image.decode() : new Promise<void>((resolve, reject) => {
           image.onload = () => resolve()
           image.onerror = () => reject(new Error('Image failed to load'))
         })
+    }
+
+    const timer = setTimeout(() => releaseTransitionImage(src), Math.max(250, holdMs))
+    transitionHeld.set(src, { image, timer, lease })
+    const decode = lease ? lease.ready.then(start) : start(src)
     void decode.then(() => {
       if (generation === cacheGeneration) rememberImageDecoded(src)
     }).catch(() => {})
-
-    const timer = setTimeout(() => releaseTransitionImage(src), Math.max(250, holdMs))
-    transitionHeld.set(src, { image, timer })
   }
 }
 

@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowRight, Plus } from 'lucide-react'
@@ -10,7 +11,7 @@ import styles from './WeaverPanel.module.css'
 function useDisplay(session: WeaverSession) {
   const { t } = useTranslation('weaver')
   const buildTypes = useStore((s) => s.weaverBuildTypes)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   return sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))
 }
 

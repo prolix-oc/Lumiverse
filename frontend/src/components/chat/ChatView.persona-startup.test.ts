@@ -26,10 +26,11 @@ async function openChat(metadata: Record<string, unknown> = {}, initial: Record<
     chatHeads: [], personas: [], personasLoaded: false, fullSettingsLoaded: false,
     activePersonaId: null, characterPersonaBindings: {}, personaTagBindings: {},
     setActiveCharacter() {}, setActiveChatDisplayOwner() {}, setActiveChatName() {},
+    setActiveChatLoadedCharacterIds(ids: string[]) { state.activeChatLoadedCharacterIds = ids },
     setActiveChatMetadata(value: unknown) { state.activeChatMetadata = value },
     clearGroupChat() {}, clearGroupExpressions() {}, clearMultiCharacterExpressions() {},
     setActivePersona(id: unknown) { selected.push(id); state.activePersonaId = id; emit() },
-    updateCharacter() { finished = true },
+    updateCharacter(id: string, character: unknown) { state.characters = [...state.characters.filter((item: any) => item.id !== id), character] },
     ...initial,
   }
   function emit() { for (const listener of [...listeners]) listener() }
@@ -37,10 +38,10 @@ async function openChat(metadata: Record<string, unknown> = {}, initial: Record<
     chatId: 'chat', useStore: { getState: () => state, subscribe: (fn: () => void) => {
       listeners.add(fn); return () => { listeners.delete(fn) }
     } },
-    chatsApi: { get: async () => ({ character_id: 'character', metadata }), patchMetadata: async (...args: unknown[]) => { patches.push(args) } },
+    chatsApi: { open: async () => ({ chat: { character_id: 'character', metadata }, messages: { data: [{ id: 'message' }], total: 1 }, characters: [{ id: 'character', tags: ['tag'] }] }), patchMetadata: async (...args: unknown[]) => { patches.push(args) } },
     messagesApi: { list: async () => ({ data: [{ id: 'message' }], total: 1 }) },
     setActiveChat() {}, setMessages() {}, recoverPooledGeneration: async () => {},
-    generateApi: { acknowledge: async () => {} }, loadoutsApi: { resolve: async () => ({}) },
+    generateApi: { acknowledge: async () => {} }, loadoutsApi: { resolve: async () => { finished = true; return {} } },
     resolveCouncilForChat: async () => { throw new Error('No binding') },
     resolveChatPersonaSelection, setPersistedChatPersonaId, CHAT_PERSONA_METADATA_KEY,
     personaToastName: (value: { name: string }) => value.name, t: (key: string) => key,

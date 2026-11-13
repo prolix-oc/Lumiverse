@@ -1,5 +1,7 @@
 import { get, post, put } from './client'
 
+export type WebSearchProvider = 'searxng' | 'exa' | 'tavily' | 'deepseek'
+
 export interface WebSearchProviderProfile {
   apiUrl: string
   requestTimeoutMs: number
@@ -16,7 +18,7 @@ export interface WebSearchProviderProfile {
 
 export interface WebSearchSettingsInput {
   enabled?: boolean
-  provider?: 'searxng' | 'exa' | 'tavily'
+  provider?: WebSearchProvider
   apiUrl?: string
   requestTimeoutMs?: number
   defaultResultCount?: number
@@ -27,13 +29,13 @@ export interface WebSearchSettingsInput {
   safeSearch?: 0 | 1 | 2
   engines?: string[]
   inlineToolEnabled?: boolean
-  providerProfiles?: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
+  providerProfiles?: Partial<Record<WebSearchProvider, WebSearchProviderProfile>>
   apiKey?: string | null
 }
 
 export interface WebSearchSettingsResponse {
   enabled: boolean
-  provider: 'searxng' | 'exa' | 'tavily'
+  provider: WebSearchProvider
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -45,7 +47,7 @@ export interface WebSearchSettingsResponse {
   engines: string[]
   inlineToolEnabled: boolean
   hasApiKey: boolean
-  providerProfiles?: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
+  providerProfiles?: Partial<Record<WebSearchProvider, WebSearchProviderProfile>>
 }
 
 export interface WebSearchDocument {

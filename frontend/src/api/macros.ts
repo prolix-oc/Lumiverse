@@ -43,6 +43,9 @@ export interface MacroCatalogResponse {
 }
 
 export interface MacroBatchResolveRequest {
+  message_id?: string
+  swipe_index?: number
+  use_message_preset?: boolean
   templates: Record<string, string>
   chat_id?: string
   character_id?: string

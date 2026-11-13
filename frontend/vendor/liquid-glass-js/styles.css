@@ -1,0 +1,45 @@
+/* Base Styles - General layout and typography */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: sans-serif;
+  background: white;
+}
+
+.content {
+  padding-top: 40px;
+  max-width: 800px;
+  margin: auto;
+}
+
+/* Image styles */
+.hero-image {
+  width: 100%;
+  height: 300px;
+  object-fit: cover;
+  margin-bottom: 20px;
+  border-radius: 8px;
+}
+
+.content-image {
+  width: 100%;
+  height: 400px;
+  object-fit: cover;
+  margin: 20px 0;
+  border-radius: 8px;
+}
+
+.gradient-banner {
+  height: 300px;
+  background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gradient-banner h2 {
+  color: white;
+  text-align: center;
+}

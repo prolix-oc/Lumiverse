@@ -105,6 +105,8 @@ mock.module('react-i18next', () => ({
 mock.module('@/i18n', () => ({
   default: { t: translate },
   changeUiLanguage: async () => {},
+  applyLoginLanguage: async () => {},
+  changeLoginLanguage: async () => {},
   ensureLanguageLoaded: async () => {},
   initI18n: async () => ({ t: translate }),
   UI_LANGUAGE_STORAGE_KEY: 'lumiverse-ui-language',
@@ -160,6 +162,8 @@ beforeEach(() => {
   root = createRoot(host)
   useStore.setState({
     longMessageCollapseEnabled: true,
+    longMessageCollapseUserMessages: false,
+    longMessageCollapseDepth: 0,
     longMessageCollapsePreset: 'comfortable',
     expandedLongMessageKeys: [],
   })
@@ -173,7 +177,86 @@ afterEach(async () => {
   resetMessageTagRuntimeReadinessForTests()
 })
 
+describe('MessageContent display readiness', () => {
+  test.each(['Unchanged ordinary text', '<div><style>p{color:purple}</style><p>Unchanged HTML</p></div>'])(
+    'notifies the row when processing finishes without changing its content: %s', async content => {
+      const previous = useStore.getState()
+      const pending = Promise.withResolvers<{ content: string }>()
+      const events: Array<{ ready: boolean; pending: boolean }> = []
+      const record = (event: Event) => {
+        const detail = (event as CustomEvent).detail
+        if (detail?.displayReady) events.push({ ready: true, pending: host.querySelector('[data-display-pending]') !== null })
+      }
+      host.addEventListener('lumiverse:message-content-layout', record)
+      useStore.setState({ activeChatId: 'ready-chat', activeChatDisplayOwner: 'ready-owner', messages: [], regexScripts: [] })
+      const dispose = registerDisplayResolver('ready-owner', {
+        ready: () => true, finalizeWithoutScripts: true,
+        resolveBody: () => pending.promise,
+        resolveTemplates: async ({ templates }) => ({ resolved: templates }),
+        applyScripts: async ({ content }) => ({ content }),
+      })
+      try {
+        const { resetDisplayRegexCachesForTests } = await import('@/hooks/useDisplayRegex')
+        resetDisplayRegexCachesForTests()
+        await act(async () => { root?.render(<MessageContent content={content} chatId="ready-chat" messageId="ready-message" isUser={false} userName="Reader" />) })
+        expect(host.querySelector('[data-display-pending]')).not.toBeNull()
+        // Provisional source must never enter the rendered tree, including
+        // authored HTML whose descendants override inherited visibility.
+        expect(host.textContent).not.toContain('Unchanged')
+        expect(host.querySelector('[data-lumiverse-html-island]')).toBeNull()
+        expect(events).toEqual([])
+        await act(async () => { pending.resolve({ content }); await Promise.resolve() })
+        for (let i = 0; i < 10 && host.querySelector('[data-display-pending]'); i++) await flushLayout()
+        expect(host.querySelector('[data-display-pending]')).toBeNull()
+        expect(events).toEqual([{ ready: true, pending: false }])
+      } finally {
+        await act(async () => {
+          root?.unmount(); root = null; dispose()
+          useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts })
+        })
+        host.removeEventListener('lumiverse:message-content-layout', record)
+      }
+    },
+  )
+})
+
 describe('MessageContent inline HTML rendering', () => {
+  test('action activation identifies displayed captures while retaining configured effect templates', async () => {
+    const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')
+    const { regexActionSignature } = await import('../../../../src/utils/regex-action-signature')
+    const payload = { id: 'go', scriptId: 'capture-rule', instanceId: 'capture-rule:0:6', type: 'send', multi_select: false,
+      cost: 1, limit: 0, content: 'Take north', title: '', subtitle: '', effects: [{ type: 'set_state', key: 'route', value: 'north' }] }
+    const configured = { ...payload, content: 'Take $1', effects: [{ type: 'set_state', key: 'route', value: '$1' }] }
+    const html = `<button data-lumiverse-regex-action="${encodeURIComponent(JSON.stringify(payload))}">North</button>`
+    const previous = useStore.getState()
+    const activations: any[] = []
+    const record = (event: Event) => activations.push((event as CustomEvent).detail)
+    window.addEventListener(REGEX_ACTION_EVENT, record)
+    useStore.setState({ activeChatId: 'capture-chat', activeChatDisplayOwner: 'capture-owner',
+      messages: [{ id: 'capture-message', content: 'choice', is_user: false, swipe_id: 0, swipes: ['choice'] }] as any,
+      regexScripts: [{ id: 'capture-rule', disabled: false, scope: 'global', target: ['display'], placement: ['ai_output'], find_regex: 'choice',
+        replace_string: '', flags: 'g', substitute_macros: 'none', trim_strings: [], min_depth: null, max_depth: null, actions: [configured] }] as any,
+    })
+    const dispose = registerDisplayResolver('capture-owner', { ready: () => true,
+      resolveBody: async () => ({ content: 'choice' }), resolveTemplates: async () => ({ resolved: {} }), applyScripts: async () => ({ content: html }) })
+    try {
+      await act(async () => { root?.render(<MessageContent content="choice" isUser={false} userName="Reader" chatId="capture-chat" messageId="capture-message" />) })
+      const findAction = () => host.querySelector<HTMLButtonElement>('button[data-lumiverse-regex-action]')
+        ?? host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.querySelector<HTMLButtonElement>('button[data-lumiverse-regex-action]')
+      for (let i = 0; i < 40 && !findAction(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+      expect(findAction()).toBeTruthy()
+      findAction()!.dispatchEvent(new domWindow.MouseEvent('click', { bubbles: true, composed: true }))
+      expect(activations).toHaveLength(1)
+      expect(activations[0].actionSignature).toBe(regexActionSignature(payload))
+      expect(activations[0].effects).toEqual(configured.effects)
+    } finally {
+      await act(async () => {
+        root?.unmount(); root = null; dispose()
+        window.removeEventListener(REGEX_ACTION_EVENT, record)
+        useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts })
+      })
+    }
+  })
   test('read-only previews resolve owned display but never deliver tags or activate regex actions', async () => {
     const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
     const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')
@@ -316,6 +399,26 @@ describe('MessageContent inline HTML rendering', () => {
     expect(host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.textContent).toContain(
       content.includes('Widget') ? 'Widget' : 'Document',
     )
+  })
+
+  test('keeps inline styled glossary elements inside their prose paragraph without splitting into islands', async () => {
+    const glossA = '<button type="button" class="tb-gloss" tabindex="0"><style>.tb-gloss{display:inline-block}</style><span class="tb-gloss-term">Thiren</span><span class="tb-gloss-pop" role="tooltip">Beast-kin citizens.</span></button>'
+    const glossB = '<span class="tb-gloss" data-no-island tabindex="0"><style>.tb-gloss{display:inline-block}</style><span class="tb-gloss-term">Sovereign&#39;s Mile</span><span class="tb-gloss-pop" role="tooltip">Final uphill furlong.</span></span>'
+    const content = [
+      `Then we both reach for each other's waistbands at the same instant — both of us flinching back a half-step, ears flat, the ${glossA} wiring humming a chord neither of us asked for.`,
+      '',
+      `<font color="#E8534A" style="font-weight:bold">"Take the ${glossB} and they'll still call it a fluke."</font>`,
+    ].join('\n')
+
+    await render(content)
+
+    expect(host.querySelectorAll('[data-lumiverse-html-island]')).toHaveLength(0)
+    const paragraphs = host.querySelectorAll('p')
+    expect(paragraphs).toHaveLength(2)
+    expect(paragraphs[0]?.querySelector('button.tb-gloss .tb-gloss-term')?.textContent).toBe('Thiren')
+    expect(paragraphs[0]?.textContent).toContain('ears flat, the ThirenBeast-kin citizens. wiring humming a chord')
+    expect(paragraphs[1]?.querySelector('span.tb-gloss .tb-gloss-term')?.textContent).toBe("Sovereign's Mile")
+    expect(host.querySelectorAll('style')).toHaveLength(1)
   })
 })
 
@@ -469,10 +572,10 @@ describe('MessageContent long-message collapsing', () => {
       )
     })
 
-    expect(host.querySelector<HTMLImageElement>('img[src*="images.example"]')).not.toBeNull()
     await act(async () => {
       await new Promise((resolve) => domWindow.setTimeout(resolve, 20))
     })
+    expect(host.querySelector<HTMLImageElement>('img[src*="images.example"]')).not.toBeNull()
     expect(getChatDisplaySettleDiagnostics('chat-images').blockers).toEqual([])
     expect(isChatDisplaySettled('chat-images')).toBe(true)
   })
@@ -515,7 +618,7 @@ describe('MessageContent long-message collapsing', () => {
     expect(useStore.getState().expandedLongMessageKeys).not.toContain('chat-1:message-1')
   })
 
-  test('does not constrain short assistant messages or any user message', async () => {
+  test('does not constrain short assistant messages or user messages by default', async () => {
     await act(async () => {
       root?.render(
         <MessageContent content="Short" isUser={false} userName="User" chatId="chat-1" messageId="short" />,
@@ -541,6 +644,32 @@ describe('MessageContent long-message collapsing', () => {
     const viewport = host.querySelector<HTMLElement>('[data-component="MessageContent"] > div')
     expect(viewport?.style.maxHeight).toBe('')
     expect(host.querySelector('[data-long-message-toggle]')).toBeNull()
+  })
+
+  test('opts user messages into collapse and preserves expansion across remounts', async () => {
+    await act(async () => {
+      useStore.setState({ longMessageCollapseUserMessages: true })
+      root?.render(<MessageContent content={'Long user content '.repeat(80)} isUser userName="User" chatId="chat-1" messageId="user-1" />)
+    })
+    setRenderedBodyHeight(900)
+    await flushLayout()
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-controls="long-message-body-user-1"]')!
+    expect(toggle.textContent).toBe('Read more')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)?.style.maxHeight).toBe('500px')
+    await act(async () => toggle.click())
+    expect(toggle.textContent).toBe('Show less')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { root?.unmount(); root = createRoot(host) })
+    await act(async () => {
+      root?.render(<MessageContent content={'Long user content '.repeat(80)} isUser userName="User" chatId="chat-1" messageId="user-1" />)
+    })
+    setRenderedBodyHeight(900)
+    await flushLayout()
+    expect(host.querySelector('button[aria-expanded="true"]')?.textContent).toBe('Show less')
+    await act(async () => useStore.setState({ longMessageCollapseUserMessages: false }))
+    expect(host.querySelector('[data-long-message-toggle]')).toBeNull()
+    expect(host.querySelector<HTMLElement>('[data-component="MessageContent"] > div')?.style.maxHeight).toBe('')
   })
 
   test('uses every preset height and honors the disabled setting', async () => {
@@ -599,12 +728,63 @@ describe('MessageContent long-message collapsing', () => {
 describe('MessageContent image reuse', () => {
   for (const island of [false, true]) {
     const imageRoot = () => island ? host.firstElementChild!.shadowRoot! : host
-    const render = async (html: string) => {
+    const render = async (html: string, isStreaming = false) => {
       const { ProseHtml, IsolatedHtml } = await import('./MessageContent')
       await act(async () => {
-        root?.render(island ? <IsolatedHtml html={html} isStreaming={false} /> : <ProseHtml html={html} />)
+        root?.render(island ? <IsolatedHtml html={html} isStreaming={isStreaming} /> : <ProseHtml html={html} />)
       })
     }
+    test(`streamed ${island ? 'island' : 'prose'} text never detaches existing media or animation containers`, async () => {
+      const frame = (tail: string) => '<style>.animated{animation:spin 1s infinite}</style>'
+        + `<div class="animated"><img src="/animated.gif"><video src="/clip.webm"></video><span>${tail}</span></div>`
+      await render(frame('one'), true)
+      const container = imageRoot().querySelector<HTMLElement>('.animated')!
+      const image = container.querySelector('img')!
+      const video = container.querySelector('video')!
+      const stylesheet = imageRoot().querySelector<HTMLStyleElement>('style:last-of-type')!
+      const text = container.querySelector('span')!.firstChild
+      const mutations: MutationRecord[] = []
+      const observer = new MutationObserver(records => mutations.push(...records))
+      observer.observe(imageRoot(), { subtree: true, childList: true, attributes: true, characterData: true })
+
+      for (const tail of ['one two', 'one two three', 'final']) await render(frame(tail), true)
+      await render(frame('final'), false)
+      mutations.push(...observer.takeRecords())
+      observer.disconnect()
+
+      expect(imageRoot().querySelector<HTMLElement>('.animated')).toBe(container)
+      expect(container.querySelector('img')).toBe(image)
+      expect(container.querySelector('video')).toBe(video)
+      expect(imageRoot().querySelector<HTMLStyleElement>('style:last-of-type')).toBe(stylesheet)
+      expect(container.querySelector('span')!.firstChild).toBe(text)
+      expect(text?.textContent).toBe('final')
+      // Identity alone is insufficient: detach/reinsert also restarts media
+      // and CSS animations. Streaming should produce text mutations only.
+      expect(mutations.length).toBeGreaterThan(0)
+      expect(mutations.every(record => record.type === 'characterData')).toBe(true)
+    })
+
+    test(`streaming preserves interaction state in ${island ? 'islands' : 'prose'} until source attributes change`, async () => {
+      const frame = (tail: string, style = 'color:red') => `<details><summary>More</summary><input value="initial"><button style="${style}">Action</button><span>${tail}</span></details>`
+      await render(frame('one'))
+      const details = imageRoot().querySelector('details')!
+      const input = imageRoot().querySelector('input')!
+      const button = imageRoot().querySelector('button')!
+      details.open = true
+      input.value = 'user value'
+      button.style.opacity = '0.5'
+
+      await render(frame('one two'))
+      expect(imageRoot().querySelector('details')).toBe(details)
+      expect(details.open).toBe(true)
+      expect(imageRoot().querySelector('input')).toBe(input)
+      expect(input.value).toBe('user value')
+      expect(button.style.opacity).toBe('0.5')
+
+      await render(frame('one two three', 'color:blue'))
+      expect(button.style.color).toBe('blue')
+    })
+
     test(`skips unchanged image attributes when surrounding ${island ? 'island' : 'prose'} content changes`, async () => {
       await render('<p>Before</p><img src="/scene.png" class="scene" alt="Scene" width="400">')
       const original = imageRoot().querySelector('img')!
@@ -738,5 +918,255 @@ describe('owned display spacing', () => {
     } finally {
       await act(async () => { unregisterDisplayResolver('padding-owner'); useStore.setState({ activeChatId: null, activeChatDisplayOwner: null }) })
     }
+  })
+})
+
+describe('Streaming details completion', () => {
+  test.each([
+    ['<details><summary>Title', '<details><summary>Title</summary></details>'],
+    ['<DETAILS open><SUMMARY>Title', '<DETAILS open><SUMMARY>Title</summary></details>'],
+    ['<details><summary>Title</summary></details>', '<details><summary>Title</summary></details>'],
+    ['</details><details>', '</details><details>'],
+    ['<details <summary>', '<details <summary></details>'],
+    ['<details title="a>b"><summary>', '<details title="a>b"><summary></summary></details>'],
+    ['<detailsx><summary_extra>', '<detailsx><summary_extra>'],
+    ['```\n<details><summary>\n```\n<summary>Title', '```\n<details><summary>\n```\n<summary>Title</summary>'],
+    ['~~~\n<details>\n~~~\n<summary>Title', '~~~\n<details>\n~~~\n<summary>Title</summary>'],
+    ['<details>\n```\n</details>\n```\n', '<details>\n```\n</details>\n```\n</details>'],
+  ])('retains completion boundaries in %s', async (raw, expected) => {
+    const { balanceStreamingDetails } = await import('./MessageContent')
+    expect(balanceStreamingDetails(raw)).toBe(expected)
+  })
+
+  test('leaves many unfinished detail tags unchanged', async () => {
+    const { balanceStreamingDetails } = await import('./MessageContent')
+    const raw = '<details <summary '.repeat(256)
+    expect(balanceStreamingDetails(raw)).toBe(raw)
+    expect(balanceStreamingDetails(raw + '>')).toBe(raw + '></details>')
+  })
+})
+
+describe('Trusted video extraction', () => {
+  test('retains video attributes and the surrounding text', async () => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const raw = 'Before<IFRAME src="https://www.youtube-nocookie.com/embed/abcdef?autoplay=1&amp;start=4" title=" Example "></IFRAME \n>After'
+    expect(extractTrustedYouTubeEmbeds(raw)).toEqual({
+      content: 'Before<!--LUMIVERSE_YOUTUBE_EMBED_0-->After',
+      embeds: [{ src: 'https://www.youtube-nocookie.com/embed/abcdef?autoplay=1&start=4', title: 'Example' }],
+    })
+  })
+
+  test.each([
+    'https://www.youtube-nocookie.com.evil.test/embed/abcdef',
+    'https://www.youtube.com/embed/abcdef',
+    'http://www.youtube-nocookie.com/embed/abcdef',
+    'https://www.youtube-nocookie.com/embed/short',
+    'https://www.youtube-nocookie.com/embed/abcdef#fragment',
+    'https://www.youtube-nocookie.com/embed/abcdef?autoplay=2',
+    'https://www.youtube-nocookie.com/embed/abcdef?start=1234567',
+    'https://www.youtube-nocookie.com/embed/abcdef?unknown=1',
+    'javascript:alert(1)',
+  ])('leaves rejected video URL %s unchanged', async (src) => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const raw = `<iframe src="${src}"></iframe>`
+    expect(extractTrustedYouTubeEmbeds(raw)).toEqual({ content: raw, embeds: [] })
+  })
+
+  test('leaves many unfinished video frames unchanged after a complete frame', async () => {
+    const { extractTrustedYouTubeEmbeds } = await import('./MessageContent')
+    const incomplete = '<iframe '.repeat(256)
+    for (const ending of ['', '\n', '\r\n', '\u2028', '\u2029']) {
+      expect(extractTrustedYouTubeEmbeds(incomplete + ending)).toEqual({ content: incomplete + ending, embeds: [] })
+      const complete = '<iframe src="https://www.youtube-nocookie.com/embed/abcdef" title="Example"></iframe>'
+      expect(extractTrustedYouTubeEmbeds(complete + incomplete + ending)).toEqual({
+        content: '<!--LUMIVERSE_YOUTUBE_EMBED_0-->' + incomplete + ending,
+        embeds: [{ src: 'https://www.youtube-nocookie.com/embed/abcdef', title: 'Example' }],
+      })
+    }
+  })
+})
+describe('Image lazy loading', () => {
+  test.each([
+    ['<IMG src="/scene.png">', '<img loading="lazy" src="/scene.png">'],
+    ['<img loading=eager>', '<img loading=eager>'],
+    ['<img LOADING="lazy">', '<img LOADING="lazy">'],
+    ['<img loading = eager>', '<img loading="lazy" loading = eager>'],
+    ['<img data-loading=x>', '<img data-loading=x>'],
+    ['<img title="loading=x">', '<img title="loading=x">'],
+    ['<img title=">loading=x">', '<img loading="lazy" title=">loading=x">'],
+    ['<img <IMG loading=x <IMG>', '<img <IMG loading=x <img loading="lazy">'],
+    ['<imgx><img_name><img-ok>', '<imgx><img_name><img loading="lazy"-ok>'],
+    ['<img\r\nsrc="/scene.png">', '<img loading="lazy"\r\nsrc="/scene.png">'],
+  ])('preserves attribute handling in %s', async (html, expected) => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    expect(addLazyLoadingToImages(html)).toBe(expected)
+  })
+
+  test('handles many image prefixes before one closing delimiter', async () => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    const raw = '<img '.repeat(256)
+    const expected = '<img loading="lazy" '.repeat(256)
+    expect(addLazyLoadingToImages(raw)).toBe(expected)
+    expect(addLazyLoadingToImages(raw + '>')).toBe(expected + '>')
+    expect(addLazyLoadingToImages(raw + 'loading=eager>')).toBe(raw + 'loading=eager>')
+  })
+
+  test('does not replace images that already specify loading', async () => {
+    const { addLazyLoadingToImages } = await import('./MessageContent')
+    const raw = '<img src="/image.png" loading=eager>'.repeat(256)
+    const nativeExec = RegExp.prototype.exec
+    let replacements = 0
+    const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      const match = nativeExec.call(this, input)
+      if (match?.[0].startsWith('<img')) replacements++
+      return match
+    })
+    let output: string
+    try {
+      output = addLazyLoadingToImages(raw)
+    } finally { exec.mockRestore() }
+    expect(output).toBe(raw)
+    expect(replacements).toBe(0)
+  })
+})
+describe('Dialogue HTML boundaries', () => {
+  test.each([
+    ['<x<y>"word"', '<x<y><span class="dialogue">&quot;word&quot;</span>'],
+    ['<x "word"', '<x <span class="dialogue">&quot;word&quot;</span>'],
+    ['<x title="a>b">"word"', '<x title="a>b<span class="dialogue">&quot;>&quot;</span>word<span class="dialogue">&quot;</span>'],
+    ['<code>"code"</code>"word"', '<code>"code"</code><span class="dialogue">&quot;word&quot;</span>'],
+    ['<pre>"code"</pre>"word"', '<pre>"code"</pre><span class="dialogue">&quot;word&quot;</span>'],
+    ['"start <strong>middle</strong> end"', '<span class="dialogue">&quot;start <strong>middle</strong> end&quot;</span>'],
+    ['<p>"first</p><p>"next</p>', '<p><span class="dialogue">&quot;first</span></p><p><span class="dialogue">&quot;next</span></p>'],
+  ])('preserves existing boundaries in %s', async (raw, expected) => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    expect(colorizeDialogue(raw).replace(/class="[^"]*"/g, 'class="dialogue"')).toBe(expected)
+  })
+
+  test('keeps a long unfinished HTML tail as text', async () => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    const tail = '<'.repeat(4096) + '"word"'
+    const expected = '<'.repeat(4096) + '<span class="dialogue">&quot;word&quot;</span>'
+    expect(colorizeDialogue(tail).replace(/class="[^"]*"/g, 'class="dialogue"')).toBe(expected)
+    expect(colorizeDialogue('<code>"code"</code>' + tail).replace(/class="[^"]*"/g, 'class="dialogue"'))
+      .toBe('<code>"code"</code>' + expected)
+  })
+})
+describe('Dialogue measurement quotes', () => {
+  test.each(["'", '&#39;', '&#00039;', '&#x27;', '&#X00027;', '&apos;', '&APOS;'])(
+    'preserves a measurement written with %s', async (apostrophe) => {
+      const { colorizeDialogue } = await import('./MessageContent')
+      for (const quote of ['"', '&quot;']) {
+        const raw = `Height 5${apostrophe}11${quote}.`
+        expect(colorizeDialogue(raw)).toBe(`Height 5${apostrophe}11&quot;.`)
+      }
+    },
+  )
+
+  test.each(["five'11", "5'", "5'Ù¡", '5&#38;11', '5&#03911', '5&aposx;11', '5&amp;apos;11'])(
+    'keeps a dialogue quote after %s', async (prefix) => {
+      const { colorizeDialogue } = await import('./MessageContent')
+      expect(colorizeDialogue(`${prefix}"hello"`).replace(/class="[^"]*"/g, 'class="dialogue"'))
+        .toBe(`${prefix}<span class="dialogue">&quot;hello&quot;</span>`)
+    },
+  )
+
+  test('does not copy the accumulated message before every quote', async () => {
+    const { colorizeDialogue } = await import('./MessageContent')
+    const raw = 'prefix '.repeat(256) + '"word" '.repeat(256)
+    let inspectedLength = 0
+    const originalSlice = String.prototype.slice
+    const slice = spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+      const result = originalSlice.call(this, start, end)
+      inspectedLength += result.length
+      return result
+    })
+    try {
+      colorizeDialogue(raw)
+    } finally {
+      slice.mockRestore()
+    }
+    expect(inspectedLength).toBeLessThan(raw.length * 4)
+  })
+})
+
+describe('HTML image asset resolution', () => {
+  test.each([
+    ['<img src="first" src="last">', '\n\n![last](/api/v1/images/last-id)\n\n'],
+    ['<img src="first" src="https://example.com/image.png">', '<img src="first" src="https://example.com/image.png">'],
+    ['<img src="/image.png"><img src="data:image/png;base64,x">', '<img src="/image.png"><img src="data:image/png;base64,x">'],
+    ['<img src="missing" class="unchanged">', '<img src="missing" class="unchanged">'],
+    ['<img src="folder/portrait.webp">', '\n\n![folder/portrait.webp](/api/v1/images/portrait-id)\n\n'],
+    ['<img src="first\'>', '\n\n![first](/api/v1/images/first-id)\n\n'],
+    ['<img src="a>b">', '\n\n![a>b](/api/v1/images/greater-id)\n\n'],
+    ['<img src="first" src="later>value"', '\n\n![first](/api/v1/images/first-id)\n\nvalue"'],
+    ['<img src="first src="last">', '\n\n![last](/api/v1/images/last-id)\n\n'],
+  ])('preserves asset selection and surrounding text for %s', async (raw, expected) => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    expect(resolveImgSrcAssetTags(raw, { first: 'first-id', last: 'last-id', portrait: 'portrait-id', 'a>b': 'greater-id' })).toBe(expected)
+  })
+
+  test('uses the supplied asset map for every resolution', async () => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    const raw = '<img src="portrait">'
+    expect(resolveImgSrcAssetTags(raw, { portrait: 'first-chat' })).toContain('/api/v1/images/first-chat')
+    expect(resolveImgSrcAssetTags(raw, { portrait: 'second-chat' })).toContain('/api/v1/images/second-chat')
+    expect(resolveImgSrcAssetTags(raw, {})).toBe(raw)
+  })
+
+  test('preserves unfinished images and later complete images', async () => {
+    const { resolveImgSrcAssetTags } = await import('./MessageContent')
+    const raw = '<img '.repeat(512) + 'src="a" '.repeat(512)
+    expect(resolveImgSrcAssetTags(raw, { a: 'image-id' })).toBe(raw)
+    expect(resolveImgSrcAssetTags(raw + '>tail<img src="a">', { a: 'image-id' })).toBe(
+      '\n\n![a](/api/v1/images/image-id)\n\ntail\n\n![a](/api/v1/images/image-id)\n\n',
+    )
+  })
+})
+
+describe('Markdown image asset boundaries', () => {
+  test.each([
+    ['![a](portrait)', '![a](/api/v1/images/image-id)'],
+    ['![![nested](portrait)', '![![nested](/api/v1/images/image-id)'],
+    ['![]() ![a](portrait)', '![]() ![a](/api/v1/images/image-id)'],
+    ['![a] x ![b](portrait)', '![a] x ![b](/api/v1/images/image-id)'],
+    ['![a](missing) ![b](portrait)', '![a](missing) ![b](/api/v1/images/image-id)'],
+    ['![a](https://example.com/x) ![b](/x) ![c](data:x)', '![a](https://example.com/x) ![b](/x) ![c](data:x)'],
+    ['![a](portrait', '![a](portrait'],
+    ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+  ])('preserves Markdown resolution for %s', async (raw, expected) => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)
+  })
+
+  test('keeps incomplete labels literal and still resolves a later complete image', async () => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    const prefix = '!['.repeat(4096)
+    expect(resolveMarkdownImgTags(prefix, { portrait: 'image-id' })).toBe(prefix)
+    expect(resolveMarkdownImgTags(prefix + '] ordinary ![a](portrait)', { portrait: 'image-id' })).toBe(prefix + '] ordinary ![a](/api/v1/images/image-id)')
+    expect(resolveMarkdownImgTags('![a](portrait)', {})).toBe('![a](portrait)')
+  })
+})
+
+describe('Markdown image title whitespace', () => {
+  test.each([
+    ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+    ["![a](portrait \t'title')", '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "title\')', '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "")', '![a](/api/v1/images/image-id)'],
+    ['![a](portrait "unfinished)', '![a](portrait "unfinished)'],
+    ['![a](portrait "a"b")', '![a](portrait "a"b")'],
+    ['![a](portrait"title")', '![a](portrait"title")'],
+    ['![a](  portrait  )', '![a](/api/v1/images/image-id)'],
+  ])('preserves title handling for %s', async (raw, expected) => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)
+  })
+
+  test('leaves long whitespace runs without a title unchanged', async () => {
+    const { resolveMarkdownImgTags } = await import('./MessageContent')
+    const raw = '![a](portrait' + ' '.repeat(8192) + 'x)'
+    expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(raw)
+    expect(resolveMarkdownImgTags('![a](portrait' + ' '.repeat(8192) + '"title")', { portrait: 'image-id' })).toBe('![a](/api/v1/images/image-id)')
   })
 })

@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { pushApi, type PushSubscriptionRecord, type PushTestResult } from '@/api/push'
 import { isNativeIOS } from '@/lib/ios-native'
 import { useIOSPushSubscription } from './useIOSPushSubscription'
+import { isNativeAndroid } from '@/lib/android-native'
+import { useAndroidPushSubscription } from './useAndroidPushSubscription'
 import {
   clearDesktopNotificationEnrollment,
   getDesktopNotificationDevice,
@@ -237,8 +239,10 @@ function describeSubscribeError(error: unknown): string {
 export function usePushSubscription() {
   const ios = isNativeIOS()
   const native = useIOSPushSubscription(ios)
-  const browserDesktop = useBrowserDesktopPushSubscription(!ios)
-  return ios ? native : browserDesktop
+  const android = isNativeAndroid()
+  const nativeAndroid = useAndroidPushSubscription(android)
+  const browserDesktop = useBrowserDesktopPushSubscription(!ios && !android)
+  return ios ? native : android ? nativeAndroid : browserDesktop
 }
 
 function useBrowserDesktopPushSubscription(enabled: boolean) {

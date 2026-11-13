@@ -425,6 +425,15 @@ const picker = ctx.components.mountSelect(target, {
 | `placeholder` | `string` | — | Placeholder text when no value is selected |
 | `searchPlaceholder` | `string` | — | Placeholder for the search input |
 | `searchThreshold` | `number` | `8` | Minimum option count before the search input is shown |
+| `forceSearch` | `boolean` | `false` | Always show the search field |
+| `onSearchChange` | `(query: string) => void` | — | Search text changed, including the initial empty query |
+| `remoteSearch` | `boolean` | `false` | Caller filters the options; skip local filtering |
+| `loading` | `boolean` | `false` | An incremental page is loading |
+| `hasMore` | `boolean` | `false` | More options are available |
+| `onLoadMore` | `() => void` | — | Request the next page |
+| `loadMoreOnScroll` | `boolean` | `false` | Request a page near the scroll boundary; retain the accessible load button |
+| `loadingMessage` | `string` | localized | Message while loading |
+| `loadMoreLabel` | `string` | localized | Accessible load/retry button label |
 | `emptyMessage` | `string` | — | Message when no options were supplied |
 | `noResultsMessage` | `string` | — | Message when the search query has no matches |
 | `triggerLabel` | `string` | — | Force a trigger label (e.g. `"+ Add"`), ignoring current selection |
@@ -437,6 +446,8 @@ const picker = ctx.components.mountSelect(target, {
 | `minWidth` | `number` | — | Minimum dropdown width in CSS pixels |
 | `disabled` | `boolean` | `false` | Disable interaction |
 | `className` | `string` | — | Additional CSS class on the wrapper |
+
+Incremental options require frontend capability `shared-select-pagination-v1`. Both single and multi selects support them. Debounce remote searches in the caller, discard stale responses, guard overlapping loads, and set `hasMore: false` at the end. Preserve the selected option in `options` while paging or searching so its trigger label and leading image remain available. Call `handle.update()` with new options and loading state. Automatic scrolling requests each displayed page once; the load button remains usable for keyboard access and retrying a failed page.
 
 Single-select also accepts:
 

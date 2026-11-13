@@ -12,7 +12,7 @@ mock.module('./client', () => ({
 
 const { ttsConnectionsApi } = await import('./tts-connections')
 
-describe('ttsConnectionsApi.previewVoices', () => {
+describe('ttsConnectionsApi voice discovery', () => {
   beforeEach(() => {
     post.mockClear()
   })
@@ -38,5 +38,12 @@ describe('ttsConnectionsApi.previewVoices', () => {
 
     await expect(ttsConnectionsApi.previewVoices(input)).resolves.toEqual(response)
     expect(post).toHaveBeenCalledWith('/tts-connections/voices/preview', input, undefined)
+  })
+
+  test('browses the library without putting credentials in the URL and forwards cancellation', async () => {
+    const input = { provider: 'elevenlabs', api_key: 'draft-key', page: 1, search: 'calm' }
+    const signal = new AbortController().signal
+    await ttsConnectionsApi.voiceLibrary(input, { signal })
+    expect(post).toHaveBeenCalledWith('/tts-connections/voices/library', input, { signal })
   })
 })

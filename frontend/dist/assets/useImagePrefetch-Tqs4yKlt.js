@@ -1,0 +1,1 @@
+import{Co as e,Mo as t}from"./global-Cs_teJJq.js";import{Rt as n}from"./store-CwKsWFRu.js";var r=t(e(),1);function i(){let e=(0,r.useRef)(new Set);return(0,r.useCallback)(t=>{let r=new Set(t.filter(Boolean)),i=[...r].filter(t=>!e.current.has(t));e.current=r,i.length>0&&n(i)},[])}export{i as t};

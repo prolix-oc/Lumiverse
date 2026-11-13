@@ -64,6 +64,8 @@ Removes tokens whose probability is below a minimum threshold relative to the to
 
 ## Repetition Control
 
+Frequency, presence, and repetition penalties are disabled when unset or set to **0**. Repetition penalty is also disabled at **1**, its neutral multiplier. Disabled penalties are omitted from generation requests, including values supplied through a custom body. Frequency and presence penalties remain active at **1**.
+
 !!! warning "Limited provider support"
     Most major providers (Anthropic, Google, DeepSeek, and many others) **do not support** frequency, presence, or repetition penalties. These parameters are silently ignored if the provider doesn't implement them. They primarily work with OpenAI and OpenAI-compatible APIs. Only use these if you know your provider supports them.
 
@@ -87,7 +89,8 @@ Penalizes tokens that have appeared *at all*, regardless of frequency. Encourage
 
 A multiplier penalty on repeated tokens. Some providers use this instead of frequency/presence penalties.
 
-- **1.0** — No penalty
+- **0** — Disabled; omitted from the request
+- **1.0** — Disabled; omitted from the request
 - **1.05 - 1.15** — Mild to moderate penalty
 
 !!! warning "Don't stack penalties"

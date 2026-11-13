@@ -552,7 +552,7 @@ describe("images.service ownership filters", () => {
 
 describe("deferred image processing", () => {
   const ONE_BY_ONE_PNG = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9axC8gQAAAABJRU5ErkJggg==",
     "base64",
   );
 

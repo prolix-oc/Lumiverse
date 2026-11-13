@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { pushApi, type PushSubscriptionRecord } from '@/api/push'
 import { getIOSNotificationStatus, hasIOSNativeBridge, registerIOSPush } from '@/lib/ios-native'
+import { getIOSAppState, subscribeIOSAppState } from '@/lib/ios-app-state'
 
 export function useIOSPushSubscription(enabled: boolean) {
   const [checked, setChecked] = useState(false)
@@ -9,18 +10,22 @@ export function useIOSPushSubscription(enabled: boolean) {
   const [destinationId, setDestinationId] = useState<string | null>(null)
   const [reason, setReason] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  const [delivery, setDelivery] = useState<'direct' | 'relay'>('direct')
+  const [relayUrl, setRelayUrl] = useState<string>()
   const refresh = useCallback(async () => {
     try {
       const status = await getIOSNotificationStatus()
       setPermission(status.permission)
       // Load destinations even if APNs has subsequently been disabled on the server.
-      const [info, rows] = await Promise.all([pushApi.getIOSInfo(), pushApi.listSubscriptions()])
+      const [info, rows] = await Promise.all([pushApi.getIOSInfo(status.bundleId), pushApi.listSubscriptions()])
+      setDelivery(info.delivery || 'direct'); setRelayUrl(info.relayUrl)
       setSubscriptions(rows)
       const current = rows.find(row => row.type === 'ios_apns' && row.device_id === status.deviceId
         && row.bundle_id === status.bundleId && row.environment === status.environment)
       setDestinationId(current?.id ?? null)
       const problem = !status.available ? status.reason : !info.configured ? info.reason
-        : info.bundleId !== status.bundleId ? 'The server APNs bundle ID does not match this iOS app.' : null
+        : info.bundleId !== status.bundleId ? 'The server APNs bundle ID does not match this iOS app.'
+        : info.delivery === 'relay' && !status.relayAvailable ? 'Update the iOS app to enable verified relay notifications.' : null
       setReason(problem); setReady(!problem)
     } catch (error) {
       setReady(false)
@@ -29,21 +34,28 @@ export function useIOSPushSubscription(enabled: boolean) {
   }, [])
   useEffect(() => {
     if (!enabled) return
-    const onResume = () => { if (document.visibilityState !== 'hidden') void refresh() }
+    const onResume = () => {
+      const appState = getIOSAppState()
+      if (appState ? appState === 'active' : document.visibilityState !== 'hidden') void refresh()
+    }
     void refresh()
     document.addEventListener('visibilitychange', onResume)
-    return () => document.removeEventListener('visibilitychange', onResume)
+    const unsubscribeAppState = subscribeIOSAppState(state => { if (state === 'active') onResume() })
+    return () => {
+      document.removeEventListener('visibilitychange', onResume)
+      unsubscribeAppState()
+    }
   }, [enabled, refresh])
 
   const subscribe = useCallback(async () => {
     if (!ready) throw new Error(reason || 'Native push notifications are not configured yet.')
-    const registration = await registerIOSPush()
+    const registration = await registerIOSPush(delivery, relayUrl)
     setPermission('granted')
     const destination = await pushApi.subscribeIOS(registration)
     setDestinationId(destination.id)
     setSubscriptions(rows => [destination, ...rows.filter(row => row.id !== destination.id)])
     return true
-  }, [ready, reason])
+  }, [ready, reason, delivery, relayUrl])
   const unsubscribe = useCallback(async (id: string) => {
     await pushApi.unsubscribe(id)
     setSubscriptions(rows => rows.filter(row => row.id !== id))

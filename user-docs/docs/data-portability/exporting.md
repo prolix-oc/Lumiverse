@@ -46,6 +46,7 @@ Inside the `.lvbak` (it's a ZIP file — you can open it with any zip utility to
 ```
 manifest.json              Producer + version + embedding config + archive id
 database/                  One NDJSON per user-owned table
+settings-values/           Large settings, including saved themes with embedded assets
 files/
   images/                  Original uploaded images
   thumbnails/              Pre-generated 300px and 700px WebP thumbnails
@@ -53,12 +54,19 @@ files/
   databank/                Databank documents (PDFs, txt, md, etc.)
   theme-assets/            Theme bundle files (fonts, images, CSS)
   notification-sounds/     Your custom completion sound
+  extension-storage/       Persistent extension files (only when selected)
 lancedb/                   Vector embeddings (only when "Include vectors" was on)
 secrets/                   Encrypted API keys (only with the ticket flow)
 manifest-stats.json        Trailing row counts and skipped-file report
 ```
 
 Thumbnails are included **as-is**, so character galleries appear instantly on the target instance instead of waiting for Sharp to regenerate them.
+
+Large saved-theme libraries are included automatically. Import new backups into an up-to-date Lumiverse instance; older versions may report that the backup schema is newer than they support. Existing backups remain importable.
+
+**Include extension files and persistent data** is off by default. Enable it to back up files belonging to your account, including per-user data from shared extensions and storage used by extensions you installed. Existing extension preferences in account settings are always included. Shared operator storage and temporary `.ephemeral` directories are excluded.
+
+On import, extension files are placed under your destination account and existing files are preserved. Reinstall the matching extensions if needed; extension code and permission grants are not bundled. Secure Enclave credentials are included separately by **Include API keys & secrets**, whether or not extension files are selected.
 
 ---
 

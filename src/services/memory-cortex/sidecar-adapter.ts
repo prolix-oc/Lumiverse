@@ -13,6 +13,7 @@ import {
   type RegisteredProvider,
 } from "../../spindle/provider-registry";
 import { emitProviderRegistryChanged } from "../../ws/bus";
+import { trackCortexRequest } from "./activity";
 
 export type CortexSidecarProviderStatus = "ok" | "unavailable" | "timeout";
 
@@ -230,57 +231,66 @@ export function createCortexSidecarGenerateRawAdapter(options: {
   const { userId, sidecarProvider, cortexConfig } = options;
 
   return async (opts) => {
-    await waitForCortexSidecarRpmSlot({
-      userId,
-      provider: sidecarProvider,
-      requestsPerMinute: cortexConfig.sidecar?.requestsPerMinute,
-      signal: opts.signal,
-    });
+    const activity = trackCortexRequest(opts.requestPurpose ?? "analysis", opts.parameters.model ?? cortexConfig.queryGeneration?.primary?.model ?? cortexConfig.sidecar?.model ?? undefined);
+    try {
+      await waitForCortexSidecarRpmSlot({
+        userId,
+        provider: sidecarProvider,
+        requestsPerMinute: cortexConfig.sidecar?.requestsPerMinute,
+        signal: opts.signal,
+      });
 
-    const { quietGenerate } = await import("../generate.service");
-    const toolChoiceParams = opts.tools?.length
-      ? getToolChoiceParams(sidecarProvider)
-      : {};
-    const defaultModel = cortexConfig.queryGeneration?.primary?.model
-      ?? cortexConfig.sidecar?.model
-      ?? null;
-    const sidecarParams: Record<string, any> = {
-      temperature: cortexConfig.sidecar?.temperature ?? 0.1,
-      top_p: cortexConfig.sidecar?.topP ?? 1.0,
-      max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
-      ...toolChoiceParams,
-      ...opts.parameters,
-    };
-    if (defaultModel && sidecarParams.model == null) sidecarParams.model = defaultModel;
+      const { quietGenerate } = await import("../generate.service");
+      const toolChoiceParams = opts.tools?.length
+        ? getToolChoiceParams(sidecarProvider)
+        : {};
+      const defaultModel = cortexConfig.queryGeneration?.primary?.model
+        ?? cortexConfig.sidecar?.model
+        ?? null;
+      const sidecarParams: Record<string, any> = {
+        temperature: cortexConfig.sidecar?.temperature ?? 0.1,
+        top_p: cortexConfig.sidecar?.topP ?? 1.0,
+        max_tokens: cortexConfig.sidecar?.maxTokens ?? 4096,
+        ...toolChoiceParams,
+        ...opts.parameters,
+      };
+      if (defaultModel && sidecarParams.model == null) sidecarParams.model = defaultModel;
 
-    const result = await quietGenerate(userId, {
-      connection_id: opts.connectionId,
-      messages: opts.messages as any,
-      parameters: sidecarParams,
-      tools: opts.tools,
-      signal: opts.signal,
-    }, { origin: { kind: "sidecar", name: "Memory Cortex", operation: opts.requestPurpose ?? "analysis" } });
+      const result = await quietGenerate(userId, {
+        connection_id: opts.connectionId,
+        messages: opts.messages as any,
+        parameters: sidecarParams,
+        tools: opts.tools,
+        signal: opts.signal,
+        stream: true,
+        onStreamActivity: (phase) => activity.phase(phase),
+      }, {
+        origin: { kind: "sidecar", name: "Memory Cortex", operation: opts.requestPurpose ?? "analysis" },
+        leaseClass: "background",
+        leasePurpose: `memory-cortex:${opts.requestPurpose ?? "analysis"}`,
+      });
 
-    const stopped = describeGenerationStop(result.finish_reason, result.stop_details);
-    if (stopped) {
-      const details = [
-        `finish_reason=${result.finish_reason}`,
-        `max_tokens=${sidecarParams.max_tokens}`,
-      ];
-      if (result.usage?.completion_tokens !== undefined) {
-        details.push(`completion_tokens=${result.usage.completion_tokens}`);
+      const stopped = describeGenerationStop(result.finish_reason, result.stop_details);
+      if (stopped) {
+        const details = [
+          `finish_reason=${result.finish_reason}`,
+          `max_tokens=${sidecarParams.max_tokens}`,
+        ];
+        if (result.usage?.completion_tokens !== undefined) {
+          details.push(`completion_tokens=${result.usage.completion_tokens}`);
+        }
+        const completionDetails = result.usage?.provider_raw?.completion_tokens_details;
+        const reasoningTokens = completionDetails && typeof completionDetails === "object" && "reasoning_tokens" in completionDetails
+          ? completionDetails.reasoning_tokens
+          : undefined;
+        if (typeof reasoningTokens === "number") details.push(`reasoning_tokens=${reasoningTokens}`);
+        throw new Error(`Sidecar ${opts.requestPurpose ?? "analysis"} failed (${details.join(", ")}): ${stopped}`);
       }
-      const completionDetails = result.usage?.provider_raw?.completion_tokens_details;
-      const reasoningTokens = completionDetails && typeof completionDetails === "object" && "reasoning_tokens" in completionDetails
-        ? completionDetails.reasoning_tokens
-        : undefined;
-      if (typeof reasoningTokens === "number") details.push(`reasoning_tokens=${reasoningTokens}`);
-      throw new Error(`Sidecar ${opts.requestPurpose ?? "analysis"} failed (${details.join(", ")}): ${stopped}`);
-    }
 
-    return {
-      content: typeof result.content === "string" ? result.content : "",
-      tool_calls: result.tool_calls,
-    };
+      return {
+        content: typeof result.content === "string" ? result.content : "",
+        tool_calls: result.tool_calls,
+      };
+    } finally { activity.finish(); }
   };
 }

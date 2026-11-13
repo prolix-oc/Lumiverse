@@ -32,6 +32,7 @@ import {
   type CortexModelFallbackPair,
   type CortexUsageStats,
 } from "@/api/memory-cortex";
+import ConnectionSelect from "@/components/shared/ConnectionSelect";
 import SidecarConnectionPicker from "@/components/shared/SidecarConnectionPicker";
 import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
 import { readProductivityFeature } from "@/lib/spindle/productivity-feature-toggles";
@@ -253,7 +254,7 @@ export default function MemoryCortexSettings() {
   } | null>(null);
   // Wall-clock "now" tick driving the "X seconds ago" subtext so it updates
   // while a long LLM call is mid-flight even without new WS events.
-  const [, setNow] = useState(Date.now());
+  const [, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!rebuilding) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -265,6 +266,7 @@ export default function MemoryCortexSettings() {
 
   // Connection profiles for sidecar picker
   const profiles = useStore((s) => s.profiles);
+  const hasDecisionConnections = useStore((s) => s.decisionProfiles.length > 0);
   const [sidecarVisibility, setSidecarVisibility] = useState<"ok" | "unavailable" | "timeout" | null>(null);
 
   // Active chat for stats (if available)
@@ -620,6 +622,30 @@ export default function MemoryCortexSettings() {
           {/* ── Context Formatting ── */}
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
+              <BookOpen size={14} />
+              <span>{t("memoryCortex.historyReplacement")}</span>
+            </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.replaceConsolidatedMessagesInContext ?? false}
+                onChange={(v) => updateConfig({ replaceConsolidatedMessagesInContext: v })}
+                label={t("memoryCortex.replaceConsolidatedMessagesInContext")}
+                hint={t("memoryCortex.replaceConsolidatedMessagesInContextHint")}
+              />
+            </div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox
+                checked={config.replaceArcSummariesInContext ?? false}
+                onChange={(v) => updateConfig({ replaceArcSummariesInContext: v })}
+                label={t("memoryCortex.replaceArcSummariesInContext")}
+                hint={t("memoryCortex.replaceArcSummariesInContextHint")}
+              />
+            </div>
+            <div className={styles.hintText}>{t("memoryCortex.historyReplacementHint")}</div>
+          </div>
+
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}>
               <Sparkles size={14} />
               <span>{t("memoryCortex.formattingSection")}</span>
             </div>
@@ -839,31 +865,59 @@ export default function MemoryCortexSettings() {
                     <option value="skip">{t("memoryCortex.fallbackSkip")}</option>
                   </select>
                 </div>
-                <div className={styles.toggleRow}>
-                  <Toggle.Checkbox
-                    checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
-                    onChange={(v) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v },
-                    })}
-                    label={t("memoryCortex.arbitratesHeuristics")}
-                    hint={t("memoryCortex.arbitratesHeuristicsHint")}
-                  />
-                </div>
-                <div className={styles.toggleRow}>
-                  <Toggle.Checkbox
-                    checked={config.sidecarReliability?.gradesExistingRecords ?? false}
-                    onChange={(v) => updateConfig({
-                      sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: v },
-                    })}
-                    label={t("memoryCortex.pruneGraph")}
-                    hint={t("memoryCortex.pruneGraphHint")}
-                  />
-                </div>
                 <div className={styles.hintText}>
                   {t("memoryCortex.sidecarLongHint")}
                 </div>
               </>
             )}
+          </div>
+
+          <div className={styles.section}>
+            <div className={styles.sectionHeader}><Shield size={14} /><span>{t("memoryCortex.arbitrationTitle")}</span></div>
+            <div className={styles.toggleRow}>
+              <Toggle.Checkbox checked={config.sidecarReliability?.arbitratesHeuristics ?? false}
+                disabled={!hasDecisionConnections && !config.sidecarReliability?.arbitratesHeuristics}
+                onChange={(v) => updateConfig({ sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: v } })}
+                label={t("memoryCortex.arbitratesHeuristics")} hint={t(hasDecisionConnections ? "memoryCortex.arbitratesHeuristicsHint" : "memoryCortex.arbitrationNeedsConnection")} />
+            </div>
+            {config.sidecarReliability?.arbitratesHeuristics && (() => {
+              const arbitration = config.arbitration ?? { backend: "decision" as const, connectionProfileId: null, model: null, timeoutMs: 30000, maxInputTokens: 16384, requestsPerMinute: 0, minConfidence: 0.8 };
+              const update = (patch: Partial<typeof arbitration>) => updateConfig({ arbitration: { ...arbitration, ...patch } });
+              return <>
+                <ConnectionSelect kind="decision" value={arbitration.connectionProfileId ?? ""}
+                  onChange={(id) => update({ connectionProfileId: id || null, model: null })}
+                  withModel seedDefaultModel={false} modelValue={arbitration.model ?? ""}
+                  onModelChange={(model) => update({ model: model || null })} clearable portal
+                  ariaLabel={t("memoryCortex.decisionConnection")} modelPlaceholder={t("memoryCortex.useConnectionDefault")} />
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationInputLimit")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.maxInputTokens ?? 16384} min={1024} max={262144} step={1024} integer
+                    onChange={(v) => update({ maxInputTokens: v ?? 16384 })} />
+                </div>
+                <div className={styles.hintText}>{t("memoryCortex.arbitrationInputLimitHint")}</div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationConfidence")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.minConfidence} min={0} max={1} step={0.05}
+                    onChange={(v) => update({ minConfidence: v ?? 0.8 })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.rpmLimit")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.requestsPerMinute} min={0} max={600} integer
+                    onChange={(v) => update({ requestsPerMinute: v ?? 0 })} />
+                </div>
+                <div className={styles.infoRow}>
+                  <span className={styles.infoLabel}>{t("memoryCortex.arbitrationTimeout")}</span>
+                  <NumericInput className={styles.numberInput} value={arbitration.timeoutMs / 1000} min={0.1} max={30} step={1}
+                    onChange={(v) => update({ timeoutMs: (v ?? 30) * 1000 })} />
+                </div>
+                <div className={styles.toggleRow}>
+                  <Toggle.Checkbox checked={config.sidecarReliability.gradesExistingRecords}
+                    onChange={(v) => updateConfig({ sidecarReliability: { ...config.sidecarReliability, gradesExistingRecords: v } })}
+                    label={t("memoryCortex.pruneGraph")} hint={t("memoryCortex.pruneGraphHint")} />
+                </div>
+                <div className={styles.hintText}>{t("memoryCortex.arbitrationHint")}</div>
+              </>;
+            })()}
           </div>
 
           {/* ── Entity Whitelist ── */}
@@ -999,6 +1053,20 @@ export default function MemoryCortexSettings() {
                     <div className={styles.toggleRow}>
                       <Toggle.Checkbox checked={config.consolidation.enabled} onChange={(v) => updateConfig({ consolidation: { ...config.consolidation, enabled: v } })} label={t("memoryCortex.enableConsolidation")} hint={t("memoryCortex.enableConsolidationHint")} />
                     </div>
+                    <div className={styles.whitelistHint}>{t("memoryCortex.consolidationIntervalHint")}</div>
+                    {([
+                      ["chunkThreshold", "consolidationThreshold"],
+                      ["chunksPerConsolidation", "consolidationBatchSize"],
+                      ["arcThreshold", "consolidationArcThreshold"],
+                    ] as const).map(([field, label]) => (
+                      <label className={styles.infoRow} key={field}>
+                        <span className={styles.infoLabel}>{t(`memoryCortex.${label}`)}</span>
+                        <NumericInput className={styles.numberInput} value={config.consolidation[field]}
+                          aria-label={t(`memoryCortex.${label}`)} data-testid={`cortex-consolidation-${field}`}
+                          min={1} step={1} integer commitOnBlur disabled={!config.consolidation.enabled}
+                          onChange={(value) => updateConfig({ consolidation: { ...config.consolidation, [field]: value ?? config.consolidation[field] } })} />
+                      </label>
+                    ))}
                   </div>
 
                   <div className={styles.section}>

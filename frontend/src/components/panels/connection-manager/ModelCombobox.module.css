@@ -109,7 +109,7 @@
 }
 
 :global([data-glass]) .dropdown {
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
   box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 

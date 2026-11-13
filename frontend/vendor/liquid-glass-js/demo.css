@@ -1,0 +1,24 @@
+/* Demo Layout Styles */
+.demo-layout {
+  position: fixed;
+  top: 60px;
+  left: max(20px, calc((100vw - 800px) / 2 + 20px));
+  width: 400px;
+  height: 440px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 40px;
+  pointer-events: none;
+}
+
+.demo-layout > * {
+  pointer-events: auto;
+}
+
+.demo-row {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}

@@ -97,6 +97,18 @@ Closing scoped macros use `/`, like `{{/if}}`, `{{/trim}}`, or `{{/numbered}}`.
 
 ---
 
+### Unknown Macros and Imported Templates
+
+An unregistered, non-scoped macro with closing `}}` keeps its original spelling. For example, `{{plugin.memory}}`, `{{unknown:single}}`, and `{{ unknown }}` remain exactly as written. They are not converted to the argument syntax used by built-in macros.
+
+Arguments inside an unknown macro stay literal too: `{{unknown::{{user}}}}` stays unchanged. Nested comments, conditional branches, and variable assignments are neither evaluated nor removed. In particular, a comment inside an unknown macro can reach the model as literal text; place comments outside the unknown macro if they should be discarded. Registered macros outside it continue to resolve normally.
+
+This corrects earlier behavior that normalized unknown macro spelling and could drop nested comments or scoped blocks. A comparison such as `{{eq::{{ unknown }}::{{unknown}}}}` now returns an empty result because the two spellings differ. A malformed expression such as `{{foo} tail {{user}}` is parsed as one closed unknown macro and remains literal, including `{{user}}`.
+
+Two recovery paths still rebuild the parsed expression: an unterminated macro receives closing braces, and an expression containing backslash-escaped braces consumes those escapes. These paths can normalize spelling and omit nested scoped blocks. Unknown scoped wrappers retain their existing behavior: their body is evaluated and the wrapper is removed. To deliberately preserve arbitrary template content, use `{{#escape}}...{{/escape}}`.
+
+---
+
 ## Core Macros
 
 Utility macros for text manipulation and flow control.
@@ -527,6 +539,8 @@ Macros for the current chat state.
 | `{{userInput}}` | `{{user_input}}` | Exact input-bar draft captured when the generation began; empty for generations not started from the input bar |
 | `{{lastCharMessage}}` | `{{last_char_message}}`, `{{lastBotMessage}}` | Content of the last character message |
 | `{{lastMessageName}}` | — | Name of whoever sent the last message |
+| `{{lastPreset}}` | — | Most recent available preset name from the selected assistant swipes |
+| `{{lastPresets::5}}` | — | Up to five recent preset names, newest first, separated by newlines |
 | `{{messageCount}}` | `{{message_count}}`, `{{messagecount}}` | Total message count in the chat |
 | `{{chatId}}` | `{{chat_id}}` | The current chat's unique ID |
 | `{{firstIncludedMessageId}}` | — | Index of the first message included in the prompt |
@@ -534,6 +548,18 @@ Macros for the current chat state.
 | `{{lastSwipeId}}` | — | Index of the last swipe on the final message |
 | `{{currentSwipeId}}` | — | Index of the active swipe |
 | `{{rejectedSwipe}}` | `{{rejectedGeneration}}`, `{{regeneratedMessage}}` | Content of the regenerate/swipe target before the new swipe was staged; empty otherwise |
+
+### Preset history
+
+`{{lastPreset}}` returns a name, including when the recorded preset has since been deleted. `{{lastPresets::5::, }}` joins recent names with a custom separator. Count defaults to 1, accepts whole numbers from 0 to 100, and is capped at 100. Negative, fractional, or non-numeric counts return empty with a diagnostic. Results larger than 65,536 characters also return empty with a diagnostic.
+
+History follows conversation order and the **currently selected swipe of each assistant message**. Repeated presets remain repeated. User/system messages, greetings, hidden messages, synthetic injections, and empty pending responses are skipped. Up to 100 attributed responses are inspected; missing metadata or names that cannot be recovered can leave fewer results than requested. No available history returns an empty string.
+
+During regeneration, the response being replaced contributes its selection from before the new swipe was staged. During continuation, the existing response contributes its previous attribution. All blocks in a generation share the same snapshot, taken before history clipping or memory replacement. Edit-and-Send excludes later messages. Continuing one swipe with another preset replaces its attribution; this does not reconstruct each earlier segment.
+
+Recorded names preserve the historical label. ID-only records use the current name of a preset you own; deleted presets without recorded names are skipped. Names containing macro syntax are returned literally. Preview/display resolution uses the chat's selected history when that resolution request starts.
+
+Place changing preset-history context in a small block late in the prompt when possible. Using it near the beginning can reduce provider prompt-prefix cache reuse. Lumiverse tracks its history dependency separately from persisted variables so ordinary macro and display caches remain reusable.
 
 ---
 
@@ -567,8 +593,8 @@ Macros for randomness and dice rolling.
 
 | Macro | Returns | Args |
 |-------|---------|------|
-| `{{random::min::max}}` | Random integer between min and max | Two numbers separated by `::`, or a list of items |
-| `{{pick::item1::item2::...}}` | One randomly chosen item | List of options separated by `::` |
+| `{{random::min::max}}` | Random integer between min and max, or one randomly chosen item | Two numbers separated by `::`, or options separated by `::` or commas |
+| `{{pick::item1::item2::...}}` | One randomly chosen item | Options separated by `::` or commas |
 | `{{roll::NdS}}` | Dice roll total | Dice notation (e.g., `2d6`, `1d20`, `3d8`) |
 
 **Examples:**
@@ -576,8 +602,14 @@ Macros for randomness and dice rolling.
 ```
 {{char}} rolls a {{roll::1d20}} on their perception check.
 The weather today is {{pick::sunny::cloudy::rainy::stormy}}.
+A random choice: {{random::thing1, thing2, thing3}}
+A comma-separated pick: {{pick::sunny, cloudy, rainy, stormy}}
 A random number: {{random::1::100}}
 ```
+
+Both `random` and `pick` accept SillyTavern-style comma-separated choices. Whitespace around each comma-separated item is trimmed; use `\,` for a literal comma inside an item, such as `{{random::hello\, world, goodbye}}`. Empty items remain possible choices.
+
+When multiple arguments are separated by `::`, commas inside each argument stay literal: `{{pick::hello, world::goodbye, world}}`. Numeric ranges still use `::`: `{{random::1::100}}` rolls between 1 and 100, while `{{random::1, 100}}` chooses either 1 or 100. Choices are text, so commas inside object text must also be escaped or kept within a `::`-separated argument.
 
 ---
 
@@ -1317,9 +1349,9 @@ Configure Chat Memory in **Settings → Advanced → Long-Term Chat Memory**, an
 
 | Macro | Returns | Args |
 |-------|---------|------|
-| `{{entities}}` | Formatted entity snapshots with facts and relationships | Optional: `{{entities::count}}` to limit the number of entities |
+| `{{entities}}` | Entity names, types, statuses, descriptions, and facts | Optional: `{{entities::count}}` to limit the number of entities |
 | `{{entityFacts::name}}` | Facts for one named entity | Entity name |
-| `{{relationships}}` | Active relationship edges in the current scene | — |
+| `{{relationships}}` | Active relationship edges in the current scene, without entity descriptions or facts | — |
 | `{{arc}}` | Current narrative arc summary | — |
 | `{{memorySalience}}` | Highest-salience retrieved memory | — |
 | `{{cortexActive}}` | `"yes"` / `"no"` — whether Memory Cortex returned results | — |

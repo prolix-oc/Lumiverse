@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Enregistrez ou annulez la modification de la connexion avant de supprimer son dossier.",
+    "newFolder": "Nouveau dossier",
+    "folder": "Dossier",
+    "invalidFolderName": "Choisissez un nom de dossier unique de 1 à 64 caractères. Sans catégorie est réservé.",
+    "deleteFolderMessage": "Supprimer « {{name}} » ? Ses connexions seront déplacées vers Sans catégorie.",
+    "allFolders": "Tous les dossiers",
+    "filterFolder": "Filtrer les connexions par dossier",
+    "search": "Rechercher des connexions, fournisseurs, modèles, dossiers…",
+    "noMatches": "Aucune connexion correspondante.",
     "imageGeneration": "Génération d'images",
     "speechToText": "Parole en texte",
     "textToSpeech": "Synthèse vocale"
@@ -679,6 +688,10 @@
     "scopeGlobal": "Mondial",
     "scopeThisChar": "Ce caractère",
     "noScripts": "Aucun script regex pour l'instant.",
+    "searchFolder": "Rechercher des scripts dans ce dossier…",
+    "searchFolderAria": "Rechercher des scripts dans {{folder}}",
+    "folderPagesAria": "Pages de scripts dans {{folder}}",
+    "noSearchResults": "Aucun script ne correspond à votre recherche.",
     "clickPlus": "Cliquez sur + pour en créer un.",
     "uncategorized": "non classé",
     "deleteFolderConfirm": "Supprimez tous les scripts regex {{count}} dans \"{{folder}}\" ? Cela ne peut pas être annulé.",
@@ -713,6 +726,8 @@
     "timedOutDetail": "Ce script a atteint le délai d'expiration de l'expression régulière et a été ignoré pendant l'exécution.",
     "slowDetail": "Ce script a été signalé comme lent après avoir mis {{seconds}}s à s'exécuter.",
     "quarantinedDisplay": "L'expression régulière d'affichage \"{{name}}\" a bloqué l'exécuteur isolé et est désormais ignorée. Levez sa mise en quarantaine dans Scripts Regex pour la réexécuter.",
+    "unavailableDisplay": "L'expression régulière d'affichage \"{{name}}\" a été ignorée pour ce rendu, car l'exécution isolée était indisponible.",
+    "skippedDisplayTitle": "Script Regex ignoré",
     "quarantined": "En quarantaine",
     "quarantinedDetail": "Ce script a bloqué l'exécuteur isolé et est actuellement ignoré. Levez la quarantaine pour le réexécuter.",
     "clearQuarantine": "Réexécuter",
@@ -1410,6 +1425,10 @@
       "noTagsFound": "Aucun tag trouvé"
     },
     "alternateAvatars": {
+      "addFromGallery": "Ajouter depuis la galerie",
+      "uploadImage": "Importer un avatar",
+      "galleryLoadFailed": "Impossible de charger les images de la galerie.",
+      "uploadFailed": "Impossible d’importer l’avatar alternatif.",
       "title": "Avatars alternatifs",
       "helper": "Photos de profil supplémentaires pour ce personnage, commutables par chat.",
       "selectionHint": "Appuyez sur un avatar pour l'utiliser dans ce chat.",
@@ -2658,6 +2677,11 @@
     "fontScale": "Échelle de police",
     "uiScale": "Échelle UI",
     "glassEffects": "Effets de verre",
+    "liquidGlass": {
+      "label": "Verre liquide",
+      "hint": "Réfracte et floute l'arrière-plan derrière les surfaces. Nécessite les effets de verre.",
+      "requiresGlass": "Activez d'abord les effets de verre"
+    },
     "renderingMode": {
       "label": "Rendu",
       "hint": "Économie désactive le flou ; Qualité active le taux de rafraîchissement élevé sur les écrans macOS compatibles après le redémarrage de la fenêtre.",
@@ -3303,6 +3327,8 @@
         "persona_description": "Personnalité de l'utilisateur",
         "scenario": "Scénario",
         "dialogue_examples": "Exemples de messages",
+        "system_prompt": "Prompt système du personnage",
+        "post_history_instructions": "Instructions du personnage après l’historique",
         "main_prompt": "Invite principale",
         "enhance_definitions": "Améliorer les définitions",
         "jailbreak": "Instructions de post-historique",
@@ -3613,5 +3639,13 @@
     "skipTitle": "Skip",
     "kickTitle": "Kick",
     "banTitle": "Ban"
+  },
+  "decisionConnectionManager": {
+    "loading": "Chargement des connexions Decision...",
+    "newConnection": "Nouvelle connexion Decision",
+    "empty": "Aucune connexion Decision pour l'instant. Ajoutez OpenRouter, NanoGPT ou TypeSafe pour commencer.",
+    "deleteTitle": "Supprimer la connexion Decision",
+    "deleteMessage": "Supprimer « {{name}} » ? Cette action est irréversible.",
+    "deleteConfirm": "Supprimer"
   }
 }

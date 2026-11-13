@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { WorldBookEntry } from "../types/world-book";
+import { activateWorldInfo } from '../services/world-info-activation.service';
+import { buildWorldInfoCaptureMap } from './world-info-capture';
 import {
   WorldInfoInterceptorChain,
   worldInfoInterceptorChain,
@@ -67,6 +69,63 @@ const context = {
     maxRecursionPasses: 3,
   },
 };
+
+describe('prompt-local world info candidates', () => {
+  test('same-result decorations and captures resolve local IDs without changing raw capture contents', async () => {
+    const chain = new WorldInfoInterceptorChain();
+    chain.register({ extensionId: 'extension', priority: 100, handler: async () => ({
+      additionalEntries: [{ ...makeEntry('local'), constant: true }],
+      mutated: [{ id: 'local', content: 'decorated', selectionContent: 'selected', outputOrder: 'insertion' }],
+      captured: ['local'],
+    }) });
+    const result = await chain.run([], context);
+    const id = result.entries[0]!.id;
+    expect(result.entries[0]!.content).toBe('decorated');
+    expect(result.selectionContentByEntryId.get(id)).toBe('selected');
+    expect(result.insertionOrderByEntryId.get(id)).toBe('extension');
+    const raw = activateWorldInfo({ entries: [...(result.additionalEntries ?? [])], messages: [], chatTurn: 1, wiState: {} });
+    expect(raw.activatedEntries[0]!.content).toBe('content-local');
+    const captures = buildWorldInfoCaptureMap(result.captureRequests, raw.activatedEntries.map(entry => ({
+      id: entry.id, comment: entry.comment, keys: entry.key, source: 'keyword' as const,
+    })));
+    expect(captures.extension.map(entry => entry.id)).toEqual([id]);
+  });
+  test('scopes candidates by extension and chat and applies later interceptors before activation', async () => {
+    const chain = new WorldInfoInterceptorChain();
+    chain.register({ extensionId: 'first', userId: 'owner', priority: 0, handler: async () => ({
+      additionalEntries: [{ ...makeEntry('local'), constant: true }],
+    }) });
+    chain.register({ extensionId: 'second', userId: 'owner', priority: 1, handler: async ctx => {
+      expect(ctx.entries[0]?.book_source).toBe('chat');
+      return { mutated: [{ id: ctx.entries[0]!.id, content: 'resolved content' }] };
+    } });
+    const result = await chain.run([], context, 'owner');
+    const activated = activateWorldInfo({ entries: result.entries, messages: [], chatTurn: 1, wiState: {} });
+    expect(activated.activatedEntries.map(entry => entry.content)).toEqual(['resolved content']);
+    expect(result.entries[0]!.id).toBe(JSON.stringify(['spindle', 'first', 'chat', 'local']));
+    const otherChat = await chain.run([], { ...context, chatId: 'other' }, 'owner');
+    expect(otherChat.entries[0]!.id).not.toBe(result.entries[0]!.id);
+    expect((await chain.run([], context, 'unrelated')).entries).toEqual([]);
+  });
+
+  test('native activation excludes unmatched and disabled local candidates', async () => {
+    const chain = new WorldInfoInterceptorChain();
+    chain.register({ extensionId: 'extension', priority: 0, handler: async () => ({ additionalEntries: [
+      makeEntry('unmatched'), { ...makeEntry('disabled'), constant: true, disabled: true },
+    ] }) });
+    const result = await chain.run([], context);
+    expect(activateWorldInfo({ entries: result.entries, messages: [], chatTurn: 1, wiState: {} }).activatedEntries).toEqual([]);
+  });
+
+  test('invalid candidate batches fail without mutating stored entries', async () => {
+    const chain = new WorldInfoInterceptorChain();
+    const original = [makeEntry('stored')];
+    const before = structuredClone(original);
+    chain.register({ extensionId: 'extension', priority: 0, handler: async () => ({ additionalEntries: [makeEntry('same'), makeEntry('same')] }) });
+    await expect(chain.run(original, context)).rejects.toThrow('duplicate id');
+    expect(original).toEqual(before);
+  });
+});
 
 describe("world info output ordering", () => {
   test("keeps ordering prompt-local and attributes it to the registering extension", async () => {

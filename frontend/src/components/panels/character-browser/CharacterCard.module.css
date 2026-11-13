@@ -13,7 +13,10 @@
               border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
               box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   contain: layout style paint;
-  will-change: transform;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { will-change: transform; }
 }
 
 /* Gradient overlay at the card bottom that blends into the image for text

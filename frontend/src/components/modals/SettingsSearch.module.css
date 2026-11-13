@@ -85,7 +85,7 @@
 
 :global([data-glass]) .dropdown {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 88%, transparent);
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
   border-color: var(--lcs-glass-border);
   box-shadow: var(--lumiverse-shadow-xl);
 }

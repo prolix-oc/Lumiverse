@@ -17,6 +17,8 @@ export interface ResolvedRegexActionPayload {
 }
 
 export interface RegexActionActivation extends ResolvedRegexActionPayload {
+  /** Identifies the displayed choice; the server still reconstructs every effect. */
+  actionSignature?: string
   chatId: string
   messageId?: string
   /**

@@ -12,7 +12,7 @@ export interface SessionDisplay {
 export function sessionDisplay(
   session: WeaverSession,
   buildTypes: WeaverBuildType[],
-  characters: Character[],
+  characters: Array<Pick<Character, 'id' | 'name'>>,
   untitled: string,
 ): SessionDisplay {
   const characterName = session.character_id

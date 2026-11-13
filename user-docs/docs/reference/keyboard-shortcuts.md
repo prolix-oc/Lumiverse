@@ -81,6 +81,32 @@ The Command Palette is the fastest way to navigate Lumiverse. It can:
 
 ## Tips
 
+### Custom desktop bindings
+
+Open **Settings → Key Bindings** in the desktop frontend. Choose a desktop action,
+application command, or command registered by a Spindle extension. Record a shortcut
+(or choose the keys manually), add it, and select **Save Bindings**.
+
+**F13–F24** can be bound on their own or with modifiers, including keys sent by
+macro pads. Other keys require **Control**, **Alt/Option**, or **Command/Super**.
+
+Bindings use app-focused mode by default. Enable **Global key bindings** once
+with desktop confirmation, then choose **Global** for each action you want to
+trigger while Lumiverse is in the background. You can configure and change all
+bindings in the frontend. Extensions can also include a binding editor directly
+in their own panel or settings. No custom shortcuts are enabled by
+default. Saving reports duplicate combinations and OS registration conflicts.
+Remove a binding and save to free its shortcut. Bindings persist across restarts.
+Disabling global key bindings changes the current account's shortcuts and shared
+desktop actions to app-focused mode.
+
+Application and extension commands require the integrated browser to remain open
+and signed in, and keep their normal chat/page restrictions. They belong to the
+selected instance and account; disabled extensions cannot receive triggers. The
+desktop's **Show / Hide Lumiverse** action keeps the browser open while hiding it.
+Global bindings work on macOS, Windows and Linux X11. Native Wayland sessions
+currently support app-focused bindings only.
+
 !!! tip "Command Palette is your friend"
     Almost everything in Lumiverse can be reached through the Command Palette. Learn to use it and you'll navigate the app much faster than clicking through menus.
 

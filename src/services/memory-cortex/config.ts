@@ -71,15 +71,13 @@ export interface SidecarReliabilityConfig {
    *    warmup signature. The next cortex warmup re-processes it. Equivalent to
    *    the "AI Only" mode users have asked for. */
   fallback: "heuristic" | "skip";
-  /** When true and the sidecar succeeded, the sidecar judges heuristic entities
-   *  and relationships extracted for this chunk: rejected heuristics are
-   *  dropped, transformed ones are renamed to the sidecar's canonical form
-   *  before merging. */
+  /** Opt-in: only an explicit boolean true enables candidate review. Default: false.
+   *  Review every entity, relationship, alias and font-color proposal before persistence.
+   *  Requires an explicitly selected native Decision connection.
+   *  Failed/incomplete reviews leave the chunk pending. */
   arbitratesHeuristics: boolean;
-  /** When true and the sidecar marks an *existing* graph entity as invalid for
-   *  this chunk's context, that entity is removed from the graph (mentions and
-   *  relations included). User-edited entities are preserved regardless of
-   *  sidecar grading. */
+  /** Also review existing records against historical excerpts. Cleanup never
+   *  removes manually edited entities or incident manually edited relations. */
   gradesExistingRecords: boolean;
 }
 
@@ -91,9 +89,21 @@ export interface FactManagementConfig {
    *  are trimmed first. Default: 30. */
   maxFactsPerEntity: number;
   /** When true and the sidecar is active, exceeding maxFactsPerEntity triggers
-   *  an LLM call to curate which facts to keep/merge/discard instead of
+   *  an LLM call to select which source facts to keep/discard instead of
    *  purely score-based trimming. ("Fact Auto-Pilot") Default: false. */
   autopilot: boolean;
+}
+
+/** Arbitration is independent of generative extraction and summarization. */
+export interface CortexArbitrationConfig {
+  backend: "decision";
+  connectionProfileId: string | null;
+  model: string | null;
+  timeoutMs: number;
+  /** Deployed Decision server's input window; batching reserves tokenizer headroom. */
+  maxInputTokens: number;
+  requestsPerMinute: number;
+  minConfidence: number;
 }
 
 export interface ThoughtMarkerConfig {
@@ -164,7 +174,11 @@ export interface MemoryCortexConfig {
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
   /** Render the Long-Term Memory block with the user's chat memory templates */
   useChatMemoryFormatting: boolean;
-  /** Max tokens for all cortex-injected content */
+  /** Replace complete source spans with saved scene summaries during prompt assembly. */
+  replaceConsolidatedMessagesInContext: boolean;
+  /** Prefer saved arc summaries over the scenes/raw messages they cover. */
+  replaceArcSummariesInContext: boolean;
+  /** Max tokens for retrieved Cortex content. History replacements use the chat context budget. */
   contextTokenBudget: number;
 
   /** Max milliseconds to wait for cortex retrieval during prompt assembly.
@@ -184,6 +198,7 @@ export interface MemoryCortexConfig {
    *  See SidecarReliabilityConfig for field-level docs.
    */
   sidecarReliability: SidecarReliabilityConfig;
+  arbitration: CortexArbitrationConfig;
 
   /** Retrieval pipeline tuning */
   retrieval: {
@@ -288,6 +303,8 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
   },
   formatterMode: "shadow",
   useChatMemoryFormatting: true,
+  replaceConsolidatedMessagesInContext: false,
+  replaceArcSummariesInContext: false,
   contextTokenBudget: 600,
   retrievalTimeoutMs: 60000,
   sidecarTimeoutMs: 60000,
@@ -295,6 +312,15 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     fallback: "heuristic",
     arbitratesHeuristics: false,
     gradesExistingRecords: false,
+  },
+  arbitration: {
+    backend: "decision",
+    connectionProfileId: null,
+    model: null,
+    timeoutMs: 30000,
+    maxInputTokens: 16384,
+    requestsPerMinute: 0,
+    minConfidence: 0.8,
   },
   consolidation: { ...DEFAULT_CONSOLIDATION_CONFIG },
   retrieval: {
@@ -442,7 +468,9 @@ export function putCortexConfig(
   update: Partial<MemoryCortexConfig>,
 ): MemoryCortexConfig {
   const current = getCortexConfig(userId);
-  const next: Partial<MemoryCortexConfig> = { ...current, ...update };
+  const next: Partial<MemoryCortexConfig> = { ...current, ...update,
+    arbitration: { ...current.arbitration, ...update.arbitration },
+  };
   // Legacy sidecar-only writes: rematerialize both primaries from sidecar
   // and keep any already-configured secondaries.
   if (update.sidecar && !update.queryGeneration && !update.memorySummarization) {
@@ -636,6 +664,11 @@ export function shouldUseCortexSidecarForChunkAnalysis(config: MemoryCortexConfi
   );
 }
 
+/** Enabling review alone never selects a default connection or starts inference. */
+export function shouldReviewCortexCandidates(config: MemoryCortexConfig): boolean {
+  return config.sidecarReliability.arbitratesHeuristics && !!config.arbitration.connectionProfileId;
+}
+
 /**
  * Normalize a partial config into a full config by merging with defaults.
  */
@@ -643,6 +676,8 @@ export function normalizeCortexConfig(
   input: Partial<MemoryCortexConfig>,
 ): MemoryCortexConfig {
   const defaults = DEFAULT_CORTEX_CONFIG;
+  // Old generative reviewers must not be reinterpreted as Decision connections.
+  const decisionArbitration = input.arbitration?.backend === "decision";
   const sidecar = {
     connectionProfileId: input.sidecar?.connectionProfileId ?? defaults.sidecar.connectionProfileId,
     model: input.sidecar?.model ?? defaults.sidecar.model,
@@ -687,21 +722,29 @@ export function normalizeCortexConfig(
     useChatMemoryFormatting: typeof input.useChatMemoryFormatting === "boolean"
       ? input.useChatMemoryFormatting
       : defaults.useChatMemoryFormatting,
+    replaceConsolidatedMessagesInContext: input.replaceConsolidatedMessagesInContext === true,
+    replaceArcSummariesInContext: input.replaceArcSummariesInContext === true,
     contextTokenBudget: input.contextTokenBudget ?? defaults.contextTokenBudget,
     retrievalTimeoutMs: input.retrievalTimeoutMs ?? defaults.retrievalTimeoutMs,
     sidecarTimeoutMs: input.sidecarTimeoutMs ?? defaults.sidecarTimeoutMs,
     sidecarReliability: {
       fallback: input.sidecarReliability?.fallback === "skip" ? "skip" : defaults.sidecarReliability.fallback,
-      arbitratesHeuristics: input.sidecarReliability?.arbitratesHeuristics
-        ?? defaults.sidecarReliability.arbitratesHeuristics,
-      gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords
-        ?? defaults.sidecarReliability.gradesExistingRecords,
+      arbitratesHeuristics: decisionArbitration && input.sidecarReliability?.arbitratesHeuristics === true,
+      gradesExistingRecords: input.sidecarReliability?.gradesExistingRecords === true,
+    },
+    arbitration: {
+      backend: "decision",
+      ...normalizeCortexModelEndpoint(decisionArbitration ? input.arbitration : undefined),
+      timeoutMs: boundedNumber(input.arbitration?.timeoutMs, 100, 30000, defaults.arbitration.timeoutMs),
+      maxInputTokens: boundedNumber(input.arbitration?.maxInputTokens, 1024, 262144, defaults.arbitration.maxInputTokens),
+      requestsPerMinute: normalizeRequestsPerMinute(input.arbitration?.requestsPerMinute, 0),
+      minConfidence: boundedNumber(input.arbitration?.minConfidence, 0, 1, defaults.arbitration.minConfidence),
     },
     consolidation: {
       enabled: input.consolidation?.enabled ?? defaults.consolidation.enabled,
-      chunkThreshold: input.consolidation?.chunkThreshold ?? defaults.consolidation.chunkThreshold,
-      chunksPerConsolidation: input.consolidation?.chunksPerConsolidation ?? defaults.consolidation.chunksPerConsolidation,
-      arcThreshold: input.consolidation?.arcThreshold ?? defaults.consolidation.arcThreshold,
+      chunkThreshold: Math.floor(boundedNumber(input.consolidation?.chunkThreshold, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.chunkThreshold)),
+      chunksPerConsolidation: Math.floor(boundedNumber(input.consolidation?.chunksPerConsolidation, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.chunksPerConsolidation)),
+      arcThreshold: Math.floor(boundedNumber(input.consolidation?.arcThreshold, 1, Number.MAX_SAFE_INTEGER, defaults.consolidation.arcThreshold)),
       useSidecar: input.consolidation?.useSidecar ?? defaults.consolidation.useSidecar,
       maxTokensPerSummary: input.consolidation?.maxTokensPerSummary ?? defaults.consolidation.maxTokensPerSummary,
     },
@@ -747,6 +790,10 @@ export function normalizeCortexConfig(
       : defaults.nonProseScaffoldTags,
     entityExtractionFilters: normalizeEntityExtractionFilters(input.entityExtractionFilters),
   };
+}
+
+function boundedNumber(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 }
 
 function normalizeRequestsPerMinute(value: number | null | undefined, fallback: number): number {

@@ -1,3 +1,4 @@
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
@@ -14,11 +15,12 @@ import styles from '../ConnectionManager.module.css'
 interface Props {
   providers: ImageGenProviderInfo[]
   profile?: ImageGenConnectionProfile
-  onSave: (input: CreateImageGenConnectionInput) => void
+  onSave: (input: CreateImageGenConnectionInput, folderId?: string) => void
   onCancel: () => void
 }
 
 export default function ImageGenConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+  const folder = useConnectionFolderDraft('imageGen', profile?.id)
   const { t } = useTranslation('panels')
   const [name, setName] = useState(profile?.name || '')
   const [provider, setProvider] = useState(profile?.provider || providers[0]?.id || 'google_gemini')
@@ -172,14 +174,15 @@ export default function ImageGenConnectionForm({ providers, profile, onSave, onC
           novelai: { ...profile?.metadata?.novelai, nonStreaming: novelAINonStreaming },
         },
       } : {}),
-    })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, novelAINonStreaming, profile?.metadata, onSave])
+    }, folder.value)
+  }, [name, provider, apiKey, apiUrl, model, isDefault, novelAINonStreaming, profile?.metadata, folder.value, onSave])
 
   return (
     <div className={styles.form}>
       <FormField label={t('connectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('connectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
+      <ConnectionFolderField kind="imageGen" {...folder} />
 
       <FormField label={t('connectionForm.provider')}>
         <Select value={provider} onChange={setProvider} options={providerOptions} />

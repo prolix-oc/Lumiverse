@@ -2,17 +2,23 @@ mod bundled_server;
 mod capture;
 mod data_folder;
 mod desktop_updates;
+mod desktop_surface;
 mod discord_rpc;
 mod external_launch;
 mod frontend;
 mod host_environment;
+mod keybindings;
 mod linux_runtime;
 mod linux_smoke;
 mod notifications;
 mod profile;
+#[cfg(test)]
+#[path = "../release_config.rs"]
+mod release_config;
 mod remote_instance;
 mod runner;
 mod system_audio;
+mod tls;
 #[cfg(target_os = "linux")]
 mod wayland_background_effect;
 #[cfg(any(target_os = "linux", test))]
@@ -79,7 +85,7 @@ fn macos_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tau
     let hide_frontend = MenuItem::with_id(
         app,
         "frontend.hide",
-        "Hide Frontend",
+        "Close Window",
         true,
         Some("CmdOrCtrl+W"),
     )?;
@@ -156,7 +162,9 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
             }
         }
         "frontend.hide" => {
-            frontend::hide_frontend_window(app);
+            if !frontend::close_focused_popup(app) {
+                frontend::hide_frontend_window(app);
+            }
         }
         #[cfg(debug_assertions)]
         "frontend.devtools" => {
@@ -174,6 +182,7 @@ fn handle_macos_menu_event<R: tauri::Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tls::initialize_provider();
     let mut context = tauri::generate_context!();
     let profile = profile::prepare(context.config_mut(), std::env::args().skip(1))
         .expect("invalid desktop profile arguments");
@@ -212,6 +221,7 @@ pub fn run() {
         .manage(profile)
         .manage(discord_rpc::DiscordRpcState::default())
         .manage(capture::DesktopCaptureState::default())
+        .manage(keybindings::KeybindingsState::default())
         .manage(system_audio::SystemAudioState::default())
         .on_page_load(|webview, payload| {
             // A reloaded or navigated frontend can no longer receive frames from a session its old page started.
@@ -219,9 +229,19 @@ pub fn run() {
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
             {
                 system_audio::frontend_gone(webview.app_handle());
+                keybindings::frontend_gone(webview.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
+            keybindings::desktop_keybindings_show,
+            keybindings::desktop_keybindings_get,
+            keybindings::desktop_keybindings_save,
+            keybindings::desktop_keybindings_publish,
+            keybindings::desktop_keybindings_trigger,
+            keybindings::desktop_keybindings_frontend_get,
+            keybindings::desktop_keybindings_frontend_save,
+            keybindings::desktop_keybindings_global_permission,
+            keybindings::desktop_keybindings_editing,
             profile::desktop_profile_info,
             external_launch::open_external_url,
             external_launch::reveal_desktop_artifact,
@@ -242,6 +262,8 @@ pub fn run() {
             bundled_server::bundled_server_stop,
             bundled_server::bundled_server_status,
             bundled_server::bundled_server_alive,
+            bundled_server::bundled_server_network_access,
+            bundled_server::bundled_server_set_network_access,
             bundled_server::bundled_setup_defaults,
             bundled_server::bundled_setup_save,
             bundled_server::bundled_setup_status,
@@ -294,6 +316,9 @@ pub fn run() {
             capture::desktop_capture_connect,
             capture::desktop_capture_disconnect,
             capture::desktop_capture_status,
+            capture::desktop_capture_request_setup,
+            capture::desktop_capture_setup_finished,
+            capture::desktop_capture_reset_approvals,
             system_audio::desktop_system_audio_status,
             system_audio::desktop_system_audio_set_enabled,
             system_audio::desktop_system_audio_start,
@@ -320,6 +345,18 @@ pub fn run() {
         .setup(|app| {
             profile::initialize(app.handle())?;
             desktop_updates::restore_resume(app.handle())?;
+            if let Err(error) = app.handle().plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(|app, shortcut, event| {
+                        keybindings::global_event(app, shortcut, event.state());
+                    })
+                    .build(),
+            ) {
+                eprintln!("[keybindings] Global shortcuts unavailable: {error}");
+            }
+            if let Err(error) = keybindings::initialize(app.handle()) {
+                eprintln!("[keybindings] Could not restore shortcuts: {error}");
+            }
             #[cfg(target_os = "macos")]
             set_macos_app_icon();
             // Keep normal macOS application/menu integration; the frontend

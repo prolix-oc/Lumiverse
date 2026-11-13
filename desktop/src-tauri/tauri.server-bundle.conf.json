@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "externalBin": ["binaries/lumiverse-server"],
-    "macOS": { "minimumSystemVersion": "13.0" }
+    "externalBin": ["binaries/lumiverse-server"]
   }
 }

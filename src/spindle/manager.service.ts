@@ -1878,6 +1878,16 @@ export function getGrantedPermissions(
   return rows.map((r) => r.permission as SpindlePermission);
 }
 
+/** Grant row IDs change on revoke/regrant, including while a desktop client is offline. */
+export function getDesktopCaptureGrantRevision(identifier: string, permission: string): string {
+  const ext = loadExtensionGrantTarget(identifier);
+  if (!ext) return "";
+  const rows = extensionGrantsHaveScopeColumn()
+    ? getDb().query("SELECT id FROM extension_grants WHERE extension_id = ? AND scope = ? AND permission IN (?, 'generation') ORDER BY id").all(ext.id, ext.scope, permission)
+    : getDb().query("SELECT id FROM extension_grants WHERE extension_id = ? AND permission IN (?, 'generation') ORDER BY id").all(ext.id, permission);
+  return JSON.stringify(rows);
+}
+
 export function hasPermission(
   identifier: string,
   permission: SpindlePermission,

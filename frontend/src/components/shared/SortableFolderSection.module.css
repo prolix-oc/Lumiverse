@@ -1,0 +1,20 @@
+.folder {
+  margin-top: 8px;
+  border-radius: 6px;
+}
+
+.folder:first-child {
+  margin-top: 0;
+}
+
+.folder[data-drop-target] {
+  background: var(--lumiverse-primary-015);
+  outline: 1px solid var(--lumiverse-primary);
+}
+
+.dragging {
+  opacity: 0.55;
+  position: relative;
+  z-index: 1;
+  background: var(--lumiverse-bg-elevated);
+}

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30"];
-const USAGE = "Usage: bun run build:linux-appimage <SSH-profile-or-user@host> [--arch x64|arm64] [--remote-output directory] [--no-download] [--jobs 12] [--smoke]\n       bun run build:linux-appimage --local [--arch x64|arm64] [--output directory] [--jobs 12] [--smoke]";
+const USAGE = "Usage: bun run build:linux-appimage <SSH-profile-or-user@host> [--arch x64|arm64] [--cross] [--remote-output directory] [--no-download] [--jobs 12] [--smoke]\n       bun run build:linux-appimage --local [--arch x64|arm64] [--cross] [--output directory] [--jobs 12] [--smoke]\n       --cross uses native x64 compilation for --arch arm64 on an x64 Linux build host.";
 
 export function parseOptions(args: string[]) {
   const host = args[0] && !args[0].startsWith("-") ? args.shift() : undefined;
@@ -14,12 +14,13 @@ export function parseOptions(args: string[]) {
   let jobs = 12;
   let arch: "x64" | "arm64" = "x64";
   let output = join(ROOT, ".cache/linux-appimage");
-  let local = false, smoke = false, download = true;
+  let local = false, smoke = false, download = true, cross = false;
   let remoteOutput: string | undefined;
   while (args.length) {
     const flag = args.shift();
     if (flag === "--local") { local = true; continue; }
     if (flag === "--smoke") { smoke = true; continue; }
+    if (flag === "--cross") { cross = true; continue; }
     if (flag === "--no-download") { download = false; continue; }
     const value = args.shift();
     if (flag === "--arch" && (value === "x64" || value === "arm64")) arch = value;
@@ -29,7 +30,8 @@ export function parseOptions(args: string[]) {
     else throw new Error(USAGE);
   }
   if ((local && (host || remoteOutput || !download)) || (!local && !host)) throw new Error(USAGE);
-  return { host, jobs, arch, output, local, smoke, download, remoteOutput };
+  if (cross && arch !== "arm64") throw new Error("--cross requires --arch arm64");
+  return { host, jobs, arch, output, local, smoke, download, remoteOutput, cross };
 }
 
 export function includeSnapshotPath(path: string): boolean {
@@ -70,7 +72,7 @@ async function run(cmd: string[], input?: string | Uint8Array, capture = false):
 async function main() {
   const args = process.argv.slice(2).filter(arg => arg !== "--");
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); return; }
-  const { host, jobs, arch, output, local, smoke, download, remoteOutput } = parseOptions(args);
+  const { host, jobs, arch, output, local, smoke, download, remoteOutput, cross } = parseOptions(args);
   if (local && process.platform !== "linux") throw new Error("--local requires Linux with Docker access.");
   const execute = (script: string, arguments_: string[] = [], capture = false) => host
     ? run(["ssh", ...SSH_OPTIONS, host, `bash -s -- ${arguments_.map(shellQuote).join(" ")}`], script, capture)
@@ -93,7 +95,7 @@ async function main() {
       : (await execute('printf "%s/.cache/lumiverse-appimage-build" "$HOME"\n', [], true)).trim();
     if (!cache.startsWith("/") || /[\r\n,]/.test(cache)) throw new Error("Unsupported remote build home directory.");
     const remoteRun = `${cache}/runs/${id}`;
-    const metadata = JSON.stringify({ format: 1, id, baseRevision, sourceArchiveSha256, arch, jobs, createdAt: new Date().toISOString(), kind: "unsigned-diagnostic" }, null, 2) + "\n";
+    const metadata = JSON.stringify({ format: 1, id, baseRevision, sourceArchiveSha256, arch, jobs, compiler: cross ? "native-x64-cross" : "target-container", createdAt: new Date().toISOString(), kind: "unsigned-diagnostic" }, null, 2) + "\n";
     console.log(`[remote-build] ${host || "local"}: ${remoteRun}`);
     await execute('set -eu\ncommand -v docker >/dev/null\ndocker info >/dev/null\nif test -n "$2"; then test -d "$2" && test -w "$2"; fi\nmkdir -p "$1/source"\n', [remoteRun, remoteOutput || ""]);
     if (host) await run(["scp", ...SSH_OPTIONS, archive, `${host}:${remoteRun}/source.tar.gz`]);
@@ -101,7 +103,7 @@ async function main() {
     // Send metadata as data rather than interpolating it into a shell program.
     if (host) await run(["ssh", ...SSH_OPTIONS, host, `cat > ${shellQuote(`${remoteRun}/build-source.json`)}`], metadata);
     else writeFileSync(join(remoteRun, "build-source.json"), metadata);
-    await execute('set -eu\ntar -xzf "$1/source.tar.gz" -C "$1/source"\nexec bash "$1/source/scripts/linux-appimage-builder/run-remote.sh" "$1" "$2" "$3" "$4" "$5"\n', [remoteRun, cache, String(jobs), smoke ? "1" : "0", arch]);
+    await execute('set -eu\ntar -xzf "$1/source.tar.gz" -C "$1/source"\nexec bash "$1/source/scripts/linux-appimage-builder/run-remote.sh" "$1" "$2" "$3" "$4" "$5" "$6"\n', [remoteRun, cache, String(jobs), smoke ? "1" : "0", arch, cross ? "1" : "0"]);
     if (remoteOutput) {
       await execute('set -eu\ncd "$1/artifacts"\nsha256sum -c SHA256SUMS\nmkdir -p "$2/lumiverse-diagnostics"\ndestination="$2/lumiverse-diagnostics/$3"\nmkdir "$destination"\ncp -a . "$destination/"\nchmod -R a+rX "$destination"\ncd "$destination"\nsha256sum -c SHA256SUMS\nprintf "[remote-build] Shared output: %s\\n" "$destination"\n', [remoteRun, remoteOutput, id]);
     }

@@ -20,6 +20,10 @@ function runtime(overrides: Partial<HostActionRuntime> = {}) {
     openWorldBookEditor: (id, entryId) => { calls.push(['openWorldBookEditor', id, entryId]) },
     invokeInputBarAction: (id) => { calls.push(['invokeInputBarAction', id]) },
     invokeExtensionCommand: (id) => { calls.push(['invokeExtensionCommand', id]) },
+    switchPersona: (id) => { calls.push(['switchPersona', id]) },
+    switchPreset: (id) => { calls.push(['switchPreset', id]) },
+    applyTheme: (id) => { calls.push(['applyTheme', id]) },
+    openCharacterChat: (id, mode) => { calls.push(['openCharacterChat', id, mode]) },
   }
   return { calls, runtime: { ...base, ...overrides } }
 }
@@ -62,5 +66,33 @@ describe('H4 host action switch', () => {
     expect(() => applyHostAction({ kind: 'modal', id: 'character_editor' }, { id: 'char-1', entryId: 'entry-1' }, host)).toThrow('HOST_ACTION_INVALID_PARAMS')
     expect(() => applyHostAction({ kind: 'modal', id: 'world_book_editor' }, { id: 'book-1', entryId: '../entry' }, host)).toThrow('HOST_ACTION_INVALID_ID')
     expect(() => applyHostAction({ kind: 'command', id: 'action-new-chat' }, { params: 'unsafe' }, host)).toThrow('HOST_ACTION_INVALID_PARAMS')
+  })
+
+  test('entity actions pass validated params to their runtime leaf', () => {
+    const { calls, runtime: host } = runtime()
+    applyHostAction({ kind: 'entity_action', id: 'switch_persona' }, { personaId: 'persona-1' }, host)
+    applyHostAction({ kind: 'entity_action', id: 'switch_preset' }, { presetId: 'preset-1' }, host)
+    applyHostAction({ kind: 'entity_action', id: 'apply_theme' }, { themeId: 'midnight-blue' }, host)
+    applyHostAction({ kind: 'entity_action', id: 'character_chat' }, { characterId: 'char-1', mode: 'latest' }, host)
+    applyHostAction({ kind: 'entity_action', id: 'character_chat' }, { characterId: 'char-1', mode: 'new' }, host)
+    expect(calls).toEqual([
+      ['switchPersona', 'persona-1'],
+      ['switchPreset', 'preset-1'],
+      ['applyTheme', 'midnight-blue'],
+      ['openCharacterChat', 'char-1', 'latest'],
+      ['openCharacterChat', 'char-1', 'new'],
+    ])
+  })
+
+  test('entity actions reject missing, unsafe, and extra params and unknown ids', () => {
+    const { calls, runtime: host } = runtime()
+    const act = (id: string, params?: Record<string, string>) => () => applyHostAction({ kind: 'entity_action', id }, params, host)
+    expect(act('switch_persona')).toThrow('HOST_ACTION_INVALID_ID:personaId')
+    expect(act('switch_preset', { presetId: '../x' })).toThrow('HOST_ACTION_INVALID_ID:presetId')
+    expect(act('apply_theme', { themeId: 'rose', css: 'x' })).toThrow('HOST_ACTION_INVALID_PARAMS:css')
+    expect(act('character_chat', { characterId: 'char-1' })).toThrow('HOST_ACTION_INVALID_PARAMS:mode')
+    expect(act('character_chat', { characterId: 'char-1', mode: 'oldest' })).toThrow('HOST_ACTION_INVALID_PARAMS:mode')
+    expect(act('delete_persona', { personaId: 'persona-1' })).toThrow('HOST_ACTION_UNMAPPED')
+    expect(calls).toEqual([])
   })
 })

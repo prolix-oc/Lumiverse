@@ -41,6 +41,34 @@ afterEach(() => {
   settingsApi.putMany = original.putMany
 })
 
+describe('composer formatting preference', () => {
+  test('is off for existing accounts and persists explicit on and off choices', async () => {
+    const rows = new Map<string, unknown>()
+    database(rows)
+    const first = store()
+    await first.loadSettings()
+    expect(first.showComposerFormattingBar).toBe(false)
+    first.setSetting('showComposerFormattingBar', true)
+    await flushSettingsNow()
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.showComposerFormattingBar).toBe(true)
+    restored.setSetting('showComposerFormattingBar', false)
+    await flushSettingsNow()
+    const disabled = store()
+    await disabled.loadSettings()
+    expect(disabled.showComposerFormattingBar).toBe(false)
+    expect(rows.get('showComposerFormattingBar')).toBe(false)
+  })
+
+  test.each(['true', 'false', 1, null, {}])('ignores malformed opt-in values: %j', async value => {
+    database(new Map([['showComposerFormattingBar', value]]))
+    const restored = store()
+    await restored.loadSettings()
+    expect(restored.showComposerFormattingBar).toBe(false)
+  })
+})
+
 describe('mobile wallpaper persistence', () => {
   test('saves, reloads and clears the mobile override independently of global display settings', async () => {
     const rows = new Map<string, unknown>()
@@ -146,6 +174,7 @@ describe('portrait dock persistence', () => {
   test('does not PUT a matching private fallback after canonical reload', async () => {
     const saved = { ...store().portraitDockSettings, open: true, dockSide: 'left' as const }
     const rows = new Map<string, unknown>([
+      ['uiLanguage', 'en'],
       ['portraitDockSettings', saved],
       ['spindle:lumiverse_suite:portrait_dock:portraitDockSettings', saved],
     ])
@@ -200,6 +229,7 @@ describe('portrait dock persistence', () => {
       rect: { x: 24, y: 48, width: 284, height: 412 },
     }
     const rows = new Map<string, unknown>([
+      ['uiLanguage', 'en'],
       ['portraitDockSettings', saved],
       ['spindle:lumiverse_suite:portrait_dock:portraitDockSettings', saved],
     ])
@@ -302,7 +332,7 @@ describe('per-device enter-to-send preferences', () => {
 
   test('migrates the committed backend scalar once, then keeps both preferences local', async () => {
     setSettingsPersistenceScope('device-preference-test-user')
-    const rows = new Map<string, unknown>([['chatSheldEnterToSend', false]])
+    const rows = new Map<string, unknown>([['uiLanguage', 'en'], ['chatSheldEnterToSend', false]])
     database(rows)
     let puts = 0
     const putMany = settingsApi.putMany
@@ -378,6 +408,7 @@ describe('long message collapse settings', () => {
   test('defaults to disabled with the comfortable height preset', () => {
     const initial = store()
     expect(initial.longMessageCollapseEnabled).toBe(false)
+    expect(initial.longMessageCollapseUserMessages).toBe(false)
     expect(initial.longMessageCollapsePreset).toBe('comfortable')
     expect(initial.longMessageCollapseCustomHeight).toBe(500)
     expect(initial.longMessageCollapseDepth).toBe(0)
@@ -389,12 +420,14 @@ describe('long message collapse settings', () => {
     const first = store()
 
     first.setSetting('longMessageCollapseEnabled', true)
+    first.setSetting('longMessageCollapseUserMessages', true)
     first.setSetting('longMessageCollapsePreset', 'custom')
     first.setSetting('longMessageCollapseCustomHeight', 347)
     first.setSetting('longMessageCollapseDepth', 6)
     await flushSettingsNow()
 
     expect(rows.get('longMessageCollapseEnabled')).toBe(true)
+    expect(rows.get('longMessageCollapseUserMessages')).toBe(true)
     expect(rows.get('longMessageCollapsePreset')).toBe('custom')
     expect(rows.get('longMessageCollapseCustomHeight')).toBe(347)
     expect(rows.get('longMessageCollapseDepth')).toBe(6)
@@ -402,6 +435,7 @@ describe('long message collapse settings', () => {
     const restored = store()
     await restored.loadSettings()
     expect(restored.longMessageCollapseEnabled).toBe(true)
+    expect(restored.longMessageCollapseUserMessages).toBe(true)
     expect(restored.longMessageCollapsePreset).toBe('custom')
     expect(restored.longMessageCollapseCustomHeight).toBe(347)
     expect(restored.longMessageCollapseDepth).toBe(6)

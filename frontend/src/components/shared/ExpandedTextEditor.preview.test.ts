@@ -27,11 +27,11 @@ describe('ExpandedTextEditor mobile editing stability', () => {
     expect(viewportSource).toContain("root.style.setProperty('--app-visual-viewport-width'")
     expect(viewportSource).toContain("root.style.setProperty('--app-visual-viewport-height'")
 
-    const overlayBlock = cssSource.match(/\.overlay\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
-    expect(overlayBlock).toContain('top: calc(var(--app-visual-viewport-offset-top)')
-    expect(overlayBlock).toContain('left: calc(var(--app-visual-viewport-offset-left)')
-    expect(overlayBlock).toContain('height: calc(var(--app-visual-viewport-height)')
-    expect(overlayBlock).toContain('width: calc(var(--app-visual-viewport-width)')
+    const viewportBlock = cssSource.match(/\.viewport\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(viewportBlock).toContain('top: calc(var(--app-visual-viewport-offset-top)')
+    expect(viewportBlock).toContain('left: calc(var(--app-visual-viewport-offset-left)')
+    expect(viewportBlock).toContain('height: calc(var(--app-visual-viewport-height)')
+    expect(viewportBlock).toContain('width: calc(var(--app-visual-viewport-width)')
   })
 
   test('focuses programmatically without allowing keyboard presentation to scroll the page', () => {

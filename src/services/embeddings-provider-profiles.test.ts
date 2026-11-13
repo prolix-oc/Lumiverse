@@ -40,6 +40,9 @@ describe("embedding provider profiles", () => {
       model: "nvidia/nemotron-3-embed-1b",
     });
     expect(__test__.NVIDIA_NIM_EMBEDDING_MODELS).toEqual(expect.arrayContaining([
+      "nvidia/nemotron-3-embed-1b",
+      "nvidia/nemotron-3.5-embed-1b",
+      "nvidia/llama-nemotron-embed-vl-1b-v2",
       "nvidia/nv-embed-v1",
       "nvidia/nv-embedqa-e5-v5",
     ]));
@@ -54,17 +57,6 @@ describe("embedding provider profiles", () => {
       api_url: "https://api.cohere.com/v2/embed",
       model: "embed-v4.0",
     });
-  });
-
-  test("uses query/passage routing only for NVIDIA's asymmetric models", () => {
-    expect(__test__.nvidiaNimNeedsInputType({
-      provider: "nvidia-nim",
-      model: "nvidia/llama-nemotron-embed-1b-v2",
-    })).toBe(true);
-    expect(__test__.nvidiaNimNeedsInputType({
-      provider: "nvidia-nim",
-      model: "nvidia/nemotron-3-embed-1b",
-    })).toBe(false);
   });
 
   test("surfaces NVIDIA's successful-HTTP problem detail", () => {

@@ -16,7 +16,7 @@
 }
 
 :global([data-glass]) .backdrop {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
 }
 
 .image {

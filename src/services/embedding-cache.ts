@@ -4,12 +4,11 @@
  * Cache keys incorporate a model fingerprint so entries are automatically
  * invalidated when the embedding model/provider/dimensions change.
  *
- * When entries are evicted from the in-memory LRU they are persisted to a
- * SQLite table so they can be recovered on a future cache miss without
- * hitting the embedding API again.
+ * Entries are also persisted to SQLite so they can be recovered after eviction
+ * from the in-memory LRU without hitting the embedding API again.
  */
 
-import { getDb } from "../db/connection";
+import { getDb, getDbGeneration } from "../db/connection";
 
 export interface ModelFingerprint {
   provider: string;
@@ -23,6 +22,15 @@ interface CacheEntry {
   createdAt: number;
 }
 
+interface DiskCacheEntry {
+  key: string;
+  vectorJson: string;
+  createdAt: number;
+}
+
+// Keep write locks bounded even when a caller submits many embedding results.
+const DISK_WRITE_BATCH_SIZE = 50;
+
 export function computeCacheKey(content: string, fingerprint: ModelFingerprint): string {
   const fp = `${fingerprint.provider}|${fingerprint.model}|${fingerprint.dimensions ?? ""}|${fingerprint.api_url}`;
   return `${Bun.hash(fp).toString(36)}:${Bun.hash(content).toString(36)}`;
@@ -32,7 +40,7 @@ export class EmbeddingCache {
   private map = new Map<string, CacheEntry>();
   private maxSize: number;
   private ttlMs: number;
-  private diskReady = false;
+  private diskGeneration = -1;
 
   constructor(maxSize = 2048, ttlMs = 600_000) {
     this.maxSize = maxSize;
@@ -41,8 +49,9 @@ export class EmbeddingCache {
 
   // ---- SQLite disk layer ----
 
-  private ensureDiskTable(): void {
-    if (this.diskReady) return;
+  private ensureDiskTable(): boolean {
+    const generation = getDbGeneration();
+    if (this.diskGeneration === generation) return true;
     try {
       const db = getDb();
       db.run(`
@@ -52,21 +61,47 @@ export class EmbeddingCache {
           created_at INTEGER NOT NULL
         )
       `);
-      this.diskReady = true;
+      this.diskGeneration = generation;
+      return true;
     } catch {
       // DB not initialised yet — disk layer unavailable, memory-only is fine
+      return false;
     }
   }
 
-  private writeToDisk(key: string, entry: CacheEntry): void {
+  private writeToDisk(entries: ReadonlyArray<{ key: string; entry: CacheEntry }>): void {
+    if (entries.length === 0) return;
     try {
-      this.ensureDiskTable();
-      if (!this.diskReady) return;
+      if (!this.ensureDiskTable()) return;
       const db = getDb();
-      db.run(
+      const insert = db.query(
         `INSERT OR REPLACE INTO embedding_cache (cache_key, vector, created_at) VALUES (?, ?, ?)`,
-        [key, JSON.stringify(entry.vector), entry.createdAt]
       );
+      const writeBatch = db.transaction((batch: DiskCacheEntry[]) => {
+        for (const row of batch) insert.run(row.key, row.vectorJson, row.createdAt);
+      });
+
+      for (let offset = 0; offset < entries.length; offset += DISK_WRITE_BATCH_SIZE) {
+        const batch: DiskCacheEntry[] = [];
+        for (const { key, entry } of entries.slice(offset, offset + DISK_WRITE_BATCH_SIZE)) {
+          try {
+            const vectorJson = JSON.stringify(entry.vector);
+            if (typeof vectorJson === "string") batch.push({ key, vectorJson, createdAt: entry.createdAt });
+          } catch {
+            // A bad cache value must not prevent other vectors from being cached.
+          }
+        }
+        try {
+          if (batch.length === 1) {
+            const row = batch[0];
+            insert.run(row.key, row.vectorJson, row.createdAt);
+          } else if (batch.length > 1) {
+            writeBatch(batch);
+          }
+        } catch {
+          // Disk caching is best-effort; continue with later bounded batches.
+        }
+      }
     } catch {
       // Non-critical — worst case we re-embed on next miss
     }
@@ -74,8 +109,7 @@ export class EmbeddingCache {
 
   private readFromDisk(key: string): CacheEntry | null {
     try {
-      this.ensureDiskTable();
-      if (!this.diskReady) return null;
+      if (!this.ensureDiskTable()) return null;
       const db = getDb();
       const row = db.query<{ vector: string; created_at: number }, [string]>(
         `SELECT vector, created_at FROM embedding_cache WHERE cache_key = ?`
@@ -89,8 +123,7 @@ export class EmbeddingCache {
 
   private deleteFromDisk(key: string): void {
     try {
-      this.ensureDiskTable();
-      if (!this.diskReady) return;
+      if (!this.ensureDiskTable()) return;
       const db = getDb();
       db.run(`DELETE FROM embedding_cache WHERE cache_key = ?`, [key]);
     } catch {
@@ -100,8 +133,7 @@ export class EmbeddingCache {
 
   private clearDisk(): void {
     try {
-      this.ensureDiskTable();
-      if (!this.diskReady) return;
+      if (!this.ensureDiskTable()) return;
       const db = getDb();
       db.run(`DELETE FROM embedding_cache`);
     } catch {
@@ -142,15 +174,22 @@ export class EmbeddingCache {
   }
 
   set(key: string, vector: number[]): void {
-    const entry: CacheEntry = { vector, createdAt: Date.now() };
+    this.setMany([{ key, vector }]);
+  }
 
-    // If key already exists, delete first so insertion order is updated
-    this.map.delete(key);
-    this.evictIfNeeded();
-    this.map.set(key, entry);
+  setMany(values: ReadonlyArray<{ key: string; vector: number[] }>): void {
+    const entries: Array<{ key: string; entry: CacheEntry }> = [];
+    for (const { key, vector } of values) {
+      const entry: CacheEntry = { vector, createdAt: Date.now() };
 
-    // Always persist to disk
-    this.writeToDisk(key, entry);
+      // If key already exists, delete first so insertion order is updated.
+      this.map.delete(key);
+      this.evictIfNeeded();
+      this.map.set(key, entry);
+      entries.push({ key, entry });
+    }
+
+    this.writeToDisk(entries);
   }
 
   clear(): void {

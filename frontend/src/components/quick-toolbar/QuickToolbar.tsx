@@ -455,6 +455,7 @@ function QuickToolbarNative() {
   const reorderActionsRef = useRef(reorderActions)
   reorderActionsRef.current = reorderActions
 
+  const [draggingActionId, setDraggingActionId] = useState<string | null>(null)
   const itemHoldRef = useRef<ReturnType<typeof createPointerHoldController> | null>(null)
   if (itemHoldRef.current === null) {
     itemHoldRef.current = createPointerHoldController(() => {
@@ -579,7 +580,6 @@ function QuickToolbarNative() {
   const [v2FitPaintWidth, setV2FitPaintWidth] = useState(0)
   const [visibleActionIds, setVisibleActionIds] = useState<string[]>([])
   const lastValidV2FitRef = useRef({ visibleActionIds: [] as string[], paintWidth: 0 })
-  const [draggingActionId, setDraggingActionId] = useState<string | null>(null)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [overflowQuery, setOverflowQuery] = useState('')
   const configuredGap = readOptionalToolbarNumber(settings, 'gap')

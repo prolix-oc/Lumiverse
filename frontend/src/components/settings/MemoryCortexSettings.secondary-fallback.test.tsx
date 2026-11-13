@@ -34,6 +34,8 @@ const config = {
   },
   formatterMode: "shadow" as const,
   useChatMemoryFormatting: true,
+  replaceConsolidatedMessagesInContext: false,
+  replaceArcSummariesInContext: false,
   contextTokenBudget: 600,
   retrievalTimeoutMs: 60000,
   sidecarTimeoutMs: 60000,
@@ -88,6 +90,7 @@ const storeState = {
   openModal: () => undefined,
   extensions: [{ identifier: "lumiverse_suite", enabled: true, has_frontend: true }],
   profiles: [{ id: "primary-conn", name: "Primary", metadata: {} }],
+  decisionProfiles: [] as Array<{ id: string; name: string; model: string; is_default: boolean }>,
   activeChatId: "chat-1",
 };
 
@@ -173,26 +176,39 @@ mock.module("@/components/panels/connection-manager/ModelCombobox", () => ({
     createElement("input", { defaultValue: value, placeholder }),
 }));
 mock.module("@/components/shared/ConnectionSelect", () => ({
-  default: ({ value, ariaLabel, onChange }: {
+  default: ({ value, ariaLabel, onChange, kind, modelValue, seedDefaultModel }: {
     value: string;
+    kind?: string;
     ariaLabel?: string;
     onChange: (id: string) => void;
+    modelValue?: string;
+    seedDefaultModel?: boolean;
   }) =>
     createElement("select", {
       "aria-label": ariaLabel,
+      "data-kind": kind,
+      "data-model-value": modelValue,
+      "data-seed-model": String(seedDefaultModel),
       value,
       onChange: (event: { target: { value: string } }) => onChange(event.target.value),
     },
       createElement("option", { value: "" }, "none"),
       createElement("option", { value: "primary-conn" }, "primary"),
       createElement("option", { value: "secondary-conn" }, "secondary"),
+      createElement("option", { value: "decision-conn" }, "decision"),
     ),
 }));
 mock.module("@/components/shared/NumericInput", () => ({
-  default: ({ value }: { value: number }) => createElement("input", { defaultValue: String(value) }),
+  default: ({ value, onChange, integer: _integer, commitOnBlur: _commit, ...props }: any) => createElement("input", {
+    ...props, type: "number", defaultValue: String(value),
+    onInput: (event: any) => onChange(event.currentTarget.valueAsNumber),
+  }),
 }));
 mock.module("@/components/shared/Toggle", () => ({
-  Toggle: { Checkbox: () => createElement("input", { type: "checkbox" }) },
+  Toggle: { Checkbox: ({ checked, disabled, label, hint, onChange }: {
+    checked: boolean; disabled?: boolean; label?: string; hint?: string; onChange: (value: boolean) => void;
+  }) => createElement("input", { type: "checkbox", checked, disabled, "aria-label": label, title: hint,
+    onChange: (event: { target: { checked: boolean } }) => onChange(event.target.checked) }) },
 }));
 mock.module("@/lib/reasoning-binding", () => ({ getReasoningBindingSummary: () => "" }));
 mock.module("@/ws/client", () => ({ wsClient: { on: () => () => undefined } }));
@@ -229,6 +245,7 @@ describe("MemoryCortexSettings secondary fallback", () => {
     host = null;
     patches.length = 0;
     resetPersistedConfig();
+    storeState.decisionProfiles = [];
   });
 
   // Waits for a condition to hold while letting pending async work settle inside
@@ -257,7 +274,7 @@ describe("MemoryCortexSettings secondary fallback", () => {
       root!.render(createElement(MemoryCortexSettings));
       await Promise.resolve();
     });
-    await waitFor(() => el.querySelector('[data-testid="cortex-query-add-fallback"]') !== null);
+    await waitFor(() => el.querySelector('[data-testid="cortex-query-add-fallback"]') !== null || el.querySelector('[aria-label="memoryCortex.decisionConnection"]') !== null);
     return el;
   };
 
@@ -296,6 +313,86 @@ describe("MemoryCortexSettings secondary fallback", () => {
 
   const selectIn = (h: HTMLDivElement, testId: string) =>
     h.querySelector<HTMLSelectElement>(`[data-testid="${testId}"] select`);
+
+  test("Decision review is configurable without a generative sidecar", async () => {
+    storeState.decisionProfiles = [{ id: "decision-conn", name: "Decision", model: "decision-model", is_default: true }];
+    persistedConfig = { ...structuredClone(config), sidecar: { ...config.sidecar, connectionProfileId: null },
+      sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true },
+      arbitration: { backend: "decision", connectionProfileId: null, model: null, timeoutMs: 30000, requestsPerMinute: 0, minConfidence: 0.8 },
+    } as typeof config;
+    const h = await mount();
+    const select = h.querySelector<HTMLSelectElement>('[aria-label="memoryCortex.decisionConnection"]');
+    expect(select?.getAttribute("data-kind")).toBe("decision");
+    await changeSelect(select!, "decision-conn");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", minConfidence: 0.8 } });
+  });
+
+  test("consolidation intervals are visible and persist independently with their units", async () => {
+    const h = await mount();
+    await click(h.querySelector('[aria-label="memoryCortex.enableConsolidation"]'));
+    for (const [field, initial, value] of [["chunkThreshold", 40, 12], ["chunksPerConsolidation", 10, 6], ["arcThreshold", 5, 3]] as const) {
+      const input = h.querySelector<HTMLInputElement>(`[data-testid="cortex-consolidation-${field}"]`)!;
+      expect(input).not.toBeNull();
+      expect(input.value).toBe(String(initial));
+      expect(input.min).toBe("1");
+      await act(async () => {
+        input.value = String(value);
+        input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(persistedConfig.consolidation).toEqual({ ...config.consolidation,
+      enabled: true, chunkThreshold: 12, chunksPerConsolidation: 6, arcThreshold: 3,
+    });
+    expect(h.textContent).toContain("memoryCortex.consolidationIntervalHint");
+  });
+
+  test("history replacement toggles persist independently of consolidation generation", async () => {
+    const h = await mount();
+    const scene = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.replaceConsolidatedMessagesInContext"]');
+    const arc = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.replaceArcSummariesInContext"]');
+    expect(scene?.checked).toBe(false);
+    expect(arc?.checked).toBe(false);
+    await click(scene);
+    expect(patches.at(-1)).toEqual({ replaceConsolidatedMessagesInContext: true });
+    await click(arc);
+    expect(patches.at(-1)).toEqual({ replaceArcSummariesInContext: true });
+    expect(persistedConfig.replaceConsolidatedMessagesInContext).toBe(true);
+    expect(persistedConfig.replaceArcSummariesInContext).toBe(true);
+    expect(persistedConfig.consolidation.enabled).toBe(false);
+    await click(scene);
+    expect(persistedConfig.replaceConsolidatedMessagesInContext).toBe(false);
+    expect(persistedConfig.replaceArcSummariesInContext).toBe(true);
+  });
+
+  test("candidate review cannot be enabled without a Decision connection", async () => {
+    const h = await mount();
+    const toggle = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.arbitratesHeuristics"]');
+    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.title).toBe("memoryCortex.arbitrationNeedsConnection");
+    expect(h.querySelector('[aria-label="memoryCortex.arbitrationBackend"]')).toBeNull();
+    expect(h.querySelector('[aria-label="memoryCortex.decisionConnection"]')).toBeNull();
+  });
+
+  test("enabling review leaves even the default Decision connection and model unselected", async () => {
+    storeState.decisionProfiles = [{ id: "decision-conn", name: "Decision", model: "decision-model", is_default: true }];
+    const h = await mount();
+    const toggle = h.querySelector<HTMLInputElement>('[aria-label="memoryCortex.arbitratesHeuristics"]');
+    expect(toggle?.disabled).toBe(false);
+    expect(patches).toEqual([]);
+    await click(toggle);
+    const select = h.querySelector<HTMLSelectElement>('[aria-label="memoryCortex.decisionConnection"]');
+    expect(select?.value).toBe("");
+    expect(select?.getAttribute("data-model-value")).toBe("");
+    expect(select?.getAttribute("data-seed-model")).toBe("false");
+    expect(patches).toEqual([{ sidecarReliability: { ...config.sidecarReliability, arbitratesHeuristics: true } }]);
+    expect(h.querySelector('[aria-label="memoryCortex.arbitrationBackend"]')).toBeNull();
+    await changeSelect(select!, "decision-conn");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { backend: "decision", connectionProfileId: "decision-conn", model: null } });
+    await changeSelect(select!, "");
+    expect(patches.at(-1)).toMatchObject({ arbitration: { connectionProfileId: null, model: null } });
+  });
 
   test("renders secondary profile controls and unavailable state", async () => {
     const h = await mount();

@@ -50,8 +50,7 @@ const channel = createDatabaseSubprocessChannel((message: DatabaseHostMessage) =
     send({ type: "result", requestId: message.requestId, result, durationMs: performance.now() - started, imageReferences });
   }, () => { stopIndexer?.(); closeDatabase(); process.exit(0); });
 
-// Graceful exit handling: ensure cleanup when parent kills with SIGKILL
-// (disconnect event may not fire properly on Windows for ipc mode).
+// Normal exits finalize handles; a forced kill is handled by the OS.
 process.on('exit', () => {
   stopIndexer?.();
   closeDatabase();

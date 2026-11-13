@@ -39,13 +39,19 @@ These are "magic" blocks that expand to character/persona/chat data:
 | `char_description` | Character's description field |
 | `char_personality` | Character's personality field |
 | `scenario` | Character's scenario field |
-| `persona` | Your persona's description |
-| `mes_examples` | Character's example messages |
+| `persona_description` | Your persona's description |
+| `dialogue_examples` | Character's example messages |
 | `system_prompt` | Character's system prompt |
 | `post_history_instructions` | Character's post-history instructions |
 | `chat_history` | All chat messages |
 | `world_info_before` | World book entries (before position) |
 | `world_info_after` | World book entries (after position) |
+
+Add **Character System Prompt** or **Character Post-History Instructions** from **Add Marker → Character** to place those card fields explicitly. Their content comes from the character card; the marker's role, position, depth, and triggers control how it is inserted.
+
+For presets without those markers or an active block referencing the corresponding macro, the character's system prompt is inserted before the preset's blocks and its post-history instructions after them. Empty fields add nothing. A disabled or trigger-filtered character instruction marker suppresses that field's fallback, so you can control when it is included.
+
+The **Post-History Instructions** marker in **Add Marker → Prompts** (`jailbreak`) remains an editable preset prompt. It is separate from the character card field; use `{{charPostHistoryInstructions}}` inside it to include the card's instructions there.
 
 ### Content Blocks
 

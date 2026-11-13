@@ -4,6 +4,22 @@ import { getRequiredTerminalLiteral } from './search-window'
 const MACRO_SYNTAX = /\{\{|<(?:user|bot|char)>/i
 const guards = new Map<string, string | RegExp | null>()
 
+// Common cleanup scripts use [⠀] or \u2800, which the terminal scanner
+// deliberately doesn't interpret. Decode only a single required character;
+// classes with ranges, alternatives or quantifiers still use isolated regex.
+export function getSingleCharacterLiteral(pattern: string, flags: string): string | null {
+  if (pattern.length > 12) return null
+  const source = pattern.startsWith('[') && pattern.endsWith(']')
+    ? pattern.slice(1, -1) : pattern
+  if (/^\\u[\da-f]{4}$/i.test(source)) return String.fromCharCode(parseInt(source.slice(2), 16))
+  if (/^\\x[\da-f]{2}$/i.test(source)) return String.fromCharCode(parseInt(source.slice(2), 16))
+  if (flags.includes('u') && /^\\u\{[\da-f]{1,6}\}$/i.test(source)) {
+    const codePoint = parseInt(source.slice(3, -1), 16)
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : null
+  }
+  return source.length === 1 && !/[\\^$.*+?()[\]{}|\-]/.test(source) ? source : null
+}
+
 /** Only a fixed, escaped literal runs here, never the user-authored regex. */
 export function cannotMatchRegex(content: string, pattern: string, flags: string): boolean {
   // The terminal scanner does not parse Unicode-set class nesting.
@@ -12,7 +28,7 @@ export function cannotMatchRegex(content: string, pattern: string, flags: string
   let guard = guards.get(key)
   if (guard === undefined) {
     // Even a short literal can avoid an entire asynchronous display pass.
-    const literal = getRequiredTerminalLiteral(pattern, 1)
+    const literal = getSingleCharacterLiteral(pattern, flags) ?? getRequiredTerminalLiteral(pattern, 1)
     guard = literal
     if (literal && flags.includes('i')) {
       guard = new RegExp(literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags.includes('u') ? 'iu' : 'i')

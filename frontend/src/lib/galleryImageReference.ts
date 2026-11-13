@@ -1,8 +1,7 @@
 import type { CharacterGalleryItem } from '@/types/api'
+import { replaceHtmlImageSources } from './htmlImageSources'
 
 export const GALLERY_IMAGE_REFERENCE_PREFIX = 'gallery://'
-
-const HTML_IMAGE_WITH_SRC_RE = /<img\b([^>]*?\s)src\s*=\s*(["'])([^"']+)\2([^>]*)>/gi
 
 export function createGalleryImageReference(token: string): string {
   return `${GALLERY_IMAGE_REFERENCE_PREFIX}${token}`
@@ -24,11 +23,8 @@ export function resolveGalleryImageSourcesInHtml(
   text: string,
   assetMap: Record<string, string>,
 ): string {
-  if (!/<img\b/i.test(text)) return text
-
-  HTML_IMAGE_WITH_SRC_RE.lastIndex = 0
-  return text.replace(
-    HTML_IMAGE_WITH_SRC_RE,
+  return replaceHtmlImageSources(
+    text, 'gallery',
     (match, before: string, quote: string, source: string, after: string) => {
       const imageId = resolveGalleryImageId(source.trim(), assetMap)
       if (!imageId) return match

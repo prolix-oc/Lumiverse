@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "1.2.5",
+  "version": "1.3.0",
   "packageManager": "bun@1.4.4",
   "engines": {
     "bun": ">=1.4.4"
@@ -10,28 +10,30 @@
     "sharp"
   ],
   "dependencies": {
-    "@better-auth/oauth-provider": "1.7.2",
-    "@lancedb/lancedb": "0.37.1",
+    "@better-auth/oauth-provider": "1.7.14",
+    "@hono/bun": "^1.0.1",
+    "@lancedb/lancedb": "0.41.0",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizers": "^3.7.2",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "^0.6.0",
     "@msgpack/msgpack": "^3.1.2",
     "@opentelemetry/api": "^1.9.1",
     "@pushforge/builder": "^2.0.1",
     "@types/archiver": "^8.0.0",
-    "@zilliz/milvus2-sdk-node": "^3.0.3",
+    "@zilliz/milvus2-sdk-node": "^3.0.6",
     "apache-arrow": "18.1.0",
     "archiver": "^8.0.0",
-    "better-auth": "1.7.2",
-    "fflate": "^0.8.2",
+    "better-auth": "1.7.14",
+    "css-tree": "3.2.1",
+    "fflate": "^0.8.3",
     "gpt-tokenizer": "^2.8.1",
-    "hono": "^4.7.0",
+    "hono": "^4.13.14",
     "js-tiktoken": "^1.0.16",
     "linkedom": "0.18.13",
-    "lumiverse-spindle-types": "0.6.49",
+    "lumiverse-spindle-types": "0.6.80",
     "mute-stream": "^3.0.0",
-    "sharp": "^0.34.5",
+    "sharp": "0.35.5",
     "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
@@ -40,17 +42,20 @@
     "@types/ssh2-sftp-client": "^9.0.6",
     "bun-types": "^1.4.4",
     "jsdom": "^29.0.1",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "@types/css-tree": "^3.2.0"
   },
   "overrides": {
     "lru-cache": "11.2.7",
     "kysely": "0.28.17",
-    "protobufjs": "8.7.0"
+    "protobufjs": "8.7.0",
+    "sharp": "0.35.5"
   },
   "resolutions": {
     "lru-cache": "11.2.7",
     "kysely": "0.28.17",
-    "protobufjs": "8.7.0"
+    "protobufjs": "8.7.0",
+    "sharp": "0.35.5"
   },
   "scripts": {
     "test": "bun test --isolate",
@@ -58,24 +63,15 @@
     "test:changed": "bun test --isolate --changed",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "docs:serve": "bun --no-env-file scripts/serve-docs.ts",
+    "docs:serve:user": "bun --no-env-file scripts/serve-docs.ts --root user-docs/site --port 3020 --base-path /guides/",
+    "docs:serve:developer": "bun --no-env-file scripts/serve-docs.ts --root developer-docs/site --port 3021",
     "build:server": "bun run scripts/build-server.ts",
     "build:desktop-server": "bun run scripts/build-desktop-server.ts",
     "build:linux-remote": "bun --no-env-file scripts/build-linux-appimage-remote.ts",
     "build:linux-appimage": "bun --no-env-file scripts/build-linux-appimage-remote.ts",
-    "build:android-prototype": "bun run scripts/build-android-prototype.ts",
-    "build:android-native": "bun run build:lancedb:android-native && bun run build:sharp:android-native && bun run build:ffmpeg:android-native && bun run build:git:android-native",
-    "build:git:android-native": "bun run scripts/build-git-android-native.ts",
-    "build:ffmpeg:android-native": "bun run scripts/build-ffmpeg-android-native.ts",
-    "build:android-tauri": "bun run scripts/build-android-tauri.ts",
-    "build:ios-client": "bun run scripts/build-ios-client.ts",
-    "test:ios-client": "bun run scripts/smoke-test-ios-client.ts",
-    "check:ios-frame-pacing": "bun run scripts/check-ios-frame-pacing.ts",
-    "build:lancedb:android-native": "bun run scripts/build-lancedb-android-native.ts",
-    "build:sharp:android-native": "bun run scripts/build-sharp-android-native.ts",
-    "test:android-prototype": "bun run scripts/smoke-test-android-prototype.ts",
     "test:server-bundle": "bun run scripts/smoke-test-server.ts",
     "build:lancedb:macos": "bun run scripts/build-lancedb-macos.ts",
-    "build:lancedb:android": "bash scripts/build-lancedb-android.sh",
     "setup": "bun run scripts/setup-wizard.ts",
     "install:smartctl": "bun run scripts/install-smartctl.ts",
     "desktop:doctor": "bun run scripts/desktop-doctor.ts",
@@ -93,13 +89,17 @@
     "release": "bash scripts/release.sh",
     "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts",
     "bench:mmap": "bun run scripts/bench-mmap.ts",
+    "milvus:maintenance": "bun run scripts/milvus-maintenance.ts",
+    "bench:milvus": "bun run scripts/bench-milvus.ts",
     "bench:images": "bun run scripts/bench-images.ts",
     "bench:thumbnail-codecs": "bun run scripts/bench-thumbnail-codecs.ts",
     "bench:regex-captures": "bun run scripts/bench-regex-captures.ts",
     "bench:regex-social-links": "bun run scripts/bench-regex-social-links.ts",
     "bench:message-tags": "bun run scripts/bench-message-tag-interceptors.ts",
     "edit-env": "bun run scripts/edit-env.ts",
-    "migrate:cl": "bun run scripts/migrate-character-library.ts"
+    "migrate:cl": "bun run scripts/migrate-character-library.ts",
+    "test:mobile-contracts": "bun test --isolate src/routes/android-notifications.routes.test.ts src/routes/ios-notifications.routes.test.ts src/routes/ios-live-activities.routes.test.ts src/routes/ios-widgets.routes.test.ts src/services/apns-encryption.test.ts src/services/apns-routing.test.ts",
+    "audit:st-gallery": "bun run scripts/audit-st-gallery.ts"
   },
   "type": "module",
   "optionalDependencies": {

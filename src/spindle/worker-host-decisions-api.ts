@@ -1,13 +1,14 @@
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
-import type { DecisionWorkerMessage } from "../decision/contract";
+import type { DecisionEvaluationInput, DecisionWorkerMessage } from "../decision/contract";
 import * as connections from "../services/decision-connections.service";
 import { collectAll } from "../services/pagination";
 import { withReadableApiKeyStatus, withReadableApiKeyStatuses } from "../services/connection-secret-status";
 import { evaluateDecision } from "../services/decisions.service";
+import { isRecord } from "../decision/validation";
 import { clampErrorMessage } from "../utils/provider-errors";
 
 type Context = {
-  hasPermission: (permission: "decisions") => boolean;
+  hasPermission: (permission: "decisions" | "images") => boolean;
   resolveEffectiveUserId: (userId?: string) => string;
   enforceScopedUser: (userId: string) => void;
   postResponse: (message: { type: "response"; requestId: string; result?: unknown; error?: string }) => void;
@@ -46,6 +47,10 @@ export class WorkerHostDecisionsApi {
         }
         case "decisions_evaluate": {
           if (this.pending.has(message.requestId)) throw new Error("Duplicate Decision request ID");
+          const assets = (message.input as DecisionEvaluationInput).assets;
+          if (assets && Object.values(assets).some((asset) => isRecord(asset) && "image_id" in asset) && !this.context.hasPermission("images")) {
+            throw new Error(`${PERMISSION_DENIED_PREFIX} images — Decision image_id assets require the images permission`);
+          }
           const controller = new AbortController();
           this.pending.set(message.requestId, controller);
           try { result = await evaluateDecision(userId, message.input, controller.signal); }

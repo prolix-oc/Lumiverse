@@ -57,6 +57,7 @@ const deleted = await spindle.presets.delete(newPreset.id)
 |---|---|---|
 | `list(options?)` | `Promise<{ data: UserPresetDTO[], total: number }>` | List presets. Options: `{ limit?, offset? }`. Defaults: limit 50, max 200. |
 | `get(presetId)` | `Promise<UserPresetDTO \| null>` | Get a preset by ID. Returns `null` if not found. |
+| `getActive(chatId?)` | `Promise<ActivePresetDTO>` | Get the preset a chat generates with, after preset profile bindings. Without a chat, resolves the selected preset and its defaults. Throws `Chat not found` for an unknown chat. |
 | `create(input)` | `Promise<UserPresetDTO>` | Create a new preset. `name` and `provider` are required. |
 | `update(presetId, input)` | `Promise<UserPresetDTO>` | Update a preset. `expected_cache_revision` is required; pass the `cache_revision` from the read/create response. |
 | `delete(presetId)` | `Promise<boolean>` | Delete a preset. Returns `true` if deleted. |
@@ -78,6 +79,36 @@ const deleted = await spindle.presets.delete(newPreset.id)
   updated_at: number
 }
 ```
+
+## ActivePresetDTO
+
+Resolution follows prompt assembly: the selected Loom preset (or the chat
+connection's preset), then the first matching preset profile binding (chat,
+persona, character, connection, then the preset's defaults).
+
+```ts
+{
+  preset_id: string | null   // null when the chat uses no preset
+  source: 'chat' | 'persona' | 'character' | 'connection' | 'defaults' | 'none'
+  source_id: string | null   // ID of the scope whose binding applied
+  block_states: Record<string, boolean> // block ID -> enabled overrides; {} when source is 'none'
+}
+```
+
+To get the effective block states, read the preset and apply the overrides:
+
+```ts
+const active = await spindle.presets.getActive(chatId)
+const preset = active.preset_id ? await spindle.presets.get(active.preset_id) : null
+const blocks = (preset?.prompt_order ?? []).map((block) => ({
+  ...block,
+  enabled: active.block_states[block.id] ?? block.enabled,
+}))
+```
+
+Block edits made with `presets.blocks.update` change the preset itself. While
+`source` is not `'none'`, the binding's `block_states` still override them for
+that chat.
 
 ## UserPresetCreateDTO
 

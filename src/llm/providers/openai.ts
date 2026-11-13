@@ -1,4 +1,5 @@
 import { describeGenerationStop } from "../generation-stop";
+import { omitDisabledPenalties } from "../generation-parameters";
 import { incompleteStream, readProviderSse, throwIfProviderError } from "../provider-sse";
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
@@ -131,7 +132,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
    * - Multipart content uses `input_text` / `input_image` / `input_audio` types
    */
   private buildResponsesBody(request: GenerationRequest): Record<string, any> {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
 
     // Only the leading system prefix belongs in top-level instructions.
     // Later system messages may be depth-positioned inside/after history, and
@@ -344,6 +345,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
           break;
         case "response.function_call_arguments.delta":
         case "response.function_call_arguments.done": {
+          request.onResponseActivity?.();
           const itemId = parsed.item_id || parsed.output_index?.toString() || "0";
           const existing = fnCallBuffer.get(itemId);
           if (existing) {

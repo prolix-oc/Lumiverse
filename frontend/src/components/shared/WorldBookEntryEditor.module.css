@@ -25,6 +25,14 @@
   container-name: wbEntryEditor wbEntryEditorCompact;
 }
 
+/* WebKit omits trailing padding from this contained flex scroller's scroll
+   range. A non-shrinking spacer keeps the final fields reachable instead. */
+.compactEntryEditor::after {
+  content: '';
+  flex: 0 0 var(--worldbook-keyboard-clearance, 0px);
+  margin-top: -8px; /* cancel the final flex gap when no keyboard is present */
+}
+
 .compactEntryEditor.parentScrollEditor {
   flex: 0 0 auto;
   overflow: visible;

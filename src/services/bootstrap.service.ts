@@ -107,6 +107,7 @@ interface StartupSettings {
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
   landingPageGalleryWidth?: "compact" | "expanded";
+  landingPinFavorites?: boolean;
   wallpaper?: unknown;
   drawerSettings?: unknown;
   spindleSettings?: unknown;
@@ -114,6 +115,8 @@ interface StartupSettings {
   activeProfileId?: string | null;
   toastPosition?: "top-right" | "top-left" | "bottom-right" | "bottom-left" | "top" | "bottom";
   defaultImpersonationMode?: "prompts" | "preset" | "oneliner";
+  showGreetingImage?: boolean;
+  greetingImagePosition?: "top" | "bottom";
 }
 
 const LIST_LIMIT_CONNECTIONS = 100;
@@ -133,6 +136,7 @@ export const STARTUP_SETTINGS_KEYS = [
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
   "landingPageGalleryWidth",
+  "landingPinFavorites",
   "wallpaper",
   "drawerSettings",
   "spindleSettings",
@@ -140,6 +144,8 @@ export const STARTUP_SETTINGS_KEYS = [
   "activeProfileId",
   "toastPosition",
   "defaultImpersonationMode",
+  "showGreetingImage",
+  "greetingImagePosition",
 ] as const;
 
 /**
@@ -227,6 +233,11 @@ export function getStartupSettings(userId: string): StartupSettings {
     startupSettings.landingPageGalleryWidth = landingPageGalleryWidth;
   }
 
+  const landingPinFavorites = rows.get("landingPinFavorites");
+  if (typeof landingPinFavorites === "boolean") {
+    startupSettings.landingPinFavorites = landingPinFavorites;
+  }
+
   if (rows.has("wallpaper")) {
     startupSettings.wallpaper = rows.get("wallpaper");
   }
@@ -281,31 +292,38 @@ export function getStartupSettings(userId: string): StartupSettings {
     startupSettings.defaultImpersonationMode = defaultImpersonationMode;
   }
 
+  const showGreetingImage = rows.get("showGreetingImage");
+  if (typeof showGreetingImage === "boolean") {
+    startupSettings.showGreetingImage = showGreetingImage;
+  }
+  const greetingImagePosition = rows.get("greetingImagePosition");
+  if (greetingImagePosition === "top" || greetingImagePosition === "bottom") {
+    startupSettings.greetingImagePosition = greetingImagePosition;
+  }
+
   return startupSettings;
 }
 
 /** First recent-chats page for the landing view, sized by the user's setting. */
-function getLandingRecentChats(userId: string): PaginatedResult<GroupedRecentChat> {
-  const settings = settingsSvc.getSettingsByKeys(userId, [
-    "landingPageChatsDisplayed",
-    "favorites",
-    "landingHiddenCharacterIds",
-  ]);
-  const stored = settings.get("landingPageChatsDisplayed");
+function getLandingRecentChats(userId: string, snapshot?: StartupSettings): PaginatedResult<GroupedRecentChat> {
+  // Preserve landing's independent fallback when an unrelated startup setting
+  // is malformed. Healthy startup reads each preference only once.
+  const settings = snapshot ?? Object.fromEntries(settingsSvc.getSettingsByKeys(userId, [
+    'landingPageChatsDisplayed', 'favorites', 'landingHiddenCharacterIds', 'landingPinFavorites',
+  ])) as StartupSettings;
+  const stored = settings.landingPageChatsDisplayed;
   const limit =
     typeof stored === "number" && Number.isFinite(stored)
       ? Math.min(Math.max(Math.floor(stored), 1), LANDING_CHATS_MAX_LIMIT)
       : LANDING_CHATS_DEFAULT_LIMIT;
-  const favorites = settings.get("favorites");
-  const hidden = settings.get("landingHiddenCharacterIds");
+  const favorites = settings.favorites;
+  const hidden = settings.landingHiddenCharacterIds;
+  const pinFavorites = settings.landingPinFavorites !== false;
   return chatsSvc.listRecentChatsGrouped(userId, { limit, offset: 0 }, {
-    favoriteCharacterIds: Array.isArray(favorites)
+    favoriteCharacterIds: pinFavorites && Array.isArray(favorites)
       ? favorites.filter((id): id is string => typeof id === "string" && id.length > 0)
       : [],
-    hiddenCharacterIds: Array.isArray(hidden)
-      ? hidden.filter((id): id is string => typeof id === "string" && id.length > 0)
-      : [],
-  });
+  }, Array.isArray(hidden) ? hidden.filter((id): id is string => typeof id === 'string' && id.length > 0) : []);
 }
 
 export function buildLandingBootstrapPayload(
@@ -332,7 +350,7 @@ export function buildLandingBootstrapPayload(
   // bun:sqlite reads; Promise fan-out only creates extra interleaving points
   // under rapid refresh churn without making the queries run faster.
   const startupSettings = safe("startupSettings", () => getStartupSettings(userId), {} as StartupSettings);
-  const recentChats = safe("recentChats", () => getLandingRecentChats(userId), emptyRecentChats);
+  const recentChats = safe("recentChats", () => getLandingRecentChats(userId, errors.startupSettings ? undefined : startupSettings), emptyRecentChats);
 
   return {
     payload: { startupSettings, recentChats },

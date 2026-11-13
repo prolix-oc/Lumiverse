@@ -43,7 +43,7 @@
 }
 
 :global([data-glass]) .viewTabs {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 10px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 10px)) var(--lcs-liquid-filter, );
 }
 
 .viewTab {
@@ -141,7 +141,7 @@
 }
 
 :global([data-glass]) .creatorNotesSurface {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 8px)) var(--lcs-liquid-filter, );
 }
 
 .hero {

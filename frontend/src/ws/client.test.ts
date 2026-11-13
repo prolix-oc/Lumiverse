@@ -413,6 +413,171 @@ describe('WebSocketClient push presence', () => {
   })
 })
 
+describe('WebSocketClient Android native lifecycle', () => {
+  test('a protected background connection retains tokens, heartbeat and reconnects while presence stays hidden', () => {
+    jest.useFakeTimers()
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: true, __LUMIVERSE_ANDROID_BACKGROUND_CONNECTION__: true })
+      client.setFocusedChat('background-tts')
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open(); socket.sent = []
+      const worker = MockWorker.instances.at(-1)!
+      worker.sent = []
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: false })
+      documentMock.visibilityState = 'hidden'; documentFocused = false
+      windowMock.dispatchEvent(Object.assign(new Event('lumiverse:android-app-state'), { detail: { state: 'background' } }))
+      const frames = socket.sent.map(frame => JSON.parse(frame))
+      expect(frames).toContainEqual({ type: 'visibility', visible: false })
+      expect(frames).toContainEqual({ type: 'stream_focus', chatId: 'background-tts' })
+      expect(worker.sent.at(-1)?.type).toBe('start')
+      const generation = worker.sent.at(-1).generation
+      worker.emit({ type: 'ping', generation, timeoutMs: 10_000 })
+      expect(socket.sent.map(frame => JSON.parse(frame)).at(-1)?.type).toBe('ping')
+      const before = MockWebSocket.instances.length
+      socket.readyState = MockWebSocket.CLOSED
+      ;(socket as any).onclose({ code: 1006, reason: 'network changed' })
+      jest.advanceTimersByTime(5000)
+      expect(MockWebSocket.instances.length).toBe(before + 1)
+      const reconnected = MockWebSocket.instances.at(-1)!
+      reconnected.open()
+      const restarted = worker.sent.at(-1)
+      expect(restarted.type).toBe('start')
+      worker.emit({ type: 'ping', generation: restarted.generation, timeoutMs: 10_000 })
+      expect(reconnected.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'stream_focus', chatId: 'background-tts' })
+      expect(reconnected.sent.map(frame => JSON.parse(frame)).at(-1)?.type).toBe('ping')
+    } finally {
+      client.disconnect()
+      Reflect.deleteProperty(windowMock, '__LUMIVERSE_ANDROID_ACTIVE__')
+      Reflect.deleteProperty(windowMock, '__LUMIVERSE_ANDROID_BACKGROUND_CONNECTION__')
+      documentMock.visibilityState = 'visible'; documentFocused = true
+      jest.useRealTimers()
+    }
+  })
+
+  test('native background releases presence and resume restores chat focus when WebView visibility is stale', () => {
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    const state = (active: boolean) => {
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: active })
+      windowMock.dispatchEvent(Object.assign(new Event('lumiverse:android-app-state'), { detail: { state: active ? 'active' : 'background' } }))
+    }
+    try {
+      Object.assign(windowMock, { __LUMIVERSE_ANDROID_ACTIVE__: true })
+      client.setFocusedChat('android-chat')
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open(); socket.sent = []
+      state(false)
+      expect(socket.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'visibility', visible: false })
+      documentMock.visibilityState = 'hidden'; documentFocused = false; socket.sent = []
+      state(true)
+      const frames = socket.sent.map(frame => JSON.parse(frame))
+      expect(frames).toContainEqual({ type: 'visibility', visible: true })
+      expect(frames).toContainEqual({ type: 'stream_focus', chatId: 'android-chat' })
+    } finally {
+      client.disconnect(); Reflect.deleteProperty(windowMock, '__LUMIVERSE_ANDROID_ACTIVE__')
+      documentMock.visibilityState = 'visible'; documentFocused = true
+    }
+  })
+})
+
+describe('WebSocketClient iOS native lifecycle', () => {
+  const emitState = (state: string) => windowMock.dispatchEvent(
+    Object.assign(new Event('lumiverse:ios-app-state'), { detail: { state } }),
+  )
+  const installBridge = () => {
+    Object.assign(windowMock, {
+      __LUMIVERSE_MOBILE__: true, __LUMIVERSE_PLATFORM__: 'ios',
+      __LUMIVERSE_IOS_NATIVE__: { version: 1, request: async () => ({ state: 'active' }) },
+    })
+    ;(globalThis as any).Worker = undefined
+  }
+  const resetBridge = () => {
+    for (const key of ['__LUMIVERSE_MOBILE__', '__LUMIVERSE_PLATFORM__', '__LUMIVERSE_IOS_NATIVE__']) {
+      Reflect.deleteProperty(windowMock, key)
+    }
+    documentMock.visibilityState = 'visible'
+    documentFocused = true
+    ;(globalThis as any).Worker = MockWorker
+  }
+
+  test('restores stream focus after a brief app switch with stale WebKit visibility and focus', async () => {
+    installBridge()
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      client.setFocusedChat('chat-1')
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open()
+      await Promise.resolve()
+      await Promise.resolve()
+      socket.sent = []
+
+      // No browser visibilitychange/focus event or timer gap accompanies this
+      // switch. UIKit alone tells us that the app left and came back.
+      emitState('inactive')
+      emitState('background')
+      expect(socket.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'visibility', visible: false })
+      expect(socket.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'stream_focus', chatId: null })
+
+      documentMock.visibilityState = 'hidden'
+      documentFocused = false
+      socket.sent = []
+      emitState('active')
+      const frames = socket.sent.map(frame => JSON.parse(frame))
+      expect(frames).toContainEqual({ type: 'visibility', visible: true })
+      expect(frames).toContainEqual({ type: 'stream_focus', chatId: 'chat-1' })
+      const probe = frames.find(frame => frame.type === 'ping')
+      expect(probe?.id).toBeString()
+      let recovered = 0
+      client.on('__ws_resume_recovery_complete', () => { recovered++ })
+      socket.receive({ type: 'pong', id: probe.id })
+      expect(recovered).toBe(1)
+    } finally { client.disconnect(); resetBridge() }
+  })
+
+  test('probes on activation even when JS missed the native background event', async () => {
+    installBridge()
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      client.connect()
+      const socket = MockWebSocket.instances.at(-1)!
+      socket.open()
+      await Promise.resolve()
+      await Promise.resolve()
+      socket.sent = []
+      emitState('active')
+      expect(socket.sent.map(frame => JSON.parse(frame)).find(frame => frame.type === 'ping')?.id).toBeString()
+    } finally { client.disconnect(); resetBridge() }
+  })
+
+  test('reconnects a closed transport on native activation while WebKit still reports hidden', async () => {
+    jest.useFakeTimers()
+    installBridge()
+    const client = new WebSocketClient('ws://localhost:3000/api/ws')
+    try {
+      client.setFocusedChat('chat-1')
+      client.connect()
+      const oldSocket = MockWebSocket.instances.at(-1)!
+      oldSocket.open()
+      await Promise.resolve()
+      await Promise.resolve()
+      emitState('background')
+      oldSocket.readyState = MockWebSocket.CLOSED
+      documentMock.visibilityState = 'hidden'
+      documentFocused = false
+      emitState('active')
+      jest.advanceTimersByTime(250)
+      const newSocket = MockWebSocket.instances.at(-1)!
+      expect(newSocket).not.toBe(oldSocket)
+      newSocket.open()
+      newSocket.receive({ event: 'CONNECTED', payload: {} })
+      expect(newSocket.sent.map(frame => JSON.parse(frame))).toContainEqual({ type: 'stream_focus', chatId: 'chat-1' })
+    } finally { client.disconnect(); resetBridge(); jest.useRealTimers() }
+  })
+})
+
 describe('WebSocketClient resume watchdog guard', () => {
   test('does not use a heartbeat worker on iOS or iPadOS', () => {
     expect(shouldUseHeartbeatWorker({

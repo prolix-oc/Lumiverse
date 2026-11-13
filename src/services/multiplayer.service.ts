@@ -711,6 +711,7 @@ export function setRoomCharacterAvatar(roomId: string, rawUrl: unknown): void {
 const roomParticipantLorebooks = new Map<string, PeerLorebook>();
 
 interface HydrationGeneration {
+  renderMode?: "persisted-message";
   active: boolean;
   generationId: string;
   status: string;
@@ -721,6 +722,7 @@ interface HydrationGeneration {
   generationType: string;
   targetMessageId?: string;
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
   characterName?: string;
   characterId?: string;
   reasoningStartedAt?: number;
@@ -762,6 +764,8 @@ function buildInFlightGeneration(room: Room): HydrationGeneration | null {
     generationType: entry.generationType,
     targetMessageId: entry.targetMessageId,
     targetSwipeId: entry.targetSwipeId,
+    backgroundSwipe: entry.backgroundSwipe,
+    renderMode: entry.renderMode,
     characterName: entry.characterName,
     characterId: entry.characterId,
     reasoningStartedAt: entry.reasoningStartedAt,

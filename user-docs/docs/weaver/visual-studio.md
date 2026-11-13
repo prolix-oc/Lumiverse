@@ -48,9 +48,9 @@ Deriving from an image requires a provider that can take an image as **input**. 
 
 | Mechanism | Providers | How it works |
 |-----------|-----------|--------------|
-| **Edit** | Google Gemini, NanoGPT | The portrait is edited directly with a facial-change instruction. No tag prompt needed — the pixels carry the character. |
+| **Edit** | Google Gemini, NanoGPT, OpenAI, xAI, Ideogram, Black Forest Labs, fal.ai, Together AI, Stability AI (Ultra / SD3) | The portrait is edited directly with a facial-change instruction. No tag prompt needed — the pixels carry the character. |
 | **Reference** | NovelAI | Generates with the portrait as a character-and-style reference, plus expression tags. |
-| **img2img** | SD WebUI API, SwarmUI, ComfyUI | Runs the portrait through img2img with expression tags. The strength control is under **Advanced** — lower keeps more of the portrait. |
+| **img2img** | SD WebUI API, SwarmUI, ComfyUI, Runware, Stability AI (Ultra / SD3) | Runs the portrait through img2img with expression tags. The strength control is under **Advanced** — lower keeps more of the portrait. |
 
 For **ComfyUI**, the connection's imported workflow must have an `init_image` mapping for img2img to be possible; a plain txt2img workflow is gated with that exact reason. A connection whose provider can't take an image at all is gated too — re-rolling expressions from pure text would lose the face, so it's never offered. The connection selector stays usable so you can switch to one that qualifies.
 
@@ -68,9 +68,16 @@ What you can control depends on which provider the connection uses.
 | **NovelAI** | Cloud | Prompt, resolution, seed | Character reference |
 | **NanoGPT** | Cloud | Prompt, size, seed | Edit |
 | **Google Gemini** | Cloud | Prompt, aspect ratio | Edit |
+| **OpenAI** | Cloud | Prompt, size, quality | Edit |
+| **xAI (Grok Imagine)** | Cloud | Prompt, aspect ratio | Edit |
+| **Together AI** | Cloud | Prompt, size/aspect ratio, steps, seed | Edit |
+| **Ideogram** | Cloud | Prompt, size or aspect ratio, rendering speed, quality, seed | Edit |
+| **Black Forest Labs** | Cloud | Prompt, size/aspect ratio, guidance, steps, seed | Edit |
+| **fal.ai** | Cloud | Prompt, size preset, steps, guidance, seed | Edit |
+| **Stability AI** | Cloud | Prompt, aspect ratio, style preset, seed | Edit / img2img (Ultra / SD3) |
+| **Runware** | Cloud | Prompt, width/height, steps, CFG, seed | img2img |
 
-!!! warning "Pollinations isn't available here"
-    Pollinations works for general [image generation](../image-generation/index.md) but is **not** supported in the Visual Studio. If your only image-gen connection is Pollinations, set up one of the providers above first.
+Every other cloud image provider in [Image Generation → Setup & Providers](../image-generation/setup.md) is prompt-driven in the Visual Studio: write a prompt (and negative prompt where supported), set size or aspect ratio and seed, and generate. That covers Venice, Recraft, DeepInfra, Fireworks, Replicate, Leonardo, Civitai, Hugging Face, and the generic OpenAI-compatible connection.
 
 ### ComfyUI
 

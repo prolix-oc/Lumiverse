@@ -1,5 +1,6 @@
 import * as embeddingsSvc from "./embeddings.service";
 import { getDb } from "../db/connection";
+import { isInferenceSchedulingEnabled, withInferenceLease } from "./inference-scheduler";
 import { scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
 import {
   canUseChatChunkVectorizationSubprocess,
@@ -251,7 +252,22 @@ class VectorizationQueue {
       let result: ChatChunkVectorizationBatchResult;
       if (canUseChatChunkVectorizationSubprocess()) {
         try {
-          result = await processChatChunkVectorizationBatchInSubprocess(tasks);
+          // The subprocess performs the embedding HTTP call, so lease the
+          // batch from the host while it runs. One dispatch is bounded by the
+          // queue's batch size, which keeps interactive preemption responsive.
+          result = await withInferenceLease(
+            {
+              userId: jobs[0].userId,
+              endpoint: isInferenceSchedulingEnabled(jobs[0].userId)
+                ? embeddingsSvc.resolvePrimaryEmbeddingEndpoint(jobs[0].userId)
+                : null,
+              requestClass: "bulk",
+              purpose: "chat-chunk-vectorization",
+            },
+            (lease) => processChatChunkVectorizationBatchInSubprocess(tasks, {
+              signal: lease.signal,
+            }),
+          );
         } catch (err) {
           if (!isChatChunkVectorizationSubprocessStartupError(err)) throw err;
           warnChatChunkVectorizationFallback();
@@ -278,6 +294,12 @@ class VectorizationQueue {
         console.info(`[vectorization] Processed ${result.processedCount} chunk(s)`);
       }
     } catch (err) {
+      // Preemption is deliberate, not a failure: requeue at the same priority
+      // so interactive traffic can use the model without decaying this work.
+      if ((err as { code?: string } | null)?.code === "INFERENCE_PREEMPTED") {
+        for (const job of jobs) this.add(job);
+        return;
+      }
       console.warn("[vectorization] Chunk batch failed, requeueing with lower priority", err);
       for (const job of jobs) {
         if (job.priority > 0) {

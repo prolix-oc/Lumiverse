@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desktop Key Bindings</title></head>
+<body><main class="dialog">
+  <h1>Desktop Key Bindings</h1>
+  <p class="intro">App-focused bindings work in the Lumiverse window. Global bindings also work in the background and must be enabled individually. No shortcuts are enabled by default.</p>
+  <p id="availability"></p>
+  <form id="add-binding">
+    <p><label for="action">Action</label><select id="action"></select></p>
+    <p><label for="chord">Shortcut</label><input id="chord" readonly placeholder="Click here, then press a shortcut" aria-describedby="chord-help"><span id="chord-help" class="field-hint">F13–F24 work on their own or with modifiers. Other keys require Control, Alt/Option or Command/Super. Shortcuts use physical key positions.</span></p>
+    <details><summary>Choose keys manually</summary><p class="field-hint">Use this when the OS or an existing global shortcut intercepts the keys you want to record.</p><div id="manual-chord"><label><input id="ctrl" type="checkbox"> Control</label> <label><input id="alt" type="checkbox"> Alt/Option</label> <label><input id="shift" type="checkbox"> Shift</label> <label><input id="meta" type="checkbox"> Cmd/Super</label><label for="key">Key</label><select id="key"><option value="">Choose a key…</option></select></div></details>
+    <p><label for="scope">Where it works</label><select id="scope"><option value="focused">Only while Lumiverse is focused</option><option value="global">Global — also while in the background</option></select></p>
+    <button class="button button-secondary" type="submit">Add Binding</button>
+  </form>
+  <p class="field-hint">Open and sign in to the integrated browser to bind application and Spindle commands. Those bindings belong to that instance and account. Disabled extensions and unavailable commands cannot trigger.</p>
+  <div id="bindings"></div>
+  <p><button id="save" class="button button-primary" type="button">Save Bindings</button></p>
+  <p id="status" role="status" aria-live="polite"></p>
+</main><script type="module" src="/src/keybindings.ts"></script></body></html>

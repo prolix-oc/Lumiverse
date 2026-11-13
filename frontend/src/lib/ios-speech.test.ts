@@ -3,6 +3,8 @@ import { IOSSpeechEngine } from './ios-speech'
 
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+const previousCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+const secureRandom = crypto.getRandomValues.bind(crypto)
 let host: EventTarget & { __LUMIVERSE_MOBILE__: boolean; __LUMIVERSE_PLATFORM__: string; __LUMIVERSE_IOS_NATIVE__: unknown }
 let calls: Array<{ action: string; payload?: Record<string, unknown> }>
 let begin: () => void
@@ -16,9 +18,10 @@ beforeEach(() => {
     } } })
   Object.defineProperty(globalThis, 'window', { configurable: true, value: host })
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { hasAttribute: () => false, getAttribute: () => null } } })
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues: secureRandom } })
 })
 afterAll(() => {
-  for (const [key, value] of [['window', previousWindow], ['document', previousDocument]] as const) {
+  for (const [key, value] of [['window', previousWindow], ['document', previousDocument], ['crypto', previousCrypto]] as const) {
     if (value) Object.defineProperty(globalThis, key, value)
     else Reflect.deleteProperty(globalThis, key)
   }

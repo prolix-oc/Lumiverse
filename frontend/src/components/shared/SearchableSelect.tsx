@@ -55,6 +55,10 @@ type MultiModeProps = {
 
 type CommonProps = {
   options: SearchableSelectOption[]
+  /** Folder names in the caller's saved order; an empty name places Uncategorized. */
+  groupOrder?: string[]
+  /** Optional shortcuts; the same options remain in their canonical groups. */
+  recentValues?: string[]
   placeholder?: string
   searchPlaceholder?: string
   /** Hide the search input when options are at or below this count. Default 8. */
@@ -69,6 +73,8 @@ type CommonProps = {
   loading?: boolean
   hasMore?: boolean
   onLoadMore?: () => void
+  /** Load the next page near the bottom of the options, retaining the accessible button. */
+  loadMoreOnScroll?: boolean
   loadingMessage?: string
   loadMoreLabel?: string
   emptyMessage?: string
@@ -103,6 +109,8 @@ export default function SearchableSelect(props: SearchableSelectProps) {
 
   const {
     options,
+    groupOrder,
+    recentValues,
     placeholder = t('placeholder'),
     searchPlaceholder = t('searchPlaceholder'),
     searchThreshold = 8,
@@ -112,6 +120,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     loading = false,
     hasMore = false,
     onLoadMore,
+    loadMoreOnScroll = false,
     loadingMessage = t('loading', { defaultValue: 'Loading…' }),
     loadMoreLabel = t('loadMore', { defaultValue: 'Load more' }),
     emptyMessage = t('emptyMessage'),
@@ -144,6 +153,18 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => onSearchChange?.(search), [onSearchChange, search])
+  const requestedPage = useRef<string | null>(null)
+  const pageKey = JSON.stringify([search, options.map(option => option.value)])
+  const loadNearEnd = useCallback(() => {
+    const list = listRef.current
+    if (!open || disabled || !loadMoreOnScroll || !hasMore || loading || !onLoadMore || !list || list.clientHeight <= 0) return
+    if (list.scrollHeight - list.scrollTop - list.clientHeight > 64) return
+    if (requestedPage.current === pageKey) return
+    requestedPage.current = pageKey
+    onLoadMore()
+  }, [open, disabled, loadMoreOnScroll, hasMore, loading, onLoadMore, pageKey])
+  useEffect(() => { loadNearEnd() }, [loadNearEnd])
+
   const isPortalOwnerActive = useCallback(() => {
     if (!portal || !portalOwnerId) return true
     const popover = popoverRef.current
@@ -156,12 +177,13 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     () => options.some((o) => (o.group ?? '').trim().length > 0),
     [options],
   )
-  const filtered = useMemo(() => {
+  const orderedOptions = useMemo(() => {
     const base = !remoteSearch && needle
       ? options.filter(
           (o) =>
             o.label.toLowerCase().includes(needle) ||
-            (o.sublabel && o.sublabel.toLowerCase().includes(needle)),
+            (o.sublabel && o.sublabel.toLowerCase().includes(needle)) ||
+            (o.group && o.group.toLowerCase().includes(needle)),
         )
       : options
     if (!hasGroups) return base
@@ -179,8 +201,18 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     const orderedKeys = buckets.has(UNCATEGORIZED_KEY)
       ? [...namedKeys, UNCATEGORIZED_KEY]
       : namedKeys
-    return orderedKeys.flatMap((k) => buckets.get(k)!)
-  }, [options, needle, hasGroups, remoteSearch])
+    const preferred = [...new Set((groupOrder ?? []).map(name => name || UNCATEGORIZED_KEY))]
+      .filter(key => buckets.has(key))
+    const keys = [...preferred, ...orderedKeys.filter(key => !preferred.includes(key))]
+    return keys.flatMap((key) => buckets.get(key)!)
+  }, [options, needle, hasGroups, remoteSearch, groupOrder])
+
+  const recentOptions = useMemo(() => {
+    const byId = new Map(orderedOptions.map(option => [option.value, option]))
+    return [...new Set(recentValues ?? [])].map(id => byId.get(id))
+      .filter((option): option is SearchableSelectOption => !!option)
+  }, [orderedOptions, recentValues])
+  const filtered = useMemo(() => [...recentOptions, ...orderedOptions], [recentOptions, orderedOptions])
 
   const isSelected = useCallback(
     (v: string) =>
@@ -590,6 +622,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         ref={listRef}
         id={listId}
         className={styles.optionList}
+        onScroll={loadNearEnd}
         role="listbox"
         aria-label={pickerName}
         aria-multiselectable={isMulti || undefined}
@@ -597,12 +630,16 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         tabIndex={-1}
       >
         {hasClearOption && renderOption(navigableOptions[0], 0)}
-        {hasGroups ? (() => {
+        {recentOptions.length > 0 && <div className={styles.optionGroup} role="group" aria-label={t('recentlyUsed')}>
+          <div className={styles.optionGroupHeader} aria-hidden>{t('recentlyUsed')}</div>
+          {recentOptions.map((option, index) => renderOption(option, index + clearOptionOffset))}
+        </div>}
+        {hasGroups || recentOptions.length > 0 ? (() => {
           const groups = new Map<string, ReactNode[]>()
-          filtered.forEach((opt, index) => {
+          orderedOptions.forEach((opt, index) => {
             const key = getGroupKey(opt)
             if (!groups.has(key)) groups.set(key, [])
-            groups.get(key)!.push(renderOption(opt, index + clearOptionOffset))
+            groups.get(key)!.push(renderOption(opt, index + recentOptions.length + clearOptionOffset))
           })
           return Array.from(groups, ([key, rows]) => {
             const name = key === UNCATEGORIZED_KEY ? t('uncategorized') : key
@@ -611,7 +648,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
               {rows}
             </div>
           })
-        })() : filtered.map((opt, index) => renderOption(opt, index + clearOptionOffset))}
+        })() : orderedOptions.map((opt, index) => renderOption(opt, index + recentOptions.length + clearOptionOffset))}
       </div>
       {filtered.length === 0 && (
         <div className={styles.emptyMessage} role="status">

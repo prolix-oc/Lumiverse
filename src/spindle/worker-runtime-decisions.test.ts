@@ -16,6 +16,10 @@ for (const mode of ["worker", "process"] as const) {
       const profile = await spindle.decisions.getConnection('profile', { userId: 'alice' });
       const models = await spindle.decisions.getModels('profile', { userId: 'alice' });
       const result = await spindle.decisions.evaluate(input);
+      const imageResult = await spindle.decisions.evaluate({
+        ...input, state: 'ref-page', assets: { 'ref-page': { image_id: 'stored' } },
+        questions: { face: { type: 'box', instructions: 'Find the face in ref-page' } },
+      });
       let preAborted, cancelled;
       const before = new AbortController(); before.abort();
       try { await spindle.decisions.evaluate(input, { signal: before.signal }); }
@@ -24,7 +28,7 @@ for (const mode of ["worker", "process"] as const) {
       const pending = spindle.decisions.evaluate({ ...input, state: 'slow' }, { signal: during.signal });
       during.abort();
       try { await pending; } catch (error) { cancelled = error.name; }
-      spindle.sendToFrontend({ providers, profiles, profile, models, result, preAborted, cancelled, granted: spindle.permissions.has('decisions') });
+      spindle.sendToFrontend({ providers, profiles, profile, models, result, imageResult, preAborted, cancelled, granted: spindle.permissions.has('decisions') });
     `);
     const completed = Promise.withResolvers<any>();
     const macro = Promise.withResolvers<any>();
@@ -37,6 +41,7 @@ for (const mode of ["worker", "process"] as const) {
       else if (message.type === "decisions_connections_list") send({ type: "response", requestId: message.requestId, result: [{ id: "profile" }] });
       else if (message.type === "decisions_connection_get") send({ type: "response", requestId: message.requestId, result: { id: message.connectionId } });
       else if (message.type === "decisions_models") send({ type: "response", requestId: message.requestId, result: [{ id: "jev-latest" }] });
+      else if (message.type === "decisions_evaluate" && message.input.assets) send({ type: "response", requestId: message.requestId, result: { model: "resolved", answers: { face: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 }, confidence: 0.5 } } } });
       else if (message.type === "decisions_evaluate" && message.input.state !== "slow") send({ type: "response", requestId: message.requestId, result: { model: "resolved", answers: { check: { type: "noul", noul: 0.81234 } } } });
       else if (message.type === "decisions_cancel") send({ type: "response", requestId: message.requestId, error: "AbortError: Decision evaluation cancelled" });
       else if (message.type === "frontend_message") completed.resolve(message.payload);
@@ -61,15 +66,17 @@ for (const mode of ["worker", "process"] as const) {
       expect(await completed.promise).toEqual({
         providers: [{ id: "typesafe" }], profiles: [{ id: "profile" }], profile: { id: "profile" }, models: [{ id: "jev-latest" }],
         result: { model: "resolved", answers: { check: { type: "noul", noul: 0.81234 } } }, preAborted: "AbortError", cancelled: "AbortError", granted: true,
+        imageResult: { model: "resolved", answers: { face: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 }, confidence: 0.5 } } },
       });
-      expect(received.filter((m) => m.type === "decisions_evaluate")).toHaveLength(2);
+      expect(received.filter((m) => m.type === "decisions_evaluate")).toHaveLength(3);
+      expect(received.find((m) => m.type === "decisions_evaluate" && m.input.assets).input.assets).toEqual({ "ref-page": { image_id: "stored" } });
       const request = received.find((m) => m.type === "decisions_evaluate" && m.input.state === "slow");
       expect(request.input.userId).toBe("alice");
       expect(request).not.toHaveProperty("signal");
       expect(received.find((m) => m.type === "decisions_cancel").requestId).toBe(request.requestId);
       send({ type: "event", event: "__macro_invoke__", payload: { requestId: "preview", name: "decision", context: { commit: false } } });
       expect((await macro.promise).error).toContain("not allowed during non-committing macro resolution");
-      expect(received.filter((m) => m.type === "decisions_evaluate")).toHaveLength(2);
+      expect(received.filter((m) => m.type === "decisions_evaluate")).toHaveLength(3);
     } finally {
       clearTimeout(timer);
       worker?.terminate();

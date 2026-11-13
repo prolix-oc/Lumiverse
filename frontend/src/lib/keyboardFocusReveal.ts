@@ -1,4 +1,5 @@
 import { findKeyboardScrollContainer, installTextareaKeyboardReveal } from './textareaKeyboardReveal'
+import { getKeyboardViewport, KEYBOARD_VIEWPORT_EVENT } from './keyboardViewport'
 
 /** Reveal ordinary form controls without treating a tall editor's bottom as its caret. */
 export function revealKeyboardFocus(target: HTMLElement): void {
@@ -12,10 +13,9 @@ export function revealKeyboardFocus(target: HTMLElement): void {
 
   const targetRect = target.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
-  const viewport = window.visualViewport
-  const viewportTop = viewport?.offsetTop ?? 0
+  const { top: viewportTop, bottom: viewportBottom } = getKeyboardViewport()
   const visibleTop = Math.max(containerRect.top, viewportTop) + 12
-  const visibleBottom = Math.min(containerRect.bottom, viewportTop + (viewport?.height ?? window.innerHeight)) - 18
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - 18
 
   // A bounding box cannot tell us where the user tapped inside a multiline
   // editor. Aligning its bottom jumps to the end of the document. Such editors
@@ -64,12 +64,14 @@ export function installKeyboardFocusReveal(): () => void {
   document.addEventListener('focusout', schedule)
   window.addEventListener('resize', schedule, { passive: true })
   window.visualViewport?.addEventListener('resize', schedule)
+  window.addEventListener(KEYBOARD_VIEWPORT_EVENT, schedule)
   syncCaretTarget()
   return () => {
     document.removeEventListener('focusin', schedule)
     document.removeEventListener('focusout', schedule)
     window.removeEventListener('resize', schedule)
     window.visualViewport?.removeEventListener('resize', schedule)
+    window.removeEventListener(KEYBOARD_VIEWPORT_EVENT, schedule)
     window.cancelAnimationFrame(frame)
     stopCaret?.()
   }

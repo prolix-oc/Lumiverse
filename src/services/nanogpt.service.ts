@@ -1,3 +1,4 @@
+import { createProviderPkce, exchangeProviderPkce } from "./provider-pkce";
 import type { ConnectionProfile } from "../types/connection-profile";
 import * as connSvc from "./connections.service";
 import * as secretsSvc from "./secrets.service";
@@ -157,49 +158,21 @@ function cleanupExpiredSessions(): void {
   }
 }
 
-function generateCodeVerifier(): string {
-  const bytes = new Uint8Array(48);
-  crypto.getRandomValues(bytes);
-  return Buffer.from(bytes).toString("base64url");
-}
-
-async function computeCodeChallenge(verifier: string): Promise<string> {
-  const data = new TextEncoder().encode(verifier);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Buffer.from(hash).toString("base64url");
-}
-
 export async function initiateOAuthAsync(
   callbackUrl: string,
   opts: { connectionId?: string; connectionName?: string },
 ): Promise<{ auth_url: string; session_token: string }> {
   cleanupExpiredSessions();
 
-  const codeVerifier = generateCodeVerifier();
-  const sessionToken = crypto.randomUUID();
-  const codeChallenge = await computeCodeChallenge(codeVerifier);
-
-  pendingOAuth.set(sessionToken, {
+  const { auth_url, session_token, codeVerifier, callbackUrl: callbackUrlWithState } = await createProviderPkce("nanogpt", callbackUrl);
+  pendingOAuth.set(session_token, {
     connectionId: opts.connectionId,
     connectionName: opts.connectionName,
     codeVerifier,
-    callbackUrl,
+    callbackUrl: callbackUrlWithState,
     createdAt: Date.now(),
   });
-
-  const params = new URLSearchParams({
-    callback_url: callbackUrl,
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
-    scope: "api.use models.read",
-    state: sessionToken,
-    client_name: "Lumiverse",
-  });
-
-  return {
-    auth_url: `https://nano-gpt.com/auth?${params.toString()}`,
-    session_token: sessionToken,
-  };
+  return { auth_url, session_token };
 }
 
 export async function completeOAuth(
@@ -224,27 +197,12 @@ export async function completeOAuth(
     if (conn.provider !== "nanogpt") throw new Error("Connection is not a NanoGPT profile");
   }
 
-  const res = await fetch("https://nano-gpt.com/api/v1/auth/keys", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "authorization_code",
-      code,
-      code_verifier: session.codeVerifier,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
+  let apiKey: string;
+  try {
+    apiKey = await exchangeProviderPkce("nanogpt", code, session.codeVerifier);
+  } catch (error) {
     pendingOAuth.delete(sessionToken);
-    throw new Error(`NanoGPT key exchange failed (${res.status}): ${err}`);
-  }
-
-  const data = (await res.json()) as { key?: string; access_token?: string };
-  const apiKey = data.key || data.access_token;
-  if (!apiKey) {
-    pendingOAuth.delete(sessionToken);
-    throw new Error("NanoGPT did not return an API key");
+    throw error;
   }
 
   if (!connectionId) {

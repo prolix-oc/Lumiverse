@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, Copy, Plus, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { streamDeckApi, type StreamDeckToken } from '@/api/stream-deck'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import sectionStyles from './SettingsSection.module.css'
 import styles from './StreamDeckSettings.module.css'
 
@@ -40,8 +41,12 @@ export default function StreamDeckSettings() {
 
   const copy = async () => {
     if (!revealed) return
-    await navigator.clipboard.writeText(revealed)
-    setCopied(true)
+    try {
+      await copyTextToClipboard(revealed)
+      setCopied(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not copy token')
+    }
   }
 
   const remove = async (id: string) => {

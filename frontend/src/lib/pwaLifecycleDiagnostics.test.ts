@@ -52,7 +52,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 Object.defineProperty(globalThis, 'crypto', {
   configurable: true,
-  value: { randomUUID: () => 'test-session' },
+  value: { getRandomValues: (bytes: Uint8Array) => bytes.fill(0) },
 })
 
 const { getPwaLifecycleDiagnostics, installPwaLifecycleDiagnostics } = await import('./pwaLifecycleDiagnostics')
@@ -79,12 +79,12 @@ describe('PWA lifecycle diagnostics', () => {
     expect(getPwaLifecycleDiagnostics()).toEqual([
       expect.objectContaining({
         event: 'boot',
-        session: 'test-session',
+        session: '00000000-0000-4000-8000-000000000000',
         data: expect.objectContaining({ navigation: 'reload' }),
       }),
       expect.objectContaining({
         event: 'pagehide',
-        session: 'test-session',
+        session: '00000000-0000-4000-8000-000000000000',
         data: expect.objectContaining({ persisted: false }),
       }),
     ])

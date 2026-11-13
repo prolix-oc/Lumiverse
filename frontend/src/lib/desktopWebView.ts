@@ -25,6 +25,11 @@ export function isTauriDesktop(): boolean {
     && !isTauriMobile()
 }
 
+/** Native hosts configure media playback without a browser gesture gate. */
+export function isTauriWebView(): boolean {
+  return isTauriMobile() || isTauriDesktop()
+}
+
 /** Whether this document is running in the macOS Tauri WKWebView shell. */
 export function isMacTauriWebView(): boolean {
   if (typeof document === 'undefined') return false

@@ -1,4 +1,4 @@
-import { router } from '@/router'
+import { navigateApp } from '@/lib/app-navigation'
 import { resolveCouncilTabId } from '@/lib/council-navigation'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
@@ -24,6 +24,7 @@ import type {
 import {
   applyHostAction,
   HOST_MODAL_IDS,
+  HOST_ACTION_NOT_FOUND,
   HOST_ROUTE_PATTERNS,
   type HostActionParams,
   type HostActionRuntime,
@@ -35,6 +36,26 @@ import {
   type AuthorityRow,
 } from './frontend-authority-map'
 import { filterEnabledFrontendContributions } from './frontend-extension-availability'
+import { PRESETS } from '@/theme/presets'
+import { selectPersona } from '@/lib/personaSelection'
+import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
+import { applyThemePreset } from '@/lib/themeSelection'
+import { openCharacterChat } from '@/lib/characterChat'
+
+/** JSON Schema subset that describes the params of an `entity_action`. */
+export interface HostActionParamSchema {
+  type: 'string'
+  description: string
+  enum?: string[]
+  oneOf?: Array<{ const: string; title: string }>
+}
+
+export interface HostActionParamsSchema {
+  type: 'object'
+  properties: Record<string, HostActionParamSchema>
+  required: string[]
+  additionalProperties: false
+}
 
 export interface HostSurface {
   kind: HostSurfaceKind
@@ -48,6 +69,7 @@ export interface HostSurface {
   role?: 'admin' | 'owner'
   owner?: string
   invocable?: boolean
+  params?: HostActionParamsSchema
 }
 
 export interface HostSurfaceTarget {
@@ -65,6 +87,8 @@ export interface HostSurfaceRegistryInputs {
   commands?: readonly Command[]
   extensionCommands?: readonly ExtensionCommandState[]
   inputBarActions?: readonly InputBarActionState[]
+  /** Built-in and saved themes offered by `apply_theme`. */
+  themes?: readonly { id: string; name: string }[]
   userRole?: string | null
 }
 
@@ -95,6 +119,58 @@ const MODALS: readonly HostSurface[] = Object.freeze([
   { kind: 'modal', id: HOST_MODAL_IDS[0], label: 'Character editor', description: 'Open the character editor', scope: 'character' },
   { kind: 'modal', id: HOST_MODAL_IDS[1], label: 'World book editor', description: 'Open a world book editor', scope: 'global' },
 ])
+
+const idParam = (description: string): HostActionParamSchema => ({ type: 'string', description })
+
+function paramsSchema(properties: Record<string, HostActionParamSchema>): HostActionParamsSchema {
+  return { type: 'object', properties, required: Object.keys(properties), additionalProperties: false }
+}
+
+function entityActionSurfaces(themes: readonly { id: string; name: string }[]): HostSurface[] {
+  return [
+    {
+      kind: 'entity_action',
+      id: 'switch_persona',
+      label: 'Switch persona',
+      description: 'Make a persona the active persona (stored on the chat when a saved chat is open)',
+      keywords: ['persona', 'switch', 'identity', 'user', 'play as'],
+      scope: 'global',
+      params: paramsSchema({ personaId: idParam('Persona id') }),
+    },
+    {
+      kind: 'entity_action',
+      id: 'switch_preset',
+      label: 'Switch preset',
+      description: 'Make a Loom preset the active preset',
+      keywords: ['preset', 'switch', 'loom', 'prompt'],
+      scope: 'global',
+      params: paramsSchema({ presetId: idParam('Loom preset id') }),
+    },
+    {
+      kind: 'entity_action',
+      id: 'apply_theme',
+      label: 'Apply theme',
+      description: 'Apply a built-in or saved theme',
+      keywords: ['theme', 'apply', 'colors', 'appearance', 'style'],
+      scope: 'global',
+      params: paramsSchema({
+        themeId: { ...idParam('Built-in theme preset id or saved theme id'), oneOf: themes.map((theme) => ({ const: theme.id, title: theme.name })) },
+      }),
+    },
+    {
+      kind: 'entity_action',
+      id: 'character_chat',
+      label: 'Chat with character',
+      description: "Open a character's latest chat, or start a new chat with the character",
+      keywords: ['chat', 'character', 'open', 'new', 'start', 'talk'],
+      scope: 'global',
+      params: paramsSchema({
+        characterId: idParam('Character id'),
+        mode: { type: 'string', description: "'latest' opens the most recent chat (or starts one if none exists); 'new' always starts a new chat", enum: ['latest', 'new'] },
+      }),
+    },
+  ]
+}
 
 function settingsRole(role: string | undefined): 'admin' | 'owner' | undefined {
   return role === 'admin' || role === 'owner' ? role : undefined
@@ -208,6 +284,7 @@ export function buildHostSurfaceCatalog(inputs: HostSurfaceRegistryInputs = {}):
     ...(inputs.inputBarActions ?? []).map(inputSurface),
     ...ROUTES,
     ...MODALS,
+    ...entityActionSurfaces(inputs.themes ?? PRESETS),
   ]
 
   const seen = new Set<string>()
@@ -216,10 +293,15 @@ export function buildHostSurfaceCatalog(inputs: HostSurfaceRegistryInputs = {}):
     if (seen.has(key)) return false
     seen.add(key)
     return true
-  }).map((surface) => ({
+  }).map(copySurface)
+}
+
+function copySurface(surface: HostSurface): HostSurface {
+  return {
     ...surface,
     keywords: surface.keywords ? [...surface.keywords] : undefined,
-  }))
+    ...(surface.params ? { params: structuredClone(surface.params) } : {}),
+  }
 }
 
 function targetKey(kind: string, id: string): string {
@@ -242,16 +324,16 @@ function defaultRuntime(
   return {
     openDrawer: (id) => useStore.getState().openDrawer(id),
     closeDrawer: () => useStore.getState().closeDrawer(),
-    openSettings: (id) => useStore.getState().openSettings(id),
+    openSettings: (id, anchorId) => useStore.getState().openSettings(id, anchorId ? { anchorId } : undefined),
     closeSettings: () => useStore.getState().closeSettings(),
     openCommandPalette: () => useStore.getState().openCommandPalette(),
     closeCommandPalette: () => useStore.getState().closeCommandPalette(),
     runCommand: (id) => {
       const command = getCommand(id)
       if (!command) throw new Error(`HOST_ACTION_UNMAPPED:command:${id}`)
-      return command.run(router.navigate)
+      return command.run(navigateApp)
     },
-    navigate: (path) => { void router.navigate(path) },
+    navigate: (path) => { void navigateApp(path) },
     setEditingCharacterId: (id) => useStore.getState().setEditingCharacterId(id),
     openWorldBookEditor: (id, entryId) => {
       const state = useStore.getState()
@@ -281,6 +363,25 @@ function defaultRuntime(
         },
       })
     },
+    switchPersona: (personaId) => {
+      if (!useStore.getState().personas.some((persona) => persona.id === personaId)) {
+        throw new Error(`${HOST_ACTION_NOT_FOUND}:personaId`)
+      }
+      return selectPersona(personaId)
+    },
+    switchPreset: async (presetId) => {
+      if (!await transitionActiveLoomPreset(presetId)) {
+        throw new Error('HOST_ACTION_UNAVAILABLE:entity_action:switch_preset')
+      }
+    },
+    applyTheme: (themeId) => {
+      const state = useStore.getState()
+      const preset = PRESETS.find((theme) => theme.id === themeId)
+      if (preset) return applyThemePreset(preset)
+      if (!state.savedThemes.some((theme) => theme.id === themeId)) throw new Error(`${HOST_ACTION_NOT_FOUND}:themeId`)
+      return state.applySavedTheme(themeId)
+    },
+    openCharacterChat: (characterId, mode) => openCharacterChat(characterId, mode, (path) => { void navigateApp(path) }),
   }
 }
 
@@ -303,10 +404,10 @@ export function createHostSurfaceAPI(options: HostSurfaceAPIFactoryOptions): Hos
     return {
       ...options,
       userRole: state.user?.role ?? null,
-      settingsTabs: filterEnabledFrontendContributions(state.settingsTabs, extensions) as unknown as readonly SettingsTabEntry[],
       extensionTabs: filterEnabledFrontendContributions(state.drawerTabs, extensions),
       extensionCommands: filterEnabledFrontendContributions(state.extensionCommands, extensions),
       inputBarActions: filterEnabledFrontendContributions(state.inputBarActions, extensions),
+      themes: [...PRESETS, ...state.savedThemes],
     }
   })
   const getGranted = options.getGrantedPermissions ?? (() => [])
@@ -336,7 +437,7 @@ export function createHostSurfaceAPI(options: HostSurfaceAPIFactoryOptions): Hos
     if (disposed) return
     const next = snapshot()
     for (const subscriber of [...subscribers]) {
-      try { subscriber(next.map((surface) => ({ ...surface, keywords: surface.keywords ? [...surface.keywords] : undefined }))) } catch { /* observer isolation */ }
+      try { subscriber(next.map(copySurface)) } catch { /* observer isolation */ }
     }
   }
 
@@ -365,10 +466,7 @@ export function createHostSurfaceAPI(options: HostSurfaceAPIFactoryOptions): Hos
       assertUsable()
       const allowed = kinds ? new Set(kinds) : undefined
       subscribeStore()
-      return snapshot().filter((surface) => !allowed || allowed.has(surface.kind)).map((surface) => ({
-        ...surface,
-        keywords: surface.keywords ? [...surface.keywords] : undefined,
-      }))
+      return snapshot().filter((surface) => !allowed || allowed.has(surface.kind)).map(copySurface)
     },
     subscribe(handler) {
       assertUsable()

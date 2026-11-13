@@ -177,7 +177,7 @@
   max-width: 100% !important;
   z-index: var(--z-quick-toolbar-floating, 10005) !important;
   background: var(--lcs-glass-bg, rgba(24, 24, 27, 0.94)) !important;
-  backdrop-filter: blur(12px) !important;
+  backdrop-filter: blur(12px) var(--lcs-liquid-filter, ) !important;
   border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)) !important;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
   box-sizing: border-box !important;
@@ -290,7 +290,7 @@
   box-shadow:
     0 16px 38px rgba(0, 0, 0, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px) var(--lcs-liquid-filter, );
   opacity: var(--quick-toolbar-opacity, 1);
   transform-origin: center;
   /* `hidden`, never `auto`: `overflow-x: auto` with the other axis `visible`
@@ -970,7 +970,7 @@ button[aria-label='Customize toolbar'],
   background: color-mix(in srgb, var(--lumiverse-surface-raised) 96%, transparent);
   box-shadow: 0 22px 52px rgba(0, 0, 0, 0.42);
   color: var(--lumiverse-text);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px) var(--lcs-liquid-filter, );
   overflow: visible;
 }
 
@@ -1175,7 +1175,7 @@ button[aria-label='Customize toolbar'],
   background: color-mix(in srgb, var(--lumiverse-surface-raised, #181b22) 94%, transparent);
   box-shadow: 0 22px 52px rgba(0, 0, 0, 0.42);
   color: var(--lumiverse-text, #f8fafc);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px) var(--lcs-liquid-filter, );
   /* Deliberately NOT a scroll container: the caret below is positioned outside the
      padding box, and `overflow: auto` here would clip it away entirely. */
   overflow: visible;

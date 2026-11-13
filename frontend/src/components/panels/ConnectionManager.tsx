@@ -1,16 +1,15 @@
-import { DndContext } from '@/lib/dndUiScale'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useConnectionAccount } from '@/hooks/useConnectionAccount'
+import ConnectionCollection from './connection-manager/ConnectionCollection'
+import { useConnectionLibrary, saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus, Shuffle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { closestCenter, type DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { connectionsApi } from '@/api/connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ConnectionForm from './connection-manager/ConnectionForm'
 import ConnectionItem from './connection-manager/ConnectionItem'
-import { useConnectionSensors, useVerticalSortModifier } from './connection-manager/useConnectionDragAndDrop'
 import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 import type { ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import styles from './ConnectionManager.module.css'
@@ -41,9 +40,8 @@ export default function ConnectionManager() {
   const setSetting = useStore((s) => s.setSetting)
   const connectionsOrder = useStore((s) => s.connectionsOrder)
 
-  const sensors = useConnectionSensors()
-  const listRef = useRef<HTMLDivElement>(null)
-  const restrictToVerticalAndBounds = useVerticalSortModifier(listRef)
+  const library = useConnectionLibrary('llm')
+  const account = useConnectionAccount(profiles.find(profile => profile.id === activeProfileId))
 
   const orderedProfiles = useMemo(() => {
     const llmOrder = connectionsOrder?.llm ?? []
@@ -54,8 +52,6 @@ export default function ConnectionManager() {
     const missing = profiles.filter((p) => !seen.has(p.id))
     return [...ordered, ...missing]
   }, [profiles, connectionsOrder])
-
-  const orderedIds = useMemo(() => orderedProfiles.map((p) => p.id), [orderedProfiles])
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -123,9 +119,10 @@ export default function ConnectionManager() {
     return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleCreate = useCallback(async (input: CreateConnectionProfileInput) => {
+  const handleCreate = useCallback(async (input: CreateConnectionProfileInput, folderId = '') => {
     try {
       const profile = await connectionsApi.create(input)
+      saveConnectionFolder('llm', profile.id, folderId)
       addProfile(profile)
       // If this was set as default, update other profiles
       if (input.is_default) {
@@ -153,16 +150,18 @@ export default function ConnectionManager() {
     try {
       const duplicated = await connectionsApi.duplicate(id)
       addProfile(duplicated)
+      library.copyFolder(id, duplicated.id)
     } catch (err) {
       console.error('[ConnectionManager] Failed to duplicate:', err)
     }
-  }, [addProfile])
+  }, [addProfile, library])
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
     try {
       await connectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
+      library.forget(deleteTarget.id)
       const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
       const nextOrder = normalizedOrder.llm.filter((id) => id !== deleteTarget.id)
       setSetting('connectionsOrder', { ...normalizedOrder, llm: nextOrder })
@@ -170,19 +169,17 @@ export default function ConnectionManager() {
     } catch (err) {
       console.error('[ConnectionManager] Failed to delete:', err)
     }
-  }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
+  }, [deleteTarget, removeProfile, connectionsOrder, setSetting, library])
 
 
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const oldIndex = orderedIds.indexOf(String(active.id))
-    const newIndex = orderedIds.indexOf(String(over.id))
-    if (oldIndex < 0 || newIndex < 0) return
-    const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
-    applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), llm: newOrder })
-  }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
+  const selectProfile = (profile: ConnectionProfile) => {
+    if (activeProfileId !== profile.id) setActiveProfile(profile.id)
+  }
+
+  const handleReorder = (ids: string[]) => {
+    applyProfileOrder(ids)
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(useStore.getState().connectionsOrder), llm: ids })
+  }
 
   if (loading) {
     return <div className={styles.loading}>{t('connectionManager.loading')}</div>
@@ -190,63 +187,54 @@ export default function ConnectionManager() {
 
   return (
     <div className={styles.manager}>
-      {!creating && (
-        <div className={styles.createActions}>
-          <button
-            type="button"
-            className={styles.createBtn}
-            onClick={() => { setCreatingProvider('openai'); setCreating(true) }}
-          >
-            <Plus size={14} />
-            <span>{t('connectionManager.newConnection')}</span>
-          </button>
-          <button
-            type="button"
-            className={styles.createBtn}
-            onClick={() => { setCreatingProvider(MODEL_ROULETTE_PROVIDER); setCreating(true) }}
-          >
-            <Shuffle size={14} />
-            <span>{t('connectionManager.newRoulette')}</span>
-          </button>
-        </div>
-      )}
-
-      {creating && (
-        <ConnectionForm
-          providers={providers}
-          initialProvider={creatingProvider}
-          onSave={handleCreate}
-          onCancel={() => setCreating(false)}
-          onOAuthCreated={(profile) => {
-            addProfile(profile)
-            setCreating(false)
-          }}
-        />
-      )}
-
-      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAndBounds]} onDragEnd={handleDragEnd}>
-        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-          <div ref={listRef} className={styles.list}>
-            {orderedProfiles.map((profile) => (
-              <ConnectionItem
-                key={profile.id}
-                profile={profile}
-                isActive={activeProfileId === profile.id}
-                providers={providers}
-                onSelect={() => {
-                  if (activeProfileId !== profile.id) setActiveProfile(profile.id)
-                }}
-                onUpdate={handleUpdate}
-                onDuplicate={() => handleDuplicate(profile.id)}
-                onDelete={() => setDeleteTarget(profile)}
-              />
-            ))}
-            {profiles.length === 0 && !creating && (
-              <div className={styles.empty}>{t('connectionManager.empty')}</div>
-            )}
+      <ConnectionCollection kind="llm" profiles={orderedProfiles} onReorder={handleReorder}
+        actions={!creating && (
+          <div className={styles.createActions}>
+            <button
+              type="button"
+              className={styles.createBtn}
+              onClick={() => { setCreatingProvider('openai'); setCreating(true) }}
+            >
+              <Plus size={14} />
+              <span>{t('connectionManager.newConnection')}</span>
+            </button>
+            <button
+              type="button"
+              className={styles.createBtn}
+              onClick={() => { setCreatingProvider(MODEL_ROULETTE_PROVIDER); setCreating(true) }}
+            >
+              <Shuffle size={14} />
+              <span>{t('connectionManager.newRoulette')}</span>
+            </button>
           </div>
-        </SortableContext>
-      </DndContext>
+        )}
+        editor={creating && (
+          <ConnectionForm
+            providers={providers}
+            initialProvider={creatingProvider}
+            onSave={handleCreate}
+            onCancel={() => setCreating(false)}
+            onOAuthCreated={(profile) => {
+              addProfile(profile)
+              setCreating(false)
+            }}
+          />
+        )}
+        emptyMessage={creating ? '' : t('connectionManager.empty')}
+        renderProfile={(profile, placement) => (
+          <ConnectionItem
+            placement={placement}
+            account={account}
+            key={profile.id}
+            profile={profile}
+            isActive={activeProfileId === profile.id}
+            providers={providers}
+            onSelect={() => selectProfile(profile)}
+            onUpdate={handleUpdate}
+            onDuplicate={() => handleDuplicate(profile.id)}
+            onDelete={() => setDeleteTarget(profile)}
+          />
+        )} />
 
       {deleteTarget && (
         <ConfirmationModal

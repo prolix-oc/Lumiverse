@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseExecutor, executeDatabaseOperation, getDatabaseExecutionStatus, startDatabaseExecution, stopDatabaseExecution } from "./execution";
@@ -138,12 +138,13 @@ describe("supervised SQLite execution", () => {
     }
   });
 
-  test("pipe transport preserves fragmented blobs and undefined metadata deletions", async () => {
+  test.each(process.platform === "win32" ? ["socket"] as const : ["socket", "ipc", "stdio"] as const)("%s transport preserves fragmented blobs and undefined metadata deletions", async (transport) => {
     await executor.close();
-    executor = new DatabaseExecutor(path, { transport: process.platform === "win32" ? "ipc" : "stdio" });
-    const blob = new Uint8Array(256 * 1024).map((_, index) => index % 251);
-    const row = await executor.execute<{ blob: Uint8Array }>({ kind: "read", statement: { sql: "SELECT ? AS blob", bindings: [blob], mode: "get" } });
+    executor = new DatabaseExecutor(path, { transport });
+    const blob = new Uint8Array(8 * 1024 * 1024).map((_, index) => index % 251);
+    const row = await executor.execute<{ blob: Uint8Array; integer: number }>({ kind: "read", statement: { sql: "SELECT ? AS blob, ? AS integer", bindings: [blob, 42n], mode: "get" } });
     expect(row.blob).toEqual(blob);
+    expect(row.integer).toBe(42);
     db.exec("CREATE TABLE chats (id TEXT, user_id TEXT, metadata TEXT, updated_at INTEGER); INSERT INTO chats VALUES ('chat', 'user', '{\"remove\":true}', 0)");
     const result = await executor.execute<any>({ kind: "chat-mutation", mutation: { action: "merge", userId: "user", id: "chat", partial: { remove: undefined, kept: true } } });
     expect(result.after.metadata).toEqual({ kept: true });
@@ -217,6 +218,46 @@ describe("supervised SQLite execution", () => {
     } finally { release(); }
   });
 
+  test.each(["request", "startup"])("a missing ready handshake reports startup failure when the %s deadline wins", async (deadline) => {
+    await executor.close();
+    executor = new DatabaseExecutor(path, {
+      transport: "socket",
+      startupTimeoutMs: deadline === "startup" ? 150 : 2000,
+      runtimePath: join(import.meta.dir, "test-fixtures/execution-unready.ts"),
+    });
+    const error = await executor.execute<never>(increment, { timeoutMs: deadline === "request" ? 150 : 2000 }).catch(error => error);
+    expect(error.code).toBe("DATABASE_STARTUP_TIMEOUT");
+    expect(error.outcome).toBe("not-started");
+    expect(error.message).toContain("transport=socket");
+    expect(error.message).toContain("runtime=");
+    expect(db.query("SELECT value FROM probe").get()).toEqual({ value: 0 });
+  });
+
+  test("file-backed bootstrap completes at top level without resolving bun from PATH", async () => {
+    const startupDir = join(directory, "fresh database ü");
+    mkdirSync(startupDir);
+    const childEnv = { ...process.env };
+    // Windows environment keys are case-insensitive; remove both Path and PATH.
+    for (const key of Object.keys(childEnv)) if (key.toLowerCase() === "path") delete childEnv[key];
+    const child = Bun.spawn({
+      cmd: [process.execPath, "--smol", join(import.meta.dir, "test-fixtures/execution-startup.ts"), join(startupDir, "database.db")],
+      env: {
+        ...childEnv,
+        PATH: startupDir,
+        LUMIVERSE_BUN_EXECUTABLE: process.execPath,
+        LUMIVERSE_BUN_METHOD: "",
+        LUMIVERSE_BUN_PATH: "",
+      },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const deadline = setTimeout(() => child.kill(), 15_000);
+    try {
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      expect(stdout).toContain("database bootstrap complete");
+    } finally { clearTimeout(deadline); child.kill(); await child.exited; }
+  }, 20_000);
+
   test("retries a rolled-back busy write while HTTP stays responsive", async () => {
     await executor.execute({ kind: "checkpoint" });
     db.exec("BEGIN IMMEDIATE; UPDATE probe SET value = 5");
@@ -266,7 +307,7 @@ describe("supervised SQLite execution", () => {
     expect(db.query("SELECT value FROM probe").get()).toEqual({ value: 0 });
   });
 
-  test.each([undefined, process.platform === "win32" ? "ipc" : "stdio"] as const)("interrupts native SQL on deadline and starts a replacement (%s)", async (transport) => {
+  test.each([undefined, "socket", ...(process.platform === "win32" ? [] : ["stdio"] as const)] as const)("interrupts native SQL on deadline and starts a replacement (%s)", async (transport) => {
     await executor.close();
     executor = new DatabaseExecutor(path, { transport });
     await executor.execute({ kind: "checkpoint" });
@@ -281,7 +322,7 @@ describe("supervised SQLite execution", () => {
     } finally { clearInterval(heartbeat); }
   });
 
-  test.each([undefined, process.platform === "win32" ? "ipc" : "stdio"] as const)("does not replay a committed write after losing its acknowledgment (%s)", async (transport) => {
+  test.each([undefined, "socket", ...(process.platform === "win32" ? [] : ["stdio"] as const)] as const)("does not replay a committed write after losing its acknowledgment (%s)", async (transport) => {
     await executor.close();
     executor = new DatabaseExecutor(path, { transport, runtimePath: join(import.meta.dir, "test-fixtures/execution-crash.ts") });
     const error = await executor.execute<never>({ kind: "transaction", statements: [{ sql: "UPDATE probe SET value = value + 1 /* lose-ack */" }] }).catch((error) => error);

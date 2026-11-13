@@ -1,6 +1,6 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
-import LanguageDetector from 'i18next-browser-languagedetector'
+import { DEFAULT_UI_LANGUAGE, UI_LANGUAGES, isUiLanguage } from './languages'
 import {
   I18N_NAMESPACES,
   type I18nNamespace,
@@ -9,8 +9,23 @@ import {
 } from './resources'
 
 export const UI_LANGUAGE_STORAGE_KEY = 'lumiverse-ui-language'
+export const LOGIN_LANGUAGE_STORAGE_KEY = 'lumiverse-login-language'
 
-const SUPPORTED = ['en', 'zh', 'zh-TW', 'ja', 'fr', 'it', 'de', 'ko'] as const
+/** Public auth screens have their own device preference, independent of any account. */
+export function readLoginLanguage(): string {
+  try {
+    const stored = localStorage.getItem(LOGIN_LANGUAGE_STORAGE_KEY)
+    if (isUiLanguage(stored)) return stored
+  } catch { /* Browser storage may be unavailable. */ }
+  const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
+  for (const language of languages) {
+    const locale = language?.replaceAll('_', '-').toLowerCase() ?? ''
+    if (/^zh-(tw|hk|mo|hant)(-|$)/.test(locale)) return 'zh-TW'
+    const base = locale.split('-')[0]
+    if (isUiLanguage(base)) return base
+  }
+  return DEFAULT_UI_LANGUAGE
+}
 
 /** Longest first so a longer namespace wins over a shorter prefix of it. */
 const NAMESPACES_BY_LENGTH = [...I18N_NAMESPACES].sort((a, b) => b.length - a.length)
@@ -44,22 +59,16 @@ i18n.t = ((key, options) => {
 
 type ResourceStore = Record<string, Partial<Record<I18nNamespace, Record<string, unknown>>>>
 
-function detectInitialLanguage(): string {
+function readInitialLanguage(): string {
+  if (window.location.pathname === '/login') return readLoginLanguage()
   try {
     const stored = localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)
-    if (stored && SUPPORTED.includes(stored as (typeof SUPPORTED)[number])) return stored
+    if (isUiLanguage(stored)) return stored
   } catch {
     /* ignore */
   }
-  const nav = navigator.language || 'en'
-  if (nav === 'zh-TW' || nav.startsWith('zh-TW')) return 'zh-TW'
-  if (nav.startsWith('zh')) return 'zh'
-  if (nav.startsWith('ja')) return 'ja'
-  if (nav.startsWith('fr')) return 'fr'
-  if (nav.startsWith('it')) return 'it'
-  if (nav.startsWith('de')) return 'de'
-  if (nav.startsWith('ko')) return 'ko'
-  return 'en'
+  // Device-language detection must never replace the app's saved choice.
+  return DEFAULT_UI_LANGUAGE
 }
 
 async function fetchResourcesFor(lng: string): Promise<ResourceStore> {
@@ -95,11 +104,10 @@ let initPromise: Promise<typeof i18n> | null = null
 export function initI18n(): Promise<typeof i18n> {
   if (!initPromise) {
     initPromise = (async () => {
-      const lng = detectInitialLanguage()
+      const lng = readInitialLanguage()
       const resources = await fetchResourcesFor(lng)
 
       await i18n
-        .use(LanguageDetector)
         .use(initReactI18next)
         .init({
           resources,
@@ -114,17 +122,12 @@ export function initI18n(): Promise<typeof i18n> {
             ko: ['en'],
             default: ['en'],
           },
-          supportedLngs: [...SUPPORTED],
+          supportedLngs: [...UI_LANGUAGES],
           nonExplicitSupportedLngs: true,
           load: 'currentOnly',
           defaultNS: 'common',
           ns: [...I18N_NAMESPACES],
           interpolation: { escapeValue: false },
-          detection: {
-            order: ['localStorage', 'navigator'],
-            lookupLocalStorage: UI_LANGUAGE_STORAGE_KEY,
-            caches: ['localStorage'],
-          },
         })
 
       return i18n
@@ -133,14 +136,38 @@ export function initI18n(): Promise<typeof i18n> {
   return initPromise
 }
 
-export async function changeUiLanguage(code: string): Promise<void> {
+async function applyLanguage(code: string, isCurrent: () => boolean): Promise<boolean> {
+  if (!isUiLanguage(code)) return false
   await ensureLanguageLoaded(code)
+  // Locale chunks can finish after another selection or an account change.
+  if (!isCurrent()) return false
   await i18n.changeLanguage(code)
+  return true
+}
+
+export async function changeUiLanguage(code: string, isCurrent: () => boolean = () => true): Promise<void> {
+  if (!await applyLanguage(code, isCurrent)) return
   try {
     localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, code)
   } catch {
     /* ignore quota errors */
   }
+}
+
+let loginLanguageRequest = 0
+
+export async function applyLoginLanguage(isCurrent: () => boolean): Promise<void> {
+  const request = ++loginLanguageRequest
+  await applyLanguage(readLoginLanguage(), () => request === loginLanguageRequest && isCurrent())
+}
+
+export async function changeLoginLanguage(code: string, isCurrent: () => boolean): Promise<void> {
+  if (!isUiLanguage(code)) return
+  const request = ++loginLanguageRequest
+  try {
+    localStorage.setItem(LOGIN_LANGUAGE_STORAGE_KEY, code)
+  } catch { /* The selection can still be applied for the current screen. */ }
+  await applyLanguage(code, () => request === loginLanguageRequest && isCurrent())
 }
 
 export default i18n

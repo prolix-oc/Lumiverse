@@ -45,6 +45,7 @@ const deleted = await spindle.chats.delete('chat-id')
 | `get(chatId)` | `Promise<ChatDTO \| null>` | Get a chat by ID. Returns `null` if not found. |
 | `getActive()` | `Promise<ChatDTO \| null>` | Get the user's currently active chat. Returns `null` if none is open. |
 | `update(chatId, input)` | `Promise<ChatDTO>` | Update a chat's name or metadata. |
+| `compareAndSetMetadata(chatId, input)` | `Promise<ChatDTO \| null>` | Replace metadata only when the expected state still matches. Requires `chat-conditional-metadata-v1`. |
 | `delete(chatId)` | `Promise<boolean>` | Delete a chat and all its messages. Returns `true` if deleted. |
 
 ## ChatDTO
@@ -68,6 +69,12 @@ const deleted = await spindle.chats.delete('chat-id')
 | `metadata` | `Record<string, unknown>` | Replace the chat's metadata object |
 
 Both fields are optional. Only provided fields are updated.
+
+## Conditional metadata updates
+
+Use `compareAndSetMetadata` for changes based on an earlier read. Requires both `chats` and `chat_mutation` permissions and the `chat-conditional-metadata-v1` host capability. Pass `expected_metadata` from `chats.get()` and the new `metadata`. Lumiverse checks and saves them together. A mismatch or deleted chat returns `null`; read again before calculating a new update.
+
+Optional checks: `expected_last_message_id` requires the same last message (`null` requires an empty chat). `expected_message` requires matching `{ id, swipe_id, swipes, metadata }` from `chat.getMessages()`; use `{}` for missing metadata. Every supplied check must pass. These compare current values and cannot detect changes that were later undone.
 
 ## Active Chat
 
@@ -162,7 +169,7 @@ const memories = await spindle.chats.getMemories('chat-id', { topK: 8 })
 
 !!! tip "Memories vs Chat Mutation"
     - **`getMemories()`** — retrieves semantically relevant *past* conversation segments via vector search. Read-only, no side effects.
-    - **`spindle.chat.getMessages()`** ([Chat Mutation](chat-mutation.md)) — returns the full raw message list for a chat.
+    - **`spindle.chat.getMessages()`** ([Chat Mutation](chat-mutation.md)) — returns the raw message list for a chat: every message by default, or a page, tail, or lighter projection with [lean read options](chat-mutation.md#lean-reads).
 
 !!! tip "Need more than retrieval?"
     `getMemories()` is the lightweight entry point under the `chats` permission. The richer surface — listing vectorized chunks, warming a chat, invalidating the cache, plus the full Memory Cortex (entities, relations, vaults, consolidations, salience) — lives under [`spindle.memories`](memories.md) and the dedicated `memories` permission. The same retrieval call is mirrored there as `spindle.memories.chatMemory.get()`.

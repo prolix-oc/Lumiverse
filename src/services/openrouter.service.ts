@@ -1,3 +1,4 @@
+import { createProviderPkce, exchangeProviderPkce } from "./provider-pkce";
 import { getProvider } from "../llm/registry";
 import { OpenRouterProvider, type OpenRouterCreditsInfo, type OpenRouterModelInfo, type OpenRouterProviderEntry } from "../llm/providers/openrouter";
 import type { ConnectionProfile } from "../types/connection-profile";
@@ -40,61 +41,21 @@ function cleanupExpiredSessions(): void {
   }
 }
 
-/** Generate a random code verifier for PKCE (43–128 chars, URL-safe). */
-function generateCodeVerifier(): string {
-  const bytes = new Uint8Array(48);
-  crypto.getRandomValues(bytes);
-  return Buffer.from(bytes).toString("base64url");
-}
-
-/** Compute S256 code challenge from verifier. */
-async function computeCodeChallenge(verifier: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Buffer.from(hash).toString("base64url");
-}
-
-/**
- * Initiate the PKCE OAuth flow. Generates code_verifier/challenge,
- * stores verifier server-side, returns the authorization URL + session token.
- *
- * Either `connectionId` (existing profile) or `connectionName` (auto-create on
- * callback) must be provided.
- */
 export async function initiateOAuthAsync(
   callbackUrl: string,
   opts: { connectionId?: string; connectionName?: string },
 ): Promise<{ auth_url: string; session_token: string }> {
   cleanupExpiredSessions();
 
-  const codeVerifier = generateCodeVerifier();
-  const sessionToken = crypto.randomUUID();
-  const codeChallenge = await computeCodeChallenge(codeVerifier);
-  // OpenRouter returns the code on callback_url; carry our correlation token
-  // in that URL so the landing page can relay it to the opener.
-  const callback = new URL(callbackUrl);
-  callback.searchParams.set("state", sessionToken);
-  const callbackUrlWithState = callback.toString();
-
-  pendingOAuth.set(sessionToken, {
+  const { auth_url, session_token, codeVerifier, callbackUrl: callbackUrlWithState } = await createProviderPkce("openrouter", callbackUrl);
+  pendingOAuth.set(session_token, {
     connectionId: opts.connectionId,
     connectionName: opts.connectionName,
     codeVerifier,
     callbackUrl: callbackUrlWithState,
     createdAt: Date.now(),
   });
-
-  const params = new URLSearchParams({
-    callback_url: callbackUrlWithState,
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
-  });
-
-  return {
-    auth_url: `https://openrouter.ai/auth?${params.toString()}`,
-    session_token: sessionToken,
-  };
+  return { auth_url, session_token };
 }
 
 /**
@@ -129,27 +90,12 @@ export async function completeOAuth(
     if (conn.provider !== "openrouter") throw new Error("Connection is not an OpenRouter profile");
   }
 
-  // Exchange code for API key
-  const res = await fetch("https://openrouter.ai/api/v1/auth/keys", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      code_verifier: session.codeVerifier,
-      code_challenge_method: "S256",
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
+  let apiKey: string;
+  try {
+    apiKey = await exchangeProviderPkce("openrouter", code, session.codeVerifier);
+  } catch (error) {
     pendingOAuth.delete(sessionToken);
-    throw new Error(`OpenRouter key exchange failed (${res.status}): ${err}`);
-  }
-
-  const data = (await res.json()) as { key?: string };
-  if (!data.key) {
-    pendingOAuth.delete(sessionToken);
-    throw new Error("OpenRouter did not return an API key");
+    throw error;
   }
 
   // Auto-create connection if this was a creation-time OAuth flow
@@ -163,7 +109,7 @@ export async function completeOAuth(
   }
 
   // Store the key as the connection's API key
-  await connSvc.setConnectionApiKey(userId, connectionId, data.key);
+  await connSvc.setConnectionApiKey(userId, connectionId, apiKey);
 
   // Clean up
   pendingOAuth.delete(sessionToken);

@@ -22,6 +22,7 @@ export interface SqlStatementOperation {
 }
 
 export type DatabaseOperation =
+  | { kind: 'connection-organization-edit'; userId: string; edits: import('../shared/connection-organization-edits').OrganizationEdit[] }
   | { kind: "gallery-remove"; userId: string; characterId: string; itemId: string }
   | { kind: "character-delete-start"; userId: string; id: string; operationId: string }
   | { kind: "deletion-status"; userId: string; operationId: string }

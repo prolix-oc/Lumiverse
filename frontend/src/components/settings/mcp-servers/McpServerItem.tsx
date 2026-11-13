@@ -18,7 +18,7 @@ const TRANSPORT_LABELS: Record<string, { label: string; icon: typeof Globe }> = 
 interface McpServerItemProps {
   server: McpServerProfile
   status?: McpServerStatus
-  onUpdate: (id: string, input: Partial<CreateMcpServerInput>) => void
+  onUpdate: (id: string, input: Partial<CreateMcpServerInput>) => Promise<void>
   onDelete: () => void
   onConnect: () => void
   onDisconnect: () => void
@@ -91,8 +91,8 @@ export default function McpServerItem({
           is_enabled: server.is_enabled,
           auto_connect: server.auto_connect,
         }}
-        onSave={(input) => {
-          onUpdate(server.id, input)
+        onSave={async (input) => {
+          await onUpdate(server.id, input)
           setEditing(false)
         }}
         onCancel={() => setEditing(false)}

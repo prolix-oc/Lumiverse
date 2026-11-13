@@ -43,3 +43,8 @@ scripts/setup-wizard.ts
 scripts/runner.ts
 scripts/runner-ui.ts
 scripts/migrate-sillytavern.ts
+
+!user-docs/docs/**
+!developer-docs/
+!developer-docs/docs/
+!developer-docs/docs/**

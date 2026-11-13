@@ -1,0 +1,1 @@
+function e(e,t){return t?e.mobile??e.global:e.global}function t(e){let t=e?.mobile_wallpaper;if(!t||typeof t!=`object`)return null;let{image_id:n,type:r}=t;return typeof n==`string`&&n&&(r===`image`||r===`video`)?t:null}function n(e,n,r){return r?t(n)??e:e}export{n,e as r,t};

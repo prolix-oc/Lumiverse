@@ -20,6 +20,9 @@ mock.module('@/api/tts-connections', () => ({
   ttsConnectionsApi: { voices: async () => ({ voices: fetchedVoices }) },
 }))
 mock.module('./ConnectionSelect', () => ({ default: () => null }))
+mock.module('@/components/modals/VoiceLibraryModal', () => ({
+  default: ({ onSelect, onClose }: { onSelect: (voice: TtsVoice) => void; onClose: () => void }) => <button onClick={() => { onSelect({ id: 'community-id', name: 'Community voice' }); onClose() }}>Choose library voice</button>,
+}))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
@@ -49,6 +52,9 @@ afterEach(async () => {
   container?.remove()
   fetchedVoices = []
   store.ttsProviders[0].capabilities.staticVoices = voices
+  store.ttsProfiles[0].provider = 'google_tts'
+  store.ttsProviders[0].id = 'google_tts'
+  delete (store.ttsProviders[0].capabilities as Record<string, unknown>).supportsVoiceLibrary
 })
 
 test.each(['static', 'fetched'])('shows gender and tone from %s voices and selects the API voice ID', async (source) => {
@@ -76,4 +82,21 @@ test.each(['static', 'fetched'])('shows gender and tone from %s voices and selec
   expect(maleVoice?.textContent).toContain('en-US')
   await act(async () => maleVoice!.click())
   expect(changes).toEqual([{ ...selected, voice: 'Algieba' }])
+})
+
+test('library selection preserves the connection and per-voice parameters', async () => {
+  store.ttsProfiles[0].provider = 'elevenlabs'
+  store.ttsProviders[0].id = 'elevenlabs'
+  Object.assign(store.ttsProviders[0].capabilities, { supportsVoiceLibrary: true })
+  const selected: VoiceRef = { connectionId: 'gemini', voice: '', parameters: { speed: 0.8 } }
+  const changes: Array<VoiceRef | null> = []
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => root!.render(<VoicePicker value={selected} onChange={(next) => changes.push(next)} />))
+  const open = [...container.querySelectorAll('button')].find((button) => button.textContent === 'voiceLibrary')!
+  await act(async () => { open.click(); await Bun.sleep(10) })
+  const choose = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Choose library voice')!
+  await act(async () => choose.click())
+  expect(changes).toEqual([{ ...selected, voice: 'community-id' }])
 })

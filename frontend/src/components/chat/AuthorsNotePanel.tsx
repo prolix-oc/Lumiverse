@@ -32,7 +32,7 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
     if (!isOpen || !chatId) return
     let cancelled = false
 
-    chatsApi.get(chatId).then((chat) => {
+    chatsApi.get(chatId, { messages: false }).then((chat) => {
       if (cancelled) return
       const an = chat.metadata?.authors_note as AuthorsNote | undefined
       const next: AuthorsNote = an

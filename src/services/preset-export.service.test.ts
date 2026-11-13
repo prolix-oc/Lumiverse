@@ -77,6 +77,19 @@ beforeEach(initTestDb);
 afterEach(() => closeDatabase());
 
 describe("streaming preset bulk export", () => {
+  test("preserves prototype-like metadata keys as ordinary properties", () => {
+    insertPreset("special-keys", "u1", "private.block");
+    const metadata = JSON.parse('{"__proto__":{"inherited":"extension data"},"constructor":{"scripts":[]}}');
+    getDb().run("UPDATE presets SET metadata = ? WHERE id = ?", [JSON.stringify(metadata), "special-keys"]);
+
+    const exported = buildPortablePresetExport("u1", getPreset("u1", "special-keys")!);
+    const passthrough = exported.passthroughMetadata as Record<string, unknown>;
+    expect(Object.getPrototypeOf(passthrough)).toBe(Object.prototype);
+    expect(Object.hasOwn(passthrough, "__proto__")).toBe(true);
+    expect(passthrough.inherited).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(passthrough))).toEqual(metadata);
+  });
+
   test("prepares a user-scoped one-shot download and streams portable JSON entries", async () => {
     insertPreset("preset-a", "u1", "private.a");
     insertPreset("preset-b", "u1", "private.b");

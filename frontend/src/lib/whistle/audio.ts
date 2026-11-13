@@ -125,6 +125,11 @@ export class TranscriptAssembler {
   text(): string {
     return this.words.map((word) => word.word).join(' ').trim()
   }
+
+  /** Assembled words with times from the start of the recording. */
+  wordList(): WhistleWord[] {
+    return this.words.map((word) => ({ ...word }))
+  }
 }
 
 /** Mirrors the connection recorder's speech confirmation and 1.6-second silence threshold. */

@@ -10,6 +10,8 @@ interface Props {
 }
 
 export default function PackCard({ pack, onClick }: Props) {
+  'use memo'
+
   const { t } = useTranslation('panels')
   const initial = pack.name.charAt(0) || '?'
 

@@ -64,6 +64,8 @@ When `corsProxy()` is used from inside a sandbox frame for binary media, the hos
 4. For fonts, validates magic bytes for WOFF, WOFF2, TTF, OTF, and TTC, and accepts `font/*`, `application/font-woff*`, `application/x-font-*`, and `application/vnd.ms-fontobject` Content-Types.
 5. Returns the body as a **base64-encoded string** (`encoding: "base64"`) so it can safely cross the WebSocket boundary.
 
+Fonts and audio also accept `application/octet-stream` and `binary/octet-stream`, including optional Content-Type parameters, when the file passes the corresponding magic-byte check. Images still require an image Content-Type.
+
 The frontend decodes the base64 payload back into a `Uint8Array` before delivering it to the sandbox:
 
 ```ts

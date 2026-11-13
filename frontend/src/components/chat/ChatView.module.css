@@ -143,15 +143,30 @@
   justify-content: flex-start;
 }
 
+/* Extension strip wrappers size to their own controls, so any extension's button
+   group sits in the rail beside the toolbar instead of claiming an equal share of
+   it. No owner allowlist: this applies to every extension. */
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) {
   position: relative;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: row;
-  justify-content: center;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
   max-width: 100%;
+}
+
+/* Every other extension root (any owner, any or no dock request) keeps its full
+   width; the Quick Toolbar absorbs the squeeze through its own overflow menu. */
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global(:is([data-spindle-ext-id], [data-spindle-ext], [data-spindle-extension-root]):not(:has([data-spindle-host-surface], [data-component='QuickToolbar']))) {
+  flex-shrink: 0;
+}
+
+/* Only the wrapper hosting a workspace surface (the strip-mounted Quick Toolbar) fills the rail. */
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']:has(> [data-spindle-host-surface])) {
+  flex: 1 1 auto;
+  justify-content: center;
+  align-items: stretch;
   width: 100%;
 }
 
@@ -206,11 +221,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chatColumnInner[data-chat-chrome-entering] .chatToolbar,
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='ChatFindBar']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='InputArea']),
-  .chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageSelectBar']) {
+  /* Keep transitions disabled after the entry flag clears too: transitions
+     use the destination style's duration when the hidden state is removed. */
+  .chatColumnInner .chatToolbar,
+  .chatColumnInner :global([data-component='ChatFindBar']),
+  .chatColumnInner :global([data-component='MessageList']),
+  .chatColumnInner :global([data-component='InputArea']),
+  .chatColumnInner :global([data-component='MessageSelectBar']) {
     transform: none;
     transition: none;
   }
@@ -273,8 +290,8 @@
 }
 
 :global([data-glass]) .cortexNotice {
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
 }
 
 .cortexNoticeError {
@@ -283,6 +300,25 @@
   background: color-mix(in srgb, var(--lumiverse-danger, #ff6b6b) 10%, var(--lcs-glass-bg, var(--lumiverse-bg-elevated)));
   box-shadow: var(--lumiverse-shadow-sm), 0 0 0 1px color-mix(in srgb, var(--lumiverse-danger, #ff6b6b) 18%, transparent);
 }
+
+.cortexNoticeWithBatches { border-radius: 16px; }
+.cortexBatchList {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  white-space: normal;
+}
+.cortexBatch {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  pointer-events: auto;
+}
+.cortexBatch[data-phase="thinking"] { color: var(--lumiverse-primary); }
+.cortexBatch[data-phase="responding"] { color: var(--lumiverse-success, #74bd9a); }
 
 .cortexNoticeDismiss {
   position: absolute;
@@ -499,7 +535,7 @@
   max-width: 100% !important;
   z-index: 9999 !important;
   background: rgba(24, 24, 27, 0.94) !important;
-  backdrop-filter: blur(12px) !important;
+  backdrop-filter: blur(12px) var(--lcs-liquid-filter, ) !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
   box-sizing: border-box !important;
@@ -593,6 +629,15 @@
 }
 
 .chatToolbar[data-native-action-side='right'] > :global([data-component='QuickToolbar']) {
+  order: 1;
+}
+
+/* A core button placed directly in the rail follows the native group's side. */
+.chatToolbar[data-native-action-side='right'] > .toolbarBtn {
+  order: 2;
+}
+
+.chatToolbar[data-native-action-side='left'] > .toolbarBtn {
   order: 1;
 }
 
@@ -705,7 +750,7 @@
 }
 
 :global([data-glass]) .portraitTab {
-  backdrop-filter: blur(var(--lcs-glass-blur));
+  backdrop-filter: blur(var(--lcs-glass-blur)) var(--lcs-liquid-filter, );
 }
 
 .portraitTab:hover {

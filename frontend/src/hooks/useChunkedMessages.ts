@@ -2,15 +2,19 @@ import { useState, useCallback, useLayoutEffect, useEffect, useMemo, useRef } fr
 import { messagesApi } from '@/api/chats'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
+import { createHistoryPageLoader, getHistoryBoundary } from '@/lib/history-page-loader'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/types/ws-events'
 
 export function useChunkedMessages(messages: Message[], chatId?: string | null) {
   const messagesPerPage = useStore((s) => s.messagesPerPage) || 50
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [historyExhausted, setHistoryExhausted] = useState(false)
-  const loadingRef = useRef(false)
-  const prefetchingRef = useRef(false)
-  const prefetchedBatchRef = useRef<{ chatId: string; loadedCount: number; data: Message[] } | null>(null)
-  const prevChatIdRef = useRef(chatId)
+  const loadingRef = useRef<symbol | null>(null)
+  const pageLoader = useRef(createHistoryPageLoader<Awaited<ReturnType<typeof messagesApi.before>>>())
+  const navigation = useRef(0)
+  const [displayReady, setDisplayReady] = useState(false)
+  const [historyRevision, setHistoryRevision] = useState(0)
   const justPrependedRef = useRef(false)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
@@ -37,12 +41,38 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
   }, [])
 
   useLayoutEffect(() => {
-    if (chatId !== prevChatIdRef.current) {
-      prevChatIdRef.current = chatId
-      prefetchedBatchRef.current = null
-      prefetchingRef.current = false
+    const loader = pageLoader.current
+    navigation.current++
+    loader.reset()
+    loadingRef.current = null
+    setLoadingOlder(false)
+    setHistoryExhausted(false)
+    setDisplayReady(false)
+    justPrependedRef.current = false
+    return () => { loadingRef.current = null; loader.reset() }
+  }, [chatId])
+
+  useEffect(() => {
+    const invalidate = (payload: { chatId: string }) => {
+      if (payload.chatId !== chatId) return
+      navigation.current++
+      pageLoader.current.reset()
+      loadingRef.current = null
+      setLoadingOlder(false)
       setHistoryExhausted(false)
+      setHistoryRevision((revision) => revision + 1)
     }
+    const off = [EventType.MESSAGE_EDITED, EventType.MESSAGE_DELETED, EventType.MESSAGE_SWIPED]
+      .map((event) => wsClient.on(event, invalidate))
+    return () => { for (const unsubscribe of off) unsubscribe() }
+  }, [chatId])
+
+  useEffect(() => {
+    const populated = (event: Event) => {
+      if ((event as CustomEvent).detail?.chatId === chatId) setDisplayReady(true)
+    }
+    window.addEventListener('lumiverse:chat-items-populated', populated)
+    return () => window.removeEventListener('lumiverse:chat-items-populated', populated)
   }, [chatId])
 
   useEffect(() => {
@@ -60,104 +90,60 @@ export function useChunkedMessages(messages: Message[], chatId?: string | null) 
     [historyExhausted, messages.length, totalChatLength]
   )
 
+  const boundary = useMemo(() => getHistoryBoundary(messages), [messages])
   const getOlderRequest = useCallback(() => {
-    if (!chatId || historyExhausted || messages.length >= totalChatLength) return null
+    if (!chatId || !boundary || historyExhausted || messages.length >= totalChatLength) return null
+    const cursor = { index: boundary.index_in_chat, id: boundary.id }
+    const key = JSON.stringify([chatId, cursor.index, cursor.id, historyBatchSize, totalChatLength, historyRevision])
+    return { key, cursor }
+  }, [chatId, boundary, historyExhausted, messages.length, totalChatLength, historyBatchSize, historyRevision])
 
-    const loadedCount = messages.length
-    const remainingBeforeLoadedWindow = Math.max(0, totalChatLength - loadedCount)
-    const offset = Math.max(0, remainingBeforeLoadedWindow - historyBatchSize)
-    const limit = remainingBeforeLoadedWindow - offset
-    if (limit <= 0) return null
-
-    return { loadedCount, offset, limit }
-  }, [chatId, historyExhausted, messages.length, totalChatLength, historyBatchSize])
-
-  const applyOlderBatch = useCallback((olderMessages: Message[]) => {
-    const existingIds = new Set(messages.map((m) => m.id))
-    const hasNewMessages = olderMessages.some((message) => !existingIds.has(message.id))
-    if (!hasNewMessages) {
-      setHistoryExhausted(true)
-      return false
-    }
-    justPrependedRef.current = true
-    prependMessages(olderMessages)
-    return true
-  }, [messages, prependMessages])
-
-  const prefetchOlder = useCallback(() => {
-    if (loadingRef.current || prefetchingRef.current) return
-
+  const readOlder = useCallback(() => {
     const request = getOlderRequest()
-    if (!request || !chatId) return
-
-    const cached = prefetchedBatchRef.current
-    if (cached && cached.chatId === chatId && cached.loadedCount === request.loadedCount) return
-
-    prefetchingRef.current = true
-    messagesApi
-      .list(chatId, { limit: request.limit, offset: request.offset })
-      .then((result) => {
-        prefetchedBatchRef.current = {
-          chatId,
-          loadedCount: request.loadedCount,
-          data: result.data,
-        }
-      })
-      .catch((err) => {
-        console.error('[useChunkedMessages] Failed to prefetch older messages:', err)
-      })
-      .finally(() => {
-        prefetchingRef.current = false
-      })
-  }, [chatId, getOlderRequest])
+    if (!request || !chatId) return Promise.resolve(undefined)
+    return pageLoader.current.load(request.key,
+      (signal) => messagesApi.before(chatId, request.cursor, historyBatchSize, { signal }))
+  }, [chatId, getOlderRequest, historyBatchSize])
 
   const loadMore = useCallback(() => {
-    if (loadingRef.current) return
-    loadingRef.current = true
-
-    const request = getOlderRequest()
-    if (!chatId || !request) {
-      loadingRef.current = false
-      return
-    }
-
-    const cached = prefetchedBatchRef.current
-    if (cached && cached.chatId === chatId && cached.loadedCount === request.loadedCount) {
-      prefetchedBatchRef.current = null
-      const didProgress = applyOlderBatch(cached.data)
-      setTimeout(() => {
-        loadingRef.current = false
-        if (didProgress) prefetchOlder()
-      }, 0)
-      return
-    }
-
+    if (loadingRef.current || !getOlderRequest()) return
+    const operation = Symbol()
+    const epoch = navigation.current
+    const requestedBoundaryId = boundary?.id
+    const requestedTotal = totalChatLength
+    loadingRef.current = operation
     setLoadingOlder(true)
-    const requestChatId = chatId
-    let didProgress = false
-    messagesApi
-      .list(chatId, { limit: request.limit, offset: request.offset })
-      .then((result) => {
-        if (prevChatIdRef.current !== requestChatId) return
-        prefetchedBatchRef.current = null
-        didProgress = applyOlderBatch(result.data)
-      })
-      .catch((err) => {
-        console.error('[useChunkedMessages] Failed to load older messages:', err)
-      })
-      .finally(() => {
-        setLoadingOlder(false)
-        setTimeout(() => {
-          loadingRef.current = false
-          if (didProgress) prefetchOlder()
-        }, 100)
-      })
-  }, [applyOlderBatch, chatId, getOlderRequest, prefetchOlder])
+    // readOlder joins the exact pending prefetch, including its eventual failure.
+    void readOlder().then((page) => {
+      if (!page || navigation.current !== epoch || loadingRef.current !== operation) return
+      const current = useStore.getState()
+      if (current.activeChatId !== chatId || getHistoryBoundary(current.messages)?.id !== requestedBoundaryId || current.totalChatLength !== requestedTotal) {
+        pageLoader.current.reset()
+        return
+      }
+      const existingIds = new Set(useStore.getState().messages.map((message) => message.id))
+      const progressed = page.data.some((message) => !existingIds.has(message.id))
+      setHistoryExhausted(!page.has_more || !progressed)
+      if (progressed) {
+        justPrependedRef.current = true
+        prependMessages(page.data)
+      }
+      pageLoader.current.reset()
+    }).catch((error) => {
+      console.error('[useChunkedMessages] Failed to load older messages:', error)
+    }).finally(() => {
+      if (loadingRef.current !== operation) return
+      loadingRef.current = null
+      setLoadingOlder(false)
+    })
+  }, [getOlderRequest, readOlder, prependMessages, boundary?.id, totalChatLength, chatId])
 
   useEffect(() => {
-    if (!hasMore) return
-    prefetchOlder()
-  }, [hasMore, prefetchOlder, messages.length])
+    if (!hasMore || !displayReady) return
+    void readOlder().catch((error) => {
+      console.error('[useChunkedMessages] Failed to prefetch older messages:', error)
+    })
+  }, [hasMore, displayReady, readOlder])
 
   const resetToBottom = useCallback(() => {
     justPrependedRef.current = false

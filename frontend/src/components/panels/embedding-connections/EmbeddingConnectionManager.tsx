@@ -1,4 +1,8 @@
+import ConnectionCollection from '../connection-manager/ConnectionCollection'
+import { useConnectionLibrary, saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import { reorderProfiles } from '@/store/slices/connections-order-merge'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { buildEmbeddingConfigUpdate, embeddingsApi, type EmbeddingConfigWithProfiles, type EmbeddingConnectionProfile, type EmbeddingDriverOption } from '@/api/embeddings'
@@ -9,6 +13,8 @@ import styles from '../ConnectionManager.module.css'
 export const EMBEDDING_CONNECTIONS_CHANGED_EVENT = 'lumiverse:embedding-connections-changed'
 
 export default function EmbeddingConnectionManager() {
+  const { t } = useTranslation('panels')
+  const library = useConnectionLibrary('embedding')
   const [config, setConfig] = useState<EmbeddingConfigWithProfiles | null>(null)
   const [providers, setProviders] = useState<EmbeddingDriverOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -48,7 +54,7 @@ export default function EmbeddingConnectionManager() {
     }
   }
 
-  const create = async (draft: EmbeddingConnectionDraft) => {
+  const create = async (draft: EmbeddingConnectionDraft, folderId = '') => {
     if (!config) return
     const { api_key, ...profile } = draft
     const connectionProfiles = [...(config.connectionProfiles ?? []), profile]
@@ -64,7 +70,10 @@ export default function EmbeddingConnectionManager() {
         dimensions: firstProfile.dimensions,
       }),
     }
-    if (await persist(next, { [profile.id]: api_key })) setCreating(false)
+    if (await persist(next, { [profile.id]: api_key })) {
+      saveConnectionFolder('embedding', profile.id, folderId)
+      setCreating(false)
+    }
   }
 
   const update = async (draft: EmbeddingConnectionDraft) => {
@@ -104,8 +113,13 @@ export default function EmbeddingConnectionManager() {
         dimensions: primary.dimensions,
       } : {}),
     })
-    if (saved) setDeleteTarget(null)
+    if (saved) {
+      library.forget(deleteTarget.id)
+      setDeleteTarget(null)
+    }
   }
+
+  const orderedProfiles = reorderProfiles(config?.connectionProfiles ?? [], library.library.profileOrder)
 
   if (loading) return <div className={styles.loading}>Loading embedding connections…</div>
   if (!config) return <div className={styles.empty}>{error || 'Embedding connections are unavailable.'}</div>
@@ -116,30 +130,23 @@ export default function EmbeddingConnectionManager() {
     <div className={styles.manager}>
       {inherited && <div className={styles.bindingCardHint}>Embedding connections are managed by the server owner.</div>}
       {error && <div className={styles.bindingCardHint} style={{ color: 'var(--lumiverse-error)' }}>{error}</div>}
-      {!creating && !inherited && (
-        <button type="button" className={styles.createBtn} onClick={() => setCreating(true)}>
-          <Plus size={14} />
-          <span>New Embedding Connection</span>
-        </button>
-      )}
-      {creating && (
-        <EmbeddingConnectionForm providers={providers} onSave={create} onCancel={() => setCreating(false)} />
-      )}
-      <div className={styles.list}>
-        {(config.connectionProfiles ?? []).map((profile) => (
-          <EmbeddingConnectionItem
-            key={profile.id}
-            profile={profile}
-            providers={providers}
-            onUpdate={update}
-            onDelete={() => setDeleteTarget(profile)}
-            disabled={inherited}
-          />
-        ))}
-        {(config.connectionProfiles ?? []).length === 0 && !creating && (
-          <div className={styles.empty}>No embedding connections configured.</div>
+      <ConnectionCollection kind="embedding" profiles={orderedProfiles} onReorder={library.reorderProfiles}
+        actions={!creating && !inherited && (
+          <button type="button" className={styles.createBtn} onClick={() => setCreating(true)}>
+            <Plus size={14} />
+            <span>New Embedding Connection</span>
+          </button>
         )}
-      </div>
+        editor={creating && (
+          <EmbeddingConnectionForm providers={providers} onSave={create} onCancel={() => setCreating(false)} />
+        )}
+        emptyMessage={creating ? '' : t('connections.noMatches')}
+        renderProfile={(profile, placement) => <EmbeddingConnectionItem
+                placement={placement}
+          profile={profile} providers={providers} onUpdate={update}
+          onDelete={() => setDeleteTarget(profile)} disabled={inherited}
+        />} />
+
       {deleteTarget && (
         <ConfirmationModal
           title="Delete Embedding Connection"

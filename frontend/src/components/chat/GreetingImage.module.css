@@ -1,0 +1,160 @@
+.frame {
+  --greeting-fade: to bottom;
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: clamp(200px, 34vw, 380px);
+  margin: 0 0 16px;
+  overflow: hidden;
+  border-radius: var(--lcs-radius, 14px);
+  /* Ease the artwork into the greeting prose over the last 20%. The extra
+     stops keep the ramp gentle instead of compressing it into a dark band. */
+  -webkit-mask-image: linear-gradient(
+    var(--greeting-fade),
+    #000 0%,
+    #000 80%,
+    rgba(0, 0, 0, 0.96) 84%,
+    rgba(0, 0, 0, 0.88) 88%,
+    rgba(0, 0, 0, 0.74) 92%,
+    rgba(0, 0, 0, 0.52) 95%,
+    rgba(0, 0, 0, 0.26) 98%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    var(--greeting-fade),
+    #000 0%,
+    #000 80%,
+    rgba(0, 0, 0, 0.96) 84%,
+    rgba(0, 0, 0, 0.88) 88%,
+    rgba(0, 0, 0, 0.74) 92%,
+    rgba(0, 0, 0, 0.52) 95%,
+    rgba(0, 0, 0, 0.26) 98%,
+    transparent 100%
+  );
+}
+
+.frame[data-position='bottom'] {
+  --greeting-fade: to top;
+  margin: 16px 0 0;
+}
+
+.frame[hidden] {
+  display: none;
+}
+
+.ambient,
+.artwork {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 500ms ease;
+}
+
+.ambient {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  object-fit: cover;
+  pointer-events: none;
+  /* A still, softly expanded copy fills portrait/square letterboxing. */
+  transform: scale(1.13);
+}
+
+.artwork {
+  position: relative;
+  object-fit: contain;
+  object-position: center;
+}
+
+/* Landscape art sets the message's media height from its natural proportions,
+   so the foreground always reaches both edges instead of shrinking into a
+   fixed box. Do not cap the height here: capping a contained image also
+   narrows it, leaving dark letterbox strips beside the artwork. */
+.frame[data-landscape],
+.frame[data-landscape] .artwork {
+  height: auto;
+}
+
+/* Landscape art fills the frame, so the ambient would only appear through the
+   edge fade as a second, dimmer blurred layer. Keep the fade clean and use the
+   ambient only for portrait/square letterboxing. */
+.frame[data-landscape] .ambient {
+  display: none;
+}
+
+.frame[data-state='ready'] .artwork {
+  opacity: 1;
+  cursor: zoom-in;
+}
+
+.frame[data-mounted-decode] .artwork {
+  visibility: hidden;
+  transition: none;
+}
+
+.frame[data-mounted-decode][data-state='ready'] .artwork {
+  visibility: visible;
+}
+
+/* Ambient blur follows the app's glass-effects setting. */
+:global([data-glass]) .ambient {
+  display: block;
+  filter: blur(24px) saturate(1.15);
+}
+
+:global([data-glass]) .frame[data-state='ready'] .ambient {
+  opacity: 0.42;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .artwork {
+    transition: opacity 500ms ease, transform 700ms cubic-bezier(0.2, 0.65, 0.3, 1);
+  }
+
+  .frame[data-state='ready']:hover .artwork {
+    transform: scale(1.015);
+  }
+
+  :global([data-no-bubble-hover]) .frame:hover .artwork {
+    transform: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .frame {
+    height: clamp(180px, 55vw, 260px);
+    margin-bottom: 12px;
+  }
+
+  .frame[data-position='bottom'] {
+    margin-top: 12px;
+    margin-bottom: 0;
+  }
+}
+
+/* Preserve the art during scrolling while dropping compositing-heavy effects. */
+:global([data-scrolling]) .ambient {
+  filter: none;
+}
+
+:global([data-scrolling]) .frame[data-state='ready'] .ambient {
+  opacity: 0.16;
+}
+
+:global([data-scrolling]) .artwork {
+  transform: none !important;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient,
+  .artwork {
+    transition: none;
+  }
+
+  .frame[data-state='ready']:hover .artwork {
+    transform: none;
+  }
+}

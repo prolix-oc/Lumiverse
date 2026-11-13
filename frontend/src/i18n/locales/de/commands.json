@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "Antwort neu generieren",
-      "description": "Letzte KI-Antwort löschen und eine neue generieren"
+      "description": "Einen neuen Swipe für die letzte KI-Antwort generieren"
     },
     "action-continue": {
       "label": "Generierung fortsetzen",
       "description": "Die KI auffordern, ihre letzte Antwort fortzusetzen"
+    },
+    "action-stop-generation": {
+      "label": "Generierung stoppen",
+      "description": "Die Antwort stoppen, die in diesem Chat gerade generiert wird"
+    },
+    "action-swipe-left": {
+      "label": "Vorheriger Swipe",
+      "description": "Den vorherigen Swipe der letzten KI-Antwort anzeigen"
+    },
+    "action-swipe-right": {
+      "label": "Nächster Swipe",
+      "description": "Den nächsten Swipe der letzten KI-Antwort anzeigen oder nach dem letzten Swipe einen neuen generieren"
     },
     "action-new-chat": {
       "label": "Neuer Chat",

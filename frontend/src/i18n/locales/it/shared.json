@@ -73,6 +73,7 @@
     "confirm": "Conferma"
   },
   "searchableSelect": {
+    "recentlyUsed": "Usate di recente",
     "placeholder": "Seleziona…",
     "searchPlaceholder": "Ricerca…",
     "emptyMessage": "Nessuna opzione disponibile",

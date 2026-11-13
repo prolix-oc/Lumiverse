@@ -82,6 +82,58 @@ describe("Spindle CORS content policy", () => {
     });
   });
 
+  for (const contentType of ["application/octet-stream", "binary/octet-stream; charset=utf-8"]) {
+    test(`accepts recognized fonts and audio served as ${contentType}`, async () => {
+      const { internal, posted } = fixture();
+      const samples = [
+        { mediaType: "font", bytes: new Uint8Array([0x77, 0x4f, 0x46, 0x32]) },
+        { mediaType: "audio", bytes: new TextEncoder().encode("RIFF\0\0\0\0WAVE") },
+      ];
+      for (const { mediaType, bytes } of samples) {
+        globalThis.fetch = (async () => new Response(bytes, {
+          headers: { "content-type": contentType },
+        })) as unknown as typeof fetch;
+        await internal.handleCorsRequest(mediaType, "http://93.184.216.34/media", {
+          responseType: "arraybuffer", mediaType,
+        });
+        expect(posted.at(-1)).toEqual({
+          type: "response", requestId: mediaType, result: expect.objectContaining({
+            status: 200, body: Buffer.from(bytes).toString("base64"), encoding: "base64",
+          }),
+        });
+      }
+    });
+
+    test(`rejects invalid or mismatched media served as ${contentType}`, async () => {
+      const { internal, posted } = fixture();
+      for (const mediaType of ["font", "audio"]) {
+        for (const body of ["export default 1", "<html>error</html>", "", mediaType === "font" ? "RIFF\0\0\0\0WAVE" : "wOF2"]) {
+          globalThis.fetch = (async () => new Response(body, {
+            headers: { "content-type": contentType },
+          })) as unknown as typeof fetch;
+          await internal.handleCorsRequest(mediaType, "http://93.184.216.34/media", {
+            responseType: "arraybuffer", mediaType,
+          });
+          expect(posted.at(-1)?.error).toContain(`downloaded content does not match a known ${mediaType} format`);
+          expect(posted.at(-1)?.result).toBeUndefined();
+        }
+      }
+    });
+
+    test(`does not allow images served as ${contentType}`, async () => {
+      const { internal, posted } = fixture();
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      globalThis.fetch = (async () => new Response(png, {
+        headers: { "content-type": contentType },
+      })) as unknown as typeof fetch;
+      for (const options of [{ responseType: "arraybuffer" }, { responseType: "arraybuffer", mediaType: "image" }]) {
+        await internal.handleCorsRequest("image", "http://93.184.216.34/media", options);
+        expect(posted.at(-1)?.error).toContain("transparent proxy only serves image data");
+        expect(posted.at(-1)?.result).toBeUndefined();
+      }
+    });
+  }
+
   test("denies requests without the CORS permission before network access", async () => {
     let calls = 0;
     globalThis.fetch = (async () => { calls += 1; return new Response("{}"); }) as unknown as typeof fetch;

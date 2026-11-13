@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { AnthropicProvider } from "./anthropic";
-import type { StreamChunk } from "../types";
+import type { LlmThinkingBlock, StreamChunk } from "../types";
 
 describe("AnthropicProvider thinking config", () => {
   for (const model of ["claude-fable-5", "claude-fable-5-1", "claude-sonnet-5"]) {
@@ -130,6 +130,24 @@ describe("Anthropic stream completion and errors", () => {
       thinking_blocks: [{ type: "thinking", thinking: "A thought.", signature: "opaque" }],
       usage: { prompt_tokens: 14, completion_tokens: 22, total_tokens: 36, provider_raw: { output_tokens: 22, cache_read_input_tokens: 4 } },
     });
+  });
+
+  test("keeps signed and redacted thinking blocks, in order, on the tool-call terminal chunk", async () => {
+    mockStream([
+      ...thinking,
+      { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "encrypted-reasoning" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } },
+      { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"city":"SF"}' } },
+      { type: "content_block_stop", index: 2 },
+      terminal("tool_use"), stop,
+    ]);
+    const final = (await collect()).at(-1);
+    expect(final).toMatchObject({ finish_reason: "tool_calls", tool_calls: [{ name: "lookup", args: { city: "SF" }, call_id: "toolu_1" }] });
+    expect(final?.thinking_blocks).toEqual([
+      { type: "thinking", thinking: "A thought.", signature: "opaque" },
+      { type: "redacted_thinking", data: "encrypted-reasoning" },
+    ]);
   });
 
   test("waits for message_stop and closes the stream before publishing completion", async () => {
@@ -434,6 +452,38 @@ describe("AnthropicProvider tool_use / tool_result wire shape", () => {
       role: "user",
       content: [
         { type: "tool_result", tool_use_id: "toolu_01abc", content: "72F" },
+      ],
+    });
+  });
+
+  test("assistant thinking blocks are sent back first, with signatures and redacted data unchanged", () => {
+    const provider = new AnthropicProvider();
+    const thinkingBlocks: LlmThinkingBlock[] = [
+      { type: "thinking", thinking: "Look it up.", signature: "opaque-signature" },
+      { type: "redacted_thinking", data: "encrypted-reasoning" },
+    ];
+    const body = provider["buildBody"](
+      {
+        model: "claude-sonnet-4-6",
+        messages: [
+          { role: "user", content: "weather please" },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "toolu_01abc", name: "get_weather", input: { city: "SF" } }],
+            thinking_blocks: thinkingBlocks,
+          },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01abc", content: "72F" }] },
+        ],
+        parameters: { max_tokens: 256 },
+      },
+      false,
+    );
+
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        ...thinkingBlocks,
+        { type: "tool_use", id: "toolu_01abc", name: "get_weather", input: { city: "SF" } },
       ],
     });
   });

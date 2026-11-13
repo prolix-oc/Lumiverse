@@ -1,4 +1,5 @@
 import { get, post, del, put } from './client'
+import { shareRead } from '@/lib/shared-read'
 import type { ExtensionInfo, SpindleManifest, ToolRegistration } from 'lumiverse-spindle-types'
 import type { ExtensionUpdateSnapshot } from '@/types/spindle-updates'
 
@@ -56,7 +57,7 @@ export interface EphemeralOverviewMe {
 
 export const spindleApi = {
   list() {
-    return get<{ extensions: ExtensionInfo[]; isPrivileged: boolean }>('/spindle')
+    return shareRead('spindle-list', () => get<{ extensions: ExtensionInfo[]; isPrivileged: boolean }>('/spindle'))
   },
 
   getUpdates() {

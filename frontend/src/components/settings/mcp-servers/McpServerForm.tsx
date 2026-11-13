@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
+import { ApiError } from '@/api/client'
 import type { CreateMcpServerInput } from '@/api/mcp-servers'
 import styles from '../../panels/ConnectionManager.module.css'
 import formStyles from './McpServerForm.module.css'
@@ -13,7 +14,7 @@ interface HeaderRow {
 
 interface McpServerFormProps {
   initial?: Partial<CreateMcpServerInput> & { initialHeaders?: HeaderRow[] }
-  onSave: (input: CreateMcpServerInput) => void
+  onSave: (input: CreateMcpServerInput) => Promise<void>
   onCancel: () => void
 }
 
@@ -43,16 +44,19 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
   )
   const [autoConnect, setAutoConnect] = useState(initial?.auto_connect !== false)
   const [enabled, setEnabled] = useState(initial?.is_enabled !== false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const savingRef = useRef(false)
 
   const isHttp = transportType === 'streamable_http' || transportType === 'sse'
   const isStdio = transportType === 'stdio'
 
-  const handleSubmit = () => {
-    if (!name.trim()) return
+  const handleSubmit = async () => {
+    if (!name.trim() || savingRef.current) return
 
     const input: CreateMcpServerInput = {
       name: name.trim(),
-      transport_type: transportType as any,
+      transport_type: transportType as CreateMcpServerInput['transport_type'],
       auto_connect: autoConnect,
       is_enabled: enabled,
     }
@@ -77,7 +81,20 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
       }
     }
 
-    onSave(input)
+    savingRef.current = true
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(input)
+    } catch (err) {
+      const message = err instanceof ApiError && typeof err.body?.error === 'string'
+        ? err.body.error
+        : err instanceof Error ? err.message : ''
+      setError(message || t('mcp.saveFailed'))
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
   }
 
   const addHeaderRow = () => setHeaders([...headers, { key: '', value: '' }])
@@ -97,17 +114,18 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
   }
 
   return (
-    <div className={styles.form}>
+    <div className={styles.form} aria-busy={saving}>
       <FormField label={t('mcp.name')}>
         <TextInput
           value={name}
           onChange={setName}
           placeholder={t('mcp.namePlaceholder')}
+          disabled={saving}
         />
       </FormField>
 
       <FormField label={t('mcp.transport')}>
-        <Select value={transportType} onChange={setTransportType} options={transportOptions} />
+        <Select value={transportType} onChange={setTransportType} options={transportOptions} disabled={saving} />
       </FormField>
 
       {isHttp && (
@@ -117,6 +135,7 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
               value={url}
               onChange={setUrl}
               placeholder={t('mcp.urlPlaceholder')}
+              disabled={saving}
             />
           </FormField>
 
@@ -128,23 +147,26 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
                     value={row.key}
                     onChange={(value) => updateHeader(idx, 'key', value)}
                     placeholder={t('mcp.headerName')}
+                    disabled={saving}
                   />
                   <TextInput
                     type="password"
                     value={row.value}
                     onChange={(value) => updateHeader(idx, 'value', value)}
                     placeholder={t('mcp.headerValue')}
+                    disabled={saving}
                   />
                   <button
                     className={formStyles.kvRemove}
                     onClick={() => removeHeaderRow(idx)}
                     type="button"
+                    disabled={saving}
                   >
                     &times;
                   </button>
                 </div>
               ))}
-              <button className={formStyles.kvAdd} onClick={addHeaderRow} type="button">
+              <button className={formStyles.kvAdd} onClick={addHeaderRow} type="button" disabled={saving}>
                 {t('mcp.addHeader')}
               </button>
             </div>
@@ -159,14 +181,17 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
               value={command}
               onChange={setCommand}
               placeholder={t('mcp.commandPlaceholder')}
+              disabled={saving}
             />
           </FormField>
+          <p className={formStyles.policyHint}>{t('mcp.stdioPolicyHint')}</p>
 
           <FormField label={t('mcp.args')} hint={t('mcp.argsHint')}>
             <TextInput
               value={args}
               onChange={setArgs}
               placeholder={t('mcp.argsPlaceholder')}
+              disabled={saving}
             />
           </FormField>
 
@@ -178,23 +203,26 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
                     value={row.key}
                     onChange={(value) => updateEnvVar(idx, 'key', value)}
                     placeholder={t('mcp.varName')}
+                    disabled={saving}
                   />
                   <TextInput
                     type="password"
                     value={row.value}
                     onChange={(value) => updateEnvVar(idx, 'value', value)}
                     placeholder={t('mcp.headerValue')}
+                    disabled={saving}
                   />
                   <button
                     className={formStyles.kvRemove}
                     onClick={() => removeEnvRow(idx)}
                     type="button"
+                    disabled={saving}
                   >
                     &times;
                   </button>
                 </div>
               ))}
-              <button className={formStyles.kvAdd} onClick={addEnvRow} type="button">
+              <button className={formStyles.kvAdd} onClick={addEnvRow} type="button" disabled={saving}>
                 {t('mcp.addVariable')}
               </button>
             </div>
@@ -206,17 +234,21 @@ export default function McpServerForm({ initial, onSave, onCancel }: McpServerFo
         checked={autoConnect}
         onChange={setAutoConnect}
         label={t('mcp.autoConnect')}
+        disabled={saving}
       />
 
       <Toggle.Checkbox
         checked={enabled}
         onChange={setEnabled}
         label={t('mcp.enabled')}
+        disabled={saving}
       />
 
+      {error && <div className={formStyles.error} role="alert">{error}</div>}
+
       <div className={styles.formActions}>
-        <Button variant="ghost" onClick={onCancel}>{tc('actions.cancel')}</Button>
-        <Button onClick={handleSubmit} disabled={!name.trim()}>{tc('actions.save')}</Button>
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>{tc('actions.cancel')}</Button>
+        <Button onClick={handleSubmit} disabled={!name.trim() || saving} loading={saving}>{tc('actions.save')}</Button>
       </div>
     </div>
   )

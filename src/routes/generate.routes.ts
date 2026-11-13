@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getConnInfo } from "hono/bun";
+import { getConnInfo } from "@hono/bun";
 import type { Context, Next } from "hono";
 import * as svc from "../services/generate.service";
 import * as breakdownSvc from "../services/breakdown.service";
@@ -136,8 +136,10 @@ app.get("/status/:chatId", (c) => {
     reasoningOffset,
     tokenSeq: entry.tokenSeq,
     generationType: entry.generationType,
+    renderMode: entry.renderMode,
     targetMessageId: entry.targetMessageId,
     targetSwipeId: entry.targetSwipeId,
+    backgroundSwipe: entry.backgroundSwipe,
     characterName: entry.characterName,
     characterId: entry.characterId,
     model: entry.model,

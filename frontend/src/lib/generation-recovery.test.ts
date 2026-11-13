@@ -9,13 +9,14 @@ import type { Message, PaginatedResult } from '@/types/api'
 let store: StoreApi<ChatSlice>
 let getStatus: ReturnType<typeof mock>
 let list: ReturnType<typeof mock>
+let getMessage: ReturnType<typeof mock>
 mock.module('@/store', () => ({ useStore: {
   getState: () => store.getState(),
   setState: (...args: Parameters<typeof store.setState>) => store.setState(...args),
 } }))
 mock.module('@/api/settings', () => ({ settingsApi: { put: async () => undefined } }))
 mock.module('@/api/generate', () => ({ generateApi: { getStatus: (...args: unknown[]) => getStatus(...args) } }))
-mock.module('@/api/chats', () => ({ messagesApi: { list: (...args: unknown[]) => list(...args) } }))
+mock.module('@/api/chats', () => ({ messagesApi: { list: (...args: unknown[]) => list(...args), get: (...args: unknown[]) => getMessage(...args) } }))
 const { createChatSlice } = await import('@/store/slices/chat')
 const { recoverPooledGeneration } = await import('./generation-recovery')
 
@@ -44,9 +45,86 @@ beforeEach(() => {
   store.getState().setMessages([original])
   getStatus = mock(async () => completed)
   list = mock(async () => ({ data: [original], total: 1, offset: 0, limit: 50 }))
+  getMessage = mock(async () => original)
 })
 
 describe('generation recovery races', () => {
+  test('equivalent concurrent recovery shares status and terminal message refresh', async () => {
+    const response = deferred<GenerationStatusResponse>()
+    getStatus = mock(() => response.promise)
+    const first = recoverPooledGeneration('chat')
+    const second = recoverPooledGeneration('chat')
+    expect(first).toBe(second)
+    expect(getStatus).toHaveBeenCalledTimes(1)
+    response.resolve(completed)
+    await Promise.all([first, second])
+    expect(list).toHaveBeenCalledTimes(1)
+    await recoverPooledGeneration('chat')
+    expect(getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  test('returning to the same chat uses a new recovery and rejects the old snapshot', async () => {
+    const old = deferred<GenerationStatusResponse>()
+    getStatus = mock(() => old.promise)
+    const first = recoverPooledGeneration('chat')
+    store.getState().setActiveChat('other')
+    store.getState().setActiveChat('chat')
+    getStatus = mock(async () => ({ active: false }))
+    await recoverPooledGeneration('chat')
+    expect(getStatus).toHaveBeenCalledTimes(1)
+    old.resolve(active)
+    await first
+    expect(store.getState().isStreaming).toBe(false)
+  })
+
+  test('reconnecting after a persisted generation stops restores its saved partial reply', async () => {
+    store.getState().startStreaming('generation', 'assistant', 'normal', 'persisted-message')
+    getStatus = mock(async () => ({ active: false, generationId: 'generation', status: 'stopped', renderMode: 'persisted-message', targetMessageId: 'assistant' }))
+    const saved = { ...original, content: 'saved partial', swipes: ['saved partial'], extra: { reasoning: 'saved thought' } }
+    getMessage = mock(async () => saved)
+    await recoverPooledGeneration('chat')
+    expect(store.getState().isStreaming).toBe(false)
+    expect(store.getState().messages).toEqual([saved])
+    expect(getMessage).toHaveBeenCalledTimes(1)
+  })
+
+  test('terminal persisted recovery cannot overwrite a newer generation', async () => {
+    getStatus = mock(async () => ({ active: false, generationId: 'generation', status: 'stopped', renderMode: 'persisted-message', targetMessageId: 'assistant' }))
+    const response = deferred<Message>(), requested = deferred<void>()
+    getMessage = mock(() => { requested.resolve(); return response.promise })
+    const recovery = recoverPooledGeneration('chat')
+    await requested.promise
+    store.getState().startStreaming('next', 'assistant', 'normal')
+    response.resolve({ ...original, content: 'old partial' })
+    await recovery
+    expect(store.getState().messages).toEqual([original])
+    expect(store.getState().activeGenerationId).toBe('next')
+  })
+
+  test('persisted-message recovery refreshes the selected text and reasoning without a stream buffer', async () => {
+    getStatus = mock(async () => ({ ...active, renderMode: 'persisted-message', targetSwipeId: undefined, content: '' }))
+    const saved = { ...original, content: 'second', swipes: ['first', 'second'], swipe_dates: [1, 1], swipe_id: 1, extra: { reasoning: 'second thoughts' } }
+    getMessage = mock(async () => saved)
+    await recoverPooledGeneration('chat')
+    expect(store.getState().streamingRenderMode).toBe('persisted-message')
+    expect(store.getState().messages).toEqual([saved])
+    expect(store.getState().streamingContent).toBe('')
+    expect(store.getState().streamingSwipeId).toBeNull()
+    store.getState().endStreaming()
+    expect(store.getState().streamingRenderMode).toBeNull()
+  })
+
+  test('a delayed persisted-message refresh cannot replace a newer edit event', async () => {
+    getStatus = mock(async () => ({ ...active, renderMode: 'persisted-message', targetSwipeId: undefined, content: '' }))
+    const response = deferred<Message>()
+    getMessage = mock(() => response.promise)
+    const work = recoverPooledGeneration('chat')
+    await Promise.resolve(); await Promise.resolve()
+    store.getState().updateMessage(original.id, { content: 'newer text', extra: { reasoning: 'newer reasoning' } })
+    response.resolve({ ...original, content: 'older text' })
+    await work
+    expect(store.getState().messages[0]!.content).toBe('newer text')
+  })
   test('reconciles a matching completed generation normally', async () => {
     store.getState().startStreaming('previous', 'assistant', 'swipe')
     await recoverPooledGeneration('chat')
@@ -55,6 +133,14 @@ describe('generation recovery races', () => {
     expect(store.getState().activeGenerationId).toBeNull()
     expect(list).toHaveBeenCalledTimes(1)
     expect(store.getState().messages).toEqual([original])
+  })
+
+  test('background recovery stages a missing target without changing the selected reply', async () => {
+    getStatus = mock(async () => ({ ...active, backgroundSwipe: true }))
+    await recoverPooledGeneration('chat')
+    expect(store.getState().messages[0]).toMatchObject({ swipe_id: 0, content: 'original', swipes: ['original', ''] })
+    expect(store.getState().streamingSwipeId).toBe(1)
+    expect(store.getState().streamingContent).toBe('live')
   })
 
   test('recovers a missed start while the new swipe is still assembling', async () => {

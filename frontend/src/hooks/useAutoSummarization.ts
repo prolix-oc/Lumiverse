@@ -75,7 +75,7 @@ export function useAutoSummarization() {
     // Don't trigger summarization from impersonate generations — they create
     // user messages that bump totalChatLength but aren't narrative content
     // worth summarizing over. The next real generation will trigger if needed.
-    if (lastGenerationType === 'impersonate') return
+    if (lastGenerationType === 'impersonate' || lastGenerationType === 'impersonate_draft') return
 
     // Capture the values this effect tick is reasoning about. Everything the
     // kickoff does is keyed off these locals, not the live store.

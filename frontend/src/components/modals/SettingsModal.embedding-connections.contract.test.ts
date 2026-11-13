@@ -16,10 +16,12 @@ describe('dedicated embedding connections contract', () => {
     expect(embeddingsRegion).not.toContain('projectConnectionProfiles(')
   })
 
-  test('Connections mounts a dedicated embedding manager', () => {
-    expect(drawerSource).toContain('<EmbeddingConnectionManager />')
-    expect(drawerSource).toContain("connections.embeddings")
-    expect(drawerSource).toContain('className="connections-stack" style={{ paddingBottom: 16 }}')
+  test('Connections mounts a dedicated embedding manager', async () => {
+    expect(drawerSource).toContain('<ConnectionsPanel />')
+    const panel = await Bun.file(new URL('../panels/ConnectionsPanel.tsx', import.meta.url)).text()
+    expect(panel).toContain("['embeddings', EmbeddingConnectionManager]")
+    expect(panel).toContain('t(`connections.${key}`)')
+    expect(panel).toContain('connections-stack')
   })
 
   test('offers native Mistral and Cohere connections with their API defaults', () => {

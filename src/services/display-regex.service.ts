@@ -1,6 +1,5 @@
 import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
-import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
@@ -15,6 +14,11 @@ import { applyRegexScripts, hasRegexMatchAction } from "./regex-scripts.service"
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { readPromptActivation } from "../utils/regex-prompt-activation";
+import type { MessagePresetContext } from "../types/preset-context";
+import { applyMessagePresetContext } from "./message-preset-context.service";
+import { createHash } from "node:crypto";
+import { preprocessDisplayMessage } from "./display-message-preprocess.service";
+import { presetHistoryDependencyValue } from "./preset-history.service";
 
 initMacros();
 
@@ -38,6 +42,11 @@ export interface ApplyDisplayRegexInput {
   resolvedReplacements?: Map<string, string>;
   dynamicMacros?: Record<string, string>;
   signal?: AbortSignal;
+  /** Server-validated context from the stored message, never a client-selected preset. */
+  presetContext?: MessagePresetContext;
+  preprocessed?: boolean;
+  /** Internal verification replay: mark only actions minted by this execution. */
+  actionVerificationNonce?: string;
 }
 
 function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv | undefined {
@@ -77,6 +86,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
           return c ? getEffectiveCharacterName(c) : undefined;
         });
         const env = buildEnv({
+          userId,
           character,
           focusedCharacter,
           persona,
@@ -183,13 +193,34 @@ function getDisplayBehaviorContext(
   };
 }
 
-type DisplayVarEnv = { variables: { local: Map<string, unknown>; chat: Map<string, unknown>; global: Map<string, unknown> } } | null | undefined;
+type DisplayVarEnv = MacroEnv | null | undefined;
 
 const DISPLAY_REGEX_CACHE = new Map<string, { result: string; touched: ReadonlyArray<readonly [string, string]> }>();
 const DISPLAY_REGEX_CACHE_MAX = 1000;
+const presetScriptDigests = new WeakMap<RegexScript[], string>();
+
+function presetScriptDigest(scripts: RegexScript[]): string {
+  let digest = presetScriptDigests.get(scripts);
+  if (!digest) {
+    digest = createHash("sha256").update(JSON.stringify(scripts)).digest("hex");
+    presetScriptDigests.set(scripts, digest);
+  }
+  return digest;
+}
+
+function presetRenderDigest(input: ApplyDisplayRegexInput, env: MacroEnv | undefined): string {
+  // Prompt defaults and selections live outside the variable maps tracked by the evaluator.
+  return createHash("sha256").update(JSON.stringify([
+    input.userId, input.context.message_id, input.presetContext,
+    env?.extra.presetMetadata, env?.extra.promptVariables,
+    env?.extra.promptVariableDefaults, env?.extra.promptVariableSelections,
+  ])).digest("hex");
+}
 
 function varStateForKey(env: DisplayVarEnv, name: string): string {
   if (!env) return "";
+  const context = presetHistoryDependencyValue(env, name);
+  if (context !== undefined) return context;
   const v = env.variables;
   const sep = name.indexOf(":");
   if (sep > 0) {
@@ -256,39 +287,24 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
   const placement: RegexPlacement = input.context.is_user ? "user_input" : "ai_output";
 
   let content = input.content;
-  if (
-    messageContentProcessorChain.count > 0
-    && input.context.chat_id
-    && content.length > 0
-  ) {
-    try {
-      const pre = await messageContentProcessorChain.run(
-        {
-          chatId: input.context.chat_id,
-          content,
-          isUser: input.context.is_user,
-          origin: "render",
-          userId: input.userId,
-          ...(input.context.message_id ? { messageId: input.context.message_id } : {}),
-          extra: {
-            ...(typeof input.context.message_index === "number"
-              ? { messageIndex: input.context.message_index }
-              : {}),
-            ...(input.context.role
-              ? { role: input.context.role, is_user: input.context.role === "user" }
-              : {}),
-          },
-        },
-        input.userId,
-        input.signal,
-      );
-      if (typeof pre.content === "string") content = pre.content;
-    } catch {
-      // Render-MCP failure should not block regex application; fall through with the raw content.
-    }
+  const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
+  if (!input.preprocessed && input.context.chat_id) {
+    const source = input.context.message_id ? chatsSvc.getMessage(input.userId, input.context.message_id) : null;
+    const processed = await preprocessDisplayMessage({
+      userId: input.userId, chatId: input.context.chat_id, content, message: source ?? undefined,
+      messageId: input.context.message_id, messageIndex: input.context.message_index,
+      role: input.context.role ?? (input.context.is_user ? "user" : "assistant"),
+      presetContext: input.presetContext, signal: input.signal,
+    });
+    content = processed.content;
+    for (const key of processed.touchedVars) fingerprint.touchedVars.add(key);
+    if (!processed.cacheable) fingerprint.cacheable = false;
   }
 
   const env = buildEnvFromContext(input.userId, input.context);
+  if (input.presetContext && (!env || !applyMessagePresetContext(env, input.userId, input.presetContext))) {
+    return { result: content, touchedVars: new Set(), cacheable: false, timedOutScriptIds: new Set() };
+  }
   const dyn: Record<string, string> = { ...(input.dynamicMacros ?? {}) };
   if (env) {
     env.extra.activationPreviewContext = {
@@ -305,22 +321,24 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
       mergeDynamicMacros(env, dyn);
     }
   }
-  const noCache = input.scripts.some((script) => script.preset_id && readPromptActivation(script.metadata) && script.find_regex.includes("{{"))
+  const noCache = !fingerprint.cacheable || !!input.actionVerificationNonce
+    || input.scripts.some((script) => script.preset_id && readPromptActivation(script.metadata) && script.find_regex.includes("{{"))
     || (globalThis as { Bun?: { env?: Record<string, string | undefined> } }).Bun?.env?.LUMIVERSE_DISPLAY_REGEX_NO_CACHE === "1";
-  const cacheKey = displayRegexCacheKey(input.context.chat_id, content, placement, input.context.depth, input.scripts, dyn, input.resolvedFindPatterns, input.resolvedReplacements);
+  const cacheKey = displayRegexCacheKey(input.context.chat_id, content, placement, input.context.depth, input.scripts, dyn, input.resolvedFindPatterns, input.resolvedReplacements)
+    // Preset edits can share a one-second updated_at value; retain the exact definition identity.
+    + (input.presetContext ? `\x00P${presetScriptDigest(input.scripts)}:${presetRenderDigest(input, env)}` : "");
   if (!noCache) {
     const cached = DISPLAY_REGEX_CACHE.get(cacheKey);
     if (cached && (env ? cached.touched.every(([n, val]) => varStateForKey(env, n) === val) : cached.touched.length === 0)) {
       return {
         result: cached.result,
-        touchedVars: new Set(cached.touched.map(([n]) => n)),
+        touchedVars: new Set([...cached.touched.map(([n]) => n), ...fingerprint.touchedVars]),
         cacheable: true,
         timedOutScriptIds: new Set(),
       };
     }
   }
 
-  const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
   const timedOutScriptIds = new Set<string>();
   const hasRepeatBack = hasRegexMatchAction(input.scripts, "repeat_back");
   const behaviorContext = hasRepeatBack
@@ -328,7 +346,10 @@ export async function applyDisplayRegex(input: ApplyDisplayRegexInput): Promise<
     : undefined;
   const result = await applyRegexScripts(
     content,
-    input.scripts,
+    input.actionVerificationNonce ? input.scripts.map(script => ({
+      ...script,
+      actions: script.actions.map(action => ({ ...action, verificationNonce: input.actionVerificationNonce })),
+    })) : input.scripts,
     placement,
     input.context.depth,
     env,

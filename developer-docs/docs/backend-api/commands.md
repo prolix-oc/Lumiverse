@@ -100,6 +100,86 @@ unsub()
 | `chatId` | `string?` | Active chat ID, if in a chat view |
 | `characterId` | `string?` | Active character ID, if available |
 | `isGroupChat` | `boolean?` | Whether the active chat is a group chat |
+| `trigger` | `{ type: 'keybind'; bindingId: string; scope: 'focused' \| 'global' }?` | Present when invoked through a configured desktop key binding |
+
+Hosts advertising `command-session-routing-v1` also pass an optional third callback
+argument, `origin: { userId: string; frontendSessionId?: string }`. It comes from
+the authenticated WebSocket, separately from the caller-supplied context. Use it
+when a command needs to hand work back to the invoking document, especially for
+microphone input. Do not broadcast a capture trigger or infer its owner from
+`context.trigger`, chat IDs, or the most recently active subscriber. Older clients
+can omit document identity; fail closed for actions requiring a specific window.
+The optional callback argument is backward compatible with 0.6.69's two-argument
+handler type; feature-detect the host capability before depending on it.
+
+```ts
+spindle.commands.onInvoked((commandId, context, origin?: { userId: string; frontendSessionId?: string }) => {
+  if (!origin?.frontendSessionId) return
+  spindle.sendToFrontend({ action: commandId }, origin.userId, {
+    frontendSessionId: origin.frontendSessionId,
+  })
+})
+```
+
+## Desktop key bindings
+
+Registered commands are available in **Settings → Key Bindings** in Desktop's
+integrated frontend.
+Focused bindings need no extra setup. The owner can enable global bindings with
+one native confirmation for this instance/account, then configure individual
+shortcuts in the frontend without repeated approval. Disabling global bindings
+in Settings changes this account's bindings and shared desktop actions to focused mode.
+No additional Spindle permission is needed to receive an invocation of an already
+registered command. Extensions receive command events rather than a raw keyboard stream.
+
+```ts
+spindle.commands.onInvoked((commandId, context) => {
+  if (commandId !== 'summarize-chat') return
+  if (context.trigger?.type === 'keybind') {
+    console.log('Desktop binding:', context.trigger.bindingId, context.trigger.scope)
+  }
+  summarizeChat(context.chatId)
+})
+```
+
+### Configure a binding inside extension UI
+
+A frontend extension can embed the host's binding editor directly in its own
+drawer panel or settings tab. The backend must first register the action through
+`spindle.commands.register()`. Feature-detect `components.mountKeybindingEditor`
+or the `desktop-keybindings-editor-v1` frontend host capability, and check for a
+desktop client. There is no trip through the host Settings screen.
+
+```ts
+// In a registered drawer/settings tab, after its root is available:
+if (ctx.client?.getInfo().bridges.desktop && ctx.components.mountKeybindingEditor) {
+  const target = document.createElement('div')
+  tab.root.append(target)
+  const editor = ctx.components.mountKeybindingEditor(target, {
+    commandId: 'summarize-chat', // this extension's registered backend command ID
+  })
+  // Call editor.destroy() when this part of your UI is removed.
+}
+```
+
+The control edits only that extension's selected registered command and uses the
+same native opt-in for global bindings. The container must belong to the current
+extension's live UI placement. Disabling/unloading the extension or revoking the
+placement closes the mounted control. The binding persists on this desktop and
+also appears in central Settings. Browser/mobile clients do not expose desktop
+configuration; older desktop clients may need an app update.
+
+The same command scopes and active extension checks apply. Bindings are local to the
+desktop installation and scoped to the selected instance, signed-in account, and
+extension installation. The integrated browser must remain open and signed in;
+global bindings can work while its window is hidden or in the background. Closing
+the browser, signing out, disabling the extension, or unregistering the command
+stops delivery. Backend-only extensions can register commands too.
+
+`context.trigger` is informational frontend context, not proof of authorization or
+a native gesture token. Existing permission and ownership checks still apply.
+Global shortcuts are supported on macOS, Windows and Linux X11. Native Wayland
+sessions currently support app-focused bindings only.
 
 ## Scopes
 

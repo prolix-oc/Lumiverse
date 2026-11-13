@@ -24,7 +24,7 @@
         "transparent": true,
         "shadow": false,
         "focus": false,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling",
         "skipTaskbar": true,
         "alwaysOnBottom": true
       }
@@ -46,6 +46,7 @@
       "../../LICENSE.md": "LICENSE.md"
     },
     "macOS": {
+      "minimumSystemVersion": "13.0",
       "entitlements": "Entitlements.plist"
     },
     "linux": {

@@ -1,0 +1,9 @@
+version: 1
+name: inference-scheduler
+slug: inference-scheduler
+protocol: http
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

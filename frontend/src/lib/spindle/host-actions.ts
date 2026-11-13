@@ -15,6 +15,7 @@ export const HOST_SURFACE_KINDS = [
   'modal',
   'input_bar_action',
   'ext_command',
+  'entity_action',
 ] as const
 
 export type HostSurfaceKind = (typeof HOST_SURFACE_KINDS)[number]
@@ -41,12 +42,17 @@ export interface HostActionRuntime {
   openWorldBookEditor(id: string, entryId?: string): void
   invokeInputBarAction(id: string): void | Promise<void>
   invokeExtensionCommand(id: string): void
+  switchPersona(personaId: string): void | Promise<void>
+  switchPreset(presetId: string): void | Promise<void>
+  applyTheme(themeId: string): void | Promise<void>
+  openCharacterChat(characterId: string, mode: 'latest' | 'new'): void | Promise<void>
 }
 
 export const HOST_ACTION_UNMAPPED = 'HOST_ACTION_UNMAPPED'
 export const HOST_ACTION_INVALID_PARAMS = 'HOST_ACTION_INVALID_PARAMS'
 export const HOST_ACTION_INVALID_ROUTE = 'HOST_ACTION_INVALID_ROUTE'
 export const HOST_ACTION_INVALID_ID = 'HOST_ACTION_INVALID_ID'
+export const HOST_ACTION_NOT_FOUND = 'HOST_ACTION_NOT_FOUND'
 
 export const HOST_ROUTE_PATTERNS = Object.freeze([
   '/',
@@ -56,6 +62,8 @@ export const HOST_ROUTE_PATTERNS = Object.freeze([
 ] as const)
 
 export const HOST_MODAL_IDS = Object.freeze(['character_editor', 'world_book_editor'] as const)
+
+export const HOST_ENTITY_ACTION_IDS = Object.freeze(['switch_persona', 'switch_preset', 'apply_theme', 'character_chat'] as const)
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -169,5 +177,30 @@ export function applyHostAction(
       only(params)
       runtime.invokeExtensionCommand(ref.id)
       return
+    case 'entity_action':
+      return applyEntityAction(ref.id, params, runtime)
   }
+}
+
+function applyEntityAction(id: string, params: HostActionParams, runtime: HostActionRuntime): void | Promise<void> {
+  switch (id) {
+    case 'switch_persona':
+      only(params, 'personaId')
+      assertHostId(params.personaId, 'personaId')
+      return runtime.switchPersona(params.personaId)
+    case 'switch_preset':
+      only(params, 'presetId')
+      assertHostId(params.presetId, 'presetId')
+      return runtime.switchPreset(params.presetId)
+    case 'apply_theme':
+      only(params, 'themeId')
+      assertHostId(params.themeId, 'themeId')
+      return runtime.applyTheme(params.themeId)
+    case 'character_chat':
+      only(params, 'characterId', 'mode')
+      assertHostId(params.characterId, 'characterId')
+      if (params.mode !== 'latest' && params.mode !== 'new') throw new Error(`${HOST_ACTION_INVALID_PARAMS}:mode`)
+      return runtime.openCharacterChat(params.characterId, params.mode)
+  }
+  throw new Error(`${HOST_ACTION_UNMAPPED}:entity_action:${id}`)
 }

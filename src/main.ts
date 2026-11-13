@@ -1,6 +1,7 @@
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { env } from "./env";
+import { MAX_ACCOUNT_ARCHIVE_BYTES } from "./services/user-data/archive-limits";
 import { getDatabasePath, initDatabase } from "./db/connection";
 import { runMigrations } from "./db/migrate";
 import { runStartupDatabaseMaintenance } from "./db/maintenance";
@@ -18,6 +19,7 @@ import {
   stopExtensionUpdateMonitor,
 } from "./spindle/update-check.service";
 import { sendRunnerMessage } from "./services/runner-channel";
+import { scheduleLanceDbStartupMaintenance } from "./services/lancedb-maintenance-supervisor";
 
 // TLS terminates at Bun, before Hono receives a Request. Resolve and validate
 // certificate material before performing the rest of the (potentially lengthy)
@@ -37,7 +39,6 @@ if (isTermuxLikeEnvironment()) {
   process.env.TMP = tempDir;
   process.env.TEMP = tempDir;
   console.log(`[startup] Temp directory: ${tempDir}`);
-  console.log("[startup] Termux LanceDB mode: cross-process write locking enabled");
 }
 
 try {
@@ -182,6 +183,10 @@ if (env.stMigrate) {
 const { seedTokenizersAsync } = await import("./services/tokenizer-seed");
 await seedTokenizersAsync();
 
+// Importing auth waits for plugin initialization, including the desktop OAuth
+// resource overwrite. Finish that write before any background writer starts.
+await import("./auth");
+
 // Finish bootstrap writes before enabling background indexing/maintenance.
 // Keep the main connection's lock budget for synchronous auth/legacy writes;
 // only the supervised subprocess uses short waits with asynchronous retries.
@@ -263,6 +268,10 @@ installMemoryPressureHandler();
 // Register push notification EventBus listeners
 const { initPushListeners } = await import("./services/push.service");
 initPushListeners();
+const { initLiveActivityListeners } = await import("./services/ios-live-activities.service");
+initLiveActivityListeners();
+const { initSpindleLiveActivityDelivery } = await import("./services/spindle-live-activities.service");
+initSpindleLiveActivityDelivery();
 
 // Register background image-generation fallback listeners
 const { initImageGenAutoListeners } = await import("./services/image-gen-auto.service");
@@ -304,7 +313,7 @@ const server = Bun.serve({
   // MAX_CHARX_SIZE ≈ 1000 MB, image/avatar uploads at a few MB, etc.), so
   // raising the global ceiling here only widens the door for routes we
   // explicitly opt-in for via the bodyLimit exclusion list above.
-  maxRequestBodySize: 5 * 1024 * 1024 * 1024, // 5 GB — matches MAX_COMPRESSED_BYTES in user-data import.
+  maxRequestBodySize: MAX_ACCOUNT_ARCHIVE_BYTES,
   idleTimeout: 255,
 });
 
@@ -335,21 +344,7 @@ if (process.env.LUMIVERSE_RUNNER_IPC === "1") {
 // in the serving process: it can make the already-listening frontend appear
 // hung. Run it in a child after readiness instead; ordinary index repair still
 // happens on demand where it is scoped to the affected vector request.
-const lancedbStartupMaintenanceEnabled = !["0", "false", "no", "off"].includes(
-  (process.env.LUMIVERSE_LANCEDB_STARTUP_MAINTENANCE ?? "").trim().toLowerCase(),
-);
-if (lancedbStartupMaintenanceEnabled) {
-  setTimeout(() => {
-    console.info("[startup] Starting deferred LanceDB maintenance child...");
-    import("./services/lancedb-maintenance-supervisor").then(({ runLanceDbMaintenanceInChild }) =>
-      runLanceDbMaintenanceInChild({ mode: "startup" })
-    ).catch((err) => {
-      console.warn("[embeddings] Deferred startup maintenance failed:", err);
-    });
-  }, 5_000);
-} else {
-  console.info("[startup] Automatic LanceDB startup maintenance is disabled; use an Operator maintenance window to run compaction.");
-}
+scheduleLanceDbStartupMaintenance();
 
 // Auto-connect to LumiHub if linked. Deferred to a timer tick so the HTTP
 // server gets a chance to service its first requests before the WebSocket
@@ -422,6 +417,8 @@ async function gracefulShutdown(signal: string) {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   console.log(`[Shutdown] Received ${signal}, shutting down...`);
+  const { interruptActiveImports } = await import("./services/user-data/import.service");
+  interruptActiveImports();
 
   // 1. Stop accepting new connections
   server.stop(true);

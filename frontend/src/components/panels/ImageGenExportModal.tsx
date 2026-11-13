@@ -90,7 +90,7 @@ export default function ImageGenExportModal({ isOpen, onClose, presets }: ImageG
         presetIds: ids.length > 0 && ids.length < presets.length ? ids : undefined,
       })
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      triggerBlobDownload(blob, 'lumiverse-image-gen-config.json')
+      await triggerBlobDownload(blob, 'lumiverse-image-gen-config.json')
       onClose()
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('imageGenPanel.exportFailed'))

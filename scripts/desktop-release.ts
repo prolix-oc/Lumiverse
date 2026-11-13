@@ -19,7 +19,7 @@ export interface DesktopFeed {
 export const BUNDLED_SOURCE_PATHS = ["src", "frontend", "desktop", "user-docs/docs", "package.json", "bun.lock", "tsconfig.json", "LICENSE.md",
   "scripts/build-server.ts", "scripts/build-desktop-server.ts", "scripts/build-lancedb-macos.ts", "scripts/lancedb-macos-native.ts", "scripts/lancedb-macos-release.ts", "scripts/reset-password.ts",
   "scripts/input.ts", "scripts/ui.ts", "scripts/tauri-finalized.ts", "scripts/appimage-patchelf.sh", "scripts/finalize-appimage.sh", "scripts/verify-appimage-permissions.sh", "scripts/verify-appimage-gstreamer.sh",
-  "scripts/appimage-apprun.sh", "scripts/appimage-runtime-manifest.ts",
+  "scripts/appimage-apprun.sh", "scripts/appimage-runtime-manifest.ts", "scripts/linux-arm64-cross.ts",
   "scripts/private-linux-release.ts", "scripts/linux-appimage-builder",
   "scripts/desktop-release.ts", "scripts/prepare-desktop-release.ts", "scripts/publish-desktop-release.ts",
   ".github/workflows/server-bundle.yml", ".github/workflows/desktop-release.yml", ".github/workflows/desktop-nightly.yml", ".github/workflows/desktop-linux-complete.yml"];

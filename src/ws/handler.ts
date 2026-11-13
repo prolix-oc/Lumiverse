@@ -1,4 +1,4 @@
-import { upgradeWebSocket } from "hono/bun";
+import { upgradeWebSocket } from "@hono/bun";
 import { Buffer } from "node:buffer";
 import { eventBus } from "./bus";
 import { EventType } from "./events";
@@ -230,10 +230,19 @@ export const wsHandler = upgradeWebSocket((c) => {
           console.warn("[WS] Could not extract raw Bun WebSocket — events will not reach this client");
         }
 
+        // A newly opened frontend missed registrations from already-running workers.
+        // Match live command broadcasts: personal commands belong only to their owner.
+        const extensions = await managerSvc.listForUser(userId!, userRole);
+        if (ws.raw?.readyState !== 1) return;
+        const extensionCommands = extensions.flatMap(extension => {
+          if (!extension.enabled || (extension.metadata?.install_scope === 'user' && extension.metadata.installed_by_user_id !== userId)) return [];
+          const commands = getWorkerHost(extension.id)?.getRegisteredCommands() ?? [];
+          return commands.length ? [{ extensionId: extension.id, extensionName: extension.name, commands }] : [];
+        });
         ws.send(
           JSON.stringify({
             event: EventType.CONNECTED,
-            payload: { message: "Connected to Lumiverse event bus", userId, role: userRole },
+            payload: { message: "Connected to Lumiverse event bus", userId, role: userRole, extensionCommands },
             timestamp: Date.now(),
           })
         );
@@ -526,7 +535,7 @@ export const wsHandler = upgradeWebSocket((c) => {
           const host = getWorkerHost(extensionId);
           if (!host) return;
 
-          host.invokeCommand(commandId, data.context ?? {}, userId);
+          host.invokeCommand(commandId, data.context ?? {}, userId, frontendSessionId);
         }
       } catch (err) {
         // Malformed JSON is the common case — drop those silently. Any other

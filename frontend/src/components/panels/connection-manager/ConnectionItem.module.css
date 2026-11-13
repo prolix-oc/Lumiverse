@@ -6,6 +6,7 @@
 }
 
 .itemDragging {
+  opacity: 0.45;
   z-index: 5;
   box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
     0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary));

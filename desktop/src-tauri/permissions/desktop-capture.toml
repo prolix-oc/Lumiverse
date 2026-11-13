@@ -1,4 +1,9 @@
 [[permission]]
 identifier = "desktop-capture-controls"
 description = "Allows only the bundled tray host to enable, disable, and inspect native capture. Captured media and consent never cross IPC."
-commands.allow = ["desktop_capture_connect", "desktop_capture_disconnect", "desktop_capture_status"]
+commands.allow = ["desktop_capture_connect", "desktop_capture_disconnect", "desktop_capture_status", "desktop_capture_setup_finished", "desktop_capture_reset_approvals"]
+
+[[permission]]
+identifier = "desktop-capture-setup"
+description = "Allows the primary frontend to request trusted native setup. Does not enable capture or grant access."
+commands.allow = ["desktop_capture_request_setup"]

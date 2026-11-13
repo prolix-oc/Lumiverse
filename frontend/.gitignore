@@ -1,0 +1,6 @@
+
+/public/theme-reference.*.json
+/public/assets/theme-reference.*.json
+/src/lib/generatedThemeReference.ts
+
+/public/assets/theme-reference-index.json

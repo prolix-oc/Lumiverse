@@ -1,5 +1,5 @@
 -- Lumiverse Database Baseline Schema
--- Generated from migrations 001 through 112.
+-- Includes schema changes through migration 133.
 -- Fresh databases bootstrap from this file instead of replaying the full
 -- migration stack. All squashed migration names are recorded in _migrations
 -- so the runner treats them as already applied.
@@ -8,7 +8,6 @@ CREATE TABLE "account" (
   id TEXT PRIMARY KEY NOT NULL,
   accountId TEXT NOT NULL,
   providerId TEXT NOT NULL,
-  issuer TEXT NOT NULL,
   userId TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
   accessToken TEXT,
   refreshToken TEXT,
@@ -829,7 +828,8 @@ CREATE TABLE "session" (
   updatedAt INTEGER NOT NULL DEFAULT (unixepoch()),
   ipAddress TEXT,
   userAgent TEXT,
-  userId TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE
+  userId TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  impersonatedBy TEXT
 );
 
 CREATE TABLE "settings" (
@@ -1114,8 +1114,8 @@ CREATE TABLE world_books (
 CREATE INDEX idx_account_provider_account
   ON account(providerId, accountId);
 
-CREATE UNIQUE INDEX account_issuer_accountId_uidx
-  ON account(issuer, accountId);
+CREATE UNIQUE INDEX account_provider_accountId_uidx
+  ON "account"(providerId, accountId);
 
 CREATE INDEX idx_account_userId ON "account"(userId);
 
@@ -1969,6 +1969,33 @@ BEGIN
   DELETE FROM image_reference_dirty WHERE source_type = 'settings' AND source_id = json_array(OLD.key, OLD.user_id);
 END;
 
+-- Android FCM destinations
+CREATE TABLE IF NOT EXISTS android_push_destinations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL UNIQUE,
+  transport TEXT NOT NULL CHECK (transport IN ('local', 'fcm')),
+  device_token TEXT,
+  project_id TEXT,
+  server_origin TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT 'Lumiverse Android',
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  registered_at INTEGER NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct','relay')),
+  package_name TEXT NOT NULL DEFAULT 'chat.lumiverse.prototype',
+  enrollment_id TEXT,
+  relay_url TEXT,
+  relay_credential TEXT,
+  encryption_key TEXT,
+  encryption_key_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_android_push_user ON android_push_destinations(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_android_push_token ON android_push_destinations(device_token) WHERE device_token IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_android_push_enrollment ON android_push_destinations(enrollment_id) WHERE enrollment_id IS NOT NULL;
+
 -- iOS APNs destinations
 CREATE TABLE IF NOT EXISTS ios_push_destinations (
   id TEXT PRIMARY KEY,
@@ -1983,7 +2010,92 @@ CREATE TABLE IF NOT EXISTS ios_push_destinations (
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   registered_at INTEGER NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct', 'relay')),
+  relay_credential TEXT,
+  encryption_key TEXT,
+  encryption_key_id TEXT,
   UNIQUE (device_token, bundle_id, environment),
   UNIQUE (user_id, device_id, bundle_id, environment)
 );
 CREATE INDEX IF NOT EXISTS idx_ios_push_user ON ios_push_destinations(user_id);
+
+-- iOS Live Activities (including the persisted stage-sound high-water mark)
+CREATE TABLE ios_live_activities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  generation_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  bundle_id TEXT NOT NULL,
+  environment TEXT NOT NULL CHECK (environment IN ('development', 'production')),
+  server_origin TEXT NOT NULL,
+  credential_hash TEXT NOT NULL,
+  activity_id TEXT,
+  push_token TEXT,
+  token_registered_at INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  desired_phase TEXT NOT NULL,
+  delivered_phase TEXT,
+  last_timestamp INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  ended_at INTEGER,
+  delivered_stage INTEGER NOT NULL DEFAULT -1,
+  delivery_mode TEXT NOT NULL DEFAULT 'direct' CHECK(delivery_mode IN ('direct', 'relay')),
+  relay_credential TEXT,
+  UNIQUE(user_id, device_id, bundle_id, environment, generation_id)
+);
+CREATE INDEX idx_ios_live_activities_generation ON ios_live_activities(user_id, generation_id);
+CREATE INDEX idx_ios_live_activities_expiry ON ios_live_activities(expires_at);
+
+-- Removing/transferring an alert destination also revokes activities on that installation.
+CREATE TRIGGER revoke_ios_destination_activities AFTER DELETE ON ios_push_destinations BEGIN
+  DELETE FROM ios_live_activities WHERE user_id = OLD.user_id AND device_id = OLD.device_id
+    AND bundle_id = OLD.bundle_id AND environment = OLD.environment;
+END;
+
+-- iOS widget registrations
+CREATE TABLE ios_widget_registrations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  credential_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  UNIQUE(user_id, device_id)
+);
+CREATE INDEX idx_ios_widget_registrations_expiry ON ios_widget_registrations(expires_at);
+
+CREATE TABLE spindle_live_activities (
+  id TEXT PRIMARY KEY,
+  extension_id TEXT REFERENCES extensions(id) ON DELETE SET NULL,
+  user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  activity_key TEXT NOT NULL,
+  extension_name TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  expires_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  UNIQUE(extension_id, user_id, activity_key)
+);
+CREATE INDEX idx_spindle_live_activities_user ON spindle_live_activities(user_id, expires_at);
+CREATE TABLE spindle_live_activity_clients (
+  destination_id TEXT PRIMARY KEY REFERENCES ios_push_destinations(id) ON DELETE CASCADE,
+  seen_at INTEGER NOT NULL
+);
+CREATE TABLE spindle_live_activity_devices (
+  id TEXT PRIMARY KEY,
+  activity_id TEXT NOT NULL REFERENCES spindle_live_activities(id) ON DELETE CASCADE,
+  destination_id TEXT NOT NULL REFERENCES ios_push_destinations(id) ON DELETE CASCADE,
+  credential_hash TEXT NOT NULL,
+  native_activity_id TEXT,
+  token_epoch TEXT NOT NULL DEFAULT '',
+  token_registered_at INTEGER NOT NULL DEFAULT 0,
+  push_token TEXT,
+  relay_credential TEXT,
+  delivered_revision INTEGER NOT NULL DEFAULT 0,
+  last_timestamp INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(activity_id, destination_id)
+);

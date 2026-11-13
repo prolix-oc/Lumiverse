@@ -350,6 +350,8 @@ mock.module('./stt-native', () => ({ createNativeSTTAPI: (deps: Parameters<typeo
   listProviders: () => [{ id: 'whistle', name: 'Whistle', onDevice: true, available: true, supportsAudioTranscription: true }],
   prepare: async () => {},
   transcribe: async () => ({ text: 'hello', provider: 'whistle' }),
+  isHostCapturing: () => false,
+  subscribeHostCapture: () => () => {},
   createEngine: () => ({
     start() {}, stop() {}, destroy() {}, isListening: () => true,
     onResult() {}, onError() {}, onStop() {}, onAudioFrame() {},
@@ -1684,6 +1686,26 @@ test('client discovery is advertised, permission-free, and scoped to the loaded 
   } finally {
     await unloadFrontendExtension(id)
     restoreGlobalProperty('__clientContext', descriptor)
+  }
+})
+
+test('composer is advertised, free to read, gated by generation to send, and scoped to the loaded frontend', async () => {
+  const id = 'composer-lifecycle'
+  const globals = globalThis as typeof globalThis & Record<string, any>
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, '__composerContext')
+  try {
+    mockedGrantedPermissions = []
+    await loadPlacementBundle(id, placementManifest(id), 'export function setup(ctx) { globalThis.__composerContext = ctx }')
+    const ctx = globals.__composerContext
+    expect(ctx.host.capabilities['composer-v1']).toBe(1)
+    expect(ctx.composer.getState()).toEqual({ mounted: false, chatId: null, text: '' })
+    expect(() => ctx.composer.setText('draft')).toThrow('COMPOSER_UNAVAILABLE')
+    await expect(ctx.composer.send()).rejects.toThrow('PERMISSION_DENIED:generation')
+    await unloadFrontendExtension(id)
+    expect(() => ctx.composer.getState()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+  } finally {
+    await unloadFrontendExtension(id)
+    restoreGlobalProperty('__composerContext', descriptor)
   }
 })
 

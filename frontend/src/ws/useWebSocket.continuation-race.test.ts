@@ -2,6 +2,7 @@ import { describe, expect, jest, mock, test } from 'bun:test'
 import { createStore } from 'zustand/vanilla'
 import ts from 'typescript'
 import type { Message } from '@/types/api'
+import { selectedPresetHistorySignature } from '@/lib/preset-history'
 
 mock.module('@/api/settings', () => ({ settingsApi: { put: async () => undefined } }))
 const { createChatSlice } = await import('@/store/slices/chat')
@@ -62,7 +63,8 @@ function setup(optimistic = false) {
     getEmptyGeneratedSwipeTarget: () => null,
     deleteEmptyGeneratedSwipe: async (_target: unknown, messages: Message[]) => messages,
     isLocalStreamPlaceholderId: (id: string) => !!id && id.startsWith('__'),
-    invalidateDisplayRegexCacheForMessage() {}, sanitizeToastMessage: (value: string) => value,
+    invalidateDisplayRegexCacheForMessage: mock(() => {}), sanitizeToastMessage: (value: string) => value,
+    invalidateDisplayRegexCacheForPresetHistory: mock(() => {}), selectedPresetHistorySignature,
     toast: { error() {} }, i18n: { t: (key: string) => key },
     document: { hidden: false, visibilityState: 'visible', hasFocus: () => true },
   }
@@ -72,7 +74,7 @@ function setup(optimistic = false) {
     const compiled = new Bun.Transpiler({ loader: 'tsx' }).transformSync(`const invoke = ${text};`)
     return new Function(...Object.keys(dependencies), `${compiled}; return invoke;`)(...Object.values(dependencies))(...args)
   }
-  for (const name of ['isCurrentGeneration', 'withReasoningSnapshot', 'patchMessageReasoningSnapshot', 'applyGenerationMetrics']) {
+  for (const name of ['isCurrentGeneration', 'withReasoningSnapshot', 'patchMessageReasoningSnapshot', 'applyGenerationMetrics', 'invalidatePresetHistoryForChange']) {
     dependencies[name] = (...args: unknown[]) => invoke(name, ...args)
   }
   const rejections: unknown[] = []
@@ -80,15 +82,61 @@ function setup(optimistic = false) {
     invoke(name, payload)
     void pending.catch((error) => { rejections.push(error) })
   }
-  const update = (message = edited) => receive('MESSAGE_EDITED', { chatId: 'chat', message })
+  const update = (message: Message = edited) => receive('MESSAGE_EDITED', { chatId: 'chat', message })
   const finish = async (reject = false) => {
     if (reject) tail.reject(new Error('Tail unavailable'))
     else tail.resolve({ data: [saved], total: 1, offset: 0 })
     await pending
     expect(rejections).toEqual([])
   }
-  return { store, receive, update, finish, fetchLatestMessages }
+  return { store, receive, update, finish, fetchLatestMessages, invalidations: dependencies.invalidateDisplayRegexCacheForMessage,
+    historyInvalidations: dependencies.invalidateDisplayRegexCacheForPresetHistory }
 }
+
+describe('preset history cache refresh', () => {
+  test('refreshes active names while ignoring timing-only updates and inactive swipes', () => {
+    const h = setup()
+    const generationMetrics = { presetId: 'preset', presetName: 'Original', tps: 1 }
+    h.store.getState().updateMessage(original.id, { extra: { generationMetrics,
+      generationMetricsBySwipe: [generationMetrics] } })
+    const payload = { chatId: 'chat', messageId: original.id, swipeId: 0, generationMetrics }
+    h.receive('GENERATION_METRICS_READY', { ...payload, generationMetrics: { ...generationMetrics, tps: 99 } })
+    h.receive('GENERATION_METRICS_READY', { ...payload, swipeId: 1, generationMetrics: { presetId: 'other', presetName: 'Inactive' } })
+    expect(h.historyInvalidations).not.toHaveBeenCalled()
+    h.receive('GENERATION_METRICS_READY', { ...payload, generationMetrics: { ...generationMetrics, presetName: 'Recorded name' } })
+    expect(h.historyInvalidations).toHaveBeenCalledTimes(1)
+    expect(h.historyInvalidations).toHaveBeenCalledWith('chat')
+    expect(h.store.getState().messages[0].extra.generationMetricsBySwipe[0].presetName).toBe('Recorded name')
+  })
+
+  test('refreshes names beyond the loaded page and in cached inactive chats', () => {
+    const h = setup()
+    h.receive('GENERATION_METRICS_READY', { chatId: 'chat', messageId: 'unloaded', swipeId: 0,
+      generationMetrics: { presetId: 'preset', presetName: 'Recorded' } })
+    h.receive('GENERATION_METRICS_READY', { chatId: 'other', messageId: 'background', swipeId: 0,
+      generationMetrics: { presetId: 'preset', presetName: 'Recorded' } })
+    expect(h.historyInvalidations.mock.calls).toEqual([['chat'], ['other']])
+  })
+
+  test('ignores edits that leave selected attribution unchanged', () => {
+    const h = setup()
+    h.update()
+    expect(h.historyInvalidations).not.toHaveBeenCalled()
+    const generationMetrics = { presetId: 'preset', presetName: 'Recorded' }
+    h.store.getState().updateMessage(original.id, { extra: { generationMetrics } })
+    h.update({ ...edited, extra: { generationMetrics, hidden: true } })
+    expect(h.historyInvalidations).toHaveBeenCalledWith('chat')
+  })
+
+  test('refreshes stopped partials again after reconciliation', async () => {
+    const h = setup()
+    h.receive('GENERATION_STOPPED', ended)
+    expect(h.historyInvalidations).toHaveBeenCalledWith('chat')
+    h.historyInvalidations.mockClear()
+    await h.finish()
+    expect(h.historyInvalidations).toHaveBeenCalledWith('chat')
+  })
+})
 
 describe('continuation terminal message ordering', () => {
   test.each([false, true])('adopts a late full row atomically and keeps it after the old tail (optimistic=%s)', async (optimistic) => {
@@ -292,3 +340,18 @@ describe('continuation terminal message ordering', () => {
     expect(h.fetchLatestMessages).not.toHaveBeenCalled()
   })
 })
+
+
+test('hidden-swipe edits reuse the selected preset rendering; selected and vanilla edits still invalidate', () => {
+  const h = setup(); h.store.getState().endStreaming();
+  const message = { ...original, extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'source' }, { preset_id: 'other' }] } }, swipes: ['Prefix', 'sibling'] };
+  h.store.getState().setMessages([message]);
+  h.update({ ...message, swipes: ['Prefix', 'sibling grows'], revision: 2 });
+  expect(h.invalidations).not.toHaveBeenCalled();
+  h.update({ ...message, content: 'Selected grows', swipes: ['Selected grows', 'sibling grows'], revision: 3 });
+  expect(h.invalidations).toHaveBeenCalledTimes(1);
+  h.update({ ...message, extra: { spindle_metadata: { preset_contexts: [{ preset_id: 'changed' }] } }, revision: 4 });
+  expect(h.invalidations).toHaveBeenCalledTimes(2);
+  h.store.getState().setMessages([original]); h.update(saved as typeof edited);
+  expect(h.invalidations).toHaveBeenCalledTimes(3);
+});

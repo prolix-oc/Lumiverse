@@ -163,7 +163,7 @@ export class WorkerHostInteractionApi {
   }
 
   /** Called by the WS handler when the frontend invokes a command. */
-  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
+  invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string, frontendSessionId?: string): void {
     if (!this.runtime) return;
     if (!this.registeredCommands.some((c) => c.id === commandId)) {
       console.warn(
@@ -176,6 +176,7 @@ export class WorkerHostInteractionApi {
       commandId,
       context,
       userId,
+      ...(frontendSessionId ? { frontendSessionId } : {}),
     });
   }
 

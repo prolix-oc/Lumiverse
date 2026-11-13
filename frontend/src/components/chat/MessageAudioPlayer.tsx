@@ -19,7 +19,9 @@ import {
   speak,
   stop as stopTTSEngine,
   getActiveMessageId,
+  getPlaybackSession,
   subscribeActiveMessage,
+  trackTTSAudioElement,
 } from '@/lib/ttsAudio'
 import styles from './MessageAudioPlayer.module.css'
 import clsx from 'clsx'
@@ -29,6 +31,8 @@ interface MessageAudioPlayerProps {
   src: string
   /** Original filename, used for the player tooltip and audio download. */
   title?: string
+  /** Start a preview opened by a user gesture; ordinary message playback is unchanged. */
+  autoPlay?: boolean
   /** Tagged onto the root so chat-bubble layout can flip alignment. */
   isUser?: boolean
   /**
@@ -78,6 +82,7 @@ function formatTime(seconds: number): string {
 export default function MessageAudioPlayer({
   src,
   title,
+  autoPlay = false,
   isUser,
   messageId,
   exiting = false,
@@ -152,14 +157,16 @@ export default function MessageAudioPlayer({
   // auto-play worked. Fetch the saved file and route it through the engine
   // so the user still hears the message; `enginePlaying` keeps the button
   // state coherent.
-  const playViaEngineFallback = useCallback(() => {
+  const playViaEngineFallback = useCallback((owner = getPlaybackSession()) => {
     if (!messageId) return
+    if (getPlaybackSession() !== owner) return
     fetch(src, { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`)
         return res.arrayBuffer()
       })
       .then((buffer) => {
+        if (getPlaybackSession() !== owner) return
         speak(buffer, messageId)
       })
       .catch((err) => {
@@ -190,8 +197,10 @@ export default function MessageAudioPlayer({
     el.addEventListener('pause', onPause)
     el.addEventListener('ended', onEnded)
     el.addEventListener('volumechange', onVolume)
+    const untrack = trackTTSAudioElement(el)
 
     return () => {
+      untrack()
       el.removeEventListener('loadedmetadata', onLoaded)
       el.removeEventListener('durationchange', onLoaded)
       el.removeEventListener('timeupdate', onTime)
@@ -221,15 +230,16 @@ export default function MessageAudioPlayer({
     }
     if (!messageId) return
     const marker = consumeFreshMarker(messageId)
-    if (!marker?.autoPlay) return
+    if (!marker?.autoPlay || (marker.playbackSession !== undefined && marker.playbackSession !== getPlaybackSession())) return
     // The audio element's src is React-bound, so by the time this effect
     // runs the new URL is already on the element. play() awaits whatever
     // loading is needed before it can actually start.
     const el = audioRef.current
     if (!el) return
+    const owner = getPlaybackSession()
     void el.play().catch((err) => {
       console.warn('[MessageAudioPlayer] autoplay-on-src-change rejected:', err)
-      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback()
+      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback(owner)
     })
   }, [src, messageId, playViaEngineFallback])
 
@@ -268,7 +278,7 @@ export default function MessageAudioPlayer({
     try {
       const response = await fetch(src, { credentials: 'include' })
       if (!response.ok) throw new Error(`Audio download failed: ${response.status}`)
-      triggerBlobDownload(await response.blob(), title || 'audio')
+      await triggerBlobDownload(await response.blob(), title || 'audio')
     } catch {
       toast.error('Could not download saved audio')
     } finally {
@@ -296,6 +306,17 @@ export default function MessageAudioPlayer({
       el.pause()
     }
   }, [messageId])
+
+  useEffect(() => {
+    if (!autoPlay) return
+    const el = audioRef.current
+    if (!el) return
+    stopTTSEngine()
+    void el.play().catch((err) => {
+      console.warn('[MessageAudioPlayer] preview playback rejected:', err)
+    })
+    return () => el.pause()
+  }, [autoPlay, src])
 
   const toggleMute = useCallback(() => {
     const el = audioRef.current
@@ -380,9 +401,10 @@ export default function MessageAudioPlayer({
     }
     if (animationDone) return
     setAnimationDone(true)
-    if (!shouldAutoPlay) return
+    if (!shouldAutoPlay || (freshMarker.playbackSession !== undefined && freshMarker.playbackSession !== getPlaybackSession())) return
     const el = audioRef.current
     if (!el) return
+    const owner = getPlaybackSession()
     void el.play().catch((err) => {
       // Browser autoplay policy blocks unmuted HTMLAudioElement playback
       // without a recent user gesture (Safari/iOS by default, Chrome in
@@ -390,9 +412,9 @@ export default function MessageAudioPlayer({
       // generation + synthesis complete. Route the audio through the
       // gesture-primed Web Audio engine instead so auto-play still sounds.
       console.warn('[MessageAudioPlayer] autoplay rejected:', err)
-      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback()
+      if ((err as any)?.name === 'NotAllowedError') playViaEngineFallback(owner)
     })
-  }, [exiting, onExited, animationDone, shouldAutoPlay, playViaEngineFallback])
+  }, [exiting, onExited, animationDone, shouldAutoPlay, freshMarker, playViaEngineFallback])
 
   return (
     <div

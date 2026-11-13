@@ -105,6 +105,7 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingSwipeId = useStore((s) => s.streamingSwipeId)
+  const persistedStream = useStore((s) => s.streamingRenderMode === 'persisted-message')
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
   const streamingContent = useStore((s) => {
     if (!s.isStreaming) return ''
@@ -153,7 +154,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const onStreamingSwipe = streamingSwipeId == null || message.swipe_id === streamingSwipeId
   const isRegenerating = isStreaming && regeneratingMessageId === message.id && onStreamingSwipe
   const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser && onStreamingSwipe
-  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe)
+  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe && streamingGenerationType !== 'impersonate_draft')
   // When this message is being regenerated, show streaming content in-place
   // instead of the saved (blank) swipe content.
   // When continuing, append streaming content to the existing message content.
@@ -161,7 +162,7 @@ export function useMessageCard(message: Message, chatId: string) {
   // in MessageList handles display to avoid race conditions with MESSAGE_SENT.
   // When navigated to a non-streaming swipe, falls through to message.content
   // (kept in sync with the active swipe by cycleSwipe / MESSAGE_SWIPED).
-  const rawContent = isRegenerating
+  const rawContent = isRegenerating && !persistedStream
     ? (streamingContent || message.content)
     : isContinuing
       ? message.content + (streamingContent || '')
@@ -180,15 +181,15 @@ export function useMessageCard(message: Message, chatId: string) {
   // API-level reasoning takes priority; during regeneration use streaming reasoning;
   // fall back to parsed inline reasoning
   const apiReasoning = message.extra?.reasoning as string | undefined
-  const reasoning = isRegenerating
+  const reasoning = isRegenerating && !persistedStream
     ? (streamingReasoning || parsedReasoning || undefined)
     : isContinuing
       ? (streamingReasoning || apiReasoning || parsedReasoning || undefined)
       : (apiReasoning || parsedReasoning || undefined)
-  const reasoningDuration = isActivelyStreaming
+  const reasoningDuration = isActivelyStreaming && !persistedStream
     ? (streamingReasoningDuration ?? undefined)
     : (message.extra?.reasoningDuration as number | undefined)
-  const reasoningStartedAt = isActivelyStreaming
+  const reasoningStartedAt = isActivelyStreaming && !persistedStream
     ? (streamingReasoningStartedAt ?? undefined)
     : undefined
   const tokenCount = message.extra?.tokenCount as number | undefined

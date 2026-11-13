@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
@@ -20,12 +21,15 @@ import {
 } from '@dnd-kit/sortable'
 import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
+import { ActivityPanel } from '@/components/shared/ActivityPanel'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
 import { translateSettingsField } from '@/lib/i18n/resolveLabel'
 import { Button, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
+import ChatImageSettings from '@/components/settings/ChatImageSettings'
 import DrawerWidthSettings from '@/components/settings/DrawerWidthSettings'
+import IOSDuoDisplaySettings from '@/components/settings/IOSDuoDisplaySettings'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -50,8 +54,8 @@ import {
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
-import { unlockNotificationAudio } from '@/lib/notificationAudio'
-import { webSearchApi, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
+import { playNotificationSound, unlockNotificationAudio } from '@/lib/notificationAudio'
+import { webSearchApi, type WebSearchProvider, type WebSearchProviderProfile, type WebSearchSettingsInput, type WebSearchTestResponse } from '@/api/web-search'
 import type { DrawerSettings, GuidedGeneration, LongMessageCollapsePreset, QuickReplySet } from '@/types/store'
 import type { EmbeddingConfig, ChatMemorySettings, ChatSummary, Character, CharacterSummary } from '@/types/api'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
@@ -64,11 +68,14 @@ import TokenizerManager from '@/components/settings/TokenizerManager'
 import Diagnostics from '@/components/settings/Diagnostics'
 import NotificationSettings from '@/components/settings/NotificationSettings'
 import MemoryCortexSettings from '@/components/settings/MemoryCortexSettings'
+import InferenceSchedulerSettings from '@/components/settings/InferenceSchedulerSettings'
 import OperatorPanel from '@/components/settings/OperatorPanel'
 import VoiceSettings from '@/components/settings/VoiceSettings'
 import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettings'
 import DataPortability from '@/components/settings/DataPortability'
+import IllarinSettings from '@/components/settings/IllarinSettings'
 import StreamDeckSettings from '@/components/settings/StreamDeckSettings'
+import DesktopKeybindingsSettings from '@/components/settings/DesktopKeybindingsSettings'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import EmbeddingConnectionPicker from '@/components/shared/EmbeddingConnectionPicker'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
@@ -218,6 +225,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     <div className={styles.overlay} onClick={onClose}>
       <motion.div
         className={styles.modal}
+        data-liquid-glass-surface=""
         onClick={(e) => e.stopPropagation()}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -288,18 +296,20 @@ function SettingsView({ view }: { view: string }) {
 
   let coreContent: ReactNode | null = null
   switch (view) {
+    case 'keyBindings':
+      coreContent = <DesktopKeybindingsSettings />; break
     case 'account':
       coreContent = <AccountSettings />; break
     case 'display':
-      coreContent = <DisplaySettings />; break
+      break
     case 'chat':
-      coreContent = <ChatSettings />; break
+      break
     case 'extensions':
       coreContent = <ExtensionSettingsView />; break
     case 'guided':
       coreContent = <GuidedGenerationSettings />; break
     case 'quickReplies':
-      coreContent = <QuickRepliesSettings />; break
+      break
     case 'extensionPools':
       coreContent = <ExtensionPoolSettings />; break
     case 'advanced':
@@ -320,6 +330,8 @@ function SettingsView({ view }: { view: string }) {
       coreContent = <SsoProviderSettings />; break
     case 'memoryCortex':
       coreContent = <MemoryCortexSettings />; break
+    case 'inference':
+      coreContent = <InferenceSchedulerSettings />; break
     case 'notifications':
       coreContent = <NotificationSettings />; break
     case 'voice':
@@ -340,12 +352,16 @@ function SettingsView({ view }: { view: string }) {
       break
   }
 
-  if (!coreContent && extensionTabs.length === 0) {
-    return hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
+  const retainedCoreView = view === 'display' || view === 'chat' || view === 'quickReplies'
+  if (!coreContent && !retainedCoreView && extensionTabs.length === 0) {
+    coreContent = hasCoreTab ? <div className={styles.placeholder}>{t('selectCategory')}</div> : null
   }
 
   return (
     <>
+      <ActivityPanel active={view === 'display'}><DisplaySettings /></ActivityPanel>
+      <ActivityPanel active={view === 'chat'}><ChatSettings /></ActivityPanel>
+      <ActivityPanel active={view === 'quickReplies'}><QuickRepliesSettings /></ActivityPanel>
       {coreContent}
       {extensionTabs.length > 0
         ? <SettingsExtensionTabBodies tabs={extensionTabs} />
@@ -380,10 +396,13 @@ function DisplaySettings() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
   const drawerSettings = useStore((s) => s.drawerSettings)
+  const showRecentConnections = useStore((s) => s.showRecentConnections !== false)
+  const showRecentPersonas = useStore((s) => s.showRecentPersonas !== false)
   const desktopPinchZoomEnabled = useStore((s) => s.desktopPinchZoomEnabled)
   const modalWidthMode = useStore((s) => s.modalWidthMode)
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const longMessageCollapseEnabled = useStore((s) => s.longMessageCollapseEnabled)
+  const longMessageCollapseUserMessages = useStore((s) => s.longMessageCollapseUserMessages)
   const longMessageCollapsePreset = useStore((s) => s.longMessageCollapsePreset)
   const longMessageCollapseCustomHeight = useStore((s) => s.longMessageCollapseCustomHeight)
   const longMessageCollapseDepth = useStore((s) => s.longMessageCollapseDepth)
@@ -391,6 +410,7 @@ function DisplaySettings() {
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
   const landingPageGalleryWidth = useStore((s) => s.landingPageGalleryWidth)
   const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
+  const landingPinFavorites = useStore((s) => s.landingPinFavorites)
   const toastPosition = useStore((s) => s.toastPosition)
   const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
   const chatHeadsSize = useStore((s) => s.chatHeadsSize)
@@ -435,6 +455,12 @@ function DisplaySettings() {
 
       {longMessageCollapseEnabled && (
         <>
+          <Toggle.Checkbox
+            checked={longMessageCollapseUserMessages}
+            onChange={(checked) => setSetting('longMessageCollapseUserMessages', checked)}
+            label={t('display.longMessages.includeUserMessages')}
+            hint={t('display.longMessages.includeUserMessagesHint')}
+          />
           <div className={styles.field}>
             <label className={styles.fieldLabel}>{t('display.longMessages.height')}</label>
             <div className={styles.segmented}>
@@ -528,6 +554,8 @@ function DisplaySettings() {
 
       <h3 id={sectionAnchorId('display', 'drawer')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('display.drawer.title')}</h3>
 
+      <IOSDuoDisplaySettings settings={drawerSettings} onChange={updateDrawer} />
+
       <div className={styles.drawerRow}>
         <div className={styles.field}>
           <label className={styles.fieldLabel}>{t('display.drawer.side')}</label>
@@ -590,6 +618,20 @@ function DisplaySettings() {
         onChange={(checked) => updateDrawer({ showTabLabels: checked })}
         label={t('display.drawer.showTabLabels')}
         hint={t('display.drawer.showTabLabelsHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={showRecentConnections}
+        onChange={(checked) => setSetting('showRecentConnections', checked)}
+        label={t('display.drawer.showRecentConnections')}
+        hint={t('display.drawer.showRecentConnectionsHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={showRecentPersonas}
+        onChange={(checked) => setSetting('showRecentPersonas', checked)}
+        label={t('display.drawer.showRecentPersonas')}
+        hint={t('display.drawer.showRecentPersonasHint')}
       />
 
       <DrawerWidthSettings settings={drawerSettings} onChange={updateDrawer} />
@@ -762,6 +804,13 @@ function DisplaySettings() {
         <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
       </div>
 
+      <Toggle.Checkbox
+        checked={landingPinFavorites}
+        onChange={(checked) => setSetting('landingPinFavorites', checked)}
+        label={t('display.landing.pinFavorites')}
+        hint={t('display.landing.pinFavoritesHint')}
+      />
+
     </div>
   )
 }
@@ -839,10 +888,7 @@ function CompletionSoundUploader({ disabled, current, onChange, onError, onSucce
         onError(t('display.completionSound.blocked'))
         return
       }
-      const url = notificationSoundsApi.completionUrl(current.uploadedAt)
-      const audio = new Audio(url)
-      audio.volume = 0.5
-      await audio.play().catch((err) => {
+      await playNotificationSound(current.uploadedAt).catch((err) => {
         onError(err?.message || t('display.completionSound.playFailed'))
       })
     } finally {
@@ -912,6 +958,8 @@ function ChatSettings() {
   const { t: tc } = useTranslation('common')
   const { t: tChat } = useTranslation('chat', { keyPrefix: 'quickMenu' })
   const displayMode = useStore((s) => s.chatDisplayMode)
+  const showGreetingImage = useStore((s) => s.showGreetingImage)
+  const greetingImagePosition = useStore((s) => s.greetingImagePosition)
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
@@ -920,6 +968,7 @@ function ChatSettings() {
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   const enterToSend = useStore((s) => s.inputBarEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const showComposerFormattingBar = useStore((s) => s.showComposerFormattingBar)
   const defaultImpersonationMode = useStore((s) => s.defaultImpersonationMode)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
@@ -1090,6 +1139,35 @@ function ChatSettings() {
         </>
       )}
 
+      <h3 id={sectionAnchorId('chat', 'inlineImages')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.inlineImages.title')}</h3>
+      <ChatImageSettings />
+
+      <h3 id={sectionAnchorId('chat', 'greetingImages')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.greetingImages.title')}</h3>
+      <Toggle.Checkbox
+        checked={showGreetingImage}
+        onChange={(checked) => setSetting('showGreetingImage', checked)}
+        label={t('chat.greetingImages.show')}
+        hint={t('chat.greetingImages.showHint')}
+      />
+      {showGreetingImage && (
+        <div className={styles.field}>
+          <label id="greeting-image-position-label" className={styles.fieldLabel}>{t('chat.greetingImages.position')}</label>
+          <div className={styles.segmented} role="group" aria-labelledby="greeting-image-position-label">
+            {(['top', 'bottom'] as const).map((position) => (
+              <button
+                key={position}
+                type="button"
+                className={clsx(styles.segmentedBtn, greetingImagePosition === position && styles.segmentedBtnActive)}
+                aria-pressed={greetingImagePosition === position}
+                onClick={() => setSetting('greetingImagePosition', position)}
+              >
+                {t(`chat.greetingImages.${position}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <h3 id={sectionAnchorId('chat', 'width')} className={sectionTitleClass} style={{ marginTop: 12 }}>{t('chat.widthTitle')}</h3>
       <p className={styles.helperText}>
         {t('chat.widthHelper')}
@@ -1200,6 +1278,13 @@ function ChatSettings() {
         onChange={(checked) => setSetting('saveDraftInput', checked)}
         label={t('chat.saveDraft')}
         hint={t('chat.saveDraftHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={showComposerFormattingBar}
+        onChange={(checked) => setSetting('showComposerFormattingBar', checked)}
+        label={t('chat.formattingBar')}
+        hint={t('chat.formattingBarHint')}
       />
 
       <div className={styles.field}>
@@ -1346,7 +1431,7 @@ interface SortableGuideRowProps {
   guide: GuidedGeneration
   editing: boolean
   chats: ChatSummary[]
-  characters: Character[]
+  characters: Array<Pick<Character, 'id' | 'name'>>
   activeChatId: string | null
   activeCharacterId: string | null
   onToggleEnabled: (id: string, value: boolean) => void
@@ -1636,7 +1721,7 @@ function GuidedGenerationSettings() {
   const openModal = useStore((s) => s.openModal)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [chats, setChats] = useState<ChatSummary[]>([])
 
@@ -3324,7 +3409,7 @@ function EmbeddingsSettings() {
 
 interface WebSearchSettingsState {
   enabled: boolean
-  provider: 'searxng' | 'exa' | 'tavily'
+  provider: WebSearchProvider
   apiUrl: string
   requestTimeoutMs: number
   defaultResultCount: number
@@ -3336,7 +3421,7 @@ interface WebSearchSettingsState {
   engines: string[]
   inlineToolEnabled: boolean
   hasApiKey: boolean
-  providerProfiles: Partial<Record<'searxng' | 'exa' | 'tavily', WebSearchProviderProfile>>
+  providerProfiles: Partial<Record<WebSearchProvider, WebSearchProviderProfile>>
 }
 
 const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
@@ -3356,8 +3441,12 @@ const WEB_SEARCH_DEFAULTS: WebSearchSettingsState = {
   providerProfiles: {},
 }
 
-const EXA_SEARCH_API_URL = 'https://api.exa.ai/search'
-const TAVILY_SEARCH_API_URL = 'https://api.tavily.com/search'
+const WEB_SEARCH_API_URLS: Record<WebSearchProvider, string> = {
+  searxng: '',
+  exa: 'https://api.exa.ai/search',
+  tavily: 'https://api.tavily.com/search',
+  deepseek: 'https://api.deepseek.com/v1/tools/search',
+}
 
 function WebSearchSettings() {
   const { t } = useTranslation('settings')
@@ -3483,7 +3572,7 @@ function WebSearchSettings() {
               ? { ...saved, provider, hasApiKey: saved.hasApiKey ?? false }
               : {
                   provider,
-                  apiUrl: provider === 'exa' ? EXA_SEARCH_API_URL : provider === 'tavily' ? TAVILY_SEARCH_API_URL : '',
+                  apiUrl: WEB_SEARCH_API_URLS[provider],
                   hasApiKey: false,
                 })
             setEnginesInput(saved?.engines.join(', ') ?? '')
@@ -3493,8 +3582,11 @@ function WebSearchSettings() {
           <option value="searxng">{t('webSearch.providerSearxng')}</option>
           <option value="exa">{t('webSearch.providerExa')}</option>
           <option value="tavily">{t('webSearch.providerTavily')}</option>
+          <option value="deepseek">{t('webSearch.providerDeepseek')}</option>
         </select>
       </div>
+
+      {cfg.provider === 'deepseek' && <p className={styles.placeholder}>{t('webSearch.deepseekHint')}</p>}
 
       {cfg.provider === 'searxng' && (
         <div className={styles.field}>
@@ -4170,413 +4262,6 @@ function LumiHubSettings() {
       )}
 
       {error && <span className={styles.errorText}>{error}</span>}
-    </div>
-  )
-}
-
-function IllarinSettings() {
-  const { t } = useTranslation('settings')
-  const user = useStore((s) => s.user)
-  const defaultInstanceName = user?.name ? `${user.name}'s Lumiverse` : t('illarin.defaultInstance')
-  const [illarinUrl, setIllarinUrl] = useState('https://illarin.com')
-  const [instanceName, setInstanceName] = useState(defaultInstanceName)
-  const [status, setStatus] = useState<{
-    linked: boolean
-    illarin_url?: string
-    instance_name?: string
-    instance_id?: string
-    scopes?: string[]
-    permission_error?: string | null
-    pickup?: {
-      state: 'starting' | 'running' | 'retrying' | 'missing_permission' | 'stopped'
-      lastCollectAt: string | null
-      lastInstallAt: string | null
-      lastError: string | null
-      lastErrorAt: string | null
-    } | null
-    linked_at?: string | null
-    declaration_version?: string | null
-    pending_link?: { status: 'pending' | 'linked' | 'failed'; reason?: string | null } | null
-  } | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [linking, setLinking] = useState(false)
-  const statusRef = useRef(status)
-  useEffect(() => { statusRef.current = status }, [status])
-  const [unlinking, setUnlinking] = useState(false)
-  const [refreshingPermissions, setRefreshingPermissions] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [deviceCode, setDeviceCode] = useState<{ user_code: string; verification_url: string } | null>(null)
-  const [browserCode, setBrowserCode] = useState<string | null>(null)
-  const [browserAuthorizationUrl, setBrowserAuthorizationUrl] = useState<string | null>(null)
-
-  // Loopback browser linking only reaches the backend when the BROWSER runs
-  // on the same machine as the server; otherwise fall back to device codes.
-  const isLocalOrigin = ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname)
-  const pollRef = useRef<{ timer?: ReturnType<typeof setInterval>; timeout?: ReturnType<typeof setTimeout> }>({})
-
-  const stopPolling = useCallback(() => {
-    clearInterval(pollRef.current.timer)
-    clearTimeout(pollRef.current.timeout)
-  }, [])
-  useEffect(() => stopPolling, [stopPolling])
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/v1/illarin/status', { credentials: 'include' })
-      if (res.ok) {
-        const data = await res.json()
-        setStatus(data)
-        if (data.illarin_url) setIllarinUrl(data.illarin_url)
-        if (data.instance_name) setInstanceName((current) => current || data.instance_name)
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchStatus()
-    const interval = setInterval(fetchStatus, 10_000)
-    return () => clearInterval(interval)
-  }, [fetchStatus])
-
-  const finishLinking = () => {
-    stopPolling()
-    setLinking(false)
-    setDeviceCode(null)
-    setBrowserCode(null)
-    setBrowserAuthorizationUrl(null)
-    fetchStatus()
-  }
-
-  const startDeviceFlow = async (authorizationTab: Window | null) => {
-    try {
-      const res = await fetch('/api/v1/illarin/link/device', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ illarin_url: illarinUrl.trim(), instance_name: instanceName.trim() || defaultInstanceName }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        closeAuthorizationPopup(authorizationTab)
-        setError((body as any).error || t('illarin.errLinkFailed'))
-        setLinking(false)
-        return false
-      }
-      const data = await res.json() as { user_code: string; verification_url: string; expires_at: string }
-      const navigation = navigateAuthorizationPopup(authorizationTab, data.verification_url)
-      if (navigation.status === 'invalid') {
-        closeAuthorizationPopup(authorizationTab)
-        setError(t('illarin.errLinkFailed'))
-        setLinking(false)
-        return false
-      }
-      setDeviceCode({ user_code: data.user_code, verification_url: navigation.url })
-      // Poll respecting the server-enforced interval; give up at expiry.
-      pollRef.current.timer = setInterval(async () => {
-        try {
-          const check = await fetch('/api/v1/illarin/link/device/status', { credentials: 'include' })
-          if (!check.ok) return
-          const checkData = await check.json() as { status: string }
-          if (checkData.status === 'linked') finishLinking()
-          else if (checkData.status !== 'pending') {
-            setError(t('illarin.errLinkFailed'))
-            finishLinking()
-          }
-        } catch {
-          // A transient status failure should not cancel the device session.
-        }
-      }, 3000)
-      pollRef.current.timeout = setTimeout(finishLinking, 10 * 60 * 1000)
-      return true
-    } catch (err: any) {
-      closeAuthorizationPopup(authorizationTab)
-      setError(err.message || t('illarin.errConnectFailed'))
-      setLinking(false)
-      return false
-    }
-  }
-
-  const handleLink = async () => {
-    if (!illarinUrl.trim()) {
-      setError(t('illarin.errUrl'))
-      return
-    }
-
-    // Reserve the tab while this click still has browser user activation.
-    // The same window carries either local PKCE or remote device verification.
-    const authorizationTab = reserveAuthorizationPopup({ name: 'lumiverse_illarin_link' })
-
-    setError(null)
-    setLinking(true)
-    setBrowserCode(null)
-    setBrowserAuthorizationUrl(null)
-    if (!isLocalOrigin) {
-      await startDeviceFlow(authorizationTab)
-      return
-    }
-    try {
-      const res = await fetch('/api/v1/illarin/link/browser', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ illarin_url: illarinUrl.trim(), instance_name: instanceName.trim() || defaultInstanceName }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        closeAuthorizationPopup(authorizationTab)
-        setError((body as any).error || t('illarin.errLinkFailed'))
-        setLinking(false)
-        return
-      }
-      const data = await res.json() as { authorize_url?: string; user_code?: string }
-      if (!data.user_code) {
-        closeAuthorizationPopup(authorizationTab)
-        setError(t('illarin.errLinkFailed'))
-        setLinking(false)
-        return
-      }
-      setBrowserCode(data.user_code)
-      const navigation = navigateAuthorizationPopup(authorizationTab, data.authorize_url)
-      if (navigation.status === 'invalid') {
-        closeAuthorizationPopup(authorizationTab)
-        setError(t('illarin.errLinkFailed'))
-        setLinking(false)
-        setBrowserCode(null)
-        return
-      }
-
-      if (navigation.status === 'blocked') setBrowserAuthorizationUrl(navigation.url)
-
-      // Backend listens on loopback while the authorization page is open.
-      pollRef.current.timer = setInterval(async () => {
-        await fetchStatus()
-        if (statusRef.current?.linked || statusRef.current?.pending_link?.status === 'failed') {
-          if (statusRef.current?.pending_link?.status === 'failed' && !statusRef.current.linked) {
-            setError(t('illarin.errLinkFailed'))
-            stopPolling()
-            setLinking(false)
-            setBrowserCode(null)
-            setBrowserAuthorizationUrl(null)
-          } else {
-            finishLinking()
-          }
-        }
-      }, 2000)
-      pollRef.current.timeout = setTimeout(finishLinking, 5 * 60 * 1000)
-    } catch (err: any) {
-      closeAuthorizationPopup(authorizationTab)
-      setError(err.message || t('illarin.errConnectFailed'))
-      setLinking(false)
-      setBrowserCode(null)
-      setBrowserAuthorizationUrl(null)
-    }
-  }
-
-  const handleDeviceLink = () => {
-    if (!illarinUrl.trim()) {
-      setError(t('illarin.errUrl'))
-      return
-    }
-    const authorizationTab = reserveAuthorizationPopup({ name: 'lumiverse_illarin_device_link' })
-    setError(null)
-    setLinking(true)
-    void startDeviceFlow(authorizationTab)
-  }
-
-  const handleUnlink = async () => {
-    setUnlinking(true)
-    try {
-      await fetch('/api/v1/illarin/unlink', { method: 'POST', credentials: 'include' })
-      setStatus((prev) => (prev ? { ...prev, linked: false } : { linked: false }))
-    } catch {
-      setError(t('illarin.errUnlinkFailed'))
-    } finally {
-      setUnlinking(false)
-    }
-  }
-
-  const handleRefreshPermissions = async () => {
-    setRefreshingPermissions(true)
-    setError(null)
-    try {
-      const response = await fetch('/api/v1/illarin/permissions/refresh', { method: 'POST', credentials: 'include' })
-      if (!response.ok) throw new Error(t('illarin.errRefreshPermissions'))
-      await fetchStatus()
-    } catch {
-      setError(t('illarin.errRefreshPermissions'))
-      await fetchStatus()
-    } finally {
-      setRefreshingPermissions(false)
-    }
-  }
-
-  const pickupStateLabel = status?.pickup
-    ? t(`illarin.pickupState.${status.pickup.state}`)
-    : t('illarin.pickupState.stopped')
-
-  if (loading) {
-    return (
-      <div className={styles.settingsSection}>
-        <h3 id={sectionAnchorId('illarin', 'general')} className={sectionTitleClass}>{t('illarin.title')}</h3>
-        <span className={styles.helperText}>{t('illarin.loading')}</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className={styles.settingsSection}>
-      <h3 id={sectionAnchorId('illarin', 'general')} className={sectionTitleClass}>{t('illarin.title')}</h3>
-      <span className={styles.helperText}>{t('illarin.helper')}</span>
-
-      {status?.linked ? (
-        <div className={styles.lumihubCard}>
-          <div className={styles.lumihubStatusRow}>
-            <span className={clsx(styles.lumihubDot, styles.lumihubDotOnline)} />
-            <span className={styles.lumihubStatusText}>
-              {t('illarin.linkedAs', { name: status.instance_name })}
-            </span>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.url')}</span>
-            <span className={styles.lumihubMeta}>{status.illarin_url}</span>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.instanceIdLabel')}</span>
-            <span className={styles.lumihubMeta}>{status.instance_id}</span>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.scopesLabel')}</span>
-            <span className={styles.lumihubMeta}>{(status.scopes ?? []).join(', ') || t('illarin.noPermissions')}</span>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.pickupLabel')}</span>
-            <span className={styles.lumihubMeta}>{pickupStateLabel}</span>
-          </div>
-
-          {status.pickup?.lastCollectAt && (
-            <span className={styles.lumihubMeta}>
-              {t('illarin.lastCollect', { time: new Date(status.pickup.lastCollectAt).toLocaleString() })}
-            </span>
-          )}
-
-          {status.pickup?.lastError && status.pickup.state !== 'missing_permission' && (
-            <span className={styles.helperText}>
-              {t('illarin.lastPickupError', { error: status.pickup.lastError })}
-            </span>
-          )}
-
-          {status.permission_error && (
-            <span className={styles.helperText}>{t('illarin.permissionOff', { permission: status.permission_error })}</span>
-          )}
-
-          <Button variant="ghost" size="sm" onClick={handleRefreshPermissions} disabled={refreshingPermissions} loading={refreshingPermissions}>
-            {t('illarin.refreshPermissions')}
-          </Button>
-
-          {error && <span className={styles.helperText} style={{ color: 'var(--lumiverse-danger)' }}>{error}</span>}
-
-          {status.declaration_version && (
-            <div className={styles.field}>
-              <span className={styles.fieldLabel}>{t('illarin.versionLabel')}</span>
-              <span className={styles.lumihubMeta}>v{status.declaration_version}</span>
-            </div>
-          )}
-
-          <span className={styles.lumihubMeta}>{t('illarin.unlinkHint')}</span>
-
-          <Button variant="danger-ghost" size="sm" onClick={handleUnlink} disabled={unlinking} loading={unlinking}>
-            {unlinking ? t('illarin.unlinking') : t('illarin.unlink')}
-          </Button>
-        </div>
-      ) : (
-        <div className={styles.lumihubCard}>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.url')}</span>
-            <input
-              className={styles.lumihubInput}
-              type="text"
-              placeholder={t('illarin.urlPlaceholder')}
-              value={illarinUrl}
-              onChange={(e) => setIllarinUrl(e.target.value)}
-            />
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>{t('illarin.instanceName')}</span>
-            <input
-              className={styles.lumihubInput}
-              type="text"
-              value={instanceName}
-              onChange={(e) => setInstanceName(e.target.value)}
-            />
-          </div>
-
-          {deviceCode && (
-            <div className={styles.lumihubDisclosure}>
-              <span className={styles.lumihubDisclosureTitle}>{t('illarin.deviceTitle')}</span>
-              <span className={styles.lumihubDisclosureText}>
-                {t('illarin.deviceStep1', { url: deviceCode.verification_url })}
-                <br />
-                <a
-                  className={styles.illarinVerificationLink}
-                  href={deviceCode.verification_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {t('illarin.openVerification')}
-                </a>
-                <br />
-                {t('illarin.deviceStep2')}
-              </span>
-              <span className={styles.lumihubInput} style={{ fontSize: '1.4em', textAlign: 'center', letterSpacing: '0.2em' }}>
-                {deviceCode.user_code}
-              </span>
-              <span className={styles.lumihubDisclosureText}>{t('illarin.deviceNote')}</span>
-            </div>
-          )}
-
-          {browserCode && (
-            <div className={styles.lumihubDisclosure}>
-              <span className={styles.lumihubDisclosureTitle}>{t('illarin.browserCodeTitle')}</span>
-              <span className={styles.lumihubDisclosureText}>{t('illarin.browserCodeNote')}</span>
-              {browserAuthorizationUrl && (
-                <a className={styles.illarinVerificationLink} href={browserAuthorizationUrl} target="_blank" rel="noopener noreferrer">
-                  {t('illarin.openAuthorization')}
-                </a>
-              )}
-              <span className={styles.lumihubInput} style={{ fontSize: '1.4em', textAlign: 'center', letterSpacing: '0.2em' }}>
-                {browserCode}
-              </span>
-            </div>
-          )}
-
-          {linking && (
-            <span className={styles.helperText}>
-              {deviceCode ? t('illarin.waitingDevice') : t('illarin.waitingBrowser')}
-            </span>
-          )}
-
-          {error && <span className={styles.helperText} style={{ color: 'var(--lumiverse-danger)' }}>{error}</span>}
-
-          <Button variant="primary" size="sm" onClick={handleLink} disabled={linking} loading={linking}>
-            {linking ? t('illarin.linking') : t('illarin.link')}
-          </Button>
-
-          {isLocalOrigin && !deviceCode && (
-            <Button variant="ghost" size="sm" onClick={handleDeviceLink} disabled={linking}>
-              {t('illarin.deviceFallback')}
-            </Button>
-          )}
-        </div>
-      )}
     </div>
   )
 }

@@ -15,6 +15,12 @@ Object.defineProperties(globalThis, {
 })
 
 const t = (key: string) => key
+// Folder save/cancel behavior is exercised with real managers in the browser test.
+mock.module('@/components/panels/connection-manager/ConnectionFolderField', () => ({
+  default: () => null,
+  useConnectionFolderDraft: () => ({ value: '', onChange: () => {} }),
+}))
+mock.module('@/hooks/useConnectionLibrary', () => ({ saveConnectionFolder: () => {} }))
 mock.module('react-i18next', () => ({ useTranslation: () => ({ t }) }))
 mock.module('../connection-manager/ModelCombobox', () => ({ default: () => null }))
 

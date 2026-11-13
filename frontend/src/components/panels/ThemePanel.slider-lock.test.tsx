@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { DEFAULT_THEME } from '@/theme/presets'
+import { setDeviceThemeControlsEnabled, setDeviceThemeControlsScope, useDeviceThemeControls } from '@/lib/deviceThemeControls'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
 let coarse = true
@@ -14,7 +15,7 @@ Object.assign(globalThis, {
 dom.window.matchMedia = ((media: string) => ({ matches: coarse, media })) as typeof window.matchMedia
 const setTheme = mock(() => {})
 const store = {
-  theme: { ...DEFAULT_THEME, accent: { h: 201, s: 70, l: 60 } },
+  theme: { ...DEFAULT_THEME, liquidGlass: true, accent: { h: 201, s: 70, l: 60 } },
   extensionThemeOverrides: {}, mutedExtensionThemes: {}, setTheme,
   openModal: () => {}, clearAllExtensionThemeOverrides: () => {}, addSavedTheme: () => {},
 }
@@ -31,6 +32,7 @@ let root: Root
 let host: HTMLElement
 beforeEach(() => {
   setTheme.mockClear()
+  setDeviceThemeControlsScope(null)
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -83,4 +85,27 @@ test('each editing section has a synchronized unlock button and protects primary
   expect(setTheme).toHaveBeenCalledTimes(1)
   act(() => swatches[0].click())
   expect(setTheme).toHaveBeenCalledTimes(2)
+})
+
+
+test('turning device glass off preserves the synced liquid-glass preference', () => {
+  setDeviceThemeControlsScope('local-glass-test')
+  setDeviceThemeControlsEnabled(true, store.theme)
+  act(() => root.render(<ThemePanel />))
+  const glass = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+    .find(input => input.closest('label')?.textContent === 'glassEffects')!
+  expect(glass.checked).toBe(true)
+  act(() => glass.click())
+  expect(useDeviceThemeControls.getState().controls?.enableGlass).toBe(false)
+  expect(setTheme).not.toHaveBeenCalled()
+  expect(store.theme.liquidGlass).toBe(true)
+})
+
+test('turning authored glass off clears the liquid preference in the same write', () => {
+  act(() => root.render(<ThemePanel />))
+  const glass = Array.from(host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+    .find(input => input.closest('label')?.textContent === 'glassEffects')!
+  act(() => glass.click())
+  expect(setTheme).toHaveBeenCalledTimes(1)
+  expect(setTheme).toHaveBeenCalledWith(expect.objectContaining({ enableGlass: false, liquidGlass: false }))
 })

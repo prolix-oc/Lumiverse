@@ -998,6 +998,7 @@
 
 .nativeModal { height: calc(85dvh / var(--lumiverse-ui-scale, 1)); }
 .nativeModal.nativeFullscreen {
+  --worldbook-keyboard-clearance: calc(var(--app-keyboard-inset-bottom, 0px) / var(--lumiverse-ui-scale, 1));
   height: 100%;
   max-height: none;
   border-radius: 0;
@@ -1008,6 +1009,10 @@
   padding-left: calc(var(--worldbook-safe-left, env(safe-area-inset-left, 0px)) / var(--lumiverse-ui-scale, 1));
   --worldbook-footer-safe-bottom: 0px;
 }
+
+/* The fullscreen frame already extends behind the keyboard. Its footer must
+   not enlarge the editing pane a second time when the viewport gets shorter. */
+.nativeModal.nativeFullscreen .contentFooter { margin-bottom: 0; }
 
 .bookWorkspace { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .bookWorkspace[hidden] { display: none; }

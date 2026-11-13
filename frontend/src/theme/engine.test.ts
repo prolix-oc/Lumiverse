@@ -65,5 +65,34 @@ describe('generateThemeVariables', () => {
     expect(GENERATED_VARS['--lcs-glass-bg']).toBeDefined()
     expect(GENERATED_VARS['--lcs-glass-bg-hover']).toBeDefined()
     expect(GENERATED_VARS['--lcs-glass-border-hover']).toBeDefined()
+    expect(GENERATED_VARS['--lcs-liquid-tint']).toBeDefined()
+    expect(GENERATED_VARS['--lcs-liquid-blur']).toBeDefined()
+  })
+
+  test('emits an inert liquid glass material unless the theme opts in', () => {
+    const off = generateThemeVariables({ ...DEFAULT_THEME, liquidGlass: false }, 'dark')
+    const on = generateThemeVariables({ ...DEFAULT_THEME, liquidGlass: true }, 'dark')
+
+    // The tokens always exist so a theme switch never has to add or remove
+    // variables; opting out just makes them paint nothing.
+    expect(off['--lcs-liquid-tint']).toBe('transparent')
+    expect(off['--lcs-liquid-blur']).toBe('0px')
+    expect(off['--lcs-liquid-thumb-tint']).toBe('transparent')
+    expect(off['--lcs-liquid-thumb-blur']).toBe('0px')
+    expect(on['--lcs-liquid-tint']).not.toBe('transparent')
+    expect(on['--lcs-liquid-blur']).not.toBe('0px')
+    expect(on['--lcs-liquid-rim']).not.toBe('transparent')
+    expect(on['--lcs-liquid-thumb-tint']).not.toBe('transparent')
+    expect(on['--lcs-liquid-thumb-blur']).not.toBe('0px')
+    expect(on['--lcs-liquid-thumb-specular']).not.toBe('transparent')
+  })
+
+  test('keeps slider beads lighter than surfaces so small shapes stay clear', () => {
+    const on = generateThemeVariables({ ...DEFAULT_THEME, liquidGlass: true }, 'dark')
+    const alpha = (value: string) => Number(value.match(/,\s*([\d.]+)\)$/)?.[1] ?? NaN)
+
+    // A surface carries text and wants a deeper wash; a thumb is a tiny solid
+    // shape and turns muddy at the same alpha.
+    expect(alpha(on['--lcs-liquid-thumb-tint'])).toBeLessThan(alpha(on['--lcs-liquid-tint']))
   })
 })

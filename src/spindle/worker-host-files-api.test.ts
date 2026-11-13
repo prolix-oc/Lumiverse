@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdtemp, open, readdir, rm, stat, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -159,7 +160,7 @@ test("creates ZIP64 archives from staged files and uploads, then extracts exact 
     const raw = new Uint8Array(await Bun.file(getStagedFile(zip.fileId)!.path).arrayBuffer());
     expect(Buffer.from(raw).indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06]))).toBeGreaterThan(0);
     const extracted = await c.call({ type: "archives_extract", source: { fileId: zip.fileId }, options: { maxDecompressedBytes: 6 } });
-    expect(extracted.map((entry: any) => entry.name)).toEqual(["folder/first.bin", "second.bin"]);
+    expect(extracted.map((entry: any) => entry.name).sort()).toEqual(["folder/first.bin", "second.bin"]);
     for (const entry of extracted) {
       expect((await c.call({ type: "files_read_chunk", source: { fileId: entry.file.fileId }, offset: 0 })).data).toEqual(bytes);
     }
@@ -167,6 +168,69 @@ test("creates ZIP64 archives from staged files and uploads, then extracts exact 
     expect(subset.map((entry: any) => entry.name)).toEqual(["second.bin"]);
     await expect(c.call({ type: "archives_extract", source: { fileId: zip.fileId }, options: { entries: ["missing"], maxDecompressedBytes: 3 } })).rejects.toThrow("not found");
   } finally { deleteUpload(upload.uploadId); }
+});
+
+test.each(["file", "upload"])("extracts a small CHARX with less free disk than the expansion limit, source=%s", async (kind) => {
+  const c = client();
+  const entries = {
+    "card.json": new TextEncoder().encode(JSON.stringify({ spec: "chara_card_v3", data: { name: "Synthetic" } })),
+    "assets/image.png": new Uint8Array([0, 128, 255]),
+  };
+  const bytes = zipSync(entries);
+  const upload = kind === "upload"
+    ? createUpload({ ownerUserId: "alice", extensionIdentifier: "extension-a", fileName: "card.charx", declaredSize: bytes.length })
+    : undefined;
+  if (upload) await appendUpload(upload.uploadId, new Blob([new Uint8Array(bytes)]).stream(), 0);
+  const source = upload ? { uploadId: upload.uploadId } : { fileId: (await staged(c, bytes, "card.charx")).fileId };
+  const disk = fs.statfsSync(directory);
+  const diskSpy = spyOn(fs, "statfsSync").mockReturnValue({ ...disk, bavail: 1024 ** 3, bsize: 1 });
+  try {
+    const extracted = await c.call({ type: "archives_extract", source, options: { maxDecompressedBytes: 20 * 1024 ** 3 } });
+    expect(extracted.map((entry: any) => entry.name)).toEqual(Object.keys(entries));
+    for (const entry of extracted) {
+      expect((await c.call({ type: "files_read_chunk", source: { fileId: entry.file.fileId }, offset: 0 })).data)
+        .toEqual(entries[entry.name as keyof typeof entries]);
+      expect(getStagedFile(entry.file.fileId)!.budget).toBe(entry.file.size);
+    }
+  } finally {
+    diskSpy.mockRestore();
+    if (upload) deleteUpload(upload.uploadId);
+  }
+});
+
+test("reserves only selected ZIP entries and releases reservations after a disk-space failure", async () => {
+  const c = client();
+  const zip = await staged(c, zipSync({ "a.bin": new Uint8Array(3), "b.bin": new Uint8Array(3) }));
+  const source = { fileId: zip.fileId };
+  const disk = fs.statfsSync(directory);
+  const diskSpy = spyOn(fs, "statfsSync").mockReturnValue({ ...disk, bavail: 64 * 1024 ** 2 + 5, bsize: 1 });
+  try {
+    await expect(c.call({ type: "archives_extract", source, options: {} })).rejects.toThrow("Insufficient free disk space");
+    const root = (await readdir(join(directory, "spindle-files")))[0]!;
+    expect(await readdir(join(directory, "spindle-files", root))).toEqual([zip.fileId]);
+    expect(getStagedFile(zip.fileId)!.pins).toBe(0);
+    expect(await c.call({ type: "archives_extract", source, options: { entries: [] } })).toEqual([]);
+    const subset = await c.call({ type: "archives_extract", source, options: { entries: ["a.bin"] } });
+    expect(subset.map((entry: any) => entry.name)).toEqual(["a.bin"]);
+    expect(subset[0].file.size).toBe(3);
+  } finally { diskSpy.mockRestore(); }
+});
+
+test.each([0, 6] as const)("rejects understated ZIP entry sizes before writing unreserved bytes, compression=%s", async (level) => {
+  const c = client();
+  const bytes = zipSync({ "asset.bin": new Uint8Array(4096) }, { level });
+  const central = Buffer.from(bytes).indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  expect(central).toBeGreaterThan(0);
+  new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(central + 24, 1, true);
+  const zip = await staged(c, bytes);
+  const writeSpy = spyOn(fs, "writeSync");
+  try {
+    await expect(c.call({ type: "archives_extract", source: { fileId: zip.fileId }, options: { maxDecompressedBytes: 4096 } }))
+      .rejects.toThrow("entry size disagrees with central directory");
+    expect(writeSpy).not.toHaveBeenCalled();
+    const root = (await readdir(join(directory, "spindle-files")))[0]!;
+    expect(await readdir(join(directory, "spindle-files", root))).toEqual([zip.fileId]);
+  } finally { writeSpy.mockRestore(); }
 });
 
 test("rejects traversal, duplicate names, corrupt CRCs, and ZIP expansion beyond budget", async () => {

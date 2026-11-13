@@ -88,13 +88,22 @@ describe('frontend authority map', () => {
     }
     expect(frontendAuthorityPermission('ctx_member', 'ctx.connections.models')).toBe('generation')
     expect(frontendAuthorityPermission('ctx_member', 'ctx.client.getInfo')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.uuid.v4')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.uuid.v7')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.listProviders')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.onHostActivity')).toBeNull()
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.stt.isHostCapturing')).toBeNull()
     for (const method of ['prepare', 'start', 'transcribe']) {
       expect(frontendAuthorityPermission('ctx_member', `ctx.stt.${method}`)).toBe('media')
     }
     // System audio: discovery is free; starting analysis needs the privileged permission.
     expect(frontendAuthorityPermission('ctx_member', 'ctx.systemAudio.isAvailable')).toBeNull()
     expect(frontendAuthorityPermission('ctx_member', 'ctx.systemAudio.start')).toBe('system_audio')
+    // Composer: the draft is free to read and edit; sending starts a generation.
+    for (const method of ['getState', 'onChange', 'setText', 'insertText', 'focus']) {
+      expect(frontendAuthorityPermission('ctx_member', `ctx.composer.${method}`)).toBeNull()
+    }
+    expect(frontendAuthorityPermission('ctx_member', 'ctx.composer.send')).toBe('generation')
     expect(frontendAuthorityPermission('legacy_ctx_member', 'ctx.chats.updateMessage')).toBe('chats')
     for (const member of [
       'ctx.ui.registerConnectionEditorTab',

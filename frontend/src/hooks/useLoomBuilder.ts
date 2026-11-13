@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '@/store'
+import { markDisplayMilestone } from '@/lib/displayPerformance'
+import { readAccountEpoch } from '@/lib/shared-read'
 import { presetsApi } from '@/api/presets'
 import { connectionsApi } from '@/api/connections'
 import { ApiError } from '@/api/client'
@@ -11,7 +13,6 @@ import { bindImportedRegexesToPreset } from '@/lib/loom/preset-regex-import'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { assertRenderableLoomPreset, InvalidLoomPresetError, marshalImportedPresetForEditor, unmarshalPresetForEditor as unmarshalPreset } from '@/lib/loom/preset-validation'
-import { findLoomPresetFallback } from '@/lib/loom/preset-recovery'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableDef, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -90,6 +91,7 @@ function applyPrivateBlockChange(
 export function useLoomBuilder() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
   const loomRegistry = useStore((s) => s.loomRegistry)
+  const loomRegistryLoaded = useStore((s) => s.loomRegistryLoaded)
   const setActiveLoomPreset = useStore((s) => s.setActiveLoomPreset)
   const setLoomRegistry = useStore((s) => s.setLoomRegistry)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -97,6 +99,8 @@ export function useLoomBuilder() {
   const providers = useStore((s) => s.providers)
 
   const [activePreset, setActivePreset] = useState<LoomPreset | null>(null)
+  const loadedPresetId = activePreset?.id
+  useEffect(() => { if (loadedPresetId) markDisplayMilestone('presetContent') }, [loadedPresetId])
   const [runtimePresetProfile, setRuntimePresetProfile] = useState<{
     presetId: string
     blockStates: Record<string, boolean>
@@ -185,6 +189,8 @@ export function useLoomBuilder() {
           recoverFromPresetId: activeLoomPresetId,
         })
         try {
+          const { findLoomPresetFallback } = await import('@/lib/loom/preset-recovery')
+          if (!isCurrent()) return
           const fallback = await findLoomPresetFallback(activeLoomPresetId, lastGoodPresetIdRef.current, isCurrent)
           if (!fallback || !isCurrent()) return
           const restored = presetSaveCoordinator.hydrate(fallback)
@@ -249,8 +255,10 @@ export function useLoomBuilder() {
 
   // Refresh registry from API
   const refreshRegistry = useCallback(async () => {
+    const epoch = readAccountEpoch()
     try {
-      const result = await presetsApi.listRegistry({ provider: 'loom', limit: 200 })
+      const result = await presetsApi.listRegistryAll({ provider: 'loom' })
+      if (epoch !== readAccountEpoch()) return
       const registry = Object.fromEntries(
         result.data.map((p) => [
           p.id,
@@ -259,6 +267,7 @@ export function useLoomBuilder() {
             blockCount: p.block_count,
             coverUrl: p.cover_url ?? null,
             updatedAt: p.updated_at,
+            cacheRevision: p.cache_revision,
             isDefault: false,
           },
         ])
@@ -274,9 +283,9 @@ export function useLoomBuilder() {
   // duplicate/save) already calls `refreshRegistry()` itself, so skip the
   // redundant mount-time fetch when the cache is populated.
   useEffect(() => {
-    if (Object.keys(loomRegistry).length > 0) return
+    if (loomRegistryLoaded) return
     refreshRegistry()
-  }, [loomRegistry, refreshRegistry])
+  }, [loomRegistryLoaded, refreshRegistry])
 
   // Create a new preset
   const createPreset = useCallback(async (name: string, description?: string) => {

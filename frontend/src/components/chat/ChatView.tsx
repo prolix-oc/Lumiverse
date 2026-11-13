@@ -5,13 +5,12 @@ import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound, X } from 'l
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
 import { chatsApi, messagesApi } from '@/api/chats'
-import { memoryCortexApi, type CortexIngestionStatus } from '@/api/memory-cortex'
+import { memoryCortexApi, CORTEX_REQUEST_EVENT, type CortexIngestionStatus, type CortexActivitySnapshot } from '@/api/memory-cortex'
 import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
-import { expressionsApi } from '@/api/expressions'
 import { personaToastName } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -28,6 +27,7 @@ import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } f
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import { CHAT_REVEAL_SETTLE_CAP_MS, getChatDisplaySettleDiagnostics } from '@/lib/chatDisplaySettle'
+import { playChatChromeMotion } from '@/lib/chatChromeMotion'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -67,6 +67,7 @@ import {
   cortexErrorNoticeRemainingMs,
   hideDismissedCortexError,
   normalizeRebuildStatus,
+  mergeCortexActivity,
   type CortexRebuildStatus,
 } from './cortexNotice'
 
@@ -81,7 +82,6 @@ const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
 const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
 const WALLPAPER_TRANSITION_HALF_MS = 260
 const WALLPAPER_READY_FALLBACK_MS = 5000
-const CHAT_CHROME_LEAVE_MS = 220
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
@@ -136,6 +136,9 @@ export default function ChatView() {
   const spindleVisibleAtRef = useRef<number | null>(null)
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
+  const [cortexActivity, setCortexActivity] = useState<CortexActivitySnapshot | null>(null)
+  const [cortexRequestedAt, setCortexRequestedAt] = useState<number | null>(null)
+  const [cortexNow, setCortexNow] = useState(() => Date.now())
   const [dismissedCortexErrorKey, setDismissedCortexErrorKey] = useState<string | null>(null)
   const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
   const [chatFindOpen, setChatFindOpen] = useState(false)
@@ -228,7 +231,10 @@ export default function ChatView() {
   const chatComposerAboveRef = useRef<HTMLSpanElement>(null)
   const wallpaperTransitionTimeouts = useRef<number[]>([])
   const chromeEnterTimerRef = useRef<number | null>(null)
-  const chromeLeaveTimerRef = useRef<number | null>(null)
+  const chromeLoadChatRef = useRef<string | null>(null)
+  const chromeReadyChatRef = useRef<string | null>(null)
+  const chromeLeaveRequestedRef = useRef(false)
+  const chromeWasHiddenRef = useRef(true)
   // Stabilization is independent of animation preference: reduced-motion
   // users should still never see raw extension payloads before interceptors
   // attach. CSS makes the eventual reveal instantaneous for them.
@@ -327,16 +333,29 @@ export default function ChatView() {
   useLayoutEffect(() => {
     if (!chatId) return
 
+    const newChat = chromeLoadChatRef.current !== chatId
+    chromeLoadChatRef.current = chatId
+
     if (chromeEnterTimerRef.current !== null) {
       window.clearTimeout(chromeEnterTimerRef.current)
       chromeEnterTimerRef.current = null
     }
 
-    setChatChromeEntering(true)
-    document.body.setAttribute('data-chat-chrome-entering', 'true')
+    // Suspense disconnects and reconnects layout effects without replacing
+    // this chat. Keep its readiness and any pending Home navigation intact.
+    if (newChat) {
+      chromeReadyChatRef.current = null
+      setChatChromeEntering(true)
+      setChatChromeLeaving(false)
+      chromeLeaveRequestedRef.current = false
+    }
+    if (chromeReadyChatRef.current !== chatId) {
+      document.body.setAttribute('data-chat-chrome-entering', 'true')
+    }
     const handlePopulated = (event: Event) => {
       const populatedChatId = (event as CustomEvent<{ chatId?: string }>).detail?.chatId
       if (populatedChatId !== chatId) return
+      chromeReadyChatRef.current = chatId
       setChatChromeEntering(false)
       document.body.removeAttribute('data-chat-chrome-entering')
       if (chromeEnterTimerRef.current !== null) {
@@ -350,13 +369,14 @@ export default function ChatView() {
     // MessageList settle gate (CHAT_REVEAL_SETTLE_CAP_MS) so a chat whose
     // content is still resolving does not get revealed mid-pipeline by this
     // timer racing the populated dispatch.
-    chromeEnterTimerRef.current = window.setTimeout(() => {
+    if (chromeReadyChatRef.current !== chatId) chromeEnterTimerRef.current = window.setTimeout(() => {
       chromeEnterTimerRef.current = null
       const detail = {
         elapsedMs: CHAT_REVEAL_SETTLE_CAP_MS + 1500,
         ...getChatDisplaySettleDiagnostics(chatId),
       }
       console.warn('[ChatDisplaySettle] ChatView fallback reveal', detail)
+      chromeReadyChatRef.current = chatId
       window.dispatchEvent(new CustomEvent('lumiverse:chat-display-fallback-timeout', { detail }))
       setChatChromeEntering(false)
       document.body.removeAttribute('data-chat-chrome-entering')
@@ -371,15 +391,6 @@ export default function ChatView() {
       document.body.removeAttribute('data-chat-chrome-entering')
     }
   }, [chatId])
-
-  useEffect(() => {
-    return () => {
-      if (chromeLeaveTimerRef.current !== null) {
-        window.clearTimeout(chromeLeaveTimerRef.current)
-        chromeLeaveTimerRef.current = null
-      }
-    }
-  }, [])
 
   const completeNavigateHome = useCallback(() => {
     // Detach the visible chat before committing the route. In particular this
@@ -396,7 +407,8 @@ export default function ChatView() {
   }, [chatId, navigate])
 
   const handleNavigateHome = useCallback(() => {
-    if (chromeLeaveTimerRef.current !== null) return
+    if (chromeLeaveRequestedRef.current) return
+    chromeLeaveRequestedRef.current = true
 
     const landingImageUrls = peekLandingPageSnapshot()?.imageUrls ?? []
     if (landingImageUrls.length > 0) holdImagesForTransition(landingImageUrls)
@@ -415,13 +427,20 @@ export default function ChatView() {
     }
 
     setChatChromeLeaving(true)
-    chromeLeaveTimerRef.current = window.setTimeout(() => {
-      chromeLeaveTimerRef.current = null
-      completeNavigateHome()
-    }, CHAT_CHROME_LEAVE_MS)
   }, [chatId, completeNavigateHome])
 
-  const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus, t), [ingestionStatus, rebuildStatus, t])
+  useLayoutEffect(() => {
+    if (!chatChromeLeaving) return
+    return playChatChromeMotion(chatColumnInnerRef.current, 'leave', completeNavigateHome)
+  }, [chatId, chatChromeLeaving, completeNavigateHome])
+
+  const cortexActive = !!cortexRequestedAt || !!cortexActivity?.runs.some((run) => run.status === 'processing')
+  useEffect(() => {
+    if (!cortexActive) return
+    const timer = window.setInterval(() => setCortexNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [cortexActive])
+  const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus, t, cortexActivity, cortexRequestedAt, cortexNow), [ingestionStatus, rebuildStatus, t, cortexActivity, cortexRequestedAt, cortexNow])
   const visibleCortexNotice = hideDismissedCortexError(cortexNotice, dismissedCortexErrorKey)
 
   useEffect(() => {
@@ -499,17 +518,46 @@ export default function ChatView() {
 
     setIngestionStatus(null)
     setRebuildStatus(null)
+    setCortexActivity(null)
+    setCortexRequestedAt(null)
     setDismissedCortexErrorKey(null)
     resetSpindleNotice()
 
-    Promise.all([
-      memoryCortexApi.getIngestionStatus(chatId).catch(() => null),
-      memoryCortexApi.getRebuildStatus(chatId).catch(() => null),
-    ]).then(([ingestion, rebuild]) => {
-      if (cancelled) return
-      setIngestionStatus(ingestion)
-      setRebuildStatus(normalizeRebuildStatus(rebuild))
+    let receivedIngestion = false
+    let receivedRebuild = false
+    let pendingCortexRequestId: string | null = null
+    const receiveActivity = (payload: CortexActivitySnapshot) => {
+      if (cancelled || !payload || payload.chatId !== chatId) return
+      setCortexActivity((current) => mergeCortexActivity(current, payload))
+      if (pendingCortexRequestId && payload.runs.some((run) => run.clientRequestId === pendingCortexRequestId)) setCortexRequestedAt(null)
+    }
+    const refreshActivity = () => { memoryCortexApi.getActivity(chatId).then(receiveActivity).catch(() => {}) }
+    const offActivity = wsClient.on(EventType.CORTEX_ACTIVITY, receiveActivity)
+    const offActivityReconnect = wsClient.on(EventType.CONNECTED, (payload: { role?: string }) => {
+      if (payload?.role) refreshActivity()
     })
+    const onRequested = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail?.chatId !== chatId) return
+      if (detail.status === 'requested') {
+        pendingCortexRequestId = detail.id
+        setCortexRequestedAt(detail.requestedAt)
+        setCortexNow(Date.now())
+      } else if (detail.id !== pendingCortexRequestId) return
+      else if (detail.status === 'started') {
+        if (detail.activity) { receiveActivity(detail.activity); setCortexRequestedAt(null) }
+        else refreshActivity()
+      }
+      else setCortexRequestedAt(null)
+    }
+    window.addEventListener(CORTEX_REQUEST_EVENT, onRequested)
+    window.addEventListener('focus', refreshActivity)
+    memoryCortexApi.getChatStatus(chatId).then(({ activity, ingestion, rebuild }) => {
+      if (cancelled) return
+      if (activity) receiveActivity(activity)
+      if (!receivedIngestion) setIngestionStatus(ingestion)
+      if (!receivedRebuild) setRebuildStatus(normalizeRebuildStatus(rebuild))
+    }).catch(() => {})
 
     // This passive request may also queue ordinary LTCM embedding work. Do not
     // synthesize a notice from its response: only actual Cortex progress events
@@ -518,11 +566,13 @@ export default function ChatView() {
 
     const offIngestion = wsClient.on(EventType.CORTEX_INGESTION_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
+      receivedIngestion = true
       setIngestionStatus(payload)
     })
 
     const offRebuild = wsClient.on(EventType.CORTEX_REBUILD_PROGRESS, (payload: any) => {
       if (!payload || payload.chatId !== chatId) return
+      receivedRebuild = true
       setRebuildStatus(normalizeRebuildStatus(payload))
     })
 
@@ -586,6 +636,10 @@ export default function ChatView() {
       resetSpindleNotice()
       offIngestion()
       offRebuild()
+      offActivity()
+      offActivityReconnect()
+      window.removeEventListener(CORTEX_REQUEST_EVENT, onRequested)
+      window.removeEventListener('focus', refreshActivity)
       offSpindle()
       offGenerationProgress()
       offGenerationEnd()
@@ -651,6 +705,7 @@ export default function ChatView() {
 
     let cancelled = false
     let stopPersonaResolution = () => {}
+    const abort = new AbortController()
 
     const loadChat = async () => {
       // Multiplayer peers don't own this chat — the host's instance can't be
@@ -662,14 +717,22 @@ export default function ChatView() {
       try {
         const pageSize = useStore.getState().messagesPerPage || 50
 
-        // Fetch chat metadata and last messages in parallel
-        const [chat, msgPage] = await Promise.all([
-          chatsApi.get(chatId, { messages: false }),
-          messagesApi.list(chatId, { limit: pageSize, tail: true }),
-        ])
+        const metadataAtStart = useStore.getState().activeChatMetadata
+        const charactersAtStart = useStore.getState().characters
+        const opened = await chatsApi.open(chatId, pageSize, { signal: abort.signal })
         if (cancelled) return
 
         const activeState = useStore.getState()
+        // A WS edit received during the read wins over the opening snapshot.
+        const chat = { ...opened.chat, metadata:
+          activeState.activeChatMetadata !== metadataAtStart && activeState.activeChatMetadata !== null
+            ? activeState.activeChatMetadata : (opened.chat.metadata ?? {}) }
+        const msgPage = opened.messages
+        for (const character of opened.characters) {
+          const current = useStore.getState().characters.find((item) => item.id === character.id)
+          if (current && current !== charactersAtStart.find((item) => item.id === character.id)) continue
+          useStore.getState().updateCharacter(character.id, character)
+        }
         if (activeState.activeChatId !== chatId) {
           setActiveChat(chatId, chat.character_id)
         } else {
@@ -723,19 +786,6 @@ export default function ChatView() {
             useStore.getState().clearGroupExpressions()
           }
 
-          // Refresh group members on every chat open so avatars/profile data
-          // don't get stuck on an older in-memory character snapshot.
-          Promise.all(groupCharIds.map((id) => charactersApi.get(id).catch(() => null)))
-            .then((chars) => {
-              if (cancelled) return
-              const valid = chars.filter(Boolean) as import('@/types/api').Character[]
-              if (valid.length === 0) return
-
-              const store = useStore.getState()
-              for (const char of valid) {
-                store.updateCharacter(char.id, char)
-              }
-            })
         } else {
           useStore.getState().clearGroupChat()
           useStore.getState().clearGroupExpressions()
@@ -752,40 +802,29 @@ export default function ChatView() {
           useStore.getState().clearMultiCharacterExpressions()
         }
 
-        // Restore active expression from chat metadata (async, fire-and-forget)
-        const savedExpr = chat.metadata?.active_expression as string | undefined
-        if (savedExpr && chat.character_id) {
-          expressionsApi.get(chat.character_id).then((config) => {
-            if (cancelled) return
-            if (config?.enabled && config.mappings?.[savedExpr]) {
-              useStore.getState().setActiveExpression(savedExpr, config.mappings[savedExpr], chat.character_id!)
+        // The open response contains fresh characters. Only missing members
+        // (for example an oversized legacy group) need a separate fallback.
+        const requiredIds = [...new Set([...(chat.character_id ? [chat.character_id] : []), ...groupCharIds])]
+        const missingIds = requiredIds.filter((id) => !opened.characters.some((character) => character.id === id))
+        const characterPromise = Promise.all(missingIds.map((id) => charactersApi.get(id, { signal: abort.signal }).catch(() => null)))
+          .then((characters) => {
+            if (cancelled) return null
+            for (const character of characters) {
+              if (character) useStore.getState().updateCharacter(character.id, character)
             }
-          }).catch(() => {})
-        }
-
-        // Start the character fetch now, in parallel with the generation
-        // recovery below. Character-aware theming can't sample the avatar
-        // until the character record is in the store, so every await ahead
-        // of this fetch used to delay the chat's theme tint by one round trip.
-        const cachedCharacter = chat.character_id
-          ? useStore.getState().characters.find((c) => c.id === chat.character_id) ?? null
-          : null
-        const characterPromise: Promise<import('@/types/api').Character | null> = cachedCharacter
-          ? Promise.resolve(cachedCharacter)
-          : chat.character_id
-            ? charactersApi.get(chat.character_id)
-                .then((char) => {
-                  if (!cancelled) useStore.getState().updateCharacter(char.id, char)
-                  return char
-                })
-                .catch(() => null)
-            : Promise.resolve(null)
+            useStore.getState().setActiveChatLoadedCharacterIds([
+              ...opened.characters.map((character) => character.id),
+              ...characters.flatMap((character) => character ? [character.id] : []),
+            ])
+            return useStore.getState().characters.find((character) => character.id === chat.character_id) ?? null
+          })
 
         // If there's a pending council tools failure for this chat, show the retry modal now
         const pendingFailure = useStore.getState().councilToolsFailure
         if (pendingFailure && pendingFailure.chatId === chatId) {
           // Lazy import to avoid circular deps
           const { showCouncilRetryModal } = await import('@/hooks/useCouncilEvents')
+          if (cancelled) return
           showCouncilRetryModal(pendingFailure)
         }
 
@@ -793,6 +832,7 @@ export default function ChatView() {
         // also invoked on visibilitychange and WS reconnect so that any path
         // back to this chat re-syncs pooled tokens.
         if (!cancelled) await recoverPooledGeneration(chatId)
+        if (cancelled) return
 
         // Opening a chat acknowledges any terminal chat-head state globally so
         // other devices stop showing a stale completed/stopped/error badge too.
@@ -804,6 +844,7 @@ export default function ChatView() {
         generateApi.acknowledge(chatId).catch(() => {})
 
         const openedCharacter = await characterPromise
+        if (cancelled) return
 
         // Resolve persona per chat: explicit chat selections win, then
         // character/tag auto-bindings, then the default persona. Temporary
@@ -893,9 +934,11 @@ export default function ChatView() {
           if (resolved.loadout && !cancelled) {
             const { applyLoadout } = useStore.getState()
             await applyLoadout(resolved.loadout.id)
+            if (cancelled) return
             toast.info(t('chatView.appliedLoadout', { name: resolved.loadout.name }))
           }
         } catch { /* no loadout binding — that's fine */ }
+        if (cancelled) return
 
         // Resolve council (members, tool toggles, sidecar) from the
         // council-profile system — its sole owner. Loadouts no longer carry
@@ -925,22 +968,8 @@ export default function ChatView() {
           // no council profile binding or resolution issue - keep current settings
         }
 
-        // Refresh the active character on every chat open so profile/chat
-        // surfaces don't rely on a stale cached avatar/image_id. The store
-        // skips no-op updates, so the cached-snapshot case doesn't re-render
-        // the message list. (Group member refresh happens above, alongside
-        // the group state setup.)
-        if (!isGroup && chat.character_id) {
-          if (openedCharacter) {
-            if (!cancelled) useStore.getState().updateCharacter(openedCharacter.id, openedCharacter)
-          } else {
-            charactersApi.get(chat.character_id).then((char) => {
-              if (!cancelled) useStore.getState().updateCharacter(char.id, char)
-            }).catch(() => {})
-          }
-        }
       } catch (err) {
-        console.error('[ChatView] Failed to load chat:', err)
+        if (!cancelled) console.error('[ChatView] Failed to load chat:', err)
       }
     }
 
@@ -949,6 +978,7 @@ export default function ChatView() {
     return () => {
       cancelled = true
       stopPersonaResolution()
+      abort.abort()
     }
   }, [chatId, setActiveChat, setMessages, t])
 
@@ -1039,6 +1069,21 @@ export default function ChatView() {
     const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
     wallpaperTransitionTimeouts.current.push(revealTimer)
   }, [clearWallpaperTransitionTimers])
+
+  useLayoutEffect(() => {
+    const hidden = chatChromeEntering || wallpaperTransitioning || chatChromeLeaving
+    const wasHidden = chromeWasHiddenRef.current
+    chromeWasHiddenRef.current = hidden
+    if (hidden || !wasHidden) return
+    let completed = false
+    const cancel = playChatChromeMotion(chatColumnInnerRef.current, 'enter', () => { completed = true })
+    return () => {
+      cancel()
+      // A layout-effect reconnect must resume an interrupted entrance. Only
+      // consume the hidden→visible edge after playback actually completes.
+      if (!completed) chromeWasHiddenRef.current = true
+    }
+  }, [chatId, chatChromeEntering, wallpaperTransitioning, chatChromeLeaving])
 
   // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
   // when the background is a solid color (blur on solid = pure GPU waste).
@@ -1228,12 +1273,22 @@ export default function ChatView() {
                 </div>
               )}
               {visibleCortexNotice && (
-                <div className={clsx(styles.cortexNotice, visibleCortexNotice.variant === 'error' && styles.cortexNoticeError)}>
+                <div className={clsx(styles.cortexNotice, visibleCortexNotice.batches?.length && styles.cortexNoticeWithBatches, visibleCortexNotice.variant === 'error' && styles.cortexNoticeError)}>
                   <span className={styles.cortexNoticeStatus} aria-hidden="true" />
                   <span className={styles.cortexNoticeTitle}>{visibleCortexNotice.title}</span>
                   <span className={styles.cortexNoticeSeparator} aria-hidden="true">•</span>
-                  <span className={styles.cortexNoticeDetail}>{visibleCortexNotice.detail}</span>
+                  <span className={styles.cortexNoticeDetail} title={[visibleCortexNotice.detail, visibleCortexNotice.elapsed].filter(Boolean).join(' · ')}>
+                    {visibleCortexNotice.detail}
+                    {visibleCortexNotice.elapsed && <span aria-hidden="true"> · {visibleCortexNotice.elapsed}</span>}
+                  </span>
                   <span className={styles.cortexNoticePercent}>{typeof visibleCortexNotice.percent === 'number' ? `${visibleCortexNotice.percent}%` : ''}</span>
+                  {!!visibleCortexNotice.batches?.length && (
+                    <div className={styles.cortexBatchList} aria-label={t('chatView.cortexActiveBatches')}>
+                      {visibleCortexNotice.batches.map((batch) => (
+                        <span key={batch.id} className={styles.cortexBatch} data-phase={batch.phase} title={batch.detail}>{batch.label}</span>
+                      ))}
+                    </div>
+                  )}
                   {visibleCortexNotice.variant === 'error' && visibleCortexNotice.errorKey && (
                     <button
                       type="button"
@@ -1318,7 +1373,7 @@ export default function ChatView() {
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
             <div data-spindle-mount="chat_bottom_dock" data-spindle-scope={`chat:${chatId}:bottom-dock`} data-dock-request="strip" />
-            <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
+            <InputArea key={chatId} chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>
 

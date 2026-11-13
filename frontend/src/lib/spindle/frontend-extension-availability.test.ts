@@ -2,12 +2,18 @@ import { describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import {
   filterEnabledFrontendContributions,
+  filterEnabledCommandContributions,
   hasEnabledFrontendExtension,
   hasEnabledFrontendExtensionId,
   hasAvailableFrontendSurface,
 } from './frontend-extension-availability'
 
 describe('frontend extension availability', () => {
+  test('key bindings and palette commands can reach backend-only extensions, but not disabled extensions', () => {
+    expect(filterEnabledCommandContributions([
+      { extensionId: 'backend', id: 'analyze' }, { extensionId: 'disabled', id: 'stale' }, { extensionId: 'removed', id: 'removed' },
+    ], [{ id: 'backend', enabled: true, has_frontend: false }, { id: 'disabled', enabled: false, has_frontend: true }])).toEqual([{ extensionId: 'backend', id: 'analyze' }])
+  })
   test('requires an installed, enabled frontend extension with the requested identifier', () => {
     const hasSuite = (extensions: Parameters<typeof hasEnabledFrontendExtension>[0]) => (
       hasEnabledFrontendExtension(extensions, 'lumiverse_suite')

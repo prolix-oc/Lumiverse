@@ -27,7 +27,39 @@ export interface DesktopNotificationDestinationRecord {
 export type NotificationDestinationRecord =
   | PushSubscriptionRecord
   | IOSPushDestinationRecord
+  | AndroidPushDestinationRecord
   | DesktopNotificationDestinationRecord;
+
+export interface AndroidPushDestinationRecord {
+  type: "android_native";
+  id: string;
+  user_id: string;
+  device_id: string;
+  transport: "local" | "fcm";
+  project_id: string | null;
+  delivery_mode: "direct" | "relay";
+  package_name: string;
+  label: string;
+  user_agent: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateAndroidPushDestinationInput {
+  accountId?: string;
+  deviceId: string;
+  transport: "local" | "fcm";
+  serverOrigin: string;
+  deviceToken?: string;
+  projectId?: string;
+  packageName?: string;
+  delivery?: "direct" | "relay";
+  enrollmentId?: string;
+  relayCredential?: string;
+  encryption?: { key: string; keyId: string };
+  label?: string;
+  userAgent?: string;
+}
 
 export interface IOSPushDestinationRecord {
   type: "ios_apns";
@@ -36,6 +68,7 @@ export interface IOSPushDestinationRecord {
   device_id: string;
   bundle_id: string;
   environment: "development" | "production";
+  delivery_mode: "direct" | "relay";
   label: string;
   user_agent: string;
   created_at: number;
@@ -48,6 +81,9 @@ export interface CreateIOSPushDestinationInput {
   bundleId: string;
   environment: "development" | "production";
   serverOrigin: string;
+  delivery?: "direct" | "relay";
+  relayCredential?: string;
+  encryption?: { key: string; keyId: string };
   label?: string;
   userAgent?: string;
 }

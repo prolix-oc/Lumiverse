@@ -1,7 +1,8 @@
-import { get, post, del } from './client'
+import { get, post, del, type RequestOptions } from './client'
+import type { AndroidNotificationInfo, AndroidPushRegistration } from '@/lib/android-native'
 
 export interface PushSubscriptionRecord {
-  type: 'web_push' | 'tauri_desktop' | 'ios_apns'
+  type: 'web_push' | 'tauri_desktop' | 'ios_apns' | 'android_native'
   id: string
   user_id: string
   endpoint?: string
@@ -11,6 +12,9 @@ export interface PushSubscriptionRecord {
   platform?: string
   bundle_id?: string
   environment?: 'development' | 'production'
+  delivery_mode?: 'direct' | 'relay'
+  transport?: 'local' | 'fcm'
+  project_id?: string | null
   created_at: number
   updated_at: number
   last_seen_at?: number | null
@@ -29,12 +33,22 @@ export interface PushTestResult {
 }
 
 export const pushApi = {
-  getIOSInfo() {
-    return get<{ configured: boolean; bundleId: string; reason: string | null }>('/push/ios/info')
+  getAndroidInfo() {
+    return get<AndroidNotificationInfo>('/push/android/info')
   },
-  subscribeIOS(input: { deviceId: string; deviceToken: string; bundleId: string; environment: 'development' | 'production' }) {
+  subscribeAndroid(input: AndroidPushRegistration, options?: RequestOptions) {
+    return post<{ destination: PushSubscriptionRecord; credential: string; serverInstanceId: string }>('/push/android', {
+      ...input, serverOrigin: window.location.origin, label: 'Lumiverse Android', userAgent: navigator.userAgent,
+    }, options)
+  },
+  getIOSInfo(bundleId?: string) {
+    return get<{ configured: boolean; bundleId: string; reason: string | null; delivery?: 'direct' | 'relay'; relayUrl?: string; encryptionRequired?: boolean }>(
+      '/push/ios/info' + (bundleId ? `?bundleId=${encodeURIComponent(bundleId)}` : ''))
+  },
+  subscribeIOS(input: { deviceId: string; deviceToken: string; bundleId: string; environment: 'development' | 'production';
+    delivery?: 'relay' | 'direct'; relayCredential?: string; encryption?: { key: string; keyId: string } }, options?: RequestOptions) {
     return post<PushSubscriptionRecord>('/push/ios', { ...input, serverOrigin: window.location.origin,
-      label: 'Lumiverse iOS', userAgent: navigator.userAgent })
+      label: 'Lumiverse iOS', userAgent: navigator.userAgent }, options)
   },
   getVapidPublicKey() {
     return get<{ publicKey: string }>('/push/vapid-public-key')
@@ -44,8 +58,8 @@ export const pushApi = {
     return get<{ serverInstanceId: string }>('/push/desktop/info')
   },
 
-  listSubscriptions() {
-    return get<PushSubscriptionRecord[]>('/push/subscriptions')
+  listSubscriptions(options?: RequestOptions) {
+    return get<PushSubscriptionRecord[]>('/push/subscriptions', undefined, options)
   },
 
   subscribe(subscription: PushSubscriptionJSON) {

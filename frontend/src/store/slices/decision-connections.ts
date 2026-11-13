@@ -1,10 +1,9 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, DecisionConnectionsSlice } from '@/types/store'
 import type { DecisionConnectionProfile } from '@/types/api'
-import { persistKey } from './settings'
 import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
-export const createDecisionConnectionsSlice: StateCreator<AppStore, [], [], DecisionConnectionsSlice> = (set) => ({
+export const createDecisionConnectionsSlice: StateCreator<AppStore, [], [], DecisionConnectionsSlice> = (set, get) => ({
   decisionProfiles: [],
   decisionProviders: [],
 
@@ -26,10 +25,9 @@ export const createDecisionConnectionsSlice: StateCreator<AppStore, [], [], Deci
         decisionProfiles: existingIndex === -1
           ? [profile, ...state.decisionProfiles]
           : state.decisionProfiles.map((candidate, index) => index === existingIndex ? profile : candidate),
-        connectionsOrder: nextConnectionsOrder,
       }
     })
-    if (orderToPersist) persistKey('connectionsOrder', orderToPersist, 'state-sync')
+    if (orderToPersist) get().setSetting('connectionsOrder', orderToPersist, 'state-sync')
   },
 
   updateDecisionProfile: (id, updates) =>

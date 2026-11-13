@@ -11,6 +11,7 @@ import {
   DRAWER_TABS,
   adaptExtensionTabs,
   sanitizeHiddenDrawerTabIds,
+  preloadDrawerTab,
   type DrawerTabEntry,
 } from '@/lib/drawer-tab-registry'
 import {
@@ -30,11 +31,15 @@ import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-exten
 import { useDrawerTabDrag } from '@/hooks/useDrawerTabDrag'
 import { useDrawerResize } from '@/hooks/useDrawerResize'
 import { getUiScale } from '@/lib/uiScale'
+import { duoPaneStyle, type DuoLayout } from '@/lib/ios-duo-layout'
+import { useDrawerTabPreload } from '@/hooks/useDrawerTabPreload'
+import { scheduleIdleDrawerPreload } from '@/lib/drawer-tab-preload'
 
-export default function ViewportDrawer() {
+export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLayout | null }) {
   const { t } = useTranslation('panels')
   const { t: ts } = useTranslation('settings')
   const drawerOpen = useStore((s) => s.drawerOpen)
+  const pinned = duoLayout !== null
   const drawerTab = useStore((s) => s.drawerTab)
   const openDrawer = useStore((s) => s.openDrawer)
   const closeDrawer = useStore((s) => s.closeDrawer)
@@ -62,6 +67,7 @@ export default function ViewportDrawer() {
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
+  const preloadOnIntent = useDrawerTabPreload()
 
   // Publish actual drawer geometry so chat reflow also follows live resizing and UI zoom.
   useEffect(() => {
@@ -69,7 +75,7 @@ export default function ViewportDrawer() {
     const app = document.querySelector<HTMLElement>('[data-app-root]')
     if (!drawer || !app) return
     const sync = () => {
-      const width = drawerOpen && !isMobile ? drawer.getBoundingClientRect().width / getUiScale() : 0
+      const width = drawerOpen && !isMobile && !pinned ? drawer.getBoundingClientRect().width / getUiScale() : 0
       app.style.setProperty('--chat-drawer-left', drawerSettings.side === 'left' ? `${width}px` : '0px')
       app.style.setProperty('--chat-drawer-right', drawerSettings.side === 'right' ? `${width}px` : '0px')
     }
@@ -82,7 +88,7 @@ export default function ViewportDrawer() {
       app.style.removeProperty('--chat-drawer-left')
       app.style.removeProperty('--chat-drawer-right')
     }
-  }, [drawerOpen, drawerSettings.side, isMobile, settingsLoaded])
+  }, [drawerOpen, drawerSettings.side, isMobile, settingsLoaded, pinned])
 
   const updateTabListScroll = useCallback(() => {
     const el = tabListRef.current
@@ -192,6 +198,20 @@ export default function ViewportDrawer() {
     : []
   const activeFolderView = activeFolder?.type === 'folder' ? activeFolder.view ?? 'list' : 'list'
 
+  // Warm one neighboring top-level tab after opening, rather than importing
+  // every panel at startup. Folder contents wait for their own interaction.
+  const nearbyTabId = useMemo(() => {
+    if (!settingsLoaded || (!drawerOpen && !pinned) || activeFolder) return null
+    const ids = layout.flatMap(item => item.type === 'tab' && isTabVisible(item.tabId)
+      && !extensionIds.has(item.tabId) ? [tabEntryById.get(item.tabId)!.id] : [])
+    const index = ids.indexOf(activeTab)
+    return index >= 0 ? ids[index + 1] ?? ids[index - 1] ?? null : null
+  }, [settingsLoaded, drawerOpen, pinned, activeFolder, layout, isTabVisible, extensionIds, tabEntryById, activeTab])
+  useEffect(() => {
+    if (!nearbyTabId) return
+    return scheduleIdleDrawerPreload(() => preloadDrawerTab(nearbyTabId))
+  }, [nearbyTabId])
+
   const activeTabTitle =
     activeTab === 'profile' && isGroupChat
       ? t('group')
@@ -231,6 +251,7 @@ export default function ViewportDrawer() {
   const handleTabClick = useCallback(
     (layoutTabId: string) => {
       const runtimeTabId = tabEntryById.get(layoutTabId)?.id ?? layoutTabId
+      preloadDrawerTab(runtimeTabId)
       setActiveFolderId(null)
       setDrawerTab(runtimeTabId)
       openDrawer(runtimeTabId)
@@ -320,6 +341,7 @@ export default function ViewportDrawer() {
           organizedAnchor && styles.organizedTabAnchor,
         )}
         data-tab-id={entry.id}
+        {...(organizedAnchor ? {} : preloadOnIntent(entry.id))}
         onClick={organizedAnchor ? undefined : () => handleTabClick(layoutTabId)}
         onContextMenu={organizedAnchor ? undefined : handleTabContextMenu}
         onTouchStart={organizedAnchor ? undefined : tabQuickMenu.onTouchStart}
@@ -343,7 +365,7 @@ export default function ViewportDrawer() {
   return (
     <>
       <AnimatePresence>
-        {isMobile && drawerOpen && (
+        {isMobile && drawerOpen && !pinned && (
           <motion.div
             className={styles.backdrop}
             initial={{ opacity: 0 }}
@@ -359,11 +381,15 @@ export default function ViewportDrawer() {
           styles.wrapper,
           isCompact && styles.wrapperCompact,
           isRight ? styles.wrapperRight : styles.wrapperLeft,
-          drawerOpen && styles.wrapperOpen,
+          (drawerOpen || pinned) && styles.wrapperOpen,
+          pinned && styles.wrapperPinned,
         )}
-        style={{ '--drawer-panel-w': panelWidthCSS } as React.CSSProperties}
+        style={{ '--drawer-panel-w': pinned ? '100%' : panelWidthCSS, ...(duoLayout ? duoPaneStyle(duoLayout.drawer, duoLayout) : {}) } as React.CSSProperties}
+        role={pinned ? 'complementary' : undefined}
+        aria-label={pinned ? t('viewportDrawer.navigation', { defaultValue: 'Navigation' }) : undefined}
+        data-duo-drawer={pinned ? '' : undefined}
       >
-        <button
+        {!pinned && <button
           type="button"
           className={clsx(
             styles.drawerTab,
@@ -371,21 +397,25 @@ export default function ViewportDrawer() {
             drawerOpen && styles.drawerTabActive,
             drawerTabDrag.isDragging && styles.drawerTabDragging,
           )}
+          {...preloadOnIntent(activeTab)}
+          {...drawerTabDrag.pointerHandlers}
           onClick={(event) => {
             if (drawerTabDrag.consumeSuppressedClick(event)) return
             if (drawerOpen) closeDrawer()
-            else openDrawer()
+            else {
+              preloadDrawerTab(activeTab)
+              openDrawer()
+            }
           }}
           style={{ marginTop: `${drawerTabDrag.verticalPosition}vh` }}
-          {...drawerTabDrag.pointerHandlers}
         >
           <div className={styles.tabIconBox}>
             <Sparkles size={isCompact ? 14 : 16} />
           </div>
-        </button>
+        </button>}
 
-        <div className={styles.drawer} ref={drawerRef} data-lumiverse-surface="viewport-drawer">
-          {!isMobile && drawerOpen && (
+        <div className={styles.drawer} ref={drawerRef} data-lumiverse-surface="viewport-drawer" data-liquid-glass-surface="">
+          {!isMobile && drawerOpen && !pinned && (
             <div
               className={styles.resizeHandle}
               role="separator"
@@ -487,7 +517,7 @@ export default function ViewportDrawer() {
               <span className={styles.headerActions}>
                 <span data-spindle-mount="drawer_header_actions" data-spindle-scope="drawer:header-actions" style={{ display: 'contents' }} />
               </span>
-              <CloseButton onClick={closeDrawer} />
+              {!pinned && <CloseButton onClick={closeDrawer} />}
             </div>
             <div
               className={clsx(
@@ -538,6 +568,7 @@ export default function ViewportDrawer() {
                             key={layoutTabId}
                             type="button"
                             className={styles.folderTile}
+                            {...preloadOnIntent(entry.id)}
                             onClick={() => handleTabClick(layoutTabId)}
                           >
                             <span className={styles.folderTileIcon}><Icon size={19} strokeWidth={1.6} /></span>

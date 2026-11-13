@@ -8,8 +8,8 @@
   border-color: var(--lcs-glass-border);
   background: color-mix(in srgb, var(--lcs-glass-bg) 82%, var(--lumiverse-bg-elevated) 18%);
   box-shadow: var(--lumiverse-shadow-lg);
-  backdrop-filter: blur(var(--lcs-glass-strong-blur));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur));
+  backdrop-filter: blur(var(--lcs-glass-strong-blur)) var(--lcs-liquid-filter, );
+  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur)) var(--lcs-liquid-filter, );
   transition: opacity var(--lumiverse-transition-fast);
 }
 

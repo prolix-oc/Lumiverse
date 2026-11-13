@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "Régénérer la réponse",
-      "description": "Supprimer la dernière réponse de l'IA et en générer une nouvelle"
+      "description": "Générer un nouveau swipe pour la dernière réponse de l'IA"
     },
     "action-continue": {
       "label": "Continuer Génération",
       "description": "Demander à l'IA de poursuivre sa dernière réponse"
+    },
+    "action-stop-generation": {
+      "label": "Arrêter la génération",
+      "description": "Arrêter la réponse en cours de génération dans ce chat"
+    },
+    "action-swipe-left": {
+      "label": "Swipe précédent",
+      "description": "Afficher le swipe précédent de la dernière réponse de l'IA"
+    },
+    "action-swipe-right": {
+      "label": "Swipe suivant",
+      "description": "Afficher le swipe suivant de la dernière réponse de l'IA, ou en générer un nouveau après le dernier swipe"
     },
     "action-new-chat": {
       "label": "Nouveau chat",

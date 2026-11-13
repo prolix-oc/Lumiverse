@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "応答を再生成",
-      "description": "最後のAI返信を削除して、新しい返信を生成します"
+      "description": "最後のAI返信の新しいスワイプを生成します"
     },
     "action-continue": {
       "label": "生成を続行",
       "description": "AIに最後の応答を続けるよう促す"
+    },
+    "action-stop-generation": {
+      "label": "生成を停止",
+      "description": "このチャットで生成中の返信を停止します"
+    },
+    "action-swipe-left": {
+      "label": "前のスワイプ",
+      "description": "最後のAI返信の前のスワイプを表示します"
+    },
+    "action-swipe-right": {
+      "label": "次のスワイプ",
+      "description": "最後のAI返信の次のスワイプを表示します。最後のスワイプの後では新しいスワイプを生成します"
     },
     "action-new-chat": {
       "label": "新しいチャット",

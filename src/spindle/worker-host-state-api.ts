@@ -1,7 +1,8 @@
-import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
+import { PERMISSION_DENIED_PREFIX, type ActivePresetDTO } from "lumiverse-spindle-types";
 import * as chatsSvc from "../services/chats.service";
 import * as settingsSvc from "../services/settings.service";
 import * as presetsSvc from "../services/presets.service";
+import * as presetProfilesSvc from "../services/preset-profiles.service";
 import { PresetRevisionConflictError, type CreatePresetInput, type UpdatePresetInput } from "../types/preset";
 import { readRuntimeState, writeRuntimeState, type RuntimeStateCommand } from './runtime-state';
 import { withRuntimeMutation } from './runtime-state-revision';
@@ -15,6 +16,7 @@ type PresetConflictWorkerError = {
 };
 
 export type WorkerHostStateApiContext = {
+  getOwnMetadataKey?: () => string | null;
   getChatOwnerId: (chatId: string) => string | null;
   enforceScopedUser: (userId: string | null | undefined) => void;
   resolveEffectiveUserId: (requestUserId?: string) => string | null;
@@ -48,6 +50,7 @@ export class WorkerHostStateApi {
       case "vars_has_chat": this.handleVarsHasChat(msg.requestId, msg.chatId, msg.key); return true;
       case "presets_list": this.handlePresetsList(msg.requestId, msg.limit, msg.offset, msg.userId); return true;
       case "presets_get": this.handlePresetsGet(msg.requestId, msg.presetId, msg.userId); return true;
+      case "presets_get_active": void this.handlePresetsGetActive(msg.requestId, msg.chatId, msg.userId); return true;
       case "presets_create": this.handlePresetsCreate(msg.requestId, msg.input, msg.userId); return true;
       case "presets_update": this.handlePresetsUpdate(msg.requestId, msg.presetId, msg.input, msg.userId); return true;
       case "presets_delete": this.handlePresetsDelete(msg.requestId, msg.presetId, msg.userId); return true;
@@ -77,8 +80,9 @@ export class WorkerHostStateApi {
         throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
       }
       if (mutationId !== undefined && !/^[0-9a-f-]{36}$/.test(mutationId)) throw new Error('Invalid runtime mutation identifier');
-      const result = command ? await (mutationId ? withRuntimeMutation(owner, mutationId, () => writeRuntimeState(owner, chatId, command)) : writeRuntimeState(owner, chatId, command))
-        : readRuntimeState(owner, chatId, characterId ?? '');
+      const metadataKey = this.context.getOwnMetadataKey?.();
+      const result = command ? await (mutationId ? withRuntimeMutation(owner, mutationId, () => writeRuntimeState(owner, chatId, command, metadataKey)) : writeRuntimeState(owner, chatId, command, metadataKey))
+        : readRuntimeState(owner, chatId, characterId ?? '', metadataKey);
       this.context.postResponse({ type: 'response', requestId, result });
     } catch (error) {
       this.context.postResponse({ type: 'response', requestId, error: error instanceof Error ? error.message : String(error) });
@@ -344,6 +348,23 @@ export class WorkerHostStateApi {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
       this.postToWorker({ type: "response", requestId, result: presetsSvc.getPreset(resolvedUserId, presetId) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handlePresetsGetActive(requestId: string, chatId?: string, userId?: string): Promise<void> {
+    try {
+      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
+      const resolved = await presetProfilesSvc.resolveActivePreset(resolvedUserId, chatId);
+      if (!resolved) throw new Error("Chat not found");
+      const result: ActivePresetDTO = {
+        preset_id: resolved.preset_id,
+        source: resolved.source,
+        source_id: resolved.source_id,
+        block_states: { ...(resolved.binding?.block_states ?? {}) },
+      };
+      this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }

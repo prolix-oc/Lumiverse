@@ -5,6 +5,15 @@ interface FrontendExtensionAvailability {
   has_frontend?: unknown
 }
 
+/** Backend commands do not require an extension frontend bundle. */
+export function hasEnabledCommandExtensionId(extensions: readonly FrontendExtensionAvailability[] | null | undefined, id: string): boolean {
+  return Boolean(extensions?.some(extension => extension.id === id && extension.enabled === true))
+}
+
+export function filterEnabledCommandContributions<T extends { extensionId: string }>(contributions: readonly T[], extensions: readonly FrontendExtensionAvailability[] | null | undefined): T[] {
+  return contributions.filter(entry => hasEnabledCommandExtensionId(extensions, entry.extensionId))
+}
+
 function isEnabledFrontendExtension(extension: FrontendExtensionAvailability): boolean {
   return extension.enabled === true && extension.has_frontend === true
 }

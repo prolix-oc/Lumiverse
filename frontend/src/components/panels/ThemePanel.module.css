@@ -65,6 +65,49 @@
   border-color: var(--lumiverse-border-hover);
 }
 
+.deviceControls {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius);
+  min-width: 0;
+}
+
+.deviceControls > summary {
+  padding: 12px;
+  cursor: pointer;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.deviceControlsBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.deviceHint {
+  margin: 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+}
+
+.deviceControls button {
+  min-height: 44px;
+  flex-basis: 130px;
+}
+
+.deviceControls summary:focus-visible,
+.deviceControls button:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.deviceControls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .resetBtn {
   flex: 1;
   padding: 6px 14px;

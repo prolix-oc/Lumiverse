@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { Fragment, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
@@ -94,7 +95,7 @@ interface DashboardViewProps {
 function WorldTieBand({ session }: { session: WeaverSession }) {
   const { t } = useTranslation('weaver')
   const sessions = useStore((s) => s.weaverSessions)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const openSession = useStore((s) => s.openWeaverSession)
 
   const worldSessionId = session.seed.provenance.world_session_id
