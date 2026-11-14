@@ -1,7 +1,0 @@
-{
-  "identifier": "desktop-authorization",
-  "description": "The short-lived sign-in link is available only in this bundled local UI.",
-  "local": true,
-  "windows": ["desktop-authorization"],
-  "permissions": ["core:default", "core:window:allow-close", "desktop-authorization-ui"]
-}

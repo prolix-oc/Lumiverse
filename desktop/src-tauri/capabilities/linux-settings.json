@@ -1,7 +1,0 @@
-{
-  "identifier": "linux-settings",
-  "description": "Local Linux graphics and diagnostics controls.",
-  "local": true,
-  "windows": ["main", "linux-settings"],
-  "permissions": ["core:default", "linux-desktop-controls"]
-}

@@ -1,1 +1,0 @@
-ALTER TABLE regex_scripts ADD COLUMN actions TEXT NOT NULL DEFAULT '[]';

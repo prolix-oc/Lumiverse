@@ -1,7 +1,0 @@
-{
-  "identifier": "runtime-info",
-  "description": "Read the mobile host version from the packaged local app.",
-  "windows": ["main"],
-  "remote": { "urls": ["http://127.0.0.1:*/*"] },
-  "permissions": ["allow-mobile-host-info"]
-}

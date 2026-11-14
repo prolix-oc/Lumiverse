@@ -1,4 +1,0 @@
-[[permission]]
-identifier = "desktop-capture-controls"
-description = "Allows only the bundled tray host to enable, disable, and inspect native capture. Captured media and consent never cross IPC."
-commands.allow = ["desktop_capture_connect", "desktop_capture_disconnect", "desktop_capture_status"]

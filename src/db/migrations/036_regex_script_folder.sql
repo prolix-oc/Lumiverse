@@ -1,1 +1,0 @@
-ALTER TABLE regex_scripts ADD COLUMN folder TEXT NOT NULL DEFAULT '';

@@ -1,6 +1,0 @@
-[install]
-peer = false
-
-[test]
-preload = ["./bun-test-setup.ts"]
-pathIgnorePatterns = "**/*.slow.test.ts"

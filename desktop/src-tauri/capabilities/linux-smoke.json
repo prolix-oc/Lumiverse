@@ -1,7 +1,0 @@
-{
-  "identifier": "linux-smoke",
-  "description": "Explicit offline packaged WebKit smoke fixture, enabled only by its launch environment switch.",
-  "local": true,
-  "windows": ["linux-smoke"],
-  "permissions": ["desktop-smoke", "external-url-launch", "core:window:allow-set-title"]
-}
