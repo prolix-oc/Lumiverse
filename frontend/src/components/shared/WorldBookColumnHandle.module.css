@@ -1,4 +1,0 @@
-.handle { flex: 0 0 6px; width: 6px; align-self: stretch; cursor: col-resize; touch-action: none; position: relative; outline: none; }
-.handle::after { content: ''; position: absolute; inset: 0 2px; background: var(--lumiverse-border); border-radius: 2px; }
-.handle:hover::after, .handle:focus-visible::after { background: var(--lumiverse-primary); }
-.handle:focus-visible { box-shadow: 0 0 0 1px var(--lumiverse-primary); }

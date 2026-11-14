@@ -1,8 +1,0 @@
-{
-  "identifier": "external-links",
-  "description": "External link clicks use the host desktop's sanitized URL launcher.",
-  "local": true,
-  "remote": { "urls": ["http://*:*", "https://*:*"] },
-  "windows": ["main", "frontend", "frontend-popup-*", "widget-*", "frontend-url-settings"],
-  "permissions": ["external-url-launch"]
-}

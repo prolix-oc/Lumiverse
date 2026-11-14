@@ -1,8 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "server-setup",
-  "description": "First-run configuration uses native callbacks from the bundled setup page only.",
-  "local": true,
-  "windows": ["server-setup"],
-  "permissions": ["bundled-server-setup"]
-}

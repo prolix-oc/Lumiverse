@@ -1,8 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "bundled-server",
-  "description": "Only the local tray owns the packaged server process.",
-  "local": true,
-  "windows": ["main"],
-  "permissions": ["bundled-server-controls"]
-}

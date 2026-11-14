@@ -1,1 +1,0 @@
-ALTER TABLE presets ADD COLUMN cache_revision INTEGER NOT NULL DEFAULT 0;

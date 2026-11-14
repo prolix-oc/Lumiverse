@@ -1,8 +1,0 @@
-{
-  "identifier": "local-desktop-controls-dev",
-  "description": "Exact Vite development pages for the local authorization and graphics controls.",
-  "local": false,
-  "windows": ["desktop-authorization", "linux-settings"],
-  "remote": { "urls": ["http://localhost:1430/authorization.html", "http://127.0.0.1:1430/authorization.html", "http://localhost:1430/linux-settings.html", "http://127.0.0.1:1430/linux-settings.html"] },
-  "permissions": ["core:default", "core:window:allow-close", "desktop-authorization-ui", "linux-desktop-controls"]
-}
