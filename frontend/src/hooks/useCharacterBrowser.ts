@@ -8,7 +8,13 @@ import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { subscribeImportedDataRefresh } from '@/lib/import-data-events'
-import type { Character, CharacterSummary, TagCount } from '@/types/api'
+import type {
+  CardUpdateApplySummary,
+  CardUpdatePreview,
+  Character,
+  CharacterSummary,
+  TagCount,
+} from '@/types/api'
 import type { LorebookInfo } from '@/components/modals/BulkImportProgressModal'
 import type { ExpressionsImportInfo } from '@/components/modals/ExpressionsImportModal'
 import type { AlternateFieldsSummaryInfo } from '@/components/modals/AlternateFieldsSummaryModal'
@@ -109,6 +115,7 @@ export function useCharacterBrowser() {
   const [expressionsModalOpen, setExpressionsModalOpen] = useState(false)
   const [pendingAltFieldsSummary, setPendingAltFieldsSummary] = useState<AlternateFieldsSummaryInfo[]>([])
   const [altFieldsSummaryOpen, setAltFieldsSummaryOpen] = useState(false)
+  const [pendingCardUpdate, setPendingCardUpdate] = useState<{ file: File; preview: CardUpdatePreview } | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery)
 
   // Listen for gallery progress WS events during import
@@ -351,8 +358,7 @@ export function useCharacterBrowser() {
     [setSetting]
   )
 
-  // Import file
-  const importFile = useCallback(
+  const performNewCharacterImport = useCallback(
     async (file: File) => {
       setImportProgress({ step: 'uploading', percent: 0, filename: file.name })
       setImportError(null)
@@ -375,14 +381,74 @@ export function useCharacterBrowser() {
         }
         maybeShowImportedLoraHint(result.character)
       } catch (err: any) {
-        const msg = err?.body?.message || err?.message || 'Import failed'
+        const msg = err?.body?.error || err?.body?.message || err?.message || 'Import failed'
         setImportError(msg)
+        toast.error(msg)
         throw err
       } finally {
         setImportProgress(null)
       }
     },
     [addCharacter]
+  )
+
+  // Import file — checks for an existing match first so updated cards can merge selectively
+  const importFile = useCallback(
+    async (file: File) => {
+      setImportProgress({ step: 'uploading', percent: 0, filename: file.name })
+      setImportError(null)
+      try {
+        const preview = await charactersApi.previewCardImport(file, (percent) => {
+          setImportProgress((prev) =>
+            prev
+              ? percent >= 100
+                ? { ...prev, step: 'processing', percent: 100 }
+                : { ...prev, percent }
+              : null
+          )
+        })
+        if (preview.matches && preview.matches.length > 0) {
+          setImportProgress(null)
+          setPendingCardUpdate({ file, preview })
+          return
+        }
+      } catch (err: any) {
+        const msg = err?.body?.error || err?.body?.message || err?.message || 'Import failed'
+        setImportError(msg)
+        setImportProgress(null)
+        toast.error(msg)
+        throw err
+      }
+
+      await performNewCharacterImport(file)
+    },
+    [performNewCharacterImport]
+  )
+
+  const clearPendingCardUpdate = useCallback(() => {
+    setPendingCardUpdate(null)
+  }, [])
+
+  const confirmImportAsNewFromPending = useCallback(async () => {
+    const current = pendingCardUpdate
+    if (!current) return
+    setPendingCardUpdate(null)
+    await performNewCharacterImport(current.file)
+  }, [pendingCardUpdate, performNewCharacterImport])
+
+  const handleCardUpdateApplied = useCallback(
+    (updated: Character, summary: CardUpdateApplySummary) => {
+      updateCharacterInStore(updated.id, updated)
+      setFetchVersion((v) => v + 1)
+      setPendingCardUpdate(null)
+      toast.success(
+        i18n.t('panels:characterEditor.replaceCardSuccess', {
+          name: updated.name,
+          count: summary.updatedFields.length,
+        }),
+      )
+    },
+    [updateCharacterInStore]
   )
 
   // Import multiple files
@@ -775,6 +841,7 @@ export function useCharacterBrowser() {
     expressionsModalOpen,
     pendingAltFieldsSummary,
     altFieldsSummaryOpen,
+    pendingCardUpdate,
     searchQuery,
     filterTab,
     sortField,
@@ -830,5 +897,8 @@ export function useCharacterBrowser() {
     reloadAllCharacters,
     clearImportError: () => setImportError(null),
     clearPendingLorebookImport: () => setPendingLorebookImport(null),
+    clearPendingCardUpdate,
+    confirmImportAsNewFromPending,
+    handleCardUpdateApplied,
   }
 }

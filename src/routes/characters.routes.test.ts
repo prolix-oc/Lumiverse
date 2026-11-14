@@ -177,6 +177,109 @@ describe("POST /:id/replace-card", () => {
   });
 });
 
+describe("card update preview and selective apply routes", () => {
+  test("POST /preview-card-import detects matching character and returns parsed card + extras", async () => {
+    const form = new FormData();
+    form.set("file", new File([JSON.stringify({
+      spec: "chara_card_v3",
+      spec_version: "3.0",
+      data: {
+        name: "Keep this name",
+        creator: "Old creator",
+        description: "updated description",
+        first_mes: "old greeting",
+        alternate_greetings: ["old alternate", "brand new greeting"],
+      },
+    })], "updated.json", { type: "application/json" }));
+
+    const response = await app.request("http://localhost/preview-card-import", {
+      method: "POST",
+      body: form,
+    });
+
+    expect(response.status).toBe(200);
+    const preview = await response.json();
+    expect(preview.format).toBe("json");
+    expect(preview.incoming.alternate_greetings).toEqual(["old alternate", "brand new greeting"]);
+    expect(preview.matches).toHaveLength(1);
+    expect(preview.matches[0]).toMatchObject({
+      id: CHARACTER_ID,
+      name: "Keep this name",
+      matchReason: "name_and_creator",
+    });
+  });
+
+  test("POST /:id/preview-card-update and /:id/apply-card-update selectively update only chosen fields", async () => {
+    const file = new File([JSON.stringify({
+      spec: "chara_card_v3",
+      spec_version: "3.0",
+      data: {
+        name: "New Card Name",
+        description: "new description that should stay unselected",
+        first_mes: "new main greeting",
+        alternate_greetings: ["old alternate", "new alternate 2"],
+        tags: ["old-tag", "new-tag"],
+      },
+    })], "selective.json", { type: "application/json" });
+
+    const previewForm = new FormData();
+    previewForm.set("file", file);
+    const previewRes = await app.request(`http://localhost/${CHARACTER_ID}/preview-card-update`, {
+      method: "POST",
+      body: previewForm,
+    });
+    expect(previewRes.status).toBe(200);
+    const previewBody = await previewRes.json();
+    expect(previewBody.incoming.first_mes).toBe("new main greeting");
+
+    const applyForm = new FormData();
+    applyForm.set("file", file);
+    applyForm.set("selection", JSON.stringify({
+      fields: [],
+      firstMesMode: "replace_and_demote",
+      alternateGreetingsMode: "append_new",
+      tagsMode: "merge",
+    }));
+
+    const applyRes = await app.request(`http://localhost/${CHARACTER_ID}/apply-card-update`, {
+      method: "POST",
+      body: applyForm,
+    });
+    expect(applyRes.status).toBe(200);
+    const { character, summary } = await applyRes.json();
+    expect(character.name).toBe("Keep this name");
+    expect(character.description).toBe("old description");
+    expect(character.first_mes).toBe("new main greeting");
+    expect(character.alternate_greetings).toEqual(["old alternate", "new alternate 2", "old greeting"]);
+    expect(character.tags).toEqual(["old-tag", "new-tag"]);
+    expect(summary.demotedFirstMes).toBe(true);
+    expect(summary.addedAlternateGreetings).toBe(1);
+  });
+
+  test("rejects invalid selection JSON and returns 404 for unknown character", async () => {
+    const file = new File([JSON.stringify({ spec: "chara_card_v2", data: { name: "X" } })], "x.json", {
+      type: "application/json",
+    });
+
+    const badForm = new FormData();
+    badForm.set("file", file);
+    badForm.set("selection", "{not valid json");
+    const badRes = await app.request(`http://localhost/${CHARACTER_ID}/apply-card-update`, {
+      method: "POST",
+      body: badForm,
+    });
+    expect(badRes.status).toBe(400);
+
+    const missingForm = new FormData();
+    missingForm.set("file", file);
+    const missingRes = await app.request("http://localhost/missing-id/preview-card-update", {
+      method: "POST",
+      body: missingForm,
+    });
+    expect(missingRes.status).toBe(404);
+  });
+});
+
 describe("character folder routes", () => {
   test("renames and deletes a folder", async () => {
     getDb().query("UPDATE characters SET folder = 'Drafts' WHERE id = ?").run(CHARACTER_ID);

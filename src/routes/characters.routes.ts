@@ -29,6 +29,14 @@ import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
 import { importCharacterFile } from "../services/character-import.service";
 import {
+  applySelectiveCardUpdate,
+  buildCardReplacementInput,
+  buildCardUpdatePreview,
+  findMatchingCharactersForCard,
+  parseCardBundle,
+  type CardUpdateSelection,
+} from "../services/character-card-update.service";
+import {
   characterImportJobs,
   CharacterImportJobError,
 } from "../services/character-import-jobs.service";
@@ -79,52 +87,6 @@ function importCardRegexBestEffort(userId: string, characterId: string, extensio
   } catch (err) {
     console.error("[character import] regex import failed:", err);
   }
-}
-
-// These values refer to locally-owned entities rather than portable card data.
-// Replacing a JSON/PNG card must not detach or delete the user's avatar,
-// expression assets, world book links, or selected TTS voice.
-const LOCAL_CHARACTER_EXTENSION_KEYS = new Set([
-  "expressions",
-  "expression_groups",
-  "alternate_fields",
-  "alternate_avatars",
-  "world_book_id",
-  "world_book_ids",
-  "avatar_crop_image_id",
-  "original_image_id",
-  "risu_asset_map",
-  "gallery_reference_sequence",
-  "gallery_reference_names",
-  "landing_perspective_layers",
-  "ttsVoice",
-]);
-
-function buildCardReplacementInput(existing: Character, card: CreateCharacterInput): UpdateCharacterInput {
-  const preservedExtensions = Object.fromEntries(
-    Object.entries(existing.extensions ?? {}).filter(([key]) =>
-      LOCAL_CHARACTER_EXTENSION_KEYS.has(key) || key.startsWith("_lumiverse_")
-    )
-  );
-
-  return {
-    // Deliberately omit `name`: this endpoint only replaces card contents.
-    description: card.description ?? "",
-    personality: card.personality ?? "",
-    scenario: card.scenario ?? "",
-    first_mes: card.first_mes ?? "",
-    mes_example: card.mes_example ?? "",
-    creator: card.creator ?? "",
-    creator_notes: card.creator_notes ?? "",
-    system_prompt: card.system_prompt ?? "",
-    post_history_instructions: card.post_history_instructions ?? "",
-    tags: card.tags ?? [],
-    alternate_greetings: card.alternate_greetings ?? [],
-    extensions: {
-      ...(card.extensions ?? {}),
-      ...preservedExtensions,
-    },
-  };
 }
 
 // ─── Portable LoRA surfacing ──────────────────────────────────────────────
@@ -719,6 +681,86 @@ app.post("/import-url", async (c) => {
       return c.json({ error: err.message }, 400);
     }
     return c.json({ error: err.message || "Failed to import from URL" }, 400);
+  }
+});
+
+// Parse an uploaded JSON/PNG/CHARX card without creating a character yet, and
+// return candidate existing characters so the UI can offer a selective update.
+app.post("/preview-card-import", async (c) => {
+  const userId = c.get("userId");
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      return c.json({ error: "Character card file is required" }, 400);
+    }
+
+    const parsed = await parseCardBundle(file);
+    const matches = await findMatchingCharactersForCard(userId, parsed.filename, parsed.cardInput);
+    const preview = await buildCardUpdatePreview(parsed, matches);
+    return c.json(preview);
+  } catch (err: any) {
+    return respondImportError(c, err, "Failed to parse character card");
+  }
+});
+
+// Parse an uploaded JSON/PNG/CHARX card against a specific existing character.
+app.post("/:id/preview-card-update", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const existing = await svc.getCharacterAsync(userId, characterId);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      return c.json({ error: "Character card file is required" }, 400);
+    }
+
+    const parsed = await parseCardBundle(file);
+    const preview = await buildCardUpdatePreview(parsed);
+    return c.json(preview);
+  } catch (err: any) {
+    return respondImportError(c, err, "Failed to parse character card");
+  }
+});
+
+// Apply only the user-selected fields/merge options from an uploaded card.
+app.post("/:id/apply-card-update", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const existing = await svc.getCharacterAsync(userId, characterId);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      return c.json({ error: "Character card file is required" }, 400);
+    }
+
+    const rawSelection = formData.get("selection");
+    let selection: CardUpdateSelection = {};
+    if (typeof rawSelection === "string" && rawSelection.trim()) {
+      try {
+        const parsedJson = JSON.parse(rawSelection);
+        if (!parsedJson || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
+          return c.json({ error: "Invalid selection payload" }, 400);
+        }
+        selection = parsedJson as CardUpdateSelection;
+      } catch {
+        return c.json({ error: "Invalid selection JSON" }, 400);
+      }
+    }
+
+    const parsed = await parseCardBundle(file);
+    const result = await applySelectiveCardUpdate(userId, existing, parsed, selection, {
+      signal: c.req.raw.signal,
+    });
+    return c.json(result);
+  } catch (err: any) {
+    return respondImportError(c, err, "Failed to update character from card");
   }
 });
 
