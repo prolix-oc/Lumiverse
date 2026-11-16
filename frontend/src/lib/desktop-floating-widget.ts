@@ -121,7 +121,8 @@ export function publishDesktopFloatingWidgetCatalog(entries: DesktopFloatingWidg
 }
 
 /** Keep a native child window's size and the primary frontend's placement
- * registry aligned. The command verifies the calling window owns widgetId. */
+ * registry aligned. The host resolves the catalog entry from the calling
+ * window's label; widgetId is retained for compatibility with older hosts. */
 export function syncDesktopFloatingWidgetSize(widgetId: string, width: number, height: number): Promise<void> {
   if (!isDesktopFloatingWidgetWindow()) return Promise.resolve()
   return invoke('sync_desktop_widget_size', { widgetId, width, height })

@@ -474,6 +474,55 @@ mod widget_label_tests {
         assert_eq!(found, Some("spindle:demo:float:b"));
         assert!(widget_for_window_label(&widgets, "main").is_none());
     }
+
+    #[test]
+    fn widget_capabilities_allow_return_without_catalog_or_tray_access() {
+        use tauri::ipc::Origin;
+        use tauri::utils::{acl::resolved::Resolved, platform::Target};
+
+        // Use Tauri's generated manifests and resolver so permissions are checked
+        // with the same window/origin matching as an actual IPC request.
+        for platform in [Target::MacOS, Target::Windows, Target::Linux] {
+            let manifests =
+                serde_json::from_str(include_str!("../gen/schemas/acl-manifests.json")).unwrap();
+            let capabilities =
+                serde_json::from_str(include_str!("../gen/schemas/capabilities.json")).unwrap();
+            let resolved = Resolved::resolve(&manifests, capabilities, platform).unwrap();
+            let authority = tauri::runtime_authority!(manifests, resolved);
+            for url in [
+                "http://127.0.0.1:7860/widget.html",
+                "https://example.com/widget.html",
+            ] {
+                let origin = Origin::Remote {
+                    url: url.parse().unwrap(),
+                };
+                for command in ["return_extension_widget", "sync_desktop_widget_size"] {
+                    assert!(
+                        authority
+                            .resolve_access(command, "widget-1234", "widget-1234", &origin)
+                            .is_some(),
+                        "{command} is blocked on {platform:?}"
+                    );
+                    assert!(authority
+                        .resolve_access(command, "unrelated", "unrelated", &origin)
+                        .is_none());
+                }
+                for command in [
+                    "set_desktop_widget_catalog",
+                    "resize_extension_widget",
+                    "return_extension_widget_from_tray",
+                    "show_extension_widget",
+                ] {
+                    assert!(
+                        authority
+                            .resolve_access(command, "widget-1234", "widget-1234", &origin)
+                            .is_none(),
+                        "{command} must remain unavailable to widgets"
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn valid_widget_descriptor(widget: &DesktopWidgetDescriptor) -> bool {
@@ -1210,7 +1259,7 @@ pub fn sync_desktop_widget_size(
         widget.height = height;
         widget.clone()
     };
-    app.emit_to("main", "desktop-widget-size", updated)
+    app.emit_to(FRONTEND_LABEL, "desktop-widget-size", updated)
         .map_err(|error| error.to_string())
 }
 
