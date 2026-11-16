@@ -280,6 +280,25 @@ describe("card update preview and selective apply routes", () => {
   });
 });
 
+describe("selective card update ownership", () => {
+  test("rejects foreign and deleting targets and excludes them from matching", async () => {
+    for (const update of ["UPDATE characters SET user_id = 'other-user'", "UPDATE characters SET user_id = 'user-1', deleting = 1"]) {
+      getDb().run(update);
+      const form = () => {
+        const body = new FormData();
+        body.set("file", new File([JSON.stringify({ name: "Keep this name", description: "Changed" })], "card.json"));
+        body.set("selection", JSON.stringify({ fields: ["description"] }));
+        return body;
+      };
+      expect((await app.request(`http://localhost/${CHARACTER_ID}/preview-card-update`, { method: "POST", body: form() })).status).toBe(404);
+      expect((await app.request(`http://localhost/${CHARACTER_ID}/apply-card-update`, { method: "POST", body: form() })).status).toBe(404);
+      const preview = await app.request("http://localhost/preview-card-import", { method: "POST", body: form() });
+      expect((await preview.json()).matches).toEqual([]);
+      expect((getDb().query("SELECT description FROM characters WHERE id = ?").get(CHARACTER_ID) as any).description).toBe("old description");
+    }
+  });
+});
+
 describe("character folder routes", () => {
   test("renames and deletes a folder", async () => {
     getDb().query("UPDATE characters SET folder = 'Drafts' WHERE id = ?").run(CHARACTER_ID);

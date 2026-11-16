@@ -7,9 +7,13 @@ export interface NanoGptCachingSettings {
   /**
    * Optional message index that NanoGPT should treat as the cache cutoff.
    * Anything from index 0 up to and including this index is eligible for
-   * caching. Omit to let NanoGPT decide.
+   * caching. Omit to derive a boundary before the recent conversation tail.
    */
   cutAfterMessageIndex?: number
+  /** Derive a cutoff by default; false delegates placement to NanoGPT. */
+  autoCut?: boolean
+  /** History messages to leave uncached before the latest assistant (default 6). */
+  tailReserveMessages?: number
   /**
    * When true, NanoGPT respects user-provided inline `cache_control` markers
    * in the request body instead of auto-injecting its own breakpoints.
@@ -47,6 +51,15 @@ function readForceCacheCapableRouting(record: Record<string, unknown>): boolean 
   return raw === true ? true : undefined
 }
 
+function readAutomaticCutSettings(record: Record<string, unknown>): Pick<NanoGptCachingSettings, 'autoCut' | 'tailReserveMessages'> {
+  const autoCut = record.autoCut ?? record.auto_cut
+  const reserve = record.tailReserveMessages ?? record.tail_reserve_messages
+  return {
+    ...(typeof autoCut === 'boolean' ? { autoCut } : {}),
+    ...(typeof reserve === 'number' && Number.isSafeInteger(reserve) && reserve >= 0 ? { tailReserveMessages: reserve } : {}),
+  }
+}
+
 export function parseNanoGptCachingSettings(value: unknown): NanoGptCachingSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { ...DEFAULT_NANOGPT_CACHING }
@@ -57,6 +70,7 @@ export function parseNanoGptCachingSettings(value: unknown): NanoGptCachingSetti
     // re-enabling restores the user's last config.
     return {
       ...DEFAULT_NANOGPT_CACHING,
+      ...readAutomaticCutSettings(record),
       ttl: record.ttl === '1h' ? '1h' : '5m',
       stickyProvider: record.stickyProvider === false ? false : true,
       ...(readCutAfter(record) !== undefined ? { cutAfterMessageIndex: readCutAfter(record) } : {}),
@@ -71,6 +85,7 @@ export function parseNanoGptCachingSettings(value: unknown): NanoGptCachingSetti
     enabled: true,
     ttl: record.ttl === '1h' ? '1h' : '5m',
     stickyProvider: record.stickyProvider === false ? false : true,
+    ...readAutomaticCutSettings(record),
     ...(cutAfter !== undefined ? { cutAfterMessageIndex: cutAfter } : {}),
     ...(explicit !== undefined ? { explicitCacheControl: true } : {}),
     ...(force !== undefined ? { forceCacheCapableRouting: true } : {}),
@@ -83,6 +98,7 @@ export function buildNanoGptCachingMetadata(settings: NanoGptCachingSettings): f
     enabled: true,
     ttl: settings.ttl,
     stickyProvider: settings.stickyProvider,
+    ...readAutomaticCutSettings({ ...settings }),
   }
   if (
     typeof settings.cutAfterMessageIndex === 'number' &&

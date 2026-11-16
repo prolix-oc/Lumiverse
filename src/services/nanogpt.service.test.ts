@@ -42,6 +42,30 @@ test("provider discovery accepts a new unsaved connection and reports unsupporte
   expect(fetchSpy).toHaveBeenCalledTimes(1);
 });
 
+test("provider discovery reads the providerDetails list returned for models without provider selection", async () => {
+  spy(globalThis, "fetch").mockResolvedValue(Response.json({
+    canonicalId: "google/gemini-3-pro",
+    supportsProviderSelection: false,
+    message: "This model does not support provider selection",
+    defaultPrice: { inputPer1kTokens: 0.002 },
+    providerDetails: [
+      { provider: "google", available: true, pricing: { inputPer1kTokens: 0.002 } },
+      { provider: "googlenative", available: true, pricing: { inputPer1kTokens: 0.002 } },
+    ],
+  }));
+  const result = await discoverModelProviders("alice", { model: "google/gemini-3-pro", api_key: "placeholder" });
+  expect(result.supportsProviderSelection).toBe(false);
+  expect(result.providers.map((p) => p.provider)).toEqual(["google", "googlenative"]);
+  // No displayName on the wire: the requested ID stands in so the panel has a label.
+  expect(result.displayName).toBe("google/gemini-3-pro");
+});
+
+test("provider discovery still rejects a payload carrying neither list", async () => {
+  spy(globalThis, "fetch").mockResolvedValue(Response.json({ supportsProviderSelection: false }));
+  expect(discoverModelProviders("alice", { model: "closed-model", api_key: "placeholder" }))
+    .rejects.toThrow("NanoGPT returned an invalid provider list");
+});
+
 test("balance uses the documented POST endpoint and parses string balances", async () => {
   const fetchSpy = spy(globalThis, "fetch").mockResolvedValue(Response.json({ usd_balance: "12.1234", nano_balance: "0.5", nanoDepositAddress: "private-account-address" }));
   expect(await fetchPaygoBalance("placeholder")).toEqual({ usd_balance: 12.1234, nano_balance: 0.5 });

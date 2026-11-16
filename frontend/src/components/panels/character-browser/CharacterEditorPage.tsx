@@ -539,6 +539,9 @@ export default function CharacterEditorPage() {
   const layersSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layerSaveLockRef = useRef<Promise<void> | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const pendingFieldValues = useRef<Record<string, Record<string, any>>>({})
+  const fieldSaveLock = useRef<Promise<unknown>>(Promise.resolve())
+  const extensionsSaveLock = useRef<Promise<unknown>>(Promise.resolve())
   const fileRef = useRef<HTMLInputElement>(null)
   const cardReplaceFileRef = useRef<HTMLInputElement>(null)
   const perspectiveLayerFileRef = useRef<HTMLInputElement>(null)
@@ -953,9 +956,13 @@ export default function CharacterEditorPage() {
     (field: string, value: any) => {
       if (!editingCharacterId) return
       clearTimeout(timers.current[field])
+      pendingFieldValues.current[editingCharacterId] ??= {}
+      pendingFieldValues.current[editingCharacterId][field] = value
       timers.current[field] = setTimeout(() => {
+        delete pendingFieldValues.current[editingCharacterId]?.[field]
         showSaving()
-        browser.updateCharacter(editingCharacterId, { [field]: value })
+        const save = () => browser.updateCharacter(editingCharacterId, { [field]: value })
+        fieldSaveLock.current = fieldSaveLock.current.then(save, save)
       }, DEBOUNCE_MS)
     },
     [editingCharacterId, browser, showSaving]
@@ -1047,10 +1054,12 @@ export default function CharacterEditorPage() {
     clearTimeout(timers.current['extensions'])
     timers.current['extensions'] = undefined as unknown as ReturnType<typeof setTimeout>
     const next = pendingExtensionsRef.current
-    if (!next) return
+    if (!next) { await extensionsSaveLock.current; return }
     pendingExtensionsRef.current = null
     showSaving()
-    await browser.updateCharacter(editingCharacterId, { extensions: next })
+    const save = () => browser.updateCharacter(editingCharacterId, { extensions: next })
+    extensionsSaveLock.current = extensionsSaveLock.current.then(save, save)
+    await extensionsSaveLock.current
   }, [editingCharacterId, browser, showSaving])
 
   const mutateExtensions = useCallback(
@@ -1549,25 +1558,6 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
-  const handleReplaceCard = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      e.target.value = ''
-      if (!file || !editingCharacterId || replacingCard) return
-
-      setReplacingCard(true)
-      try {
-        const preview = await charactersApi.previewCardUpdate(editingCharacterId, file)
-        setPendingCardUpdate({ file, preview })
-      } catch (err: any) {
-        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
-      } finally {
-        setReplacingCard(false)
-      }
-    },
-    [editingCharacterId, replacingCard, t]
-  )
-
   const handleCardUpdateApplied = useCallback(
     (updated: Character, summary: CardUpdateApplySummary) => {
       if (!editingCharacterId) return
@@ -1642,6 +1632,35 @@ export default function CharacterEditorPage() {
       void flushPerspectiveLayersSave()
     }, 400)
   }, [flushPerspectiveLayersSave])
+
+  const handleReplaceCard = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId || replacingCard) return
+
+      setReplacingCard(true)
+      try {
+        // Finish local edits before taking the snapshot shown in the merge dialog.
+        // A delayed save must not race with the eventual selective update.
+        for (const timer of Object.values(timers.current)) clearTimeout(timer)
+        const pending = pendingFieldValues.current[editingCharacterId] ?? {}
+        delete pendingFieldValues.current[editingCharacterId]
+        await fieldSaveLock.current
+        if (Object.keys(pending).length) await browser.updateCharacter(editingCharacterId, pending)
+        await flushExtensionsSave()
+        if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+        await flushPerspectiveLayersSave()
+        const preview = await charactersApi.previewCardUpdate(editingCharacterId, file)
+        setPendingCardUpdate({ file, preview })
+      } catch (err: any) {
+        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
+      } finally {
+        setReplacingCard(false)
+      }
+    },
+    [editingCharacterId, replacingCard, t, browser, flushExtensionsSave, flushPerspectiveLayersSave]
+  )
 
   // Flush any pending layer edits when the editor closes or the character changes.
   useEffect(() => () => {

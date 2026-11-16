@@ -1,23 +1,16 @@
+import { applyCharxModulesAndAssets } from "./charx-import.service";
 import { readDatabaseRows } from "../db/queries";
 import * as svc from "./characters.service";
 import * as images from "./images.service";
 import * as cardSvc from "./character-card.service";
-import * as gallerySvc from "./character-gallery.service";
 import * as regexSvc from "./regex-scripts.service";
-import * as exprSvc from "./expressions.service";
 import * as wbSvc from "./world-books.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
-import {
-  galleryReferenceFromArchivePath,
-  remapGreetingBackgrounds,
-} from "../utils/gallery-image-reference";
-import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 
 const MAX_AVATAR_PREVIEW_BYTES = 8 * 1024 * 1024;
-const GALLERY_UPLOAD_CONCURRENCY = 6;
 
 // These values refer to locally-owned entities rather than portable card data.
 // Replacing a JSON/PNG/CHARX card must not detach or delete the user's avatar,
@@ -437,56 +430,6 @@ function normalizeGreetingKey(value: string): string {
   return value.trim();
 }
 
-function remapGreetingToolsForAlternateSelection(
-  extensions: Record<string, any>,
-  keptExistingIndices: number[],
-  options: { mainReplaced: boolean },
-): Record<string, any> {
-  const tools = extensions.greeting_tools;
-  if (!tools || typeof tools !== "object" || Array.isArray(tools)) return extensions;
-
-  const nextTools: Record<string, any> = { ...tools };
-  if (options.mainReplaced) {
-    delete nextTools.mainGreeting;
-  }
-
-  if (tools.indexMap && typeof tools.indexMap === "object" && !Array.isArray(tools.indexMap)) {
-    const nextIndexMap: Record<string, string> = {};
-    const keptGreetingIds = new Set<string>();
-    keptExistingIndices.forEach((oldIdx, newIdx) => {
-      const mappedId = tools.indexMap[String(oldIdx)];
-      if (typeof mappedId === "string" && mappedId) {
-        nextIndexMap[String(newIdx)] = mappedId;
-        keptGreetingIds.add(mappedId);
-      }
-    });
-    nextTools.indexMap = nextIndexMap;
-
-    if (tools.greetings && typeof tools.greetings === "object" && !Array.isArray(tools.greetings)) {
-      const nextGreetings: Record<string, any> = {};
-      for (const id of keptGreetingIds) {
-        if (tools.greetings[id]) nextGreetings[id] = tools.greetings[id];
-      }
-      nextTools.greetings = nextGreetings;
-    }
-  }
-
-  return { ...extensions, greeting_tools: nextTools };
-}
-
-function clearReplacedAlternateGreetingTools(
-  extensions: Record<string, any>,
-  mainReplaced: boolean,
-): Record<string, any> {
-  const tools = extensions.greeting_tools;
-  if (!tools || typeof tools !== "object" || Array.isArray(tools)) return extensions;
-  const nextTools: Record<string, any> = { ...tools };
-  if (mainReplaced) delete nextTools.mainGreeting;
-  delete nextTools.indexMap;
-  delete nextTools.greetings;
-  return { ...extensions, greeting_tools: nextTools };
-}
-
 function mergeTags(existing: string[], incoming: string[]): string[] {
   const seen = new Set(existing);
   const result = [...existing];
@@ -515,256 +458,6 @@ function regexSignature(script: { name?: string; scriptName?: string; find_regex
   return `${name}\u0000${find}\u0000${replace}`;
 }
 
-async function applyCharxAssetsSelective(
-  userId: string,
-  characterId: string,
-  charxResult: cardSvc.CharxResult,
-  mode: "merge" | "replace",
-  updatedTextFields: Set<string>,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  const current = await svc.getCharacterAsync(userId, characterId);
-  if (!current) return false;
-
-  const { lumiverseModules, expressionAssets, assetFiles, expressionGroupAnalysis } = charxResult;
-  const assetImageMap = new Map<string, string>();
-  const consumedPaths = new Set<string>();
-  const extensions: Record<string, any> = { ...(current.extensions || {}) };
-
-  if (lumiverseModules) {
-    // Expressions
-    if (lumiverseModules.expressions?.mappings) {
-      const existingExpr = (extensions.expressions && typeof extensions.expressions === "object")
-        ? extensions.expressions
-        : {};
-      const existingMappings: Record<string, string> = mode === "merge" && existingExpr.mappings
-        ? { ...existingExpr.mappings }
-        : {};
-      for (const [label, archivePath] of Object.entries(lumiverseModules.expressions.mappings)) {
-        if (mode === "merge" && existingMappings[label]) {
-          consumedPaths.add(archivePath);
-          continue;
-        }
-        const assetFile = assetFiles.get(archivePath);
-        if (assetFile) {
-          const img = await images.uploadImage(userId, assetFile, { owner_character_id: characterId });
-          existingMappings[label] = img.id;
-          consumedPaths.add(archivePath);
-          assetImageMap.set(archivePath, img.id);
-        }
-      }
-      if (Object.keys(existingMappings).length > 0) {
-        extensions.expressions = {
-          enabled: lumiverseModules.expressions.enabled,
-          useAsAvatar: exprSvc.getExpressionConfig(userId, characterId)?.useAsAvatar ?? false,
-          defaultExpression: lumiverseModules.expressions.defaultExpression,
-          mappings: existingMappings,
-        };
-      }
-    }
-
-    // Expression groups
-    if (lumiverseModules.expression_groups?.groups) {
-      const existingGroups: Record<string, Record<string, string>> =
-        mode === "merge" && extensions.expression_groups && typeof extensions.expression_groups === "object"
-          ? { ...extensions.expression_groups }
-          : {};
-      for (const [groupName, labelMap] of Object.entries(lumiverseModules.expression_groups.groups)) {
-        const groupMappings: Record<string, string> = mode === "merge" && existingGroups[groupName]
-          ? { ...existingGroups[groupName] }
-          : {};
-        for (const [label, archivePath] of Object.entries(labelMap)) {
-          if (mode === "merge" && groupMappings[label]) {
-            consumedPaths.add(archivePath);
-            continue;
-          }
-          const assetFile = assetFiles.get(archivePath);
-          if (assetFile) {
-            const img = await images.uploadImage(userId, assetFile, { owner_character_id: characterId });
-            groupMappings[label] = img.id;
-            consumedPaths.add(archivePath);
-            assetImageMap.set(archivePath, img.id);
-          }
-        }
-        if (Object.keys(groupMappings).length > 0) {
-          existingGroups[groupName] = groupMappings;
-        }
-      }
-      if (Object.keys(existingGroups).length > 0) {
-        extensions.expression_groups = existingGroups;
-      }
-    }
-
-    // Alternate fields
-    if (lumiverseModules.alternate_fields) {
-      if (mode === "replace") {
-        extensions.alternate_fields = lumiverseModules.alternate_fields;
-      } else {
-        const existingAlt = (extensions.alternate_fields && typeof extensions.alternate_fields === "object")
-          ? { ...extensions.alternate_fields }
-          : {};
-        for (const [fieldKey, variants] of Object.entries(lumiverseModules.alternate_fields)) {
-          if (!Array.isArray(variants)) continue;
-          const currentVariants = Array.isArray(existingAlt[fieldKey]) ? [...existingAlt[fieldKey]] : [];
-          const seenContent = new Set(currentVariants.map((v: any) => String(v?.content ?? "").trim()));
-          for (const variant of variants) {
-            if (!variant || typeof variant !== "object") continue;
-            const contentKey = String(variant.content ?? "").trim();
-            if (!seenContent.has(contentKey)) {
-              seenContent.add(contentKey);
-              currentVariants.push(variant);
-            }
-          }
-          existingAlt[fieldKey] = currentVariants;
-        }
-        extensions.alternate_fields = existingAlt;
-      }
-    }
-
-    // Alternate avatars
-    if (Array.isArray(lumiverseModules.alternate_avatars) && lumiverseModules.alternate_avatars.length > 0) {
-      const existingAltAvatars = mode === "merge" && Array.isArray(extensions.alternate_avatars)
-        ? [...extensions.alternate_avatars]
-        : [];
-      const seenLabels = new Set(existingAltAvatars.map((a: any) => String(a?.label ?? "").trim()));
-      const seenIds = new Set(existingAltAvatars.map((a: any) => String(a?.id ?? "")));
-      for (const [position, av] of lumiverseModules.alternate_avatars.entries()) {
-        const stableId = cardSvc.stableCharxAlternateAvatarId(av.id, position);
-        if (mode === "merge" && (seenIds.has(stableId) || (av.label && seenLabels.has(av.label.trim())))) {
-          consumedPaths.add(av.path);
-          continue;
-        }
-        const assetFile = assetFiles.get(av.path);
-        if (assetFile) {
-          const img = await images.uploadImage(userId, assetFile, { owner_character_id: characterId });
-          existingAltAvatars.push({
-            id: stableId,
-            image_id: img.id,
-            label: av.label,
-          });
-          consumedPaths.add(av.path);
-          assetImageMap.set(av.path, img.id);
-        }
-      }
-      if (existingAltAvatars.length > 0) {
-        extensions.alternate_avatars = existingAltAvatars;
-      }
-    }
-
-    // Landing perspective layers
-    if (Array.isArray(lumiverseModules.landing_perspective_layers) && lumiverseModules.landing_perspective_layers.length > 0) {
-      if (mode === "replace" || !Array.isArray(extensions[svc.LANDING_PERSPECTIVE_LAYERS_KEY]) || extensions[svc.LANDING_PERSPECTIVE_LAYERS_KEY].length === 0) {
-        const landingLayers: Array<{ id: string; image_id: string; label?: string; intensity: number }> = [];
-        for (const layer of lumiverseModules.landing_perspective_layers) {
-          if (!layer || typeof layer !== "object") continue;
-          const path = typeof layer.path === "string" ? layer.path : null;
-          if (!path) continue;
-          const assetFile = assetFiles.get(path);
-          if (!assetFile) continue;
-          const img = await images.uploadOptimizedWebpImage(userId, assetFile, { owner_character_id: characterId });
-          landingLayers.push({
-            id: typeof layer.id === "string" && layer.id ? layer.id : crypto.randomUUID(),
-            image_id: img.id,
-            ...(typeof layer.label === "string" && layer.label ? { label: layer.label } : {}),
-            intensity: typeof layer.intensity === "number" && Number.isFinite(layer.intensity)
-              ? Math.max(0, Math.min(1.5, Math.round(layer.intensity * 100) / 100))
-              : 0.6,
-          });
-          consumedPaths.add(path);
-          assetImageMap.set(path, img.id);
-          if (landingLayers.length >= 5) break;
-        }
-        if (landingLayers.length > 0) {
-          extensions[svc.LANDING_PERSPECTIVE_LAYERS_KEY] = landingLayers;
-        }
-      }
-    }
-
-    await svc.updateCharacterAsync(userId, characterId, { extensions });
-  }
-
-  // Upload unconsumed gallery images
-  const existingGalleryRefs = mode === "merge"
-    ? new Set(gallerySvc.listGallery(userId, characterId, { registerReferences: false }).map((g) => g.reference))
-    : new Set<string>();
-  const remainingGalleryEntries: Array<{ path: string; file: File }> = [];
-  for (const [path, assetFile] of assetFiles) {
-    if (consumedPaths.has(path)) continue;
-    if (charxResult.avatarFile && assetFile.name === charxResult.avatarFile.name) continue;
-    if (/^assets\/(icon|other)\//i.test(path)) {
-      const ref = galleryReferenceFromArchivePath(path);
-      if (mode === "merge" && ref && existingGalleryRefs.has(ref)) continue;
-      remainingGalleryEntries.push({ path, file: assetFile });
-    }
-  }
-
-  await mapWithConcurrency(remainingGalleryEntries, GALLERY_UPLOAD_CONCURRENCY, async ({ path, file: gf }) => {
-    try {
-      const img = await images.uploadImage(userId, gf, { owner_character_id: characterId });
-      gallerySvc.addToGallery(userId, characterId, img.id, undefined, { registerReference: false });
-      assetImageMap.set(path, img.id);
-    } catch {
-      // Skip individual gallery image failures
-    }
-  });
-
-  if (assetImageMap.size > 0) {
-    const refreshed = await svc.getCharacterAsync(userId, characterId);
-    if (refreshed) {
-      const candidateFields: Record<string, any> = {};
-      for (const field of [
-        "first_mes",
-        "description",
-        "personality",
-        "scenario",
-        "mes_example",
-        "system_prompt",
-        "post_history_instructions",
-        "creator_notes",
-        "alternate_greetings",
-      ] as const) {
-        if (updatedTextFields.has(field)) {
-          candidateFields[field] = refreshed[field];
-        }
-      }
-      if (Object.keys(candidateFields).length > 0) {
-        const resolved = cardSvc.resolveInlineAssetReferences(candidateFields as any, assetImageMap);
-        if (Object.keys(resolved).length > 0) {
-          await svc.updateCharacterAsync(userId, characterId, resolved);
-        }
-      }
-
-      const portableToLocal = new Map<string, string>();
-      const risuAssetMap: Record<string, string> = { ...(refreshed.extensions?.risu_asset_map || {}) };
-      for (const [archivePath, imageId] of assetImageMap) {
-        const galleryReference = galleryReferenceFromArchivePath(archivePath);
-        const key = galleryReference ?? cardSvc.fileStem(archivePath);
-        if (!risuAssetMap[key]) risuAssetMap[key] = imageId;
-        if (galleryReference) portableToLocal.set(galleryReference, imageId);
-      }
-      if (Object.keys(risuAssetMap).length > 0) {
-        const latest = await svc.getCharacterAsync(userId, characterId);
-        if (latest) {
-          const nextExt: Record<string, any> = { ...(latest.extensions || {}), risu_asset_map: risuAssetMap };
-          const remapped = remapGreetingBackgrounds(nextExt.greeting_backgrounds, portableToLocal);
-          if (remapped !== nextExt.greeting_backgrounds) {
-            nextExt.greeting_backgrounds = remapped;
-          }
-          await svc.updateCharacterAsync(userId, characterId, { extensions: nextExt });
-        }
-      }
-    }
-  }
-
-  // Risu expression assets (when no Lumiverse expression module already ran)
-  if (!lumiverseModules?.expressions && !lumiverseModules?.expression_groups && !expressionGroupAnalysis?.isMultiCharacter && expressionAssets.length > 0) {
-    await exprSvc.importFromAssets(userId, characterId, expressionAssets);
-  }
-
-  void signal;
-  return true;
-}
-
 export async function applySelectiveCardUpdate(
   userId: string,
   existing: Character,
@@ -776,6 +469,7 @@ export async function applySelectiveCardUpdate(
   const updateInput: UpdateCharacterInput = {};
   const updatedFields: string[] = [];
   const updatedTextFields = new Set<string>();
+  const updatedGreetingIndices = new Set<number>();
 
   // 1. Scalar fields
   const requestedFields = Array.isArray(selection.fields) ? selection.fields : [];
@@ -810,6 +504,7 @@ export async function applySelectiveCardUpdate(
 
   if (alternateMode === "replace_all") {
     nextAlternates = [...incomingAlternates];
+    incomingAlternates.forEach((_, index) => updatedGreetingIndices.add(index));
     addedAlternateGreetings = incomingAlternates.length;
     updatedFields.push("alternate_greetings");
     updatedTextFields.add("alternate_greetings");
@@ -828,6 +523,7 @@ export async function applySelectiveCardUpdate(
     }
     if (toAppend.length > 0) {
       nextAlternates = [...existingAlternates, ...toAppend];
+      toAppend.forEach((_, index) => updatedGreetingIndices.add(existingAlternates.length + index));
       addedAlternateGreetings = toAppend.length;
       updatedFields.push("alternate_greetings");
       updatedTextFields.add("alternate_greetings");
@@ -843,6 +539,7 @@ export async function applySelectiveCardUpdate(
       : [];
     const added = incomingIndices.map((idx) => incomingAlternates[idx]);
     nextAlternates = [...kept, ...added];
+    added.forEach((_, index) => updatedGreetingIndices.add(kept.length + index));
     addedAlternateGreetings = added.length;
     updatedFields.push("alternate_greetings");
     updatedTextFields.add("alternate_greetings");
@@ -913,25 +610,52 @@ export async function applySelectiveCardUpdate(
     }
   }
 
-  // Keep greeting_tools metadata aligned when greetings are removed or replaced
+  // Keep every greeting-indexed setting attached to the same retained content.
   const mainReplaced = firstMesMode === "replace" || firstMesMode === "replace_and_demote";
-  if (alternateMode === "replace_all") {
-    const updatedTools = clearReplacedAlternateGreetingTools(workingExtensions, mainReplaced);
-    if (updatedTools !== workingExtensions) {
-      workingExtensions = updatedTools;
-      extensionsModified = true;
+  if (mainReplaced || nextAlternates !== null) {
+    const retained = alternateMode === "replace_all" ? [] : keptExistingIndices ?? existingAlternates.map((_, i) => i);
+    const indexMap = new Map<number, number>();
+    if (!mainReplaced) indexMap.set(0, 0);
+    retained.forEach((oldIndex, newIndex) => indexMap.set(oldIndex + 1, newIndex + 1));
+    if (demotedFirstMes) indexMap.set(0, nextAlternates!.length);
+    const tools = workingExtensions.greeting_tools;
+    if (tools && typeof tools === "object" && !Array.isArray(tools)) {
+      const nextTools = { ...tools };
+      if (mainReplaced) nextTools.mainGreeting = null;
+      const titles: Record<string, any> = {};
+      const ids: Record<string, string> = {};
+      for (const [oldIndex, newIndex] of indexMap) {
+        if (newIndex === 0) continue;
+        const metadata = oldIndex === 0 ? tools.mainGreeting : tools.greetings?.[tools.indexMap?.[String(oldIndex - 1)]];
+        const id = oldIndex === 0 ? metadata?.id : tools.indexMap?.[String(oldIndex - 1)];
+        if (typeof id === "string") {
+          ids[String(newIndex - 1)] = id;
+          if (metadata) titles[id] = metadata;
+        }
+      }
+      nextTools.indexMap = ids;
+      nextTools.greetings = titles;
+      workingExtensions.greeting_tools = nextTools;
     }
-  } else if (alternateMode === "select" && keptExistingIndices !== null && keptExistingIndices.length !== existingAlternates.length) {
-    const updatedTools = remapGreetingToolsForAlternateSelection(workingExtensions, keptExistingIndices, { mainReplaced });
-    if (updatedTools !== workingExtensions) {
-      workingExtensions = updatedTools;
-      extensionsModified = true;
+    if (workingExtensions.greeting_backgrounds && typeof workingExtensions.greeting_backgrounds === "object") {
+      workingExtensions.greeting_backgrounds = Object.fromEntries(
+        Object.entries(workingExtensions.greeting_backgrounds)
+          .filter(([key]) => indexMap.has(Number(key)))
+          .map(([key, value]) => [indexMap.get(Number(key)), value]),
+      );
     }
-  } else if (mainReplaced && workingExtensions.greeting_tools?.mainGreeting) {
-    workingExtensions = {
-      ...workingExtensions,
-      greeting_tools: { ...workingExtensions.greeting_tools, mainGreeting: null },
-    };
+    if (workingExtensions.avatar_bindings && typeof workingExtensions.avatar_bindings === "object") {
+      workingExtensions.avatar_bindings = Object.fromEntries(Object.entries(workingExtensions.avatar_bindings).flatMap(([id, raw]) => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+        const binding = { ...raw } as Record<string, any>;
+        if (typeof binding.greeting_index === "number") {
+          const nextIndex = indexMap.get(binding.greeting_index);
+          if (nextIndex === undefined) delete binding.greeting_index;
+          else binding.greeting_index = nextIndex;
+        }
+        return Object.keys(binding).length ? [[id, binding]] : [];
+      }));
+    }
     extensionsModified = true;
   }
 
@@ -1112,14 +836,14 @@ export async function applySelectiveCardUpdate(
   const charxAssetsMode: CharxAssetsUpdateMode = selection.charxAssetsMode ?? "keep";
   let charxAssetsApplied = false;
   if (parsed.charxResult && (charxAssetsMode === "merge" || charxAssetsMode === "replace")) {
-    charxAssetsApplied = await applyCharxAssetsSelective(
-      userId,
-      existing.id,
-      parsed.charxResult,
-      charxAssetsMode,
+    await applyCharxModulesAndAssets(userId, latest, parsed.charxResult, {
+      assetMode: charxAssetsMode,
+      importWorldBooks: false,
       updatedTextFields,
-      options.signal,
-    );
+      updatedGreetingIndices,
+      signal: options.signal,
+    });
+    charxAssetsApplied = true;
     if (charxAssetsApplied) {
       const refreshed = await svc.getCharacterAsync(userId, existing.id);
       if (refreshed) latest = refreshed;

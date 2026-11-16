@@ -143,7 +143,7 @@ describe("character-card-update.service", () => {
     expect(updated.tags).toEqual(["local-tag", "author-new-tag"]);
     expect(updated.extensions.ttsVoice).toEqual({ connectionId: "conn-1", voice: "AriaVoice" });
     // Greeting tools indexMap for kept existing indices stays intact
-    expect(updated.extensions.greeting_tools.indexMap).toEqual({ "0": "g_0", "1": "g_1" });
+    expect(updated.extensions.greeting_tools.indexMap).toEqual({ "0": "g_0", "1": "g_1", "3": "g_main" });
     expect(updated.extensions.greeting_tools.mainGreeting).toBeNull();
     expect(summary.demotedFirstMes).toBe(true);
     expect(summary.addedAlternateGreetings).toBe(1);
@@ -278,6 +278,7 @@ describe("character-card-update.service", () => {
       description: "My custom local bio",
       first_mes: "Original greeting",
       alternate_greetings: ["Local alt"],
+      extensions: { alternate_fields: { personality: [{ id: "v1", label: "Local", content: "My captain" }] } },
     });
 
     const charxFile = new File([new Uint8Array(archive!)], "skycaptain.charx", { type: "application/zip" });
@@ -298,7 +299,67 @@ describe("character-card-update.service", () => {
     expect(latest.description).toBe("My custom local bio");
     expect(latest.first_mes).toBe("Original greeting");
     expect(latest.alternate_greetings).toEqual(["Local alt", "New greeting from charx"]);
-    expect(latest.extensions.alternate_fields?.personality).toHaveLength(1);
+    expect(latest.extensions.alternate_fields?.personality).toHaveLength(2);
+    expect(new Set(latest.extensions.alternate_fields.personality.map((variant: any) => variant.id)).size).toBe(2);
     expect(getCharacterWorldBookIds(latest.extensions)).toHaveLength(1);
   });
+  test("greeting selection keeps titles, backgrounds and avatar bindings with their original greeting", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "Metadata", first_mes: "Old main", alternate_greetings: ["A", "B"],
+      extensions: {
+        greeting_tools: { mainGreeting: { id: "main", title: "Main title" }, indexMap: { 0: "a", 1: "b" }, greetings: { a: { title: "A title" }, b: { title: "B title" } } },
+        greeting_backgrounds: { 0: "main-art", 1: "a-art", 2: "b-art" },
+        avatar_bindings: { avatar: { greeting_index: 2, description: "variant" }, removed: { greeting_index: 1 }, main: { greeting_index: 0 } },
+      },
+    });
+    const parsed = await parseCardBundle(makeJsonCard("metadata.json", { name: "Metadata", first_mes: "New main", alternate_greetings: ["New alt"] }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, {
+      firstMesMode: "replace_and_demote", alternateGreetingsMode: "select",
+      keepExistingGreetingIndices: [1], selectedIncomingGreetingIndices: [0],
+    });
+    expect(character.alternate_greetings).toEqual(["B", "New alt", "Old main"]);
+    expect(character.extensions.greeting_backgrounds).toEqual({ 1: "b-art", 3: "main-art" });
+    expect(character.extensions.avatar_bindings).toEqual({ avatar: { greeting_index: 1, description: "variant" }, main: { greeting_index: 3 } });
+    expect(character.extensions.greeting_tools.indexMap["2"]).toBe("main");
+    expect(character.extensions.greeting_tools.greetings.main.title).toBe("Main title");
+  });
+
+  test("reordered selections remap titles even when no greetings are removed", async () => {
+    const existing = createCharacter(USER_ID, { name: "Order", alternate_greetings: ["A", "B"], extensions: {
+      greeting_tools: { indexMap: { 0: "a", 1: "b" }, greetings: { a: { title: "A" }, b: { title: "B" } } },
+    } });
+    const parsed = await parseCardBundle(makeJsonCard("order.json", { name: "Order" }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { alternateGreetingsMode: "select", keepExistingGreetingIndices: [1, 0] });
+    expect(character.extensions.greeting_tools.indexMap).toEqual({ 0: "b", 1: "a" });
+  });
+
+  test("CHARX asset merge resolves incoming references to kept images without rewriting local greetings", async () => {
+    const file = new File([Buffer.from(ONE_BY_ONE_PNG_BASE64, "base64")], "happy.png", { type: "image/png" });
+    const image = await images.uploadImage(USER_ID, file);
+    const existing = createCharacter(USER_ID, { name: "Assets", alternate_greetings: ['<img src="happy.png"> local'], extensions: {
+      expressions: { enabled: false, defaultExpression: "happy", mappings: { happy: image.id } },
+    } });
+    const parsed = await parseCardBundle(makeJsonCard("assets.json", { name: "Assets", description: '<img src="happy.png"> incoming', alternate_greetings: ['<img src="happy.png"> new'] }));
+    parsed.charxResult = { card: parsed.cardInput, avatarFile: null, galleryFiles: [], risuModule: null, polyglotJpegAvatar: null,
+      expressionAssets: [], expressionGroupAnalysis: null, assetFiles: new Map([["assets/other/happy.png", file]]),
+      lumiverseModules: { version: 1, expressions: { enabled: true, defaultExpression: "happy", mappings: { happy: "assets/other/happy.png" } } },
+    };
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { fields: ["description"], alternateGreetingsMode: "append_new", charxAssetsMode: "merge" });
+    expect(character.description).toBe(`<img src="/api/v1/images/${image.id}"> incoming`);
+    expect(character.alternate_greetings).toEqual(['<img src="happy.png"> local', `<img src="/api/v1/images/${image.id}"> new`]);
+    expect(character.extensions.expressions.enabled).toBe(false);
+  });
+
+  test("CHARX merge imports Risu multi-character expressions", async () => {
+    const file = new File([Buffer.from(ONE_BY_ONE_PNG_BASE64, "base64")], "Alice_happy.png", { type: "image/png" });
+    const existing = createCharacter(USER_ID, { name: "Group" });
+    const parsed = await parseCardBundle(makeJsonCard("group.json", { name: "Group" }));
+    parsed.charxResult = { card: parsed.cardInput, avatarFile: null, galleryFiles: [file], risuModule: null, polyglotJpegAvatar: null,
+      expressionAssets: [{ label: "Alice_happy", file }], expressionGroupAnalysis: { isMultiCharacter: true, groups: { Alice: { happy: "Alice_happy" } } },
+      assetFiles: new Map([["assets/other/Alice_happy.png", file]]), lumiverseModules: null,
+    };
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { charxAssetsMode: "merge" });
+    expect(character.extensions.expression_groups?.Alice?.happy).toBeTruthy();
+  });
+
 });

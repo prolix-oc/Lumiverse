@@ -25,9 +25,17 @@ All three Character Card Specification versions (v1, v2, v3) are auto-detected a
 1. Open the **Character Browser** panel
 2. Click the **Import** button
 3. Select your file(s) or drag them into the drop zone
-4. The character appears in your library immediately
+4. New characters appear in your library. If a single file matches an existing character, review the update options first.
 
 For PNG cards, the image itself becomes the character's avatar.
+
+## Update an Existing Character
+
+When importing a single local card, Lumiverse looks for existing characters with the same source filename or name, prioritizing matching creators. Choose the intended character in the update dialog, or use **Import as New** to create a separate copy.
+
+Review the field differences and choose what to apply. You can replace the main greeting, move the old main greeting into alternates, append only new greetings, or pick individual greetings to keep. Tags, avatar, portable extensions, world books, regex scripts, and CHARX assets have separate controls. Existing local assets and settings are kept unless you choose to update them.
+
+The character editor's **Update from Card** action opens the same dialog for that character. This supports JSON, PNG, CHARX, and JPEG cards containing an embedded ZIP bundle. Bulk and URL imports retain their existing import behavior.
 
 ---
 

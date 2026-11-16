@@ -708,7 +708,7 @@ app.post("/preview-card-import", async (c) => {
 app.post("/:id/preview-card-update", async (c) => {
   const userId = c.get("userId");
   const characterId = c.req.param("id");
-  const existing = await svc.getCharacterAsync(userId, characterId);
+  const existing = (await svc.getCharactersByIdsAsync(userId, [characterId], { excludeDeleting: true })).get(characterId);
   if (!existing) return c.json({ error: "Not found" }, 404);
 
   try {
@@ -730,7 +730,7 @@ app.post("/:id/preview-card-update", async (c) => {
 app.post("/:id/apply-card-update", async (c) => {
   const userId = c.get("userId");
   const characterId = c.req.param("id");
-  const existing = await svc.getCharacterAsync(userId, characterId);
+  const existing = (await svc.getCharactersByIdsAsync(userId, [characterId], { excludeDeleting: true })).get(characterId);
   if (!existing) return c.json({ error: "Not found" }, 404);
 
   try {

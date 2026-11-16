@@ -274,4 +274,23 @@ describe('CardUpdateModal', () => {
 
     expect(onImportAsNew).toHaveBeenCalledTimes(1)
   })
+  test('cannot apply to a stale target after switching to a character that fails to load', async () => {
+    const file = new File(['{}'], 'elena.json')
+    const candidates = [...matches, { ...matches[0], id: 'char-2', name: 'Other Elena' }]
+    await act(async () => { root.render(<CardUpdateModal isOpen file={file} preview={preview} matches={candidates} onApplied={onApplied} onClose={onClose} />) })
+    await flush()
+    getCharacter.mockRejectedValueOnce(new Error('Character unavailable'))
+    const select = host.querySelector('select')!
+    await act(async () => {
+      select.value = 'char-2'
+      select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    await flush()
+    expect(host.textContent).toContain('Character unavailable')
+    const apply = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.includes('Apply Updates'))!
+    expect(apply.disabled).toBe(true)
+    await act(async () => { apply.click() })
+    expect(applyCardUpdate).not.toHaveBeenCalled()
+  })
+
 })

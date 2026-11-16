@@ -216,6 +216,7 @@ export default function CardUpdateModal({
     if (!isOpen || initialTargetCharacter || !selectedTargetId) return
     let cancelled = false
     setLoadingTarget(true)
+    setLoadedTarget(null)
     setLoadError(null)
     charactersApi.get(selectedTargetId)
       .then((char) => {
@@ -232,7 +233,7 @@ export default function CardUpdateModal({
     }
   }, [isOpen, initialTargetCharacter, selectedTargetId])
 
-  const target = initialTargetCharacter ?? loadedTarget
+  const target = initialTargetCharacter ?? (loadedTarget?.id === selectedTargetId ? loadedTarget : null)
 
   // Initialize merge defaults once both target and preview are available
   useEffect(() => {
@@ -411,7 +412,7 @@ export default function CardUpdateModal({
   }, [target, preview, firstMesDiffers, alternatesDiffer, tagsInfo.differs, hasWorldBooks, hasRegexScripts, hasCharxAssets])
 
   const handleApply = useCallback(async () => {
-    if (!target || !file || selectedChangeCount === 0 || applying) return
+    if (!target || !file || selectedChangeCount === 0 || applying || loadingTarget) return
     setApplying(true)
     try {
       const selection: CardUpdateSelection = {
@@ -441,6 +442,7 @@ export default function CardUpdateModal({
   }, [
     target,
     file,
+    loadingTarget,
     selectedChangeCount,
     applying,
     selectedFields,
@@ -463,10 +465,12 @@ export default function CardUpdateModal({
     setImportingAsNew(true)
     try {
       await onImportAsNew()
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || t('cardUpdate.applyFailed'))
     } finally {
       setImportingAsNew(false)
     }
-  }, [onImportAsNew, importingAsNew])
+  }, [onImportAsNew, importingAsNew, t])
 
   const activeMatch = useMemo(
     () => matches?.find((m) => m.id === selectedTargetId) ?? matches?.[0] ?? null,
@@ -484,7 +488,6 @@ export default function CardUpdateModal({
       isOpen={isOpen && !!preview}
       onClose={() => !applying && !importingAsNew && onClose()}
       maxWidth={760}
-      mobilePresentation="fullscreen"
       modalId="card-update"
       data-component="CardUpdateModal"
     >
