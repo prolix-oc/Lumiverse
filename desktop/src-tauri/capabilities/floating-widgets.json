@@ -9,6 +9,7 @@
   },
   "permissions": [
     "desktop-widget-size-sync",
+    "desktop-widget-return",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
     "core:window:allow-set-focus",

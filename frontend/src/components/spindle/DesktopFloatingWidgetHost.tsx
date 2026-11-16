@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { useStore } from '@/store'
 import {
+  DESKTOP_WIDGET_MAX_SIZE,
   desktopFloatingWidgetTarget,
   desktopWidgetMinSize,
   returnDesktopFloatingWidgetToPage,
@@ -158,8 +159,8 @@ export default function DesktopFloatingWidgetHost({
       ) return
 
       const minSize = desktopWidgetMinSize(isChromeless)
-      const width = Math.max(minSize.width, Math.min(1200, detail.width))
-      const height = Math.max(minSize.height, Math.min(900, detail.height))
+      const width = Math.max(minSize.width, Math.min(DESKTOP_WIDGET_MAX_SIZE.width, detail.width))
+      const height = Math.max(minSize.height, Math.min(DESKTOP_WIDGET_MAX_SIZE.height, detail.height))
       const nativeSize = { width, height: height + hostChromeHeight }
       requestedNativeSize.current = nativeSize
       console.info('[desktop-widget] pop-out received size request', {

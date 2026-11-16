@@ -83,6 +83,11 @@ description = "Allows a native floating widget window to synchronize only its ow
 commands.allow = ["sync_desktop_widget_size"]
 
 [[permission]]
+identifier = "desktop-widget-return"
+description = "Allows a native floating widget window to return only itself to the page."
+commands.allow = ["return_extension_widget"]
+
+[[permission]]
 identifier = "remote-instance-commands"
 description = "Allows only the local tray host to authorize, poll, and disconnect a selected remote Lumiverse instance."
 commands.allow = [

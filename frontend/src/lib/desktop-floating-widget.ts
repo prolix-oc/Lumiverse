@@ -32,7 +32,7 @@ export interface DesktopFloatingWidgetPopoutState {
  * owns the same numbers in desktop/src-tauri/src/frontend.rs. */
 export const DESKTOP_WIDGET_MIN_SIZE = { width: 160, height: 100 } as const
 export const DESKTOP_WIDGET_CHROMELESS_MIN_SIZE = { width: 24, height: 24 } as const
-export const DESKTOP_WIDGET_MAX_SIZE = { width: 1200, height: 900 } as const
+export const DESKTOP_WIDGET_MAX_SIZE = { width: 7680, height: 4320 } as const
 
 export function desktopWidgetMinSize(chromeless: boolean): { width: number; height: number } {
   return chromeless ? DESKTOP_WIDGET_CHROMELESS_MIN_SIZE : DESKTOP_WIDGET_MIN_SIZE
@@ -121,7 +121,8 @@ export function publishDesktopFloatingWidgetCatalog(entries: DesktopFloatingWidg
 }
 
 /** Keep a native child window's size and the primary frontend's placement
- * registry aligned. The command verifies the calling window owns widgetId. */
+ * registry aligned. The host resolves the catalog entry from the calling
+ * window's label; widgetId is retained for compatibility with older hosts. */
 export function syncDesktopFloatingWidgetSize(widgetId: string, width: number, height: number): Promise<void> {
   if (!isDesktopFloatingWidgetWindow()) return Promise.resolve()
   return invoke('sync_desktop_widget_size', { widgetId, width, height })

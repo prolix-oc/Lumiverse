@@ -124,8 +124,8 @@ describe('desktop pop-out float placement', () => {
     )
     handles.push(handle)
 
-    handle.setSize(4000, 4000)
+    handle.setSize(10000, 10000)
 
-    expect(placementStore.getState().floatWidgets[0]).toMatchObject({ width: 1200, height: 900 })
+    expect(placementStore.getState().floatWidgets[0]).toMatchObject({ width: 7680, height: 4320 })
   })
 })

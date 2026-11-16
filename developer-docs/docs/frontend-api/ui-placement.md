@@ -356,7 +356,7 @@ host owns the window bounds but the extension still uses the same standard
 `setSize` call. Browser and PWA clients simply retain their existing CSS and
 placement behavior.
 
-Native pop-outs clamp requested content bounds to `24×24`–`1200×900` logical
+Native pop-outs clamp requested content bounds to `24×24`–`7680×4320` logical
 pixels for chromeless widgets. Widgets using the default native title chrome
 have a minimum content size of `160×100`. The title bar is added outside the
 requested content height.
