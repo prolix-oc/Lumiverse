@@ -462,6 +462,11 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
   protected static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "use_responses_api", "_nanogpt"]);
 
+  /** Serialize once with the same message expansion rules used on the wire. */
+  serializeMessages(messages: LlmMessage[]): any[] {
+    return messages.flatMap((message) => this.flattenForChat(message));
+  }
+
   /** Build the request body using capabilities as the parameter allowlist. */
   protected buildBody(request: GenerationRequest, stream: boolean): any {
     const params = omitDisabledPenalties(request.parameters);
@@ -469,7 +474,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
 
     const body: any = {
       model: request.model,
-      messages: request.messages.flatMap((m) => this.flattenForChat(m)),
+      messages: this.serializeMessages(request.messages),
       stream,
     };
 
