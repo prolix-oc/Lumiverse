@@ -1,4 +1,5 @@
 import { readGenerationVariableSeed } from "../db/swipe-variable-state";
+import { CHAT_HISTORY_KEY, isChatHistoryMessage } from "../llm/chat-history";
 import { omitDisabledPenalties } from "../llm/generation-parameters";
 import { withVariableValues } from "../utils/variable-checkpoint";
 import {
@@ -202,11 +203,10 @@ export type {
 // new message objects without spreading — is updated to preserve the tag
 // explicitly.
 //
-// Tag is a regular string property because Symbol-keyed props are not copied
-// by spread. Providers explicitly destructure {role, content} when building
+// Tag is a regular string property to survive worker structured cloning.
+// Providers explicitly destructure {role, content} when building
 // outbound requests, so the tag never leaks to the LLM.
 
-const CHAT_HISTORY_KEY = "__chatHistorySource";
 const CORTEX_HISTORY_SUMMARY_KEY = "__cortexHistorySummary";
 const WORLD_INFO_KEY = "__worldInfoSource";
 const RUNTIME_WORLD_INFO_PLACEMENT_KEY = "__runtimeWorldInfoPlacementId";
@@ -232,10 +232,6 @@ function markAsChatHistory(
     stampSourceMessageMetadata(msg, source.metadata);
   }
   return msg;
-}
-
-export function isChatHistoryMessage(msg: LlmMessage): boolean {
-  return (msg as any)[CHAT_HISTORY_KEY] === true;
 }
 
 function isContextAnchorProtected(msg: LlmMessage): boolean {
@@ -277,7 +273,7 @@ export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
   return typeof v === "number" ? v : undefined;
 }
 
-export { getSourceMessageMetadata };
+export { getSourceMessageMetadata, isChatHistoryMessage };
 
 /**
  * Native reasoning is persisted separately from the display-only `extra.reasoning`

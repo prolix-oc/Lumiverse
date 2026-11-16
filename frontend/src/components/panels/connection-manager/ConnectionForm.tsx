@@ -751,7 +751,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
               </FormField>
               <FormField
                 label="Cache Cutoff Message Index"
-                hint="Optional. Pin the cache boundary to a specific message index (0-based). Everything up to and including this index is eligible for caching. Leave blank to let NanoGPT decide."
+                hint="Optional. Pin the cache boundary to a specific message index (0-based). Everything up to and including this index is eligible for caching. Leave blank to derive a cutoff before the recent conversation tail."
               >
                 <TextInput
                   value={

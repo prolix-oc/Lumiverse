@@ -168,6 +168,16 @@ Only managed API (MaaS) models can be called directly by this connection. A self
 
 ## NanoGPT Usage
 
+### Prompt caching
+
+For NanoGPT Claude models, **Enable Prompt Caching** sends NanoGPT's explicit caching helper. When **Cache Cutoff Message Index** is blank, Lumiverse derives a cutoff before the newest assistant turn and reserves six more history messages to reduce cache misses from recent prompt rewrites. Short prompts and requests without a completed assistant turn retain NanoGPT's automatic placement. Other model families keep their existing implicit caching behavior.
+
+A pinned cutoff always takes precedence. Advanced connection metadata under `nanogpt_caching` also accepts `autoCut: false` to delegate placement to NanoGPT, and `tailReserveMessages` (a nonnegative integer, default `6`) to adjust the reserve. Snake-case aliases `auto_cut` and `tail_reserve_messages` are accepted. Connection edits preserve these settings. **Explicit Cache Control** uses existing inline markers; the cutoff does not reposition them. [NanoGPT prompt caching](https://docs.nano-gpt.com/api-reference/miscellaneous/prompt-caching)
+
+The reserve is a heuristic, not a guarantee of cache hits. Presets with deeper regex windows may need a larger reserve. Changing content earlier in the prompt or trimming old context can still invalidate the cached prefix. The eight-message minimum for a derived cutoff is separate from the provider's minimum token requirement.
+
+### Balance and routing
+
 The active NanoGPT connection shows your **PAYG account balance**, today's spend, this month's spend, and any available subscription quotas. Spend is net of refunds for **this connection's API key** and follows **UTC** dates. Other API keys' usage is not included. Unavailable account data appears as Unknown; refresh the card to retry. [NanoGPT Usage API](https://docs.nano-gpt.com/api-reference/endpoint/usage)
 
 Edit the connection and select a model to discover its available upstream providers and prices. Routing preferences are saved per model on that connection. **Preferred providers** specifies a soft order; **Allowed providers** restricts requests to that list; **Excluded providers** blocks selected providers. You can also choose a price, speed, throughput, or latency routing goal and control fallback. Displayed rates use USD per million tokens and already include provider-selection markup. [Provider selection](https://docs.nano-gpt.com/api-reference/miscellaneous/provider-selection)
