@@ -64,8 +64,9 @@ import ImageLightbox from '@/components/shared/ImageLightbox'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import CardUpdateModal from '@/components/modals/CardUpdateModal'
 import { useLongPress } from '@/hooks/useLongPress'
-import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
+import type { CardUpdateApplySummary, CardUpdatePreview, Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
 import { hasNativeDownloadCompletion } from '@/lib/downloads'
@@ -511,6 +512,7 @@ export default function CharacterEditorPage() {
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showTokenReport, setShowTokenReport] = useState(false)
+  const [pendingCardUpdate, setPendingCardUpdate] = useState<{ file: File; preview: CardUpdatePreview } | null>(null)
   const [avatarKey, setAvatarKey] = useState(0)
   const [lorebookImporting, setLorebookImporting] = useState(false)
   const [lorebookResult, setLorebookResult] = useState<string | null>(null)
@@ -537,6 +539,9 @@ export default function CharacterEditorPage() {
   const layersSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layerSaveLockRef = useRef<Promise<void> | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const pendingFieldValues = useRef<Record<string, Record<string, any>>>({})
+  const fieldSaveLock = useRef<Promise<unknown>>(Promise.resolve())
+  const extensionsSaveLock = useRef<Promise<unknown>>(Promise.resolve())
   const fileRef = useRef<HTMLInputElement>(null)
   const cardReplaceFileRef = useRef<HTMLInputElement>(null)
   const perspectiveLayerFileRef = useRef<HTMLInputElement>(null)
@@ -560,11 +565,12 @@ export default function CharacterEditorPage() {
   useEffect(() => {
     if (!isOpen) return
     const handleEscape = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || pendingCardUpdate) return
       if (e.key === 'Escape') close()
     }
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [isOpen, close])
+  }, [isOpen, close, pendingCardUpdate])
 
   useEffect(() => {
     if (!editingCharacterId || character) return
@@ -950,9 +956,13 @@ export default function CharacterEditorPage() {
     (field: string, value: any) => {
       if (!editingCharacterId) return
       clearTimeout(timers.current[field])
+      pendingFieldValues.current[editingCharacterId] ??= {}
+      pendingFieldValues.current[editingCharacterId][field] = value
       timers.current[field] = setTimeout(() => {
+        delete pendingFieldValues.current[editingCharacterId]?.[field]
         showSaving()
-        browser.updateCharacter(editingCharacterId, { [field]: value })
+        const save = () => browser.updateCharacter(editingCharacterId, { [field]: value })
+        fieldSaveLock.current = fieldSaveLock.current.then(save, save)
       }, DEBOUNCE_MS)
     },
     [editingCharacterId, browser, showSaving]
@@ -1044,10 +1054,12 @@ export default function CharacterEditorPage() {
     clearTimeout(timers.current['extensions'])
     timers.current['extensions'] = undefined as unknown as ReturnType<typeof setTimeout>
     const next = pendingExtensionsRef.current
-    if (!next) return
+    if (!next) { await extensionsSaveLock.current; return }
     pendingExtensionsRef.current = null
     showSaving()
-    await browser.updateCharacter(editingCharacterId, { extensions: next })
+    const save = () => browser.updateCharacter(editingCharacterId, { extensions: next })
+    extensionsSaveLock.current = extensionsSaveLock.current.then(save, save)
+    await extensionsSaveLock.current
   }, [editingCharacterId, browser, showSaving])
 
   const mutateExtensions = useCallback(
@@ -1546,31 +1558,29 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
-  const handleReplaceCard = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      e.target.value = ''
-      if (!file || !editingCharacterId || replacingCard) return
-
-      // An older debounce firing after the replacement would otherwise restore
-      // stale editor values over the newly-uploaded card.
+  const handleCardUpdateApplied = useCallback(
+    (updated: Character, summary: CardUpdateApplySummary) => {
+      if (!editingCharacterId) return
+      // An older debounce firing after the update would otherwise restore
+      // stale editor values over the newly-merged card.
       for (const timer of Object.values(timers.current)) clearTimeout(timer)
       pendingExtensionsRef.current = null
       if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
 
-      setReplacingCard(true)
-      try {
-        const updated = await charactersApi.replaceCard(editingCharacterId, file)
-        lastSyncedId.current = null
-        updateCharInStore(editingCharacterId, updated)
-        toast.success(t('characterEditor.replaceCardSuccess'))
-      } catch (err: any) {
-        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
-      } finally {
-        setReplacingCard(false)
+      lastSyncedId.current = null
+      updateCharInStore(editingCharacterId, updated)
+      if (summary.avatarUpdated === 'replace_primary') {
+        setAvatarKey((k) => k + 1)
       }
+      setPendingCardUpdate(null)
+      toast.success(
+        t('characterEditor.replaceCardSuccess', {
+          name: updated.name,
+          count: summary.updatedFields.length,
+        }),
+      )
     },
-    [editingCharacterId, replacingCard, t, updateCharInStore]
+    [editingCharacterId, t, updateCharInStore]
   )
 
   const perspectiveLayers = useMemo<CharacterPerspectiveLayerInput[]>(() => {
@@ -1622,6 +1632,35 @@ export default function CharacterEditorPage() {
       void flushPerspectiveLayersSave()
     }, 400)
   }, [flushPerspectiveLayersSave])
+
+  const handleReplaceCard = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId || replacingCard) return
+
+      setReplacingCard(true)
+      try {
+        // Finish local edits before taking the snapshot shown in the merge dialog.
+        // A delayed save must not race with the eventual selective update.
+        for (const timer of Object.values(timers.current)) clearTimeout(timer)
+        const pending = pendingFieldValues.current[editingCharacterId] ?? {}
+        delete pendingFieldValues.current[editingCharacterId]
+        await fieldSaveLock.current
+        if (Object.keys(pending).length) await browser.updateCharacter(editingCharacterId, pending)
+        await flushExtensionsSave()
+        if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+        await flushPerspectiveLayersSave()
+        const preview = await charactersApi.previewCardUpdate(editingCharacterId, file)
+        setPendingCardUpdate({ file, preview })
+      } catch (err: any) {
+        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
+      } finally {
+        setReplacingCard(false)
+      }
+    },
+    [editingCharacterId, replacingCard, t, browser, flushExtensionsSave, flushPerspectiveLayersSave]
+  )
 
   // Flush any pending layer edits when the editor closes or the character changes.
   useEffect(() => () => {
@@ -2075,7 +2114,7 @@ export default function CharacterEditorPage() {
                   <input
                     ref={cardReplaceFileRef}
                     type="file"
-                    accept=".json,application/json,.png,image/png"
+                    accept=".json,application/json,.png,image/png,.charx,.jpg,.jpeg"
                     className={styles.hiddenInput}
                     onChange={handleReplaceCard}
                   />
@@ -2905,6 +2944,17 @@ export default function CharacterEditorPage() {
         onClose={() => setShowTokenReport(false)}
         characterName={name || character.name}
         items={tokenReportItems}
+      />
+    )}
+
+    {character && (
+      <CardUpdateModal
+        isOpen={!!pendingCardUpdate}
+        file={pendingCardUpdate?.file ?? null}
+        preview={pendingCardUpdate?.preview ?? null}
+        initialTargetCharacter={character}
+        onApplied={handleCardUpdateApplied}
+        onClose={() => setPendingCardUpdate(null)}
       />
     )}
 

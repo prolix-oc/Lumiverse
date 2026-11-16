@@ -26,6 +26,7 @@ import BulkImportProgressModal from '@/components/modals/BulkImportProgressModal
 import LorebookImportModal from '@/components/modals/LorebookImportModal'
 import ExpressionsImportModal from '@/components/modals/ExpressionsImportModal'
 import AlternateFieldsSummaryModal from '@/components/modals/AlternateFieldsSummaryModal'
+import CardUpdateModal from '@/components/modals/CardUpdateModal'
 import Pagination from '@/components/shared/Pagination'
 import type { CharacterViewMode } from '@/types/store'
 import type { CharacterSummary } from '@/types/api'
@@ -621,6 +622,16 @@ export default function CharacterBrowser() {
         isOpen={browser.altFieldsSummaryOpen}
         items={browser.pendingAltFieldsSummary}
         onClose={browser.closeAltFieldsSummary}
+      />
+
+      <CardUpdateModal
+        isOpen={!!browser.pendingCardUpdate}
+        file={browser.pendingCardUpdate?.file ?? null}
+        preview={browser.pendingCardUpdate?.preview ?? null}
+        matches={browser.pendingCardUpdate?.preview.matches}
+        onImportAsNew={browser.confirmImportAsNewFromPending}
+        onApplied={browser.handleCardUpdateApplied}
+        onClose={browser.clearPendingCardUpdate}
       />
 
     </div>

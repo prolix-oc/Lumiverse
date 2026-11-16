@@ -175,6 +175,39 @@ export const charactersApi = {
     return upload<Character>(`/characters/${id}/replace-card`, form)
   },
 
+  previewCardImport(file: File, onProgress?: (percent: number) => void) {
+    const form = new FormData()
+    form.append('file', file)
+    if (onProgress) {
+      return uploadWithProgress<import('@/types/api').CardUpdatePreview>('/characters/preview-card-import', form, onProgress)
+    }
+    return upload<import('@/types/api').CardUpdatePreview>('/characters/preview-card-import', form)
+  },
+
+  previewCardUpdate(id: string, file: File, onProgress?: (percent: number) => void) {
+    const form = new FormData()
+    form.append('file', file)
+    if (onProgress) {
+      return uploadWithProgress<import('@/types/api').CardUpdatePreview>(`/characters/${id}/preview-card-update`, form, onProgress)
+    }
+    return upload<import('@/types/api').CardUpdatePreview>(`/characters/${id}/preview-card-update`, form)
+  },
+
+  applyCardUpdate(
+    id: string,
+    file: File,
+    selection: import('@/types/api').CardUpdateSelection,
+    onProgress?: (percent: number) => void,
+  ) {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('selection', JSON.stringify(selection))
+    if (onProgress) {
+      return uploadWithProgress<import('@/types/api').CardUpdateApplyResult>(`/characters/${id}/apply-card-update`, form, onProgress)
+    }
+    return upload<import('@/types/api').CardUpdateApplyResult>(`/characters/${id}/apply-card-update`, form)
+  },
+
   importUrl(url: string) {
     // Importing may also pull a gallery and an expression pack, so this shares
     // the longer ceiling rather than the default 30s.

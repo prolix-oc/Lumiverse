@@ -1632,6 +1632,102 @@ export interface ImportResult {
   lumiverse_lora?: PortableLoraReference
 }
 
+export type CardMatchReason = 'source_filename' | 'name_and_creator' | 'name'
+
+export interface CharacterUpdateMatchCandidate {
+  id: string
+  name: string
+  creator: string
+  image_id: string | null
+  updated_at: number
+  matchReason: CardMatchReason
+}
+
+export interface CardUpdateExtrasSummary {
+  embeddedLorebookEntries: number
+  lumiverseWorldBookCount: number
+  regexScriptCount: number
+  expressionCount: number
+  expressionGroupCount: number
+  galleryCount: number
+  alternateAvatarCount: number
+  alternateFieldKeys: string[]
+  landingPerspectiveLayerCount: number
+}
+
+export interface CardUpdatePreview {
+  format: 'json' | 'png' | 'charx' | 'jpeg_polyglot'
+  filename: string
+  incoming: {
+    name: string
+    description: string
+    personality: string
+    scenario: string
+    first_mes: string
+    mes_example: string
+    creator: string
+    creator_notes: string
+    system_prompt: string
+    post_history_instructions: string
+    tags: string[]
+    alternate_greetings: string[]
+    extensions: Record<string, any>
+  }
+  hasAvatar: boolean
+  avatarPreviewUrl: string | null
+  extras: CardUpdateExtrasSummary
+  matches?: CharacterUpdateMatchCandidate[]
+}
+
+export type CardScalarField =
+  | 'name'
+  | 'description'
+  | 'personality'
+  | 'scenario'
+  | 'mes_example'
+  | 'creator'
+  | 'creator_notes'
+  | 'system_prompt'
+  | 'post_history_instructions'
+
+export type FirstMesUpdateMode = 'keep' | 'replace' | 'replace_and_demote'
+export type AlternateGreetingsUpdateMode = 'keep' | 'append_new' | 'replace_all' | 'select'
+export type TagsUpdateMode = 'keep' | 'merge' | 'replace'
+export type AvatarUpdateMode = 'keep' | 'replace_primary' | 'add_alternate'
+export type ExtensionsUpdateMode = 'keep' | 'merge_portable' | 'replace_portable'
+export type WorldBookUpdateMode = 'keep' | 'import_new'
+export type RegexUpdateMode = 'keep' | 'merge_new' | 'replace_character_bound'
+export type CharxAssetsUpdateMode = 'keep' | 'merge' | 'replace'
+
+export interface CardUpdateSelection {
+  fields?: CardScalarField[]
+  firstMesMode?: FirstMesUpdateMode
+  alternateGreetingsMode?: AlternateGreetingsUpdateMode
+  keepExistingGreetingIndices?: number[]
+  selectedIncomingGreetingIndices?: number[]
+  tagsMode?: TagsUpdateMode
+  avatarMode?: AvatarUpdateMode
+  extensionsMode?: ExtensionsUpdateMode
+  worldBookMode?: WorldBookUpdateMode
+  regexMode?: RegexUpdateMode
+  charxAssetsMode?: CharxAssetsUpdateMode
+}
+
+export interface CardUpdateApplySummary {
+  updatedFields: string[]
+  addedAlternateGreetings: number
+  demotedFirstMes: boolean
+  avatarUpdated: AvatarUpdateMode
+  worldBooksImported: number
+  regexScriptsImported: number
+  charxAssetsApplied: boolean
+}
+
+export interface CardUpdateApplyResult {
+  character: Character
+  summary: CardUpdateApplySummary
+}
+
 export interface BulkImportResultItem {
   filename: string
   success: boolean
