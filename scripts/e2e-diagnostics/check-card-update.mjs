@@ -15,7 +15,7 @@ const cardFile = data => {
   const type = Buffer.from('tEXt')
   const length = Buffer.alloc(4); length.writeUInt32BE(payload.length)
   const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([type, payload])))
-  return { name: 'selective-update.png', mimeType: 'image/png', buffer: Buffer.concat([png.subarray(0, -12), length, type, payload, crc, png.subarray(-12)]) }
+  return { name: `selective-update-${data.name}.png`, mimeType: 'image/png', buffer: Buffer.concat([png.subarray(0, -12), length, type, payload, crc, png.subarray(-12)]) }
 }
 
 const api = await request.newContext({ baseURL: base })
