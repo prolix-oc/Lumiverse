@@ -110,7 +110,7 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
       { key: 'greetingImages', titleKey: 'chat.greetingImages.title', titleFallback: 'Greeting Images', keywords: ['greeting', 'starting message', 'first message', 'image', 'artwork', 'top', 'bottom'] },
       { key: 'width', titleKey: 'chat.widthTitle', titleFallback: 'Chat Width', keywords: ['chat width', 'content width', 'message width', 'center chat', 'sidebar', 'reflow'] },
       { key: 'messagesPerPage', titleKey: 'chat.messagesPerPageTitle', titleFallback: 'Messages Per Page', keywords: ['messages per page', 'pagination', 'page size', 'load more'] },
-      { key: 'input', titleKey: 'chat.inputTitle', titleFallback: 'Input', keywords: ['input', 'composer', 'textarea', 'send', 'enter key', 'impersonate', 'impersonation mode', 'default'] },
+      { key: 'input', titleKey: 'chat.inputTitle', titleFallback: 'Input', keywords: ['input', 'composer', 'textarea', 'send', 'enter key', 'formatting', 'formatting bar', 'markdown', 'bold', 'italic', 'underline', 'impersonate', 'impersonation mode', 'default'] },
       { key: 'regen', titleKey: 'chat.regenTitle', titleFallback: 'Regeneration Feedback', keywords: ['regeneration', 'regen', 'feedback', 'swipe regenerate'] },
       { key: 'messageInfo', titleKey: 'chat.messageInfoTitle', titleFallback: 'Message Info', keywords: ['message info', 'timestamp', 'token count', 'metadata'] },
       { key: 'swipe', titleKey: 'chat.swipeTitle', titleFallback: 'Swipe Navigation', keywords: ['swipe', 'swipe navigation', 'alternate responses', 'variations'] },

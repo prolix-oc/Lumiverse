@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
+import ts from 'typescript'
 import { effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 
 const chatDir = import.meta.dir
@@ -7,6 +8,25 @@ const sourceDir = resolve(chatDir, '../..')
 
 const readSource = (file: string) => Bun.file(resolve(chatDir, file)).text()
 const countMatches = (source: string, pattern: RegExp) => source.match(pattern)?.length ?? 0
+
+function layoutEffectsWithGuard(source: string, guard: string): string[] {
+  const file = ts.createSourceFile('InputArea.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const effects: string[] = []
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node) && node.expression.getText(file) === 'useLayoutEffect') {
+      const callback = node.arguments[0]
+      if (callback && ts.isArrowFunction(callback) && ts.isBlock(callback.body)) {
+        const first = callback.body.statements[0]
+        if (first && ts.isIfStatement(first) && first.expression.getText(file) === guard) {
+          effects.push(callback.body.getText(file))
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return effects
+}
 
 function mountTags(source: string, mount: string): string[] {
   const escapedMount = mount.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -97,14 +117,14 @@ describe('P12 chat dock preservation contracts', () => {
     )
     // The textarea also observes width changes to rewrap drafts. Only the
     // safe-zone publisher must share one observer for the composer and lore.
-    const safeZonePath = source.match(
-      /useLayoutEffect\(\(\) => \{\s*if \(hideForMobileEdit\) return[\s\S]*?\}, \[hideForMobileEdit\]\)/,
-    )?.[0] ?? ''
+    // Select the effect body independently of its reactive dependencies.
+    const safeZonePaths = layoutEffectsWithGuard(source, 'hideForMobileEdit')
+    expect(safeZonePaths).toHaveLength(1)
+    const safeZonePath = safeZonePaths[0]!
     expect(countMatches(safeZonePath, /new\s+ResizeObserver\s*\(/g)).toBe(1)
-    expect(source).toContain('composeChatSafeZones')
-    expect(source).toMatch(/setProperty\(\s*["']--lcs-composer-safe-zone["']/)
-    expect(source).toMatch(/setProperty\(\s*["']--lcs-input-safe-zone["']/)
-    expect(source).toMatch(/composeChatSafeZones\(\s*composerHeight\s*,\s*loreHeight\s*,\s*bottomOffset\s*\)/)
+    expect(safeZonePath).toContain("publish('--lcs-composer-safe-zone', zones.composerSafeZone)")
+    expect(safeZonePath).toContain("publish('--lcs-input-safe-zone', zones.inputSafeZone)")
+    expect(safeZonePath).toMatch(/composeChatSafeZones\(\s*composerHeight\s*,\s*loreHeight\s*,\s*bottomOffset\s*\)/)
 
     expect(safeZonePath).toContain('ro.observe(el)')
     expect(safeZonePath).toContain('ro.observe(loreMount)')
@@ -114,7 +134,9 @@ describe('P12 chat dock preservation contracts', () => {
     expect(source).toContain('renderedPxToLayoutPx(child.getBoundingClientRect().height)')
     expect(source).toMatch(/rootObserver\.observe\(root,[\s\S]{0,100}attributeFilter:\s*\['style'\]/)
 
-    const hiddenEditPath = source.match(/if \(!hideForMobileEdit\) return[\s\S]*?\}, \[hideForMobileEdit\]\)/s)?.[0] ?? ''
+    const hiddenEditPaths = layoutEffectsWithGuard(source, '!hideForMobileEdit')
+    expect(hiddenEditPaths).toHaveLength(1)
+    const hiddenEditPath = hiddenEditPaths[0]!
     expect(hiddenEditPath).toContain('composeChatSafeZones')
     expect(hiddenEditPath).toContain('--lcs-composer-safe-zone')
     expect(hiddenEditPath).toContain('--lcs-input-safe-zone')

@@ -64,6 +64,15 @@
     "assistant": "어시스턴트"
   },
   "input": {
+    "formatting": {
+      "label": "메시지 서식",
+      "bold": "굵게",
+      "italic": "기울임꼴",
+      "underline": "밑줄",
+      "quotes": "따옴표",
+      "singleQuotes": "작은따옴표",
+      "parentheses": "소괄호"
+    },
     "placeholder": "메시지 입력…",
     "backHome": "홈으로 돌아가기",
     "regenerate": "재생성",

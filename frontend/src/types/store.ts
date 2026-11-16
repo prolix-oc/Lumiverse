@@ -806,6 +806,8 @@ export interface SettingsSlice {
   bubbleOpacity: number
   inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
+  /** Opt-in paired formatting controls above the chat input. */
+  showComposerFormattingBar: boolean
   /** Account-synced composer action bar layout; null until first saved. */
   composerActionBar: { order: string[]; hidden: string[] } | null
   defaultImpersonationMode: ImpersonationPreference
@@ -1358,6 +1360,8 @@ export interface BulkUpdateStatus {
 
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
+  /** A successful installed-extension snapshot is available for reconciliation. */
+  extensionsLoaded: boolean
   extensionUpdates: import('./spindle-updates').ExtensionUpdateInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>

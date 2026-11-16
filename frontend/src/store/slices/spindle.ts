@@ -10,6 +10,7 @@ import { compareFrontendHydrationPriority } from '@/lib/spindle/frontend-startup
 import { shareExtensionLoad } from '@/lib/spindle/extension-load-flight'
 import { reconcileMessageTagRuntimeCapabilities } from '@/lib/spindle/message-tag-runtime-readiness'
 import { systemAudioConsent } from '@/lib/spindle/system-audio-consent'
+import { reconcileInstalledExtensionDrawerTabs } from '../extension-drawer-reconciliation'
 
 const MUTED_THEMES_KEY = 'lumiverse:mutedExtensionThemes'
 const FRONTEND_HYDRATION_CONCURRENCY = 4
@@ -66,6 +67,7 @@ function saveMutedThemes(muted: Record<string, boolean>) {
 
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
+  extensionsLoaded: false,
   extensionUpdates: [],
   extensionThemeOverrides: {},
   mutedExtensionThemes: loadMutedThemes(),
@@ -86,16 +88,19 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
 
   loadExtensions: () => shareExtensionLoad(async () => {
     const userId = (get() as AppStore).user?.id ?? null
+    set({ extensionsLoaded: false })
     try {
       // Retry the one-shot list fetch so a transient cold-start failure does
       // not leave the store empty (and the extension unloaded until the user
       // happens to open the Extensions panel, which only re-runs when empty).
       const { extensions, isPrivileged } = await retrySpindleList()
+      if (((get() as AppStore).user?.id ?? null) !== userId) return
       for (const extension of extensions) {
         if (!extension.granted_permissions.includes('system_audio')) systemAudioConsent.clear(userId, extension.id)
       }
       reconcileMessageTagRuntimeCapabilities(extensions)
-      set({ extensions, spindlePrivileged: isPrivileged })
+      set({ extensions, extensionsLoaded: true, spindlePrivileged: isPrivileged })
+      reconcileInstalledExtensionDrawerTabs(get() as AppStore)
 
       await new Promise<void>((resolveHydration) => {
         scheduleLowPriorityTask(async () => {
@@ -201,9 +206,12 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   removeExtension: async (id: string) => {
     const userId = (get() as AppStore).user?.id ?? null
     await spindleApi.remove(id)
+    if (((get() as AppStore).user?.id ?? null) !== userId) return
     systemAudioConsent.clear(userId, id)
     spindleApi.clearManifestCache(id)
+    reconcileInstalledExtensionDrawerTabs(get() as AppStore, id)
     await unloadFrontendExtension(id)
+    if (((get() as AppStore).user?.id ?? null) !== userId) return
     get().clearExtensionChatStyleModes(id)
     set((state) => {
       const { [id]: _o, ...overridesRest } = state.extensionThemeOverrides

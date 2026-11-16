@@ -334,6 +334,8 @@ export interface AssemblyContext {
   editAndSendContext?: EditAndSendContext;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
   rejectedSwipe?: string;
+  /** Original selected attribution before a regenerate/swipe output slot was staged. */
+  rejectedPresetHistory?: import("../types/preset-history").PresetHistoryTarget;
   /** For continue: source message id of the assistant turn being extended. */
   continueMessageId?: string;
   /** For continue: separator to append to the target in the model prompt and saved reply. */

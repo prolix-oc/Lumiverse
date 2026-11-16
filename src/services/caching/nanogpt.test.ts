@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyNanoGptCaching, isNanoGptClaudeModel } from "./nanogpt";
+import type { LlmMessage } from "../../llm/types";
+import {
+  applyNanoGptCaching,
+  computeAutoCutAfterMessageIndex,
+  isNanoGptClaudeModel,
+} from "./nanogpt";
 
 describe("isNanoGptClaudeModel", () => {
   test("matches bare claude- ids", () => {
@@ -268,5 +273,189 @@ describe("applyNanoGptCaching", () => {
       );
       expect(result.params.caching).toBeUndefined();
     }
+  });
+});
+
+describe("computeAutoCutAfterMessageIndex", () => {
+  // Shape of a real long-chat payload: a leading system run, alternating
+  // history, the depth-injected `user` blocks, then post-history system
+  // instructions.
+  const buildPayload = (historyPairs: number, injected = 9): LlmMessage[] => {
+    const messages: LlmMessage[] = [];
+    for (let i = 0; i < 6; i++) messages.push({ role: "system", content: `sys ${i}` });
+    for (let i = 0; i < historyPairs; i++) {
+      messages.push({ role: "user", content: `u ${i}` });
+      messages.push({ role: "assistant", content: `a ${i}` });
+    }
+    for (let i = 0; i < injected; i++) {
+      messages.push({ role: "user", content: `<internal_tracker_${i}> roll ${i}` });
+    }
+    messages.push({ role: "system", content: "post-history instructions" });
+    return messages;
+  };
+
+  test("cuts before the volatile tail, not at the end of the payload", () => {
+    const messages = buildPayload(50);
+    const newestAssistant = messages.reduce(
+      (acc, m, i) => (m.role === "assistant" ? i : acc),
+      -1,
+    );
+    expect(newestAssistant).toBe(105);
+    // One back off the newest assistant turn, then six reserved messages.
+    expect(computeAutoCutAfterMessageIndex(messages)).toBe(98);
+  });
+
+  test("keeps the injected tail and post-history system block outside the prefix", () => {
+    const messages = buildPayload(50);
+    const cut = computeAutoCutAfterMessageIndex(messages)!;
+    // Nothing from the injected run (which carries re-rolled macros) is
+    // inside the cached prefix.
+    expect(messages.slice(0, cut + 1).some((m) => String(m.content).includes("<internal_tracker_"))).toBe(false);
+  });
+
+  test("advances by one turn when a turn is appended, so the next request reads the previous prefix", () => {
+    const before = computeAutoCutAfterMessageIndex(buildPayload(50))!;
+    const after = computeAutoCutAfterMessageIndex(buildPayload(51))!;
+    expect(after).toBeGreaterThan(before);
+    expect(after).toBe(before + 2);
+  });
+
+  test("honours a custom tail reserve", () => {
+    const messages = buildPayload(50);
+    expect(computeAutoCutAfterMessageIndex(messages, 0)).toBe(104);
+    expect(computeAutoCutAfterMessageIndex(messages, 12)).toBe(92);
+  });
+
+  test("ignores an assistant prefill after volatile injected blocks", () => {
+    const messages = buildPayload(50);
+    messages.push({ role: "assistant", content: "Response prefix", partial: true });
+    expect(computeAutoCutAfterMessageIndex(messages)).toBe(98);
+  });
+
+  test("uses tagged history instead of injected assistant blocks and counts history depth", () => {
+    const messages = buildPayload(50);
+    for (const message of messages.slice(6, 106)) {
+      Object.assign(message, { __chatHistorySource: true });
+    }
+    messages.splice(103, 0, ...Array.from({ length: 10 }, (): LlmMessage => ({
+      role: "system", content: "volatile depth injection",
+    })));
+    messages.push({ role: "assistant", content: "volatile assistant instruction" });
+    expect(computeAutoCutAfterMessageIndex(messages)).toBe(98);
+  });
+
+  test("accepts exactly eight cacheable messages", () => {
+    expect(computeAutoCutAfterMessageIndex(buildPayload(1), 0)).toBeUndefined();
+    expect(computeAutoCutAfterMessageIndex(buildPayload(2), 0)).toBe(8);
+    const messages = buildPayload(2).slice(1);
+    expect(computeAutoCutAfterMessageIndex(messages, 0)).toBe(7);
+  });
+
+  test("uses wire indices when tool results expand a source message", () => {
+    const messages = buildPayload(50);
+    messages[10].content = [
+      { type: "tool_result", tool_use_id: "one", content: "result one" },
+      { type: "tool_result", tool_use_id: "two", content: "result two" },
+      { type: "text", text: "user text" },
+    ];
+    expect(computeAutoCutAfterMessageIndex(messages)).toBe(100);
+  });
+
+  test("uses wire indices when empty content arrays are omitted", () => {
+    const messages = buildPayload(50);
+    for (let i = 6; i < 26; i++) messages[i].content = [];
+    expect(computeAutoCutAfterMessageIndex(messages)).toBe(78);
+  });
+
+  test("declines when there is no assistant turn yet", () => {
+    expect(
+      computeAutoCutAfterMessageIndex([
+        { role: "system", content: "sys" },
+        { role: "user", content: "first message" },
+      ]),
+    ).toBeUndefined();
+    expect(computeAutoCutAfterMessageIndex([])).toBeUndefined();
+  });
+
+  test("declines on short chats where a pinned prefix is not worth the write premium", () => {
+    expect(computeAutoCutAfterMessageIndex(buildPayload(2))).toBeUndefined();
+  });
+});
+
+describe("applyNanoGptCaching automatic cut", () => {
+  const longChat = (): LlmMessage[] => {
+    const messages: LlmMessage[] = [];
+    for (let i = 0; i < 6; i++) messages.push({ role: "system", content: `sys ${i}` });
+    for (let i = 0; i < 50; i++) {
+      messages.push({ role: "user", content: `u ${i}` });
+      messages.push({ role: "assistant", content: `a ${i}` });
+    }
+    for (let i = 0; i < 9; i++) messages.push({ role: "user", content: `<internal_${i}>` });
+    messages.push({ role: "system", content: "post-history" });
+    return messages;
+  };
+
+  test("derives cutAfterMessageIndex when the user pinned none", () => {
+    const result = applyNanoGptCaching(
+      {
+        provider: "nanogpt",
+        model: "anthropic/claude-opus-4-5",
+        metadata: { nanogpt_caching: { enabled: true, ttl: "1h", stickyProvider: true } },
+      },
+      { params: {}, messages: longChat() },
+    );
+    expect((result.params as any).prompt_caching.cutAfterMessageIndex).toBe(98);
+  });
+
+  test("a pinned index always wins over the derived one", () => {
+    const result = applyNanoGptCaching(
+      {
+        provider: "nanogpt",
+        model: "anthropic/claude-opus-4-5",
+        metadata: {
+          nanogpt_caching: { enabled: true, ttl: "1h", cutAfterMessageIndex: 12 },
+        },
+      },
+      { params: {}, messages: longChat() },
+    );
+    expect((result.params as any).prompt_caching.cutAfterMessageIndex).toBe(12);
+  });
+
+  test("autoCut: false restores NanoGPT's own breakpoint placement", () => {
+    const result = applyNanoGptCaching(
+      {
+        provider: "nanogpt",
+        model: "anthropic/claude-opus-4-5",
+        metadata: { nanogpt_caching: { enabled: true, ttl: "1h", autoCut: false } },
+      },
+      { params: {}, messages: longChat() },
+    );
+    expect((result.params as any).prompt_caching.cutAfterMessageIndex).toBeUndefined();
+  });
+
+  test("tailReserveMessages from metadata reaches the derived cut", () => {
+    const result = applyNanoGptCaching(
+      {
+        provider: "nanogpt",
+        model: "anthropic/claude-opus-4-5",
+        metadata: {
+          nanogpt_caching: { enabled: true, ttl: "1h", tail_reserve_messages: 12 },
+        },
+      },
+      { params: {}, messages: longChat() },
+    );
+    expect((result.params as any).prompt_caching.cutAfterMessageIndex).toBe(92);
+  });
+
+  test("non-Claude routes still emit nothing", () => {
+    const result = applyNanoGptCaching(
+      {
+        provider: "nanogpt",
+        model: "zai-org/glm-5",
+        metadata: { nanogpt_caching: { enabled: true, ttl: "1h" } },
+      },
+      { params: {}, messages: longChat() },
+    );
+    expect((result.params as any).prompt_caching).toBeUndefined();
   });
 });

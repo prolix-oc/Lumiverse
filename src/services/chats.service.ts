@@ -4334,6 +4334,7 @@ export function buildMacroEnvForChat(userId: string, chatId: string): MacroEnv |
       persona,
       chat,
       messages: [],
+      deferPresetHistory: true,
       generationType: "normal",
       userId,
       commit: false,

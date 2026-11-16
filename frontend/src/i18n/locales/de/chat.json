@@ -64,6 +64,15 @@
     "assistant": "Assistent"
   },
   "input": {
+    "formatting": {
+      "label": "Nachrichtenformatierung",
+      "bold": "Fett",
+      "italic": "Kursiv",
+      "underline": "Unterstrichen",
+      "quotes": "Anführungszeichen",
+      "singleQuotes": "Einfache Anführungszeichen",
+      "parentheses": "Klammern"
+    },
     "placeholder": "Nachricht eingeben\u2026",
     "backHome": "Zurück zur Startseite",
     "regenerate": "Neu generieren",

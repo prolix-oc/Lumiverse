@@ -131,6 +131,7 @@ describe('spindle list retry', () => {
     expect(slice.get().extensions).toHaveLength(1)
     expect(slice.get().extensions[0]?.id).toBe('canvas')
     expect(slice.get().spindlePrivileged).toBe(true)
+    expect(slice.get().extensionsLoaded).toBe(true)
     // Hydration should have proceeded after the recovered list
     expect(loadCalls).toBe(1)
   })
@@ -143,6 +144,7 @@ describe('spindle list retry', () => {
 
     expect(listCalls).toBe(5)
     expect(slice.get().extensions).toHaveLength(0)
+    expect(slice.get().extensionsLoaded).toBe(false)
     expect(loadCalls).toBe(0)
   }, 15000)
 

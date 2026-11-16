@@ -478,6 +478,8 @@
     "enterToSendMobile": "在行動端按 Enter 發送",
     "saveDraft": "保存草稿輸入",
     "saveDraftHint": "自動保存未發送的消息，在刷新頁面或切換聊天后仍可恢復",
+    "formattingBar": "格式工具列",
+    "formattingBarHint": "在訊息輸入框上方顯示格式按鈕。在游標位置插入成對符號，或用符號包住選取的文字。",
     "defaultImpersonationMode": "預設代寫模式",
     "defaultImpersonationModeHint": "用於未指定自身代寫模式的聊天與群組聊天。",
     "portraitSide": "立繪面板位置",

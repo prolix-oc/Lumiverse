@@ -107,6 +107,8 @@ import InputAreaCustomizeModal, {
   type ComposerActionId,
 } from './InputAreaCustomizeModal'
 import { ComposerActionBarLive } from './InputAreaComposerBar'
+import ComposerFormattingBar from './ComposerFormattingBar'
+import { formatComposerSelection, type ComposerFormat } from '@/lib/composerFormatting'
 import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 import { isGuideActive, isGuideAutoEnabled } from '@/lib/guided-generations'
 import {
@@ -182,6 +184,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
   const navigate = useNavigate()
   const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const showComposerFormattingBar = useStore((s) => s.showComposerFormattingBar === true)
   const { draft, text, setText, attachments: pendingAttachments, setAttachments: setPendingAttachments, acknowledgeDraft } = useComposerDraft(chatId, saveDraftInput)
   const [isSavingMessage, setIsSavingMessage] = useState(false)
   const [pendingRegexVisibleCount, setPendingRegexVisibleCount] = useState(0)
@@ -872,18 +875,41 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     // Folding and pane resizing can rewrap a draft without changing its text.
     // Watch width only so our own height writes do not cause a resize loop.
     let width = -1
+    let frame = 0
     const observer = new ResizeObserver(([entry]) => {
       if (!entry || entry.contentRect.width === width) return
       width = entry.contentRect.width
-      resizeTextarea(ta)
+      // Rewrapping can also change the scrollbar gutter. Write height outside
+      // observer delivery so WebKit can finish the current resize cycle.
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => resizeTextarea(ta))
     })
     observer.observe(ta)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
   }, [resizeTextarea])
 
   const queueTextareaSelection = useCallback((start: number, end = start, direction: 'forward' | 'backward' | 'none' = 'none') => {
     pendingSelectionRef.current = { start, end, direction }
   }, [])
+
+  const handleComposerFormat = useCallback((format: ComposerFormat) => {
+    const ta = textareaRef.current
+    if (!ta || isComposingRef.current) return
+    const next = formatComposerSelection(ta.value, ta.selectionStart, ta.selectionEnd, format)
+    queueTextareaSelection(next.start, next.end, ta.selectionDirection)
+    // Focus during the tap so mobile browsers keep/open the keyboard. Use a
+    // native edit where supported so formatting participates in Undo/Redo.
+    ta.focus({ preventScroll: true })
+    try {
+      ta.ownerDocument.execCommand('insertText', false, next.replacement)
+    } catch { /* WebViews without native edit support use the controlled draft. */ }
+    setText(next.text)
+    setHashQuery(null)
+    setAtQuery(null)
+  }, [queueTextareaSelection, setText])
 
   const applySTTTranscript = useCallback((transcript: string, moveCaret = false) => {
     const base = sttDraftBaseRef.current
@@ -1274,6 +1300,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const root = document.documentElement
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
     const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
+    const formattingBar = el.querySelector<HTMLElement>('[data-composer-formatting]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1288,7 +1315,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const update = () => {
       const loreHeight = measureLoreHeight()
       const h = measureComposerHeight(el, popoverSlot)
-      const composerHeight = Math.max(0, h - loreHeight) + 8
+      const formattingHeight = formattingBar ? renderedPxToLayoutPx(formattingBar.getBoundingClientRect().height) + 8 : 0
+      const composerHeight = Math.max(0, h - loreHeight) + formattingHeight + 8
       // Use the animated position, so list padding and composer move together.
       // Zero is valid for edge-to-edge PWA composers.
       const measuredBottom = parseFloat(getComputedStyle(el).bottom)
@@ -1304,6 +1332,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
+    if (formattingBar) ro.observe(formattingBar)
     if (loreMount) ro.observe(loreMount)
     const stopObservingMotion = observeComposerMotion(el, update)
     update()
@@ -1337,7 +1366,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       parent.style.removeProperty('--lcs-composer-safe-zone')
       parent.style.removeProperty('--lcs-input-safe-zone')
     }
-  }, [hideForMobileEdit])
+  }, [hideForMobileEdit, showComposerFormattingBar, showSTTIndicator])
 
   // Document-level Escape to stop generation
   useEffect(() => {
@@ -4152,6 +4181,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           reasoningStartedAt={streamingReasoningStartedAt}
           isStreaming
         />
+      )}
+
+      {showComposerFormattingBar && !showSTTIndicator && (
+        <ComposerFormattingBar onFormat={handleComposerFormat} />
       )}
 
       {showSTTIndicator ? (

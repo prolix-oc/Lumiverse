@@ -14,6 +14,7 @@ import type { MessagePresetContext, RegexScript } from '@/types/regex'
 import { resetMessagePresetScriptsForTests, useMessagePresetScripts } from './useMessagePresetScripts'
 import { canOptimisticallyAppendStreamingText } from '@/lib/display-streaming'
 import { TextBudgetCache } from '@/lib/textBudgetCache'
+import { presetHistoryDependency } from '@/lib/preset-history'
 
 interface ResolvedDisplayRegexTemplates {
   resolvedFindPatterns: Map<string, string>
@@ -21,6 +22,7 @@ interface ResolvedDisplayRegexTemplates {
 }
 
 interface DisplayRegexCacheEntry {
+  chatId?: string
   pendingCharacters?: number
   value?: ResolvedDisplayRegexTemplates
   promise?: Promise<ResolvedDisplayRegexTemplates>
@@ -28,6 +30,7 @@ interface DisplayRegexCacheEntry {
 }
 
 interface DisplayRegexContentCacheEntry {
+  chatId?: string
   pendingCharacters?: number
   processingState?: string
   value?: string
@@ -84,6 +87,7 @@ interface PendingDisplayPreprocess {
 }
 
 interface DisplayPreprocessCacheEntry {
+  chatId?: string
   pendingCharacters?: number
   processingState?: string
   value?: string
@@ -245,7 +249,7 @@ async function fetchDisplayPreprocessBatch(
     })
     if (!res.ok) return bodies.map((body) => ({ content: body.rawContent, ok: false }))
     const json = (await res.json()) as {
-      items?: Array<{ content?: unknown; incrementalRawAppendSafe?: unknown }>
+      items?: Array<{ content?: unknown; incrementalRawAppendSafe?: unknown; touchedVars?: string[]; cacheable?: boolean }>
     }
     if (!Array.isArray(json.items)) {
       return bodies.map((body) => ({ content: body.rawContent, ok: false }))
@@ -256,6 +260,8 @@ async function fetchDisplayPreprocessBatch(
         content: typeof item?.content === 'string' ? item.content : body.rawContent,
         ok: typeof item?.content === 'string',
         incrementalRawAppendSafe: item?.incrementalRawAppendSafe === true,
+        touchedVars: item?.touchedVars,
+        cacheable: item?.cacheable,
       }
     })
   } catch {
@@ -427,6 +433,7 @@ function useDisplayPreprocessedState(
               value: next.content,
               processingState: next.processingState,
               messageId,
+              chatId,
               ...(next.touchedVars ? { touchedVars: new Set(next.touchedVars) } : {}),
               incrementalRawAppendSafe: next.incrementalRawAppendSafe === true,
             })
@@ -438,7 +445,7 @@ function useDisplayPreprocessedState(
         return { content, ok: false }
       })
       assigned = trackForDisplaySettle(promise)
-      displayPreprocessCache.set(key, { promise: assigned, messageId, pendingCharacters: content.length })
+      displayPreprocessCache.set(key, { promise: assigned, messageId, chatId, pendingCharacters: content.length })
       return assigned
     }, (outcome) => setState({ key, version, raw: content, outcome }))
   }, [key, version, chatId, messageId, content, opts?.swipeIndex, opts?.presetContext, opts?.role, opts?.depth, opts?.messageIndex,
@@ -553,6 +560,22 @@ export function invalidateDisplayRegexCacheForMessage(messageId: string): void {
     if (entry.messageId === messageId) { displayPreprocessCache.delete(key); removed++ }
   }
   if (removed > 0) bumpPerMessageCv(messageId)
+}
+
+/** Invalidate only history readers, including negative reads and in-flight reads of unknown dependencies. */
+export function invalidateDisplayRegexCacheForPresetHistory(chatId?: string): void {
+  let changed = false
+  for (const cache of [displayRegexResolutionCache, displayRegexContentCache, displayPreprocessCache]) {
+    for (const [key, entry] of cache) {
+      const readsHistory = [...(entry.touchedVars ?? [])].some(dependency => chatId
+        ? dependency === presetHistoryDependency(chatId) : dependency.startsWith('context:presetHistory:'))
+      if (readsHistory || (entry.promise && (!chatId || entry.chatId === chatId))) {
+        cache.delete(key)
+        changed = true
+      }
+    }
+  }
+  if (changed) bumpGlobalCv()
 }
 
 export function invalidateDisplayRegexCacheForVars(changedVars: ReadonlySet<string>): void {
@@ -884,9 +907,10 @@ export function useDisplayRegexState(
           if (agg && res.touched_vars) {
             for (const arr of Object.values(res.touched_vars)) for (const v of arr) agg.add(v)
           }
-          if (res.cacheable && Object.values(res.cacheable).some((c) => c === false)) agg = null
+          const cacheable = !res.cacheable || !Object.values(res.cacheable).some((c) => c === false)
           if (displayRegexResolutionCache.get(templateCacheKey)?.promise === assignedPromise) {
-            cacheResolvedTemplates(templateCacheKey, agg ? { value: next, touchedVars: agg } : { value: next })
+            if (cacheable) cacheResolvedTemplates(templateCacheKey, { value: next, chatId: scopedChatId ?? undefined, ...(agg ? { touchedVars: agg } : {}) })
+            else displayRegexResolutionCache.delete(templateCacheKey)
           }
           return next
         })
@@ -899,6 +923,7 @@ export function useDisplayRegexState(
       assignedPromise = trackInitialDisplayResolve(promise, scopedChatId)
       pendingTemplates = assignedPromise
       cacheResolvedTemplates(templateCacheKey, {
+        chatId: scopedChatId ?? undefined,
         promise: assignedPromise,
         pendingCharacters: templateEntries.reduce((sum, [key, value]) => sum + key.length + value.length, 0),
       })
@@ -968,7 +993,7 @@ export function useDisplayRegexState(
         if (displayRegexContentCache.get(contentCacheKey)?.promise === assigned) {
           if (cacheable !== false) {
             displayRegexContentCache.set(contentCacheKey, {
-              value: result, processingState, touchedVars, messageId: preprocessOpts?.messageId,
+              value: result, processingState, touchedVars, messageId: preprocessOpts?.messageId, chatId: scopedChatId ?? undefined,
             })
           } else displayRegexContentCache.delete(contentCacheKey)
         }
@@ -981,7 +1006,7 @@ export function useDisplayRegexState(
       })
       assigned = trackContentForDisplaySettle(promise)
       displayRegexContentCache.set(contentCacheKey, {
-        promise: assigned, processingState, messageId: preprocessOpts?.messageId,
+        promise: assigned, processingState, messageId: preprocessOpts?.messageId, chatId: scopedChatId ?? undefined,
         pendingCharacters: content.length,
       })
       return assigned

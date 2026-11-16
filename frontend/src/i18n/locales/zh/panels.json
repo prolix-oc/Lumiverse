@@ -1425,6 +1425,10 @@
       "noTagsFound": "未找到标签"
     },
     "alternateAvatars": {
+      "addFromGallery": "从图库添加",
+      "uploadImage": "上传头像",
+      "galleryLoadFailed": "无法加载图库图片。",
+      "uploadFailed": "无法上传备用头像。",
       "title": "备用头像",
       "helper": "该角色的额外头像，可在各聊天中分别切换。",
       "selectionHint": "点击头像以在此聊天中使用。",

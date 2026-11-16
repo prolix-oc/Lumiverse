@@ -1,4 +1,9 @@
+import type { LlmMessage } from "../../llm/types";
+import { isChatHistoryMessage } from "../../llm/chat-history";
+import { NanoGPTProvider } from "../../llm/providers/nanogpt";
 import type { CachingContext, CachingInput, CachingOutput } from "./types";
+
+const messageSerializer = new NanoGPTProvider();
 
 // Matches NanoGPT-routed Claude IDs: `claude-…`, `anthropic/claude-…`, or
 // any vendor-prefixed Anthropic route. Used to gate NanoGPT's explicit
@@ -13,12 +18,89 @@ export function isNanoGptClaudeModel(model?: string | null): boolean {
   return /(?:^|\/)(?:anthropic\/)?claude[-_]/i.test(model);
 }
 
+// Conversation messages left outside the cached prefix by the automatic cut.
+//
+// A provider-selected breakpoint can include the volatile tail: depth-injected
+// blocks with freshly evaluated macros, the newest turn, or history still
+// being rewritten by depth-gated regexes. Keeping that tail outside the
+// boundary improves the chance of reusing an unchanged prefix.
+//
+// Six is a heuristic margin for depth-gated prompt regexes. Presets with
+// deeper rewrites or dynamic content earlier in the prompt need tuning.
+const DEFAULT_TAIL_RESERVE_MESSAGES = 6;
+
+// Leave NanoGPT's placement alone on short payloads. Provider token thresholds
+// still determine whether the selected prefix is eligible for caching.
+const MIN_CACHEABLE_PREFIX_MESSAGES = 8;
+
 interface NanoGptCachingPayload {
   enabled: true;
   ttl: "5m" | "1h";
   stickyProvider: boolean;
   cutAfterMessageIndex?: number;
   explicitCacheControl?: boolean;
+}
+
+function readTailReserve(cacheSetting: Record<string, any>): number {
+  const raw =
+    cacheSetting.tailReserveMessages ?? cacheSetting.tail_reserve_messages;
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) {
+    return DEFAULT_TAIL_RESERVE_MESSAGES;
+  }
+  return raw;
+}
+
+/**
+ * Suggest a cache boundary before the recent conversation tail.
+ *
+ * Walks back from the end of the assembled payload past the trailing run of
+ * non-history blocks (post-history system instructions plus the
+ * depth-injected `user` blocks that end the array) to the newest assistant
+ * turn, ignoring assistant prefills. Tagged assembly history also excludes
+ * injected assistant blocks and counts the reserve in actual history messages.
+ * Raw API requests without provenance use a role-based fallback.
+ *
+ * Recomputed per request on purpose: the boundary tracks the end of the
+ * conversation, so each turn reads the previous turn's prefix and writes
+ * only the delta when the earlier prefix stays unchanged. Context trimming or
+ * dynamic content earlier in the prompt can still invalidate that prefix.
+ *
+ * Returns undefined when there is nothing worth pinning, leaving NanoGPT's
+ * own breakpoint placement untouched.
+ */
+export function computeAutoCutAfterMessageIndex(
+  messages: LlmMessage[],
+  tailReserveMessages: number = DEFAULT_TAIL_RESERVE_MESSAGES,
+): number | undefined {
+  if (!Array.isArray(messages) || messages.length === 0) return undefined;
+
+  const hasTaggedHistory = messages.some(isChatHistoryMessage);
+  let newestAssistant = messages.length - 1;
+  while (newestAssistant >= 0 && (
+    messages[newestAssistant].role !== "assistant" ||
+    messages[newestAssistant].partial === true ||
+    (hasTaggedHistory && !isChatHistoryMessage(messages[newestAssistant]))
+  )) {
+    newestAssistant--;
+  }
+  // No assistant turn yet (first generation, or a sidecar system+user prompt):
+  // there is no settled history to protect.
+  if (newestAssistant < 0) return undefined;
+
+  // The newest assistant turn itself is still inside every depth window, so
+  // the boundary starts one message before it.
+  let reserve = Number.isSafeInteger(tailReserveMessages) && tailReserveMessages >= 0
+    ? tailReserveMessages : DEFAULT_TAIL_RESERVE_MESSAGES;
+  let cut = newestAssistant - 1;
+  while (cut >= 0 && reserve > 0) {
+    if (!hasTaggedHistory || isChatHistoryMessage(messages[cut])) reserve--;
+    cut--;
+  }
+  if (reserve > 0 || cut < 0) return undefined;
+  // Tool-result arrays can expand and empty content arrays can disappear.
+  // Use the same serializer as dispatch so this is an index in the wire array.
+  const prefixLength = messageSerializer.serializeMessages(messages.slice(0, cut + 1)).length;
+  return prefixLength >= MIN_CACHEABLE_PREFIX_MESSAGES ? prefixLength - 1 : undefined;
 }
 
 /**
@@ -31,6 +113,8 @@ interface NanoGptCachingPayload {
  * - Claude routes: emit the `prompt_caching` body helper (NanoGPT's
  *   explicit caching format). Forwards `enabled`, `ttl`, `stickyProvider`,
  *   `cutAfterMessageIndex`, `explicitCacheControl` when set in metadata.
+ *   With no pinned `cutAfterMessageIndex`, derives one from the payload so
+ *   the cached prefix stops short of the volatile tail.
  * - Any model with `forceCacheCapableRouting: true`: also emit top-level
  *   `caching: true`. This biases NanoGPT to route to a cache-capable
  *   upstream — useful when implicit caching isn't covering your route, but
@@ -78,8 +162,16 @@ export function applyNanoGptCaching(
     // camelCase and snake_case from metadata; emit canonical camelCase.
     const cutAfterRaw =
       cacheSetting.cutAfterMessageIndex ?? cacheSetting.cut_after_message_index;
+    const autoCutDisabled = (cacheSetting.autoCut ?? cacheSetting.auto_cut) === false;
     if (typeof cutAfterRaw === "number" && Number.isInteger(cutAfterRaw) && cutAfterRaw >= 0) {
+      // A pinned index is the user's explicit choice — never override it.
       payload.cutAfterMessageIndex = cutAfterRaw;
+    } else if (!autoCutDisabled) {
+      const autoCut = computeAutoCutAfterMessageIndex(
+        input.messages,
+        readTailReserve(cacheSetting),
+      );
+      if (autoCut !== undefined) payload.cutAfterMessageIndex = autoCut;
     }
     const explicitRaw =
       cacheSetting.explicitCacheControl ?? cacheSetting.explicit_cache_control;

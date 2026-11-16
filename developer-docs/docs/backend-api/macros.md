@@ -22,6 +22,10 @@ Built-in macro resolution supports scoped blocks and control flow:
 
 Only selected conditional/switch branches are resolved, so side-effect macros in unselected branches do not run.
 
+The host built-ins `{{lastPreset}}` and `{{lastPresets::count::separator}}` return preset names from selected assistant swipes, newest first, preserving repeats. Count defaults to 1 and is capped at 100; the default separator is a newline. Missing provenance returns empty, and names remain literal data. Regeneration uses the target's original selection. These built-ins do not replace extension-owned rendering or extend the separate prompt-activation find-pattern whitelist.
+
+Macro-resolution fingerprints may include the reserved read-only dependency `context:presetHistory:<chatId>` alongside variable reads. A cache consuming these fingerprints must invalidate history-dependent entries when selected attribution changes, including when an empty result becomes available; it must not interpret this key as a persisted variable. Host result caches validate the current history value. Extension-owned resolvers remain responsible for their own caching and context.
+
 ## Push Model (recommended)
 
 The push model lets your extension proactively send the latest macro value to the host. During prompt assembly the host returns the cached value instantly — no RPC roundtrip to the worker, no risk of stalling generation.

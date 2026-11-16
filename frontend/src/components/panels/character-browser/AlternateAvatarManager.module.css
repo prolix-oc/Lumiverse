@@ -38,6 +38,35 @@
   scrollbar-width: thin;
 }
 
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.controlBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.controlBtn:hover:not(:disabled) {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+}
+
+.controlBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .avatarCard {
   position: relative;
   display: flex;

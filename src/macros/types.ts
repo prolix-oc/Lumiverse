@@ -268,8 +268,8 @@ export interface MacroDiagnostic {
 export interface EvaluateResult {
   text: string;
   diagnostics: MacroDiagnostic[];
-  /** `<scope>:<key>` strings naming every var observed via
-   *  env.variables.*.get/has during evaluation. */
+  /** `<scope>:<key>` variable reads, plus reserved `context:presetHistory:<chatId>`
+   *  read-only context dependencies. Consumers must validate both before reuse. */
   touchedVars: ReadonlySet<string>;
   /** False when any volatile macro fired or an interceptor handled the
    *  template. Consumers must not cache the result when false. */

@@ -140,6 +140,8 @@ async function runDisplayPreprocessItem(
   return {
     messageId: item.messageId,
     content: processed.content,
+    touchedVars: [...processed.touchedVars],
+    cacheable: processed.cacheable,
     // Lets the client paint an append-only plain-text suffix while its next
     // coalesced preprocess request is pending. Macro-looking suffixes remain
     // gated client-side, and any applicable processor disables the fast path.
@@ -1267,7 +1269,7 @@ app.post("/:chatId/display-preprocess", async (c) => {
   }
 
   const processed = await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal);
-  return c.json({ content: processed.content });
+  return c.json({ content: processed.content, touchedVars: processed.touchedVars, cacheable: processed.cacheable });
 });
 
 export { app as chatsRoutes };

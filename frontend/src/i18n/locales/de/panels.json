@@ -1339,9 +1339,9 @@
     "tokenReportApproximation": "~ kennzeichnet eine Schätzung, da für das aktive Modell kein Tokenizer verfügbar war.",
     "openChat": "Chat öffnen",
     "createPersona": "Persona aus Karte erstellen",
-    "replaceCard": "Kartendaten ersetzen",
-    "replaceCardSuccess": "Charakterkartendaten ersetzt",
-    "replaceCardFailed": "Charakterkartendaten konnten nicht ersetzt werden",
+    "replaceCard": "Aus Karte aktualisieren",
+    "replaceCardSuccess": "{{name}} aktualisiert ({{count}} Bereich(e))",
+    "replaceCardFailed": "Vorschau der Charakterkarten-Aktualisierung fehlgeschlagen",
     "personaCreateSuccess": "Persona „{{name}}“ erstellt",
     "personaCreateFailed": "Persona konnte nicht erstellt werden",
     "personaCreateNoContent": "Füge eine Beschreibung oder Persönlichkeit hinzu, bevor du eine Persona erstellst.",
@@ -1680,6 +1680,10 @@
       "stateExcluded": "Ausgeschlossen \u2014 klicken zum Zurücksetzen"
     },
     "alternateAvatars": {
+      "addFromGallery": "Aus Galerie hinzufügen",
+      "uploadImage": "Avatar hochladen",
+      "galleryLoadFailed": "Galeriebilder konnten nicht geladen werden.",
+      "uploadFailed": "Der alternative Avatar konnte nicht hochgeladen werden.",
       "title": "Alternative Avatare",
       "helper": "Zusätzliche Profilbilder für diesen Charakter, pro Chat umschaltbar.",
       "selectionHint": "Tippe auf einen Avatar, um ihn in diesem Chat zu verwenden.",

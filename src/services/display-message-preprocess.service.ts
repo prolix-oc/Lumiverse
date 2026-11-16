@@ -32,12 +32,14 @@ export async function preprocessDisplayMessage(input: {
         },
       }, input.userId, input.signal)
     : { content: input.content };
+  const fingerprint = { touchedVars: new Set<string>(), cacheable: true };
   const content = await resolveDisplayMessageBody(
     input.userId, input.chatId, processed.content ?? input.content,
     input.message, input.swipeIndex, input.signal, input.presetContext,
     // Processors can change chat state while running; keep their existing
     // per-item reads rather than sharing a snapshot across those mutations.
     hasContentProcessor ? undefined : input.context,
+    fingerprint,
   );
-  return { content, incrementalRawAppendSafe: !hasContentProcessor };
+  return { content, incrementalRawAppendSafe: !hasContentProcessor, ...fingerprint };
 }

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, spyOn, test } from "bun:test";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
 import { CortexActivityTracker, getCortexActivity, trackCortexRequest, withCortexBatch, updateCortexActivity } from "./activity";
@@ -69,25 +69,37 @@ test("failed requests and batches cannot leave ghost activity or count as comple
 });
 
 test("token activity is throttled without broadcasting model content", async () => {
+  jest.useFakeTimers();
   const chatId = crypto.randomUUID();
-  let events = 0;
-  const off = eventBus.on(EventType.CORTEX_ACTIVITY, (event) => { if (event.payload.chatId === chatId) events++; });
+  // Observe publication directly: in-process event listeners use a separate
+  // timer queue, which must not determine the throttle assertion's timing.
+  const emit = spyOn(eventBus, "emit");
+  const events = () => emit.mock.calls.filter(([event, payload]) =>
+    event === EventType.CORTEX_ACTIVITY && payload.chatId === chatId);
   const tracker = new CortexActivityTracker("user", chatId, "rebuild");
   try {
     await tracker.run(async () => {
       const request = trackCortexRequest("analysis");
       request.phase("thinking");
-      await Bun.sleep(5);
-      const before = events;
+      jest.advanceTimersByTime(0);
+      const before = events().length;
       for (let i = 0; i < 1000; i++) request.phase("thinking");
-      expect(events).toBe(before);
-      await new Promise((resolve) => setTimeout(resolve, 110));
-      expect(events).toBe(before + 1);
-      expect(Object.keys(getCortexActivity(chatId).runs[0].requests[0]).sort()).toEqual(
+      expect(events()).toHaveLength(before);
+      jest.advanceTimersByTime(99);
+      expect(events()).toHaveLength(before);
+      jest.advanceTimersByTime(1);
+      expect(events()).toHaveLength(before + 1);
+      const snapshot = events().at(-1)![1];
+      expect(Object.keys(snapshot.runs[0].requests[0]).sort()).toEqual(
         ["id", "batch", "chunks", "purpose", "model", "phase", "queuedAt", "updatedAt", "firstContentAt"].sort());
       request.finish();
     });
-  } finally { tracker.finish(); off(); }
+  } finally {
+    tracker.finish();
+    jest.runAllTimers();
+    emit.mockRestore();
+    jest.useRealTimers();
+  }
 });
 
 test("completed ingestion history stays bounded during a burst of work", () => {

@@ -517,6 +517,8 @@
     "enterToSendMobile": "모바일에서 Enter를 눌러 전송",
     "saveDraft": "입력 임시 저장",
     "saveDraftHint": "전송하지 않은 메시지를 자동으로 저장하여 페이지를 새로고침하거나 채팅을 전환해도 유지되도록 합니다.",
+    "formattingBar": "서식 도구 모음",
+    "formattingBarHint": "메시지 입력란 위에 서식 버튼을 표시합니다. 커서 위치에 기호 쌍을 삽입하거나 선택한 텍스트를 기호로 감쌉니다.",
     "defaultImpersonationMode": "기본 대리 작성 모드",
     "defaultImpersonationModeHint": "자체 대리 작성 모드를 설정하지 않은 채팅 및 그룹 채팅에서 사용됩니다.",
     "portraitSide": "초상화 패널 위치",

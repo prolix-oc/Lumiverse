@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, mock, test } from 'bun:test'
 import ts from 'typescript'
 import { preserveNewerMessageRevisions, reconcileMessageTail, reconciledTailTotal } from '../store/messageTailReconciliation'
 import { getHistoryBoundary } from '../lib/history-page-loader'
@@ -47,7 +47,8 @@ test.each([true, false])('authored insertion preserves continuation order and st
   const state: any = {}
   Object.assign(state, compile(factorySource, { settingsApi: { put: async () => {} }, preserveNewerMessageRevisions, reconcileMessageTail, reconciledTailTotal })(
     (next: any) => Object.assign(state, typeof next === 'function' ? next(state) : next), () => state))
-  const dependencies = { store: { getState: () => state }, invalidateDisplayRegexCacheForMessage() {}, isLocalStreamPlaceholderId: () => false }
+  const invalidatePresetHistoryForChange = mock(() => {})
+  const dependencies = { store: { getState: () => state }, invalidateDisplayRegexCacheForMessage() {}, invalidatePresetHistoryForChange, isLocalStreamPlaceholderId: () => false }
   const sent = compile(callbacks.get('MESSAGE_SENT')!, dependencies)
   const message = (id: string, index: number, is_user: boolean, date: number) => ({ id, chat_id: 'chat', index_in_chat: index,
     is_user, content: id, send_date: date, created_at: date, extra: {}, swipes: [id], swipe_dates: [date], swipe_id: 0, revision: 1 })
@@ -57,7 +58,9 @@ test.each([true, false])('authored insertion preserves continuation order and st
   state.beginStreaming(undefined, 'continue')
   state.startStreaming('generation', undefined, 'continue')
   state.streamingContent = 'continuation buffer'
-  sent({ chatId: 'chat', authored: true, inserted: true, message: message('inserted', 1, isUser, 3) })
+  const inserted = message('inserted', 1, isUser, 3)
+  sent({ chatId: 'chat', authored: true, inserted: true, message: inserted })
+  expect(invalidatePresetHistoryForChange).toHaveBeenCalledWith('chat', null, inserted)
   expect(state.messages.map((row: any) => [row.id, row.index_in_chat])).toEqual([['user', 0], ['inserted', 1], ['assistant', 2]])
   expect(state.messages.at(-1).content).toBe('assistant')
   expect(state.streamingContent).toBe('continuation buffer')

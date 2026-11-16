@@ -20,6 +20,7 @@ import { DEFAULT_IMPERSONATION_MODE, resolveImpersonationMode } from '@/lib/impe
 import { isChatImageSize, isChatImageAlignment, isChatImageTargets, DEFAULT_CHAT_IMAGE_TARGETS } from '@/lib/chatImagePresentation'
 import { whistleLanguage } from '@/lib/whistle/config'
 import { createSettingsLoadGenerationGuard } from './settings-load-generation'
+import { reconcileInstalledExtensionDrawerTabs } from '../extension-drawer-reconciliation'
 import {
   deriveReorderArgs,
   normalizeConnectionsOrder,
@@ -66,6 +67,7 @@ export const DATA_KEYS: ReadonlySet<string> = new Set([
   'bubbleUseFullAvatar',
   'bubbleOpacity',
   'saveDraftInput',
+  'showComposerFormattingBar',
   'composerActionBar',
   'defaultImpersonationMode',
   'chatWidthMode',
@@ -192,6 +194,7 @@ function isValidSettingValue(key: string, value: unknown): boolean {
   if (key === 'chatImageTargets') return isChatImageTargets(value)
   if (key === 'showGreetingImage') return typeof value === 'boolean'
   if (key === 'landingPinFavorites') return typeof value === 'boolean'
+  if (key === 'showComposerFormattingBar') return typeof value === 'boolean'
   if (key === 'greetingImagePosition') return value === 'top' || value === 'bottom'
   return true
 }
@@ -779,6 +782,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   bubbleOpacity: 1,
   inputBarEnterToSend: { ...DEFAULT_ENTER_TO_SEND_SETTINGS },
   saveDraftInput: true,
+  showComposerFormattingBar: false,
   composerActionBar: null,
   defaultImpersonationMode: DEFAULT_IMPERSONATION_MODE,
   chatWidthMode: 'full',
@@ -965,6 +969,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
 
     set(patch as any)
+    reconcileInstalledExtensionDrawerTabs(get())
     if (Object.prototype.hasOwnProperty.call(settings, 'activeProfileId')) {
       const raw = settings.activeProfileId
       const id = raw == null || raw === '' ? null : String(raw)
@@ -1706,6 +1711,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         if (!isCurrentLoad()) return
         persistKey('imageGeneration', patch.imageGeneration)
       }
+      reconcileInstalledExtensionDrawerTabs(get())
     } catch (err) {
       if (isCurrentLoad()) {
         traceSettings('loadSettings:failed', { loadGeneration })

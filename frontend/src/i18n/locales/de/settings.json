@@ -514,6 +514,8 @@
     "enterToSendMobile": "Auf Mobilgeräten mit Enter senden",
     "saveDraft": "Eingabeentwurf speichern",
     "saveDraftHint": "Speichert Ihre ungesendete Nachricht automatisch, sodass sie Seitenaktualisierungen und Chatwechsel übersteht",
+    "formattingBar": "Formatierungsleiste",
+    "formattingBarHint": "Formatierungsschaltflächen über der Nachrichteneingabe anzeigen. Fügt passende Zeichen am Cursor ein oder umschließt ausgewählten Text.",
     "defaultImpersonationMode": "Standard-Impersonationsmodus",
     "defaultImpersonationModeHint": "Wird von Chats und Gruppenchats verwendet, die keinen eigenen Impersonationsmodus festlegen.",
     "portraitSide": "Seite des Porträt-Panels",

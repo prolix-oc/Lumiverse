@@ -23,6 +23,8 @@ export function createDisplayRenderContext(userId: string, chatId: string) {
       if (!seed) return null;
       const env = cloneEnv(seed);
       env.extra = structuredClone(seed.extra);
+      // Only the read snapshot is shared; each message still owns its variable maps.
+      env.extra.presetHistory = seed.extra.presetHistory;
       if (seed.character.alternateGreetings) env.character.alternateGreetings = [...seed.character.alternateGreetings];
       return env;
     },
@@ -46,6 +48,7 @@ export async function resolveDisplayMessageBody(
   signal?: AbortSignal,
   presetContextOverride?: MessagePresetContext,
   context?: DisplayRenderContext,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
 ): Promise<string> {
   const source = message?.chat_id === chatId ? message : undefined;
   const presetContext = presetContextOverride ?? readMessagePresetContext(source?.extra, swipeIndex);
@@ -61,7 +64,7 @@ export async function resolveDisplayMessageBody(
       // Leave outlets unresolved; other display macros can still resolve.
     }
   }
-  return resolveRenderedMessageContent(content, env, true);
+  return resolveRenderedMessageContent(content, env, true, outFingerprint);
 }
 
 interface ReconcileChatMessageMacrosInput {
@@ -129,24 +132,30 @@ export async function resolveRenderedMessageContent(
   content: string,
   env: MacroEnv,
   deferLiteralBraceRestore = false,
+  outFingerprint?: { touchedVars: Set<string>; cacheable: boolean },
 ): Promise<string> {
-  const rendered = await resolveMessageMacroContent(content, env);
+  const rendered = await resolveMessageMacroContent(content, env, outFingerprint);
   return deferLiteralBraceRestore ? rendered.template : rendered.content;
 }
 
 /** Keep literal positions until the caller has persisted the message's provenance. */
-export async function resolveMessageMacroContent(content: string, env: MacroEnv) {
+export async function resolveMessageMacroContent(content: string, env: MacroEnv, outFingerprint?: { touchedVars: Set<string>; cacheable: boolean }) {
   if (env.extra.preserveMessageSource) return { content, template: content, literalBraces: [] as number[] };
-  const template = await resolveMessageMacroTemplate(content, env);
+  const template = await resolveMessageMacroTemplate(content, env, outFingerprint);
   return { ...captureMessageLiterals(template), template };
 }
 
-async function resolveMessageMacroTemplate(content: string, env: MacroEnv): Promise<string> {
+async function resolveMessageMacroTemplate(content: string, env: MacroEnv, outFingerprint?: { touchedVars: Set<string>; cacheable: boolean }): Promise<string> {
   if (env.extra.preserveMessageSource || !HAS_MACRO_RE.test(content)) return content;
   initMacros();
-  return withJsonBlocksProtected(content, env, async (protectedContent) =>
-    healFormattingArtifacts((await evaluate(protectedContent, env, registry, { deferLiteralBraceRestore: true })).text),
-  );
+  return withJsonBlocksProtected(content, env, async (protectedContent) => {
+    const result = await evaluate(protectedContent, env, registry, { deferLiteralBraceRestore: true });
+    if (outFingerprint) {
+      for (const key of result.touchedVars) outFingerprint.touchedVars.add(key);
+      if (!result.cacheable) outFingerprint.cacheable = false;
+    }
+    return healFormattingArtifacts(result.text);
+  });
 }
 
 export function buildPersistedMacroVariables(

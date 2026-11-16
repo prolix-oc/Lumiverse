@@ -106,6 +106,10 @@ export interface ApplyCharxOptions {
    * flag must gate both sources.
    */
   importWorldBooks?: boolean;
+  /** Selective updates preserve the primary avatar, regex and unselected text. */
+  assetMode?: "merge" | "replace";
+  updatedTextFields?: ReadonlySet<string>;
+  updatedGreetingIndices?: ReadonlySet<number>;
 }
 
 /**
@@ -121,8 +125,10 @@ export async function applyCharxModulesAndAssets(
 ): Promise<{ lumiverseModulesSummary?: Record<string, any> }> {
   const { avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles, expressionGroupAnalysis } = charxResult;
   const importWorldBooks = options.importWorldBooks !== false;
+  const selective = options.assetMode !== undefined;
+  const merge = options.assetMode === "merge";
 
-  if (avatarFile) {
+  if (avatarFile && !selective) {
     const image = await images.uploadImage(userId, avatarFile);
     svc.setCharacterImage(userId, character.id, image.id);
     svc.setCharacterAvatar(userId, character.id, image.filename);
@@ -139,8 +145,13 @@ export async function applyCharxModulesAndAssets(
 
     // Expressions
     if (lumiverseModules.expressions?.mappings) {
-      const exprMappings: Record<string, string> = {};
+      const exprMappings: Record<string, string> = merge ? { ...extensions.expressions?.mappings } : {};
       for (const [label, archivePath] of Object.entries(lumiverseModules.expressions.mappings)) {
+        if (merge && exprMappings[label]) {
+          consumedPaths.add(archivePath);
+          assetImageMap.set(archivePath, exprMappings[label]);
+          continue;
+        }
         const assetFile = assetFiles.get(archivePath);
         if (assetFile) {
           const img = await images.uploadImage(userId, assetFile);
@@ -151,9 +162,9 @@ export async function applyCharxModulesAndAssets(
       }
       if (Object.keys(exprMappings).length > 0) {
         extensions.expressions = {
-          enabled: lumiverseModules.expressions.enabled,
+          enabled: merge && extensions.expressions ? extensions.expressions.enabled : lumiverseModules.expressions.enabled,
           useAsAvatar: exprSvc.getExpressionConfig(userId, character.id)?.useAsAvatar ?? false,
-          defaultExpression: lumiverseModules.expressions.defaultExpression,
+          defaultExpression: merge && extensions.expressions ? extensions.expressions.defaultExpression : lumiverseModules.expressions.defaultExpression,
           mappings: exprMappings,
         };
       }
@@ -161,10 +172,15 @@ export async function applyCharxModulesAndAssets(
 
     // Expression groups (multi-character)
     if (lumiverseModules.expression_groups?.groups) {
-      const expressionGroups: Record<string, Record<string, string>> = {};
+      const expressionGroups: Record<string, Record<string, string>> = merge ? { ...extensions.expression_groups } : {};
       for (const [groupName, labelMap] of Object.entries(lumiverseModules.expression_groups.groups)) {
-        const groupMappings: Record<string, string> = {};
+        const groupMappings: Record<string, string> = merge ? { ...expressionGroups[groupName] } : {};
         for (const [label, archivePath] of Object.entries(labelMap)) {
+          if (merge && groupMappings[label]) {
+            consumedPaths.add(archivePath);
+            assetImageMap.set(archivePath, groupMappings[label]);
+            continue;
+          }
           const assetFile = assetFiles.get(archivePath);
           if (assetFile) {
             const img = await images.uploadImage(userId, assetFile);
@@ -184,13 +200,40 @@ export async function applyCharxModulesAndAssets(
 
     // Alternate fields
     if (lumiverseModules.alternate_fields) {
-      extensions.alternate_fields = lumiverseModules.alternate_fields;
+      if (!merge) extensions.alternate_fields = lumiverseModules.alternate_fields;
+      else {
+        const alternateFields = { ...extensions.alternate_fields };
+        for (const [field, variants] of Object.entries(lumiverseModules.alternate_fields)) {
+          if (!Array.isArray(variants)) continue;
+          const kept = Array.isArray(alternateFields[field]) ? [...alternateFields[field]] : [];
+          const seen = new Set(kept.map((v: any) => String(v?.content ?? "").trim()));
+          const ids = new Set(kept.map((v: any) => v?.id));
+          for (const variant of variants) {
+            const key = String(variant?.content ?? "").trim();
+            if (variant && !seen.has(key)) {
+              const id = variant.id && !ids.has(variant.id) ? variant.id : crypto.randomUUID();
+              kept.push({ ...variant, id });
+              seen.add(key);
+              ids.add(id);
+            }
+          }
+          alternateFields[field] = kept;
+        }
+        extensions.alternate_fields = alternateFields;
+      }
     }
 
     // Alternate avatars
-    const altAvatars: Array<{ id: string; image_id: string; label: string }> = [];
+    const altAvatars: Array<{ id: string; image_id: string; label: string }> = merge && Array.isArray(extensions.alternate_avatars) ? [...extensions.alternate_avatars] : [];
     if (Array.isArray(lumiverseModules.alternate_avatars)) {
       for (const [position, av] of lumiverseModules.alternate_avatars.entries()) {
+        const stableId = cardSvc.stableCharxAlternateAvatarId(av.id, position);
+        const kept = merge ? altAvatars.find((item) => item.id === stableId || (av.label && item.label === av.label)) : undefined;
+        if (kept) {
+          consumedPaths.add(av.path);
+          assetImageMap.set(av.path, kept.image_id);
+          continue;
+        }
         const assetFile = assetFiles.get(av.path);
         if (assetFile) {
           const img = await images.uploadImage(userId, assetFile);
@@ -208,7 +251,7 @@ export async function applyCharxModulesAndAssets(
       }
     }
 
-    if (lumiverseModules.avatar_bindings && typeof lumiverseModules.avatar_bindings === "object") {
+    if (!selective && lumiverseModules.avatar_bindings && typeof lumiverseModules.avatar_bindings === "object") {
       extensions.avatar_bindings = lumiverseModules.avatar_bindings;
     }
 
@@ -219,6 +262,15 @@ export async function applyCharxModulesAndAssets(
         if (!layer || typeof layer !== "object") continue;
         const path = typeof layer.path === "string" ? layer.path : null;
         if (!path) continue;
+        const kept = merge && Array.isArray(extensions[LANDING_PERSPECTIVE_LAYERS_KEY])
+          ? extensions[LANDING_PERSPECTIVE_LAYERS_KEY].find((item: any) => item.id === layer.id)
+          : undefined;
+        if (kept) {
+          consumedPaths.add(path);
+          assetImageMap.set(path, kept.image_id);
+          landingLayers.push(kept);
+          continue;
+        }
         const assetFile = assetFiles.get(path);
         if (!assetFile) continue;
         const img = await images.uploadOptimizedWebpImage(userId, assetFile, { owner_character_id: character.id });
@@ -235,7 +287,9 @@ export async function applyCharxModulesAndAssets(
         if (landingLayers.length >= 5) break;
       }
       if (landingLayers.length > 0) {
-        extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = landingLayers;
+        extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = merge && Array.isArray(extensions[LANDING_PERSPECTIVE_LAYERS_KEY])
+          ? [...extensions[LANDING_PERSPECTIVE_LAYERS_KEY], ...landingLayers.filter((layer) => !extensions[LANDING_PERSPECTIVE_LAYERS_KEY].some((item: any) => item.id === layer.id))].slice(0, 5)
+          : landingLayers;
       }
     }
 
@@ -260,7 +314,7 @@ export async function applyCharxModulesAndAssets(
 
     // Bundled regex scripts — rebound to the new character on import
     let regexScriptCount = 0;
-    if (lumiverseModules.regex_scripts?.length) {
+    if (!selective && lumiverseModules.regex_scripts?.length) {
       regexScriptCount = regexSvc.importCharacterBoundRegexScripts(
         userId,
         character.id,
@@ -291,11 +345,15 @@ export async function applyCharxModulesAndAssets(
 
   // Upload remaining (unconsumed) asset images to the gallery, tracking
   // archive path → image ID for inline asset resolution.
+  const existingGallery = merge ? gallerySvc.listGallery(userId, character.id, { registerReferences: false }) : [];
   const remainingGalleryEntries: Array<{ path: string; file: File }> = [];
   for (const [path, assetFile] of assetFiles) {
     if (consumedPaths.has(path)) continue;
     if (avatarFile && assetFile.name === avatarFile.name) continue;
     if (/^assets\/(icon|other)\//i.test(path)) {
+      const reference = galleryReferenceFromArchivePath(path);
+      const kept = existingGallery.find((item) => reference && item.reference === reference);
+      if (kept) { assetImageMap.set(path, kept.image_id); continue; }
       remainingGalleryEntries.push({ path, file: assetFile });
     }
   }
@@ -322,22 +380,20 @@ export async function applyCharxModulesAndAssets(
   // Resolve inline asset references (embeded://, relative filenames, Risu
   // <img="...">) in character text fields, and store the Risu asset name →
   // image ID map for display-time resolution of AI-generated <img="..."> tags.
-  const risuAssetMap: Record<string, string> = {};
+  const risuAssetMap: Record<string, string> = selective ? { ...character.extensions?.risu_asset_map } : {};
   if (assetImageMap.size > 0) {
-    const resolvedFields = cardSvc.resolveInlineAssetReferences(
-      {
-        first_mes: character.first_mes,
-        description: character.description,
-        personality: character.personality,
-        scenario: character.scenario,
-        mes_example: character.mes_example,
-        system_prompt: character.system_prompt,
-        post_history_instructions: character.post_history_instructions,
-        creator_notes: character.creator_notes,
-        alternate_greetings: character.alternate_greetings,
-      },
-      assetImageMap,
-    );
+    const fields: Record<string, string | string[]> = {};
+    for (const field of ["first_mes", "description", "personality", "scenario", "mes_example", "system_prompt", "post_history_instructions", "creator_notes"] as const) {
+      if (!options.updatedTextFields || options.updatedTextFields.has(field)) fields[field] = character[field] ?? "";
+    }
+    if (!options.updatedTextFields || options.updatedTextFields.has("alternate_greetings")) {
+      fields.alternate_greetings = character.alternate_greetings ?? [];
+    }
+    const resolvedFields = cardSvc.resolveInlineAssetReferences(fields, assetImageMap);
+    if (Array.isArray(resolvedFields.alternate_greetings) && options.updatedGreetingIndices) {
+      resolvedFields.alternate_greetings = resolvedFields.alternate_greetings.map((g, index) =>
+        options.updatedGreetingIndices!.has(index) ? g : character.alternate_greetings[index]);
+    }
     if (Object.keys(resolvedFields).length > 0) {
       await svc.updateCharacterAsync(userId, character.id, resolvedFields);
     }
@@ -346,7 +402,7 @@ export async function applyCharxModulesAndAssets(
     for (const [archivePath, imageId] of assetImageMap) {
       const galleryReference = galleryReferenceFromArchivePath(archivePath);
       const key = galleryReference ?? cardSvc.fileStem(archivePath);
-      if (!risuAssetMap[key]) risuAssetMap[key] = imageId;
+      if ((selective && !merge) || !risuAssetMap[key]) risuAssetMap[key] = imageId;
       if (galleryReference) portableToLocal.set(galleryReference, imageId);
     }
     if (Object.keys(risuAssetMap).length > 0) {
@@ -370,24 +426,26 @@ export async function applyCharxModulesAndAssets(
     }
   }
 
-  importRisuModuleRegexScripts(userId, character.id, risuModule);
+  if (!selective) importRisuModuleRegexScripts(userId, character.id, risuModule);
 
   // Multi-character expression handling: when expression assets span multiple
   // characters (detected by prefix grouping), store structured expression_groups
   // instead of a flat expression mapping. Skip if Lumiverse modules already
   // imported expression_groups.
   const charForExprCheck = await svc.getCharacterAsync(userId, character.id);
-  const hasLumiverseGroups = !!charForExprCheck?.extensions?.expression_groups;
+  const hasLumiverseGroups = selective
+    ? !!lumiverseModules?.expression_groups
+    : !!charForExprCheck?.extensions?.expression_groups;
   if (!hasLumiverseGroups && expressionGroupAnalysis?.isMultiCharacter && Object.keys(risuAssetMap).length > 0) {
-    const expressionGroups: Record<string, Record<string, string>> = {};
+    const expressionGroups: Record<string, Record<string, string>> = merge ? { ...charForExprCheck?.extensions?.expression_groups } : {};
     for (const [groupName, labelMap] of Object.entries(expressionGroupAnalysis.groups)) {
-      const groupMappings: Record<string, string> = {};
+      const groupMappings: Record<string, string> = merge ? { ...expressionGroups[groupName] } : {};
       for (const [cleanLabel, originalLabel] of Object.entries(labelMap)) {
         // risuAssetMap is keyed by stem (no extension); originalLabel may carry the
         // archive's extension, so fall back to stem.
         const imageId = risuAssetMap[originalLabel]
           ?? risuAssetMap[cardSvc.fileStem(originalLabel)];
-        if (imageId) {
+        if (imageId && (!merge || !groupMappings[cleanLabel])) {
           groupMappings[cleanLabel] = imageId;
         }
       }
@@ -404,8 +462,16 @@ export async function applyCharxModulesAndAssets(
         });
       }
     }
-  } else {
-    await importRisuExpressionAssets(userId, character.id, expressionAssets);
+  } else if (!selective || (!lumiverseModules?.expressions && !lumiverseModules?.expression_groups)) {
+    const keptMappings = charForExprCheck?.extensions?.expressions?.mappings ?? {};
+    const assets = merge ? expressionAssets.filter((asset) => !keptMappings[asset.label]) : expressionAssets;
+    if (selective && !merge && assets.length) {
+      await svc.updateCharacterAsync(userId, character.id, { extensions: {
+        ...charForExprCheck?.extensions,
+        expressions: { ...charForExprCheck?.extensions?.expressions, mappings: {} },
+      } });
+    }
+    await importRisuExpressionAssets(userId, character.id, assets);
   }
 
   if (importWorldBooks) {

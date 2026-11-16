@@ -142,6 +142,7 @@ nav = [
     { "Troubleshooting" = "reference/troubleshooting.md" },
     { "Termux Troubleshooting" = "reference/termux-troubleshooting.md" },
     { "Environment Variables (.env)" = "reference/environment-variables.md" },
+    { "Hosting the Documentation" = "reference/hosting-documentation.md" },
     { "Glossary" = "reference/glossary.md" },
   ] },
 ]

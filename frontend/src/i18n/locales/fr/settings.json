@@ -478,6 +478,8 @@
     "enterToSendMobile": "Appuyer sur Entrée pour envoyer sur mobile",
     "saveDraft": "Enregistrez le brouillon d'entrée",
     "saveDraftHint": "Enregistre automatiquement votre message non envoyé afin qu'il persiste lors des actualisations de page et des changements de discussion.",
+    "formattingBar": "Barre de mise en forme",
+    "formattingBarHint": "Afficher les boutons de mise en forme au-dessus du champ de saisie. Insère des paires de symboles au curseur ou encadre le texte sélectionné.",
     "defaultImpersonationMode": "Mode d'usurpation d'identité par défaut",
     "defaultImpersonationModeHint": "Utilisé par les discussions et groupes qui ne définissent pas leur propre mode d'usurpation d'identité.",
     "portraitSide": "Côté panneau Portrait",

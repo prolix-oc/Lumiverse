@@ -1,17 +1,74 @@
 import { describe, expect, test } from 'bun:test'
-import type { DrawerLayoutItem } from '@/types/store'
+import type { DrawerLayoutItem, DrawerSettings } from '@/types/store'
 import {
   canonicalDrawerLayoutTabId,
   createDefaultDrawerLayout,
   drawerLayoutItemKey,
   moveDrawerLayoutItem,
   reconcileDrawerLayout,
+  reconcileExtensionDrawerSettings,
   removeDrawerLayoutContainer,
   sanitizeDrawerLayout,
   updateDrawerLayoutFolderView,
 } from './drawer-layout'
 
 describe('drawer layout', () => {
+  test('removes uninstalled extension references from root, folders, order and visibility', () => {
+    const oldTab = 'spindle:old-install:tab:main:17'
+    const liveTab = 'spindle:live-install:tab:nested:tab:main:41'
+    const folder: Extract<DrawerLayoutItem, { type: 'folder' }> = {
+      type: 'folder', id: 'favorites', name: 'Favorites', icon: 'game', view: 'grid', children: [oldTab, liveTab, 'profile'],
+    }
+    const emptyFolder: Extract<DrawerLayoutItem, { type: 'folder' }> = {
+      type: 'folder', id: 'empty', name: 'Keep me', children: [oldTab],
+    }
+    const settings = {
+      side: 'left',
+      layout: [
+        { type: 'tab', tabId: oldTab },
+        { type: 'divider', id: 'tools', label: 'Tools' },
+        folder,
+        emptyFolder,
+        { type: 'tab', tabId: 'unknown-host-tab' },
+      ],
+      tabOrder: [oldTab, liveTab, 'profile'],
+      hiddenTabIds: [oldTab, liveTab, 'regex'],
+    } as DrawerSettings
+    const next = reconcileExtensionDrawerSettings(settings, new Set(['live-install']))
+    expect(next).toEqual({
+      ...settings,
+      layout: [
+        settings.layout[1],
+        { ...folder, children: [liveTab, 'profile'] },
+        { ...emptyFolder, children: [] },
+        settings.layout[4],
+      ],
+      tabOrder: [liveTab, 'profile'],
+      hiddenTabIds: [liveTab, 'regex'],
+    })
+    expect(settings.hiddenTabIds).toEqual([oldTab, liveTab, 'regex'])
+    expect(reconcileExtensionDrawerSettings(next, new Set(['live-install']))).toBe(next)
+  })
+
+  test('prunes legacy order and visibility without materializing a layout', () => {
+    const settings = {
+      tabOrder: ['profile', 'spindle:removed:tab:main', 'spindle:installed:tab:main:9'],
+      hiddenTabIds: ['spindle:removed:tab:main:12'],
+    } as DrawerSettings
+    const next = reconcileExtensionDrawerSettings(settings, new Set(['installed']))
+    expect(next.tabOrder).toEqual(['profile', 'spindle:installed:tab:main:9'])
+    expect(next.hiddenTabIds).toEqual([])
+    expect(next.layout).toBeUndefined()
+  })
+
+  test('keeps settings unchanged when every Spindle owner is installed', () => {
+    const settings = {
+      layout: [{ type: 'folder', id: 'tools', name: 'Tools', children: ['spindle:installed:tab:main:17', 'profile'] }],
+      tabOrder: ['spindle:installed:tab:main'], hiddenTabIds: ['spindle:installed:tab:main:17'],
+    } as DrawerSettings
+    expect(reconcileExtensionDrawerSettings(settings, new Set(['installed']))).toBe(settings)
+  })
+
   test('retires Council subpages from saved folders and legacy tab order', () => {
     const layout = reconcileDrawerLayout({
       layout: [{ type: 'folder', id: 'council-folder', name: 'Council', children: ['council', 'prompt', 'ooc', 'feedback', 'create'] }],

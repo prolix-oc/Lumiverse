@@ -3,6 +3,7 @@ import { NanoGPTProvider, buildNanoGptRouting } from "./nanogpt";
 import { OpenRouterProvider } from "./openrouter";
 import { injectConnectionMetadataFlags } from "../../services/generation/connection-metadata";
 import { resolveEffectiveApiUrl } from "../../services/connections.service";
+import { applyNanoGptCaching } from "../../services/caching/nanogpt";
 import type { GenerationRequest } from "../types";
 
 const provider = new NanoGPTProvider();
@@ -21,6 +22,30 @@ function mockGeneration() {
 
 describe("NanoGPT routing at dispatch", () => {
   for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "JSON"} cache cutoffs address the serialized history before the volatile tail`, async () => {
+      mockGeneration();
+      const messages: GenerationRequest["messages"] = Array.from({ length: 40 }, (_, index) => ({
+        role: index % 2 ? "assistant" : "user", content: `history ${index}`,
+      }));
+      messages[2].content = [
+        { type: "tool_result", tool_use_id: "first", content: "result one" },
+        { type: "tool_result", tool_use_id: "second", content: "result two" },
+      ];
+      messages[4].content = [];
+      messages.push(...Array.from({ length: 12 }, () => ({ role: "user" as const, content: "volatile injection" })));
+      messages.push({ role: "assistant", content: "prefill", partial: true });
+      const cached = applyNanoGptCaching({ provider: "nanogpt", model: "claude-sonnet-4-5", metadata: {
+        nanogpt_caching: { enabled: true },
+      } }, { messages, params: {} });
+      const request = { model: "claude-sonnet-4-5", messages: cached.messages, parameters: cached.params };
+      if (stream) { for await (const _chunk of provider.generateStream("placeholder", "", request)) { /* drain */ } }
+      else await provider.generate("placeholder", "", request);
+      const body = sent[0].body;
+      expect(body.messages[body.prompt_caching.cutAfterMessageIndex].content).toBe("history 32");
+      expect(body.messages.slice(0, body.prompt_caching.cutAfterMessageIndex + 1).some((message: { content: string }) => message.content === "volatile injection")).toBe(false);
+      expect(JSON.stringify(body)).not.toContain("__chatHistorySource");
+    });
+
     test(`${stream ? "streaming" : "JSON"} uses model-specific routing and preserves caching`, async () => {
       mockGeneration();
       const settings = { billing_mode: "paygo", model_overrides: { "z-ai/glm-5": { only: ["novita"], order: ["novita"], allow_fallbacks: false, sort: "price" } } };
