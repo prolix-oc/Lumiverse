@@ -86,7 +86,7 @@ try {
             assert.ok(box.x >= 0 && box.x + box.width <= width + 1 && box.y >= (width === 390 ? 47 : 0) - 1, 'controls fit below safe top')
           }
           await close.click()
-          for (const alt of ['Markdown', 'Linked Markdown', '', 'Raw HTML', 'XML image', 'Portrait', 'PortraitSource', 'Island Markdown', 'Island HTML', 'Attachment', 'User attachment']) {
+          for (const alt of ['Markdown', 'Linked Markdown', '', 'Raw HTML', 'XML image', 'Portrait', 'PortraitSource', 'Attachment', 'User attachment']) {
             const image = alt ? page.locator('#message').getByRole('img', { name: alt, exact: true }) : page.locator('#message img[alt=""]')
             await image.scrollIntoViewIfNeeded()
             await page.waitForFunction(img => img.complete && img.naturalWidth > 0, await image.elementHandle(), { timeout: 10000 }).catch(async error => {
@@ -118,8 +118,8 @@ try {
         await aligns.getByRole('button', { name: 'Left', exact: true }).click()
         await close.click()
         const samples = [
-          ['Markdown', 0], ['Linked Markdown', 0], ['', 0], ['Portrait', 0], ['PortraitSource', 0], ['Island Markdown', 0],
-          ['Raw HTML', 1], ['XML image', 1], ['Island HTML', 1], ['Attachment', 2], ['User attachment', 2],
+          ['Markdown', 0], ['Linked Markdown', 0], ['', 0], ['Portrait', 0], ['PortraitSource', 0], ['Island Markdown', null],
+          ['Raw HTML', 1], ['XML image', 1], ['Island HTML', null], ['Attachment', 2], ['User attachment', 2],
         ]
         const sampleImage = alt => alt ? page.locator('#message').getByRole('img', { name: alt, exact: true }) : page.locator('#message img[alt=""]')
         const sampleState = async alt => {
@@ -166,7 +166,7 @@ try {
           }
           for (const [alt, category] of samples) {
             const actual = await sampleState(alt)
-            if (mask & (1 << category)) {
+            if (category !== null && (mask & (1 << category))) {
               assert.ok(Math.abs(actual.frameWidth - actual.parentWidth * 0.75) < 3, alt + ': selected type uses requested width')
             } else {
               const original = baseline.get(alt)

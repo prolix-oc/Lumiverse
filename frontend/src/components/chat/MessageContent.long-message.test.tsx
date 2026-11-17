@@ -343,6 +343,26 @@ describe('MessageContent inline HTML rendering', () => {
     })
   }
 
+  test('keeps image presentation controls outside an authored HTML island', async () => {
+    const { chatImageSize, chatImageAlignment } = useStore.getState()
+    try {
+      useStore.setState({ chatImageSize: '100', chatImageAlignment: 'center' })
+      const content = '<div><style>.portrait { width: 120px }</style><img class="portrait" src="https://images.example/card.png" alt="Card"></div>'
+      await act(async () => {
+        root?.render(<MessageContent content={content} isUser={false} userName="User" chatId="chat" messageId="image-test" isStreaming disableInterceptors />)
+      })
+      const message = host.querySelector('[data-component="MessageContent"]')
+      expect(message?.getAttribute('data-chat-image-size')).toBe('100')
+      const island = message?.querySelector('[data-lumiverse-html-island]')
+      expect(island?.hasAttribute('data-chat-image-size')).toBe(false)
+      expect(island?.shadowRoot?.querySelector('img.portrait')).toBeTruthy()
+      expect(island?.shadowRoot?.textContent).toContain('.portrait { width: 120px }')
+      expect(island?.shadowRoot?.querySelector('[data-lumi-image-presentation]')).toBeNull()
+    } finally {
+      await act(async () => { useStore.setState({ chatImageSize, chatImageAlignment }) })
+    }
+  })
+
   test('keeps adjacent buttons with trailing class whitespace as HTML', async () => {
     await render('<div class="grid"><div class="btn " risu-btn="one">One</div><div class="btn active" risu-btn="two">Two</div></div>')
     expect(host.querySelectorAll('.btn')).toHaveLength(2)

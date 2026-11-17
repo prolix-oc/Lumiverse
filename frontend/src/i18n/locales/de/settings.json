@@ -544,7 +544,7 @@
     "inlineImages": {
       "title": "Inline-Bilder",
       "size": "Größe der Inline-Bilder",
-      "hint": "Wähle, für welche Bildtypen diese Einstellungen gelten, einschließlich Bildern in Begrüßungen und HTML-Abschnitten. Prozentwerte skalieren Bilder relativ zur Nachrichtenbreite und behalten ihre Proportionen bei. Standard behält die bisherige Größe bei.",
+      "hint": "Wähle, für welche Bildtypen diese Einstellungen gelten, einschließlich Inline-Bildern in Begrüßungen. Bilder in HTML-Karten behalten ihre eigene Gestaltung. Prozentwerte skalieren Bilder relativ zur Nachrichtenbreite und behalten ihre Proportionen bei. Standard behält die bisherige Größe bei.",
       "default": "Standard",
       "applyTo": "Anwenden auf",
       "markdown": "Markdown- / Asset-Bilder",

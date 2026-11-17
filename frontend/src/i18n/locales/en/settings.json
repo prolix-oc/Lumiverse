@@ -481,7 +481,7 @@
     "inlineImages": {
       "title": "Inline Images",
       "size": "Inline image size",
-      "hint": "Choose which image types use these controls, including images in greetings and HTML sections. Percentages scale images to the message width while keeping their proportions. Default keeps existing sizing.",
+      "hint": "Choose which image types use these controls, including inline images in greetings. Images inside HTML cards keep their own styling. Percentages scale images to the message width while keeping their proportions. Default keeps existing sizing.",
       "default": "Default",
       "applyTo": "Apply to",
       "markdown": "Markdown / asset images",
