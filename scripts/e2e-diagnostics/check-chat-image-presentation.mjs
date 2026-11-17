@@ -5,10 +5,10 @@ import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { launchTestBrowser } from './browser-runtime.mjs'
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const require = createRequire(new URL('../../frontend/package.json', import.meta.url))
 const { build } = require('esbuild')
-const playwright = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const bundle = await build({
   absWorkingDir: root, entryPoints: ['frontend/tests/chat-image-presentation.fixture.tsx'], outfile: 'image-fixture.js',
   bundle: true, write: false, format: 'iife', jsx: 'automatic',
@@ -50,7 +50,8 @@ const url = `http://127.0.0.1:${server.address().port}`
 if (process.argv.includes('--serve')) { console.log(`Image presentation fixture: ${url}`); await new Promise(() => {}) }
 try {
   for (const engine of (process.env.IMAGE_BROWSERS || 'chromium,firefox,webkit').split(',')) {
-    const browser = await playwright[engine].launch({ timeout: 30000 })
+    const runtime = await launchTestBrowser(engine, { timeout: 30000 })
+    const { browser } = runtime
     try {
       for (const width of [1280, 390]) for (const scale of [1, 1.25]) {
         const page = await browser.newPage({ viewport: { width, height: 844 }, reducedMotion: 'reduce' })
@@ -86,7 +87,7 @@ try {
             assert.ok(box.x >= 0 && box.x + box.width <= width + 1 && box.y >= (width === 390 ? 47 : 0) - 1, 'controls fit below safe top')
           }
           await close.click()
-          for (const alt of ['Markdown', 'Linked Markdown', '', 'Raw HTML', 'XML image', 'Portrait', 'PortraitSource', 'Island Markdown', 'Island HTML', 'Attachment', 'User attachment']) {
+          for (const alt of ['Markdown', 'Linked Markdown', '', 'Raw HTML', 'XML image', 'Portrait', 'PortraitSource', 'Attachment', 'User attachment']) {
             const image = alt ? page.locator('#message').getByRole('img', { name: alt, exact: true }) : page.locator('#message img[alt=""]')
             await image.scrollIntoViewIfNeeded()
             await page.waitForFunction(img => img.complete && img.naturalWidth > 0, await image.elementHandle(), { timeout: 10000 }).catch(async error => {
@@ -118,8 +119,8 @@ try {
         await aligns.getByRole('button', { name: 'Left', exact: true }).click()
         await close.click()
         const samples = [
-          ['Markdown', 0], ['Linked Markdown', 0], ['', 0], ['Portrait', 0], ['PortraitSource', 0], ['Island Markdown', 0],
-          ['Raw HTML', 1], ['XML image', 1], ['Island HTML', 1], ['Attachment', 2], ['User attachment', 2],
+          ['Markdown', 0], ['Linked Markdown', 0], ['', 0], ['Portrait', 0], ['PortraitSource', 0], ['Island Markdown', null],
+          ['Raw HTML', 1], ['XML image', 1], ['Island HTML', null], ['Attachment', 2], ['User attachment', 2],
         ]
         const sampleImage = alt => alt ? page.locator('#message').getByRole('img', { name: alt, exact: true }) : page.locator('#message img[alt=""]')
         const sampleState = async alt => {
@@ -131,11 +132,17 @@ try {
             const frame = img.closest('button') || img
             const parent = frame.parentElement.getBoundingClientRect()
             return { width: b.width, height: b.height, marginLeft: style.marginLeft, marginRight: style.marginRight,
+              float: style.cssFloat, objectFit: style.objectFit,
               frameWidth: frame.getBoundingClientRect().width, parentWidth: parent.width }
           })
         }
         const baseline = new Map()
         for (const [alt] of samples) baseline.set(alt, await sampleState(alt))
+        const cardImage = baseline.get('Island HTML')
+        assert.ok(Math.abs(cardImage.width - 120 * scale) < 1, 'card stylesheet sets image width')
+        assert.ok(Math.abs(cardImage.height - 80 * scale) < 1, 'card stylesheet sets image height')
+        assert.equal(cardImage.float, 'right', 'card stylesheet sets image alignment')
+        assert.equal(cardImage.objectFit, 'cover', 'card stylesheet sets image cropping')
         const videoState = () => page.locator('#videos video').evaluateAll(videos => videos.map(video => {
           const rect = video.getBoundingClientRect(), parent = video.parentElement.getBoundingClientRect()
           return { x: rect.x - parent.x, y: rect.y - parent.y, width: rect.width, height: rect.height }
@@ -166,11 +173,11 @@ try {
           }
           for (const [alt, category] of samples) {
             const actual = await sampleState(alt)
-            if (mask & (1 << category)) {
+            if (category !== null && (mask & (1 << category))) {
               assert.ok(Math.abs(actual.frameWidth - actual.parentWidth * 0.75) < 3, alt + ': selected type uses requested width')
             } else {
               const original = baseline.get(alt)
-              for (const property of ['width', 'height', 'marginLeft', 'marginRight']) {
+              for (const property of ['width', 'height', 'marginLeft', 'marginRight', 'float', 'objectFit']) {
                 if (typeof actual[property] === 'number') assert.ok(Math.abs(actual[property] - original[property]) < 1, alt + ': unchecked type keeps ' + property)
                 else assert.equal(actual[property], original[property], alt + ': unchecked type keeps ' + property)
               }
@@ -199,6 +206,6 @@ try {
         await page.close()
         console.log(`${engine} ${width}px scale ${scale}: image target combinations, presets, keyboard, persistence and safe top passed`)
       }
-    } finally { await browser.close() }
+    } finally { await runtime.close() }
   }
 } finally { server.close() }
