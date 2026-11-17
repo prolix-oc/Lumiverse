@@ -562,7 +562,7 @@ export function buildResolvedThemeVars(
   return { config: effectiveConfig, mode, vars: preserveDeviceControls(vars), hasOverrides, hasPaletteOverride }
 }
 
-export function useThemeApplicator() {
+export function useThemeApplicator(ready = true) {
   const theme = useStore((s) => s.theme) as ThemeConfig | null
   const deviceControls = useDeviceThemeControls(activeDeviceThemeControls)
   const characterThemeOverlay = useStore((s) => s.characterThemeOverlay)
@@ -584,6 +584,17 @@ export function useThemeApplicator() {
   // Apply dimensions before paint; the resize notification below lets portal
   // positioning and other geometry consumers update against the new scale.
   useLayoutEffect(() => {
+    // Keep the startup/native surface until the authenticated theme snapshot
+    // arrives. Applying defaults here would needlessly rebuild it twice.
+    if (!ready) {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current)
+        animationFrameRef.current = null
+      }
+      appliedVarsRef.current = null
+      hadOverridesRef.current = false
+      return
+    }
     const root = document.documentElement
     const motionMq = window.matchMedia('(prefers-reduced-motion: reduce)')
 
@@ -698,5 +709,5 @@ export function useThemeApplicator() {
     return () => {
       motionMq.removeEventListener('change', updateGlass)
     }
-  }, [theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, deviceControls])
+  }, [ready, theme, characterThemeOverlay, extensionThemeOverrides, mutedExtensionThemes, deviceControls])
 }

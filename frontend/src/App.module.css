@@ -1,3 +1,10 @@
+.startup {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
 .app {
   position: fixed;
   inset: 0 var(--guide-dock-right, 0px) var(--guide-dock-bottom, 0px) var(--guide-dock-left, 0px);

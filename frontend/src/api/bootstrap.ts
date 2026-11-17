@@ -72,6 +72,7 @@ export interface LandingBootstrapResponse {
 let landingFlight: { scope: number; request: Promise<LandingBootstrapResponse> } | null = null
 
 export const bootstrapApi = {
+  fetchStartup: () => get<StartupSettings>('/bootstrap/startup'),
   fetch: () => get<BootstrapResponse>('/bootstrap'),
   fetchLanding: () => {
     const scope = sharedReadScope()

@@ -922,6 +922,12 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (typeof settings.favoritesBarCollapsed === 'boolean') patch.favoritesBarCollapsed = settings.favoritesBarCollapsed
     if (typeof settings.importChubExpressions === 'boolean') patch.importChubExpressions = settings.importChubExpressions
     if ('theme' in settings) patch.theme = normalizeTheme(settings.theme)
+    if (isPlainObject(settings.customCSS)) {
+      patch.customCSS = mergeStoredSetting(get().customCSS, settings.customCSS)
+    }
+    if (isPlainObject(settings.componentOverrides)) {
+      patch.componentOverrides = settings.componentOverrides
+    }
     if (typeof settings.landingPageChatsDisplayed === 'number' && Number.isFinite(settings.landingPageChatsDisplayed)) {
       patch.landingPageChatsDisplayed = settings.landingPageChatsDisplayed
     }

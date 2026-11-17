@@ -85,8 +85,9 @@ function Application() {
 
   const { t } = useTranslation('common')
   const safeTheme = useSafeThemeState()
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
   useWebSocket()
-  useThemeApplicator()
+  useThemeApplicator(settingsLoaded)
   const desktopPinchZoomEnabled = useStore((s) => s.desktopPinchZoomEnabled)
   useEffect(() => desktopPinchZoomEnabled ? installDesktopViewportZoom() : undefined, [desktopPinchZoomEnabled])
   useCharacterTheme()
@@ -380,6 +381,14 @@ function Application() {
         root.style.removeProperty('--lumiverse-content-max-width')
     }
   }, [modalWidthMode, modalMaxWidth])
+
+  // Mount the shell with all saved theme layers already hydrated. The startup
+  // request is independent of the slower providers/extensions bootstrap.
+  if (!settingsLoaded) return (
+    <div className={styles.startup} role="status" aria-label={t('actions.loading')}>
+      <Spinner size={28} />
+    </div>
+  )
 
   const content = isDesktopFloatingWidgetWindow() ? <DesktopFloatingWidgetHost /> : (
     <>

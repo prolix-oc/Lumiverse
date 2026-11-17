@@ -1,7 +1,11 @@
 import { Hono } from "hono";
-import { buildBootstrapPayload, buildLandingBootstrapPayload } from "../services/bootstrap.service";
+import { buildBootstrapPayload, buildLandingBootstrapPayload, getStartupSettings } from "../services/bootstrap.service";
 
 const app = new Hono();
+
+// Appearance and layout must not wait for providers, presets, or extensions.
+// Authentication middleware scopes this snapshot to the verified account.
+app.get("/startup", (c) => c.json(getStartupSettings(c.get("userId"))));
 
 /**
  * GET /api/v1/bootstrap/landing

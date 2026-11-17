@@ -104,6 +104,8 @@ interface StartupSettings {
   viewMode?: "grid" | "single" | "list";
   charactersPerPage?: number;
   theme?: unknown;
+  customCSS?: unknown;
+  componentOverrides?: unknown;
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
   landingPageGalleryWidth?: "compact" | "expanded";
@@ -133,6 +135,8 @@ export const STARTUP_SETTINGS_KEYS = [
   "viewMode",
   "charactersPerPage",
   "theme",
+  "customCSS",
+  "componentOverrides",
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
   "landingPageGalleryWidth",
@@ -217,6 +221,10 @@ export function getStartupSettings(userId: string): StartupSettings {
   if (rows.has("theme")) {
     startupSettings.theme = rows.get("theme");
   }
+  // A theme pack owns all three layers. Deliver them in the same snapshot so
+  // the first render doesn't use the base palette without its CSS/TSX.
+  if (rows.has("customCSS")) startupSettings.customCSS = rows.get("customCSS");
+  if (rows.has("componentOverrides")) startupSettings.componentOverrides = rows.get("componentOverrides");
 
   const landingPageChatsDisplayed = rows.get("landingPageChatsDisplayed");
   if (typeof landingPageChatsDisplayed === "number" && Number.isFinite(landingPageChatsDisplayed)) {

@@ -149,6 +149,8 @@ export interface StartupSettings {
   favoritesBarCollapsed?: boolean
   importChubExpressions?: boolean
   theme?: ThemeConfig | null
+  customCSS?: CustomCSSSettings
+  componentOverrides?: Record<string, import('@/lib/componentOverrides').ComponentOverride>
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
   landingPageGalleryWidth?: 'compact' | 'expanded'

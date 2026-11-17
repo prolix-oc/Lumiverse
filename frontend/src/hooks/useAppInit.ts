@@ -137,6 +137,11 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
   let landingPreloadHandled = false
   const imageGenProfilesVersion = useStore.getState().imageGenProfilesVersion
 
+  // Start the small appearance/layout read before either bootstrap fan-out.
+  // Whichever startup snapshot wins hydrates once; a late response cannot
+  // overwrite full settings or a different account's state.
+  void loadStartupSettings(isCurrent)
+
   // Recent-chat grouping is landing data, not a prerequisite for direct chat
   // navigation or native widget startup.
   const landingPromise = window.location.pathname === '/' ? bootstrapApi.fetchLanding()
@@ -217,6 +222,19 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
         })
         .catch(() => {})
     }
+  }
+}
+
+export async function loadStartupSettings(isCurrent: () => boolean): Promise<void> {
+  try {
+    const settings = await bootstrapApi.fetchStartup()
+    if (isCurrent() && !useStore.getState().settingsLoaded) {
+      useStore.getState().hydrateStartupSettings(settings)
+    }
+  } catch {
+    // Older servers may not expose this route. Try full settings immediately
+    // so a slow/failed broad bootstrap cannot strand the startup indicator.
+    if (isCurrent() && !useStore.getState().settingsLoaded) await loadFullSettings(isCurrent)
   }
 }
 

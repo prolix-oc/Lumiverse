@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useCallback } from 'react'
 import { useStore } from '@/store'
 import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
 import { rewriteThemeAssetUrls } from '@/lib/themeAssetCss'
@@ -25,13 +25,13 @@ function getOrCreateStyleElement(): HTMLStyleElement {
  */
 export function useCustomCSSApplicator() {
   const safeThemeMode = useSafeThemeState().active
+  const userId = useStore((s) => s.user?.id ?? null)
   const customCSS = useStore((s) => s.customCSS)
   const componentOverrides = useStore((s) => s.componentOverrides)
   const toggleCustomCSS = useStore((s) => s.toggleCustomCSS)
   const toggleComponentOverride = useStore((s) => s.toggleComponentOverride)
-  const lastHashRef = useRef('')
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = getOrCreateStyleElement()
 
     try {
@@ -39,32 +39,30 @@ export function useCustomCSSApplicator() {
       const parts: string[] = []
 
       // Global CSS (independent toggle)
-      if (!safeThemeMode && customCSS.enabled && customCSS.css.trim()) {
+      if (userId && !safeThemeMode && customCSS.enabled && customCSS.css.trim()) {
         parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
       }
 
       // Per-component CSS — each override has its own toggle, independent of global
       for (const [, override] of Object.entries(componentOverrides)) {
-        if (!safeThemeMode && override.enabled && override.css?.trim()) {
+        if (userId && !safeThemeMode && override.enabled && override.css?.trim()) {
           parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
         }
       }
 
       if (parts.length === 0) {
         el.textContent = ''
-        lastHashRef.current = ''
         return
       }
 
       const combined = parts.join('\n\n')
 
       // Skip if nothing changed
-      if (combined === lastHashRef.current) return
+      if (combined === el.textContent) return
 
       const result = validateCSS(combined)
       if (result.valid) {
         el.textContent = combined
-        lastHashRef.current = combined
       } else {
         toast.error(i18n.t('common.toast.customCssError', { error: result.error }))
       }
@@ -76,15 +74,16 @@ export function useCustomCSSApplicator() {
       // the previously-applied CSS in place instead of crashing.
       toast.error(i18n.t('common.toast.customCssError', { error: (err as Error).message }))
     }
-  }, [safeThemeMode, customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
+  }, [userId, safeThemeMode, customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
 
-  // Cleanup on unmount
-  useEffect(() => {
+  // Clear before paint on logout, account changes and unmount. Comparing the
+  // actual style contents above also lets StrictMode restore it after cleanup.
+  useLayoutEffect(() => {
     return () => {
       const el = document.getElementById(STYLE_ID)
       if (el) el.textContent = ''
     }
-  }, [])
+  }, [userId])
 
   // Emergency escape: Ctrl+Shift+U disables all custom styling
   const handleEscape = useCallback((e: KeyboardEvent) => {
