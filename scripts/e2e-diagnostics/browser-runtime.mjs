@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import * as playwright from 'playwright'
+import { createRequire } from 'node:module'
+
+const playwright = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright')
 
 /** Launch the binary matched to the pinned Playwright package, with fresh data. */
 export async function launchTestBrowser(name, options = {}) {

@@ -24,11 +24,11 @@ const content = `![Markdown](/fixture-wide.svg)
 
 <img src="PortraitSource" alt="Asset source">
 
-<div><style>.fixture-card { color: inherit; }</style><div class="fixture-card">
+<div><style>.fixture-card { color: inherit; } .fixture-card .portrait { width:120px; height:80px; float:right; margin-left:7px; object-fit:cover; }</style><div class="fixture-card">
 
 ![Island Markdown](/fixture-wide.svg)
 
-<img src="/fixture-wide.svg" alt="Island HTML" style="width:120px;max-height:80px" />
+<img class="portrait" src="/fixture-wide.svg" alt="Island HTML" />
 </div></div>`
 
 useStore.setState({

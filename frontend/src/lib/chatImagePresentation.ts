@@ -28,7 +28,7 @@ export function isChatImageAlignment(value: unknown): value is ChatImageAlignmen
   return value === 'left' || value === 'center' || value === 'right'
 }
 
-/** Shared sizing and alignment for prose, isolated HTML and attachments. */
+/** Shared sizing and alignment for prose images and attachments. */
 export function chatImagePresentationStyle(size: ChatImageSize = 'default', alignment: ChatImageAlignment = 'left'): CSSProperties {
   return {
     ...(size !== 'default' && {
