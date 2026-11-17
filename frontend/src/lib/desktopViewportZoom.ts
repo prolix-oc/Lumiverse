@@ -83,10 +83,94 @@ function touchDistance(touches: TouchList): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+const INCIDENTAL_AXIS_RATIO = 0.25
+
 function wheelPixels(event: WheelEvent): ViewportPoint {
   const factor = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
     : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? window.innerHeight : 1
   return { x: event.deltaX * factor, y: event.deltaY * factor }
+}
+
+function isScrollableOverflow(overflow: string | undefined): boolean {
+  return overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay'
+}
+
+/** Collect target elements inside body from innermost to outermost, crossing shadow roots. */
+function eventElementPath(event: Event): Element[] {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+  const elements: Element[] = []
+  for (const node of path) {
+    if (node === document.body || node === document.documentElement) break
+    if (node instanceof Element) elements.push(node)
+  }
+  if (elements.length > 0) return elements
+
+  // Synthetic test events may override `target` without populating `composedPath()`.
+  let current: Element | null = event.target instanceof Element
+    ? event.target
+    : typeof Node !== 'undefined' && event.target instanceof Node
+      ? event.target.parentElement
+      : null
+  while (current && current !== document.body && current !== document.documentElement) {
+    elements.push(current)
+    const root = typeof current.getRootNode === 'function' ? current.getRootNode() : null
+    current = current.parentElement
+      ?? (typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot ? root.host : null)
+  }
+  return elements
+}
+
+function scrollAxisMetrics(el: Element, axis: 'x' | 'y', style: CSSStyleDeclaration) {
+  if (axis === 'y') {
+    return {
+      overflow: style.overflowY,
+      overscroll: style.overscrollBehaviorY,
+      pos: el.scrollTop,
+      viewport: el.clientHeight,
+      size: el.scrollHeight,
+      rtl: false,
+    }
+  }
+  return {
+    overflow: style.overflowX,
+    overscroll: style.overscrollBehaviorX,
+    pos: el.scrollLeft,
+    viewport: el.clientWidth,
+    size: el.scrollWidth,
+    rtl: style.direction === 'rtl',
+  }
+}
+
+/** True if any scrollable ancestor along `elements` can consume `delta` on `axis`. */
+function canScrollAxis(elements: Element[], axis: 'x' | 'y', delta: number): boolean {
+  if (!delta || typeof getComputedStyle !== 'function') return false
+  for (const el of elements) {
+    const style = getComputedStyle(el)
+    if (!style) continue
+    const { overflow, overscroll, pos, viewport, size, rtl } = scrollAxisMetrics(el, axis, style)
+    if (!isScrollableOverflow(overflow)) continue
+    if (!Number.isFinite(pos) || !Number.isFinite(viewport) || !Number.isFinite(size)) continue
+    // Ignore 1px rounding differences under fractional UI scale.
+    if (size - viewport <= 1) continue
+    const canMove = rtl
+      ? (delta > 0 ? pos < 0 : pos - viewport > -size + 1)
+      : (delta < 0 ? pos > 0 : pos + viewport < size - 1)
+    if (canMove) return true
+    if (overscroll === 'contain' || overscroll === 'none') return false
+  }
+  return false
+}
+
+function unconsumedPanDelta(
+  delta: number,
+  canScrollThisAxis: boolean,
+  otherDelta: number,
+  canScrollOtherAxis: boolean,
+): number {
+  if (!delta || canScrollThisAxis) return 0
+  // Suppress slight off-axis trackpad drift while another axis scrolls natively.
+  if (canScrollOtherAxis && Math.abs(delta) <= Math.abs(otherDelta) * INCIDENTAL_AXIS_RATIO) return 0
+  return -delta
 }
 
 /** Installs session-only viewport magnification in the main desktop document. */
@@ -126,10 +210,22 @@ export function installDesktopViewportZoom(): () => void {
       apply(zoomViewportFrom(zoom, zoom.scale * Math.exp(-delta.y * 0.01), point, point, viewportSize()))
       return
     }
-    if (zoom.scale === 1) return
-    event.preventDefault()
+    if (zoom.scale === 1 || event.defaultPrevented) return
     const delta = wheelPixels(event)
-    apply(panViewport(zoom, { x: -delta.x, y: -delta.y }, viewportSize()))
+    if (!delta.x && !delta.y) return
+    const elements = eventElementPath(event)
+    const scrollX = canScrollAxis(elements, 'x', delta.x)
+    const scrollY = canScrollAxis(elements, 'y', delta.y)
+    const nativeScroll = (delta.x !== 0 && scrollX) || (delta.y !== 0 && scrollY)
+    if (!nativeScroll) event.preventDefault()
+    const panDelta = {
+      x: unconsumedPanDelta(delta.x, scrollX, delta.y, scrollY),
+      y: unconsumedPanDelta(delta.y, scrollY, delta.x, scrollX),
+    }
+    if (panDelta.x || panDelta.y) {
+      const next = panViewport(zoom, panDelta, viewportSize())
+      if (next.x !== zoom.x || next.y !== zoom.y) apply(next)
+    }
   }
 
   const onGestureStart = (event: Event) => {
