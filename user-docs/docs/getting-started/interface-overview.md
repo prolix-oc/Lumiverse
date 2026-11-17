@@ -34,6 +34,24 @@ In the iOS app on iPhone Duo, unfolding keeps the drawer visible in a separate p
 
 ---
 
+## In-app guides
+
+Press **F1** or select the book button on the home page to open the guide reader.
+Book buttons in Settings and supported drawer or editor tabs open contextual help.
+Search matches guide titles, paths, and article text. Follow links or select pages
+from Browse guides to open page tabs; each tab remembers its reading position.
+Use the reading zoom controls to adjust article text independently of the app's UI scale.
+
+Choose **Half-dock view** to keep help beside your workspace, or below it on narrow
+screens. Drag the dock divider to resize it; on wider screens you can move the
+dock between the left and right edges. **Widget view** provides a floating reader:
+drag its title to move it, drag its lower-right corner to resize it, or pinch the
+title area on a touch screen. Focus the title or resize handle and use arrow keys
+for keyboard adjustments; hold **Shift** for larger steps. Minimize the widget to
+a book launcher and select it, or press **F1**, to restore it.
+
+---
+
 ## Drawer Tabs
 
 The drawer hosts every workspace panel as a tab. You can reorder them with drag-and-drop and hide ones you don't use from the tab-bar context menu.

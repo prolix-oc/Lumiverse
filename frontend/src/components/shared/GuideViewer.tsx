@@ -595,27 +595,32 @@ function GuideReader({ isOpen, onClose, guide, title, activation = 0 }: GuideVie
     }
   }
 
-  function handleReaderKeys(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Escape') {
+  function handleReaderKeys(event: KeyboardEvent<HTMLElement>) {
+    // The reader owns its keyboard interaction. Chat editing and generation
+    // cancellation also listen on document, including handlers that do not
+    // inspect defaultPrevented. Keep F1 available to the global help host.
+    if (event.key === 'F1') return
+    event.stopPropagation()
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault()
       if (query) {
-        event.preventDefault()
         setQuery('')
-      } else if (mode !== 'modal') {
-        event.preventDefault()
+      } else {
         closeReader()
       }
     }
-    if (event.key !== 'Tab' || mode !== 'modal') return
-    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), input, a[href], summary, [tabindex="0"]',
-    )).filter((element) => element.getClientRects().length > 0)
-    const first = buttons[0]
-    const last = buttons.at(-1)
-    if ((!event.shiftKey && document.activeElement === last) ||
-        (event.shiftKey && (document.activeElement === first || document.activeElement === reader.current))) {
-      event.preventDefault()
-      ;(event.shiftKey ? last : first)?.focus()
-    }
+    if (event.defaultPrevented || event.key !== 'Tab' || mode !== 'modal') return
+    const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]',
+    )).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0)
+    // WebKit can skip buttons in its native Tab order. Own each step so both
+    // directions stay in the modal and every reader control stays reachable.
+    event.preventDefault()
+    const index = focusable.findIndex((element) => element === document.activeElement)
+    const next = event.shiftKey
+      ? index <= 0 ? focusable.length - 1 : index - 1
+      : (index + 1) % focusable.length
+    ;(focusable[next] ?? reader.current)?.focus()
   }
 
   if (!isOpen) return null
@@ -623,6 +628,7 @@ function GuideReader({ isOpen, onClose, guide, title, activation = 0 }: GuideVie
   if (minimized) {
     return createPortal(
       <button ref={launcher} type="button" className={styles.launcher} style={{ zIndex: guideLayer }} onClick={() => setMinimizedAt(null)}
+        onKeyDown={handleReaderKeys}
         aria-label={'Expand guide reader: ' + title}>
         <BookOpen size={17} aria-hidden="true" />
         <span>{title}</span>
@@ -652,7 +658,7 @@ function GuideReader({ isOpen, onClose, guide, title, activation = 0 }: GuideVie
   const content = (
     <div ref={reader} tabIndex={-1} role={mode === 'modal' ? 'dialog' : 'region'}
       aria-modal={mode === 'modal' || undefined} aria-labelledby={modalTitle}
-      className={styles.reader} onKeyDown={mode === 'modal' ? handleReaderKeys : undefined}>
+      className={styles.reader} onKeyDown={handleReaderKeys}>
       <header className={styles.header}>
         <div className={styles.headerTitle} id={modalTitle}
           data-drag={mode === 'widget' || undefined}

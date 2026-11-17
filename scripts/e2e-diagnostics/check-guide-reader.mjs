@@ -1,13 +1,10 @@
 // Real guide reader and modal shell with controlled documentation responses.
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from '../../frontend/node_modules/esbuild/lib/main.js'
+import { launchTestBrowser } from './browser-runtime.mjs'
 
-const playwright = process.env.PLAYWRIGHT_MODULE
-  ? createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE)
-  : await import('playwright')
 const frontend = fileURLToPath(new URL('../../frontend/', import.meta.url))
 const bundle = await build({
   absWorkingDir: frontend,
@@ -83,7 +80,8 @@ async function assertSidebar(reader, heading) {
 }
 
 for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').split(',')) {
-  const browser = await playwright[engine].launch({ headless: true })
+  const runtime = await launchTestBrowser(engine)
+  const { browser } = runtime
   try {
     for (const width of [1280, 783, 390]) {
       for (const scale of [1, 1.25]) {
@@ -91,6 +89,13 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
         try {
           const errors = []
           page.on('pageerror', (error) => errors.push(error.message))
+          await page.addInitScript(() => {
+            window.chatKeys = []
+            // Core chat editing and generation cancellation listen on document.
+            document.addEventListener('keydown', (event) => {
+              if (['ArrowUp', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(event.key)) window.chatKeys.push(event.key)
+            })
+          })
           const safeTop = width < 600 ? 47 : 0
           await page.route('http://guide.test/**', async (route) => {
             const path = new URL(route.request().url()).pathname
@@ -116,12 +121,21 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
           const heading = page.getByRole('heading', { name: 'Set up your connection' })
           const modalButton = dialog.getByRole('button', { name: 'Modal view' })
           await page.keyboard.press('Tab')
-          assert.equal(await modalButton.evaluate((element) => element === document.activeElement), true)
+          assert.equal(await modalButton.evaluate((element) => element === document.activeElement), true,
+            await page.evaluate(() => document.activeElement?.outerHTML))
           await page.keyboard.press('Shift+Tab')
           assert.equal(await dialog.evaluate((element) => element.contains(document.activeElement)), true)
           await dialog.getByRole('link', { name: 'Read setup' }).click()
           await heading.waitFor({ state: 'attached' })
           assert.ok(await dialog.locator('#details').evaluate((el) => el.parentElement.parentElement.scrollTop > 0))
+          await dialog.locator('#details').evaluate((el) => { el.parentElement.parentElement.scrollTop = 160 })
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+          const pageTabs = dialog.getByRole('group', { name: 'Open guide pages' })
+          await pageTabs.getByRole('button', { name: 'Lumiverse Guides', exact: true }).click()
+          await dialog.getByRole('heading', { name: 'Guides home' }).waitFor()
+          await pageTabs.getByRole('button', { name: 'Connection Setup', exact: true }).click()
+          assert.ok(await dialog.locator('#details').evaluate((el) => Math.abs(el.parentElement.parentElement.scrollTop - 160) < 2),
+            'each tab restores its reading position')
           const search = dialog.getByRole('searchbox')
           await search.fill('connection setup')
           const results = dialog.getByRole('navigation')
@@ -136,6 +150,7 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
           await search.fill('connection setup')
           await search.press('Escape')
           assert.equal(await search.inputValue(), '')
+          assert.deepEqual(await page.evaluate(() => window.chatKeys), [], 'guide keys must not reach chat shortcuts')
           await dialog.getByRole('button', { name: 'Guide navigation' }).click()
           assert.equal(await results.isVisible(), false)
           await dialog.getByRole('button', { name: 'Half-dock view' }).click()
@@ -180,6 +195,8 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
           await reader.getByRole('button', { name: 'Zoom in' }).click()
           assert.ok(await heading.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)) > originalSize)
           await reader.getByRole('button', { name: 'Widget view' }).click()
+          await reader.getByTitle('Drag to move or pinch to resize').press('ArrowUp')
+          assert.deepEqual(await page.evaluate(() => window.chatKeys), [], 'moving the guide must not edit or swipe chat messages')
           assert.ok(Math.abs((await workspace.boundingBox()).width - width) < 2)
           assert.ok(Math.abs((await workspace.boundingBox()).height - 844) < 2)
           if (width === 783) assert.equal(await accountLabel.isVisible(), true)
@@ -247,6 +264,7 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
           assert.equal(await field.inputValue(), 'Edited while docked')
           assert.equal(await field.evaluate((element) => element === document.activeElement), true)
           assert.equal(await dialog.count(), 0)
+          assert.deepEqual(await page.evaluate(() => window.chatKeys), [], 'closing help must not trigger chat shortcuts')
           assert.deepEqual(errors, [])
           console.log(engine + ' · ' + width + 'px · ' + scale + '× passed')
         } finally {
@@ -255,6 +273,6 @@ for (const engine of (process.env.GUIDE_BROWSERS ?? 'chromium,firefox,webkit').s
       }
     }
   } finally {
-    await browser.close()
+    await runtime.close()
   }
 }

@@ -347,6 +347,38 @@ test('keeps local extension tabs through display changes and widget minimize', a
   }
 })
 
+test('isolates reader keys from chat shortcuts while leaving F1 available', async () => {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const close = mock(() => {})
+  const appKeys = mock(() => {})
+  document.addEventListener('keydown', appKeys)
+  const press = (element: Element, key: string) => act(async () => {
+    element.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+  try {
+    await act(async () => root.render(createElement(GuideViewer, {
+      isOpen: true, onClose: close, title: 'Reader',
+      guide: { kind: 'markdown', markdown: '# Reader' },
+    })))
+    await press(container.querySelector('[role="dialog"]')!, 'Escape')
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(appKeys).toHaveBeenCalledTimes(0)
+    await click(container, 'Widget view')
+    const handle = document.querySelector('[data-drag]')!
+    await press(handle, 'ArrowUp')
+    await press(handle, 'ArrowRight')
+    expect(appKeys).toHaveBeenCalledTimes(0)
+    await press(handle, 'F1')
+    expect(appKeys).toHaveBeenCalledTimes(1)
+  } finally {
+    document.removeEventListener('keydown', appKeys)
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
 test('ignores a late document response after navigating back', async () => {
   const container = document.createElement('div')
   document.body.append(container)
