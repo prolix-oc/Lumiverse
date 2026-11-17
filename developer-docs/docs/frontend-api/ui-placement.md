@@ -84,6 +84,37 @@ Every registered drawer tab is automatically available in the command palette. U
 
 No extra code needed. The registry handles the wiring.
 
+### Contextual guides
+
+Drawer, character editor, and preset editor tabs accept a `guide` option. Its
+`markdown` field supplies the home page. Add `pages` to expose additional
+documents in the guide navigation and search.
+
+```ts
+const guide = {
+  title: 'Character Stats Guide',
+  markdown: '# Character Stats\n\n[Set up tracking](setup/tracking.md#first-run)',
+  pages: [
+    {
+      path: 'setup/tracking.md',
+      title: 'Set up tracking',
+      markdown: '# Set up tracking\n\n## First run\n\n[Back to the guide](../index.md)',
+    },
+  ],
+}
+
+ctx.ui.registerDrawerTab({
+  id: 'stats',
+  title: 'Character Stats',
+  guide,
+})
+```
+
+Give every page a unique relative `.md` path. The host reserves `index.md`
+for the home page. Relative Markdown links resolve from the current document
+within the same guide, including links to heading fragments. Lumiverse
+sanitizes all guide Markdown before rendering it.
+
 ## Character Editor Tabs (requires `characters`)
 
 Register a tab inside the native character editor modal. Max 8 per extension, 64 global.

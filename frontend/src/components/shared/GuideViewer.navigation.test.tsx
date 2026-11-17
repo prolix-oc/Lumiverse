@@ -158,13 +158,14 @@ describe('GuideViewer builtin navigation', () => {
           '',
           '[Open child](child.md#details)',
         ].join('\n'),
-        '# CHARACTERS CHILD BODY',
+        '# CHARACTERS CHILD BODY\n\n## Details',
         '# REGEX ROOT BODY',
       ]
 
       const requestedUrls: string[] = []
 
       globalThis.fetch = (async (input) => {
+        if (String(input).endsWith('/catalog')) return Response.json([])
         requestedUrls.push(String(input))
 
         const markdown = responses.shift()
@@ -241,6 +242,9 @@ describe('GuideViewer builtin navigation', () => {
         expect(container.textContent).not.toContain(
           'CHARACTERS ROOT BODY',
         )
+        expect(container.querySelector('#details')).not.toBeNull()
+        const tabs = container.querySelector('[aria-label="Open guide pages"]')!
+        expect(tabs.querySelectorAll('button[aria-controls]')).toHaveLength(2)
 
         await act(async () => {
           root.render(
@@ -275,4 +279,142 @@ describe('GuideViewer builtin navigation', () => {
       }
     },
   )
+})
+
+function click(scope: ParentNode, label: string) {
+  const button = Array.from(scope.querySelectorAll('button')).find(
+    (element) => element.getAttribute('aria-label') === label || element.textContent === label,
+  )
+  if (!button) throw new Error('Button not found: ' + label)
+  return act(async () => button.click())
+}
+
+test('keeps local extension tabs through display changes and widget minimize', async () => {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const fetchSpy = mock(async () => { throw new Error('Extension pages should be local') })
+  globalThis.fetch = fetchSpy as unknown as typeof fetch
+  const scrollSpy = mock(() => {})
+  const oldScroll = HTMLElement.prototype.scrollIntoView
+  HTMLElement.prototype.scrollIntoView = scrollSpy
+
+  try {
+    await act(async () => root.render(createElement(GuideViewer, {
+      isOpen: true,
+      onClose: () => {},
+      title: 'Extension docs',
+      guide: {
+        kind: 'markdown',
+        markdown: '# Extension home\n\n[Open setup](setup/start.md#details)\n\n[Missing page](unlisted.md)',
+        pages: [
+          { path: 'setup/start.md', title: 'Setup', markdown: '# Setup guide\n\n## Details\n\n[Return home](../index.md)' },
+          { path: 'reference.md', markdown: '# Reference\n\nAbout delegated processing.' },
+        ],
+      },
+    })))
+
+    expect(Array.from(container.querySelectorAll('a[href]')).map((a) => a.textContent)).toEqual(['Open setup'])
+    await act(async () => container.querySelector<HTMLAnchorElement>('a[href]')!.click())
+    expect(container.textContent).toContain('Setup guide')
+    expect(scrollSpy).toHaveBeenCalledTimes(1)
+    await click(container, 'Guide navigation')
+    expect(container.querySelector('nav')?.hidden).toBe(true)
+    await click(container, 'Half-dock view')
+    expect(document.querySelector('[role="region"]')?.textContent).toContain('Setup guide')
+    await click(document, 'Zoom in')
+    expect(document.querySelector('[aria-label^="Reset reading zoom"]')?.textContent).toBe('110%')
+    await click(document, 'Widget view')
+    await click(document, 'Minimize guide widget')
+    expect(document.querySelector('[role="region"]')).toBeNull()
+    await click(document, 'Expand guide reader: Extension docs')
+    expect(document.querySelector('[role="region"]')?.textContent).toContain('Setup guide')
+    expect(document.querySelector('[aria-label^="Reset reading zoom"]')?.textContent).toBe('110%')
+    const tabs = document.querySelector('[aria-label="Open guide pages"]')!
+    await click(tabs, 'Extension docs')
+    expect(document.querySelector('[role="region"]')?.textContent).toContain('Extension home')
+    await click(tabs, 'Setup')
+    await click(tabs, 'Close Setup tab')
+    expect(tabs.querySelectorAll('button[aria-controls]')).toHaveLength(1)
+    expect(document.querySelector<HTMLButtonElement>('[aria-label="Back to previous guide"]')?.disabled).toBe(true)
+    expect(document.querySelector('[role="region"]')?.textContent).toContain('Extension home')
+    expect(fetchSpy).toHaveBeenCalledTimes(0)
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+    HTMLElement.prototype.scrollIntoView = oldScroll
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('isolates reader keys from chat shortcuts while leaving F1 available', async () => {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const close = mock(() => {})
+  const appKeys = mock(() => {})
+  document.addEventListener('keydown', appKeys)
+  const press = (element: Element, key: string) => act(async () => {
+    element.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+  try {
+    await act(async () => root.render(createElement(GuideViewer, {
+      isOpen: true, onClose: close, title: 'Reader',
+      guide: { kind: 'markdown', markdown: '# Reader' },
+    })))
+    await press(container.querySelector('[role="dialog"]')!, 'Escape')
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(appKeys).toHaveBeenCalledTimes(0)
+    await click(container, 'Widget view')
+    const handle = document.querySelector('[data-drag]')!
+    await press(handle, 'ArrowUp')
+    await press(handle, 'ArrowRight')
+    expect(appKeys).toHaveBeenCalledTimes(0)
+    await press(handle, 'F1')
+    expect(appKeys).toHaveBeenCalledTimes(1)
+  } finally {
+    document.removeEventListener('keydown', appKeys)
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
+test('ignores a late document response after navigating back', async () => {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const child = Promise.withResolvers<Response>()
+  let childSignal: AbortSignal | null | undefined
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/catalog')) return Response.json([])
+    if (url.endsWith(btoa('child.md').replace(/=+$/, ''))) {
+      childSignal = init?.signal
+      return child.promise
+    }
+    return new Response('# Home document\n\n[Child](child.md)')
+  }) as typeof fetch
+
+  try {
+    await act(async () => root.render(createElement(GuideViewer, {
+      isOpen: true,
+      onClose: () => {},
+      title: 'Guides',
+      guide: { kind: 'builtin', path: 'index.md' },
+    })))
+    await waitForText(container, 'Home document')
+    await act(async () => container.querySelector<HTMLAnchorElement>('a[href]')!.click())
+    expect(childSignal?.aborted).toBe(false)
+    await click(container, 'Back to previous guide')
+    expect(childSignal?.aborted).toBe(true)
+
+    await act(async () => child.resolve(new Response('# Late child response')))
+    expect(container.textContent).toContain('Home document')
+    expect(container.textContent).not.toContain('Late child response')
+  } finally {
+    child.resolve(new Response(''))
+    await act(async () => root.unmount())
+    container.remove()
+    globalThis.fetch = originalFetch
+  }
 })

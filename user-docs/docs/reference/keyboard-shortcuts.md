@@ -13,6 +13,7 @@ Quick reference for keyboard shortcuts in Lumiverse. On macOS, **Cmd** is the mo
 | Shortcut | Action |
 |----------|--------|
 | **Cmd/Ctrl + K** | Open Command Palette (press again to close) |
+| **F1** | Open or refocus the in-app guide reader |
 | **Escape** | Close the current modal, popover, or command palette |
 
 ---

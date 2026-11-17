@@ -49,8 +49,7 @@ import LazyImage from '@/components/shared/LazyImage'
 import CachedImage from '@/components/shared/CachedImage'
 import VirtualGrid from '@/components/shared/VirtualGrid'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
-import { GuideViewer } from '@/components/shared/GuideViewer'
-import type { GuideDefinition } from '@/lib/guides/types'
+import { GUIDE_HOME, openGuide } from '@/lib/guides/reader-session'
 import SearchField from '@/components/shared/SearchField'
 import { SortControl } from '@/components/shared/SortControl'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -924,12 +923,6 @@ function VirtualizedChatRows({
   )
 }
 
-const FULL_GUIDES: GuideDefinition = {
-  kind: 'builtin',
-  path: 'index.md',
-  title: 'Lumiverse Guides',
-}
-
 function LandingPageNative() {
   const { t } = useTranslation('landing')
   const { t: tc } = useTranslation('common')
@@ -1090,7 +1083,6 @@ function LandingPageNative() {
       markDisplayMilestone('landingContent')
     }
   }, [settingsLoaded, loading, nativeChatsVisible, homepageSurfaceReady, chatsSurfaceReady])
-  const [guidesOpen, setGuidesOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [total, setTotal] = useState(() => restoredSnapshot?.total ?? 0)
   const [creatingTempChat, setCreatingTempChat] = useState(false)
@@ -2065,7 +2057,7 @@ function LandingPageNative() {
             <button
               type="button"
               className={styles.accountBtn}
-              onClick={() => setGuidesOpen(true)}
+              onClick={(event) => openGuide(GUIDE_HOME, GUIDE_HOME.title, event.currentTarget)}
               title="Open Lumiverse guides"
               aria-label="Open Lumiverse guides"
             >
@@ -2235,13 +2227,6 @@ function LandingPageNative() {
         </main>
       </motion.div>
     </div>
-    <GuideViewer
-        isOpen={guidesOpen}
-        onClose={() => setGuidesOpen(false)}
-        guide={FULL_GUIDES}
-        title="Lumiverse Guides"
-        searchable
-    />
     <ContextMenu
       position={contextMenu?.position ?? null}
       items={contextMenuItems}

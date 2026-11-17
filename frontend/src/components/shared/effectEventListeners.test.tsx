@@ -77,6 +77,18 @@ test('closing a voice-library shell keeps its parent open and the page locked', 
   document.body.style.overflow = ''
 })
 
+test('Escape closes the visually top shell even if a lower layer opened later', async () => {
+  const closed: string[] = []
+  const guide = <ModalShell key="guide" isOpen zIndex={11100} onClose={() => closed.push('guide')}>Guide</ModalShell>
+  await mount(guide)
+  await act(async () => root.render(<>
+    {guide}
+    <ModalShell key="overlay" isOpen zIndex={11050} onClose={() => closed.push('overlay')}>Overlay</ModalShell>
+  </>))
+  escape()
+  expect(closed).toEqual(['guide'])
+})
+
 test('context-menu callback updates keep the original touch guard and latest dismissal callback', async () => {
   let now = 0
   spyOn(performance, 'now').mockImplementation(() => now)

@@ -66,7 +66,7 @@ import {
 import clsx from 'clsx'
 import ExpandedTextEditor, { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { ModalShell } from '@/components/shared/ModalShell'
-import { GuideViewer } from '@/components/shared/GuideViewer'
+import { openGuide } from '@/lib/guides/reader-session'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
@@ -2438,7 +2438,6 @@ function LoomBuilderNative({
 
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [activePresetEditorTab, setActivePresetEditorTab] = useState('preset')
-  const [guideOpen, setGuideOpen] = useState(false)
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
   const [blockValidationError, setBlockValidationError] = useState<string | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
@@ -2548,9 +2547,6 @@ function LoomBuilderNative({
     ) ?? null,
   [presetEditorTabs, activePresetEditorTab],
 )
-useEffect(() => {
-  setGuideOpen(false)
-}, [activePresetEditorTab])
 
   const configurableVariableCount = useMemo(() => {
     return (activePreset?.blocks ?? []).reduce((count, b) => {
@@ -3159,7 +3155,10 @@ useEffect(() => {
           <button
             type="button"
             className={s.extensionGuideButton}
-            onClick={() => setGuideOpen(true)}
+            onClick={(event) => {
+              const { guide, title } = activePresetExtensionTab
+              if (guide) openGuide({ ...guide, kind: 'markdown' }, title, event.currentTarget)
+            }}
             aria-label={`Open guide for ${activePresetExtensionTab.title}`}
             title="Open guide"
           >
@@ -3179,18 +3178,6 @@ useEffect(() => {
         />
       </div>
     )}
-
-    {activePresetExtensionTab?.guide && (
-  <GuideViewer
-    isOpen={guideOpen}
-    onClose={() => setGuideOpen(false)}
-    guide={{
-      kind: 'markdown',
-      ...activePresetExtensionTab.guide,
-    }}
-    title={activePresetExtensionTab.title}
-  />
-)}
 
       <div style={{ display: activePresetEditorTab === 'preset' ? 'contents' : 'none' }}>
 

@@ -103,7 +103,7 @@ import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
 import { uploadAlternateAvatar } from '@/lib/alternateAvatarUpload'
 import CharacterTokenReportModal, { type CharacterTokenReportItem } from './CharacterTokenReportModal'
-import { GuideViewer } from '@/components/shared/GuideViewer'
+import { openGuide } from '@/lib/guides/reader-session'
 import {
   getGreetingTitle,
   moveAlternateGreetingMetadata,
@@ -501,7 +501,6 @@ export default function CharacterEditorPage() {
   const [folder, setFolder] = useState('')
   const [fields, setFields] = useState<Record<string, string>>({})
   const [tags, setTags] = useState<string[]>([])
-  const [guideOpen, setGuideOpen] = useState(false)
   const [alternateGreetings, setAlternateGreetings] = useState<string[]>([])
   const [alternateGreetingIds, setAlternateGreetingIds] = useState<string[]>([])
   const [greetingBackgroundPickerIndex, setGreetingBackgroundPickerIndex] = useState<number | null>(null)
@@ -590,11 +589,6 @@ export default function CharacterEditorPage() {
     })
     return () => { cancelled = true }
   }, [editingCharacterId, character, updateCharInStore, t])
-
-  /// Guide Viewer 
-  useEffect(() => {
-  setGuideOpen(false)
-}, [activeTab])
 
   // Reset tab and force re-sync when switching to a different character.
   // Keyed on editingCharacterId (a stable string) so store-driven object
@@ -2878,7 +2872,10 @@ export default function CharacterEditorPage() {
                       <button
                         type="button"
                         className={styles.extensionGuideButton}
-                        onClick={() => setGuideOpen(true)}
+                        onClick={(event) => {
+                          const { guide, title } = activeExtensionTab
+                          if (guide) openGuide({ ...guide, kind: 'markdown' }, title, event.currentTarget)
+                        }}
                         aria-label={`Open guide for ${activeExtensionTab.title}`}
                         title="Open guide"
                       >
@@ -2926,17 +2923,6 @@ export default function CharacterEditorPage() {
         }}
       />
     )}
-    {activeExtensionTab?.guide && (
-  <GuideViewer
-    isOpen={guideOpen}
-    onClose={() => setGuideOpen(false)}
-    guide={{
-      kind: 'markdown',
-      ...activeExtensionTab.guide,
-    }}
-    title={activeExtensionTab.title}
-  />
-)}
 
     {character && (
       <CharacterTokenReportModal

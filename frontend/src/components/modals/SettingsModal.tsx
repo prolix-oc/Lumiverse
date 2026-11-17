@@ -2,7 +2,7 @@ import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
-import { RefreshCw, GripVertical, Plus } from 'lucide-react'
+import { BookOpen, RefreshCw, GripVertical, Plus } from 'lucide-react'
 import {
   closestCenter,
   MouseSensor,
@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/sortable'
 import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
+import { GUIDE_HOME, openGuide } from '@/lib/guides/reader-session'
 import { ActivityPanel } from '@/components/shared/ActivityPanel'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
@@ -101,6 +102,16 @@ const sectionTitleClass = clsx(sectionStyles.title, styles.sectionTitle)
 interface SettingsModalProps {
   onClose: () => void
 }
+
+const settingsGuidePaths = new Map([
+  ['memoryCortex', 'chatting/memory-cortex.md'],
+  ['webSearch', 'settings/web-search.md'],
+  ['embeddings', 'settings/embeddings.md'],
+  ['inference', 'settings/inference-scheduling.md'],
+  ['notifications', 'settings/push-notifications.md'],
+  ['lumihub', 'settings/lumihub.md'],
+  ['illarin', 'settings/illarin.md'],
+])
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { t: ts } = useTranslation('settings')
@@ -235,7 +246,19 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         <div className={styles.header}>
           <h2 className={styles.title}>{ts('title')}</h2>
           <SettingsSearch onNavigate={handleSearchNavigate} />
-          <CloseButton onClick={onClose} />
+          <div className={styles.headerActions}>
+            <button type="button" className={styles.guideButton}
+              aria-label={ts('openGuide', { defaultValue: 'Open settings guide' })}
+              title={ts('openGuide', { defaultValue: 'Open settings guide' })}
+              onClick={(event) => {
+                const path = settingsGuidePaths.get(activeView)
+                const guide = path ? { kind: 'builtin' as const, path } : GUIDE_HOME
+                openGuide(guide, GUIDE_HOME.title, event.currentTarget)
+              }}>
+              <BookOpen size={16} aria-hidden="true" />
+            </button>
+            <CloseButton onClick={onClose} />
+          </div>
         </div>
 
         <div className={styles.body}>

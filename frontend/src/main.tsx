@@ -2,6 +2,7 @@ import { getTauriMobilePlatform, hasTauriDesktopBridge, isTauriMobile } from '@/
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
+import { GuideReaderHost } from '@/components/shared/GuideReaderHost'
 import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
 import { navigateFromNotification } from './lib/notificationNavigation'
@@ -394,6 +395,7 @@ void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
     <StrictMode>
       <ErrorBoundary label="Application">
         <RouterProvider router={router} />
+        <GuideReaderHost />
       </ErrorBoundary>
     </StrictMode>,
   )

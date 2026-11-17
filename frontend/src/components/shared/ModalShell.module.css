@@ -1,11 +1,10 @@
 .backdrop {
   position: fixed;
-  inset: 0;
-  bottom: calc(0px - var(--ios-viewport-offset, 0px));
+  inset: 0 0 calc(0px - var(--ios-viewport-offset, 0px)) var(--guide-dock-left, 0px);
   /* Compensate for the body's UI scale, inherited by this portal. Divide
      by ui-scale so the post-zoom render equals one full viewport. */
-  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
-  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  width: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) - var(--guide-dock-left, 0px) - var(--guide-dock-right, 0px));
+  height: calc(var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1))) - var(--guide-dock-bottom, 0px));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -53,7 +52,7 @@
 .fullscreenBackdrop {
   padding: 0;
   /* Keyboard occlusion belongs to the form's scrolling content. */
-  height: calc(var(--app-fullscreen-height, var(--app-shell-height, 100dvh)) / var(--lumiverse-ui-scale, 1));
+  height: calc(var(--app-fullscreen-height, var(--app-shell-height, 100dvh)) / var(--lumiverse-ui-scale, 1) - var(--guide-dock-bottom, 0px));
 }
 .fullscreenModal {
   width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0;

@@ -10,6 +10,7 @@ const DOCS_ROOT = resolve(import.meta.dir, "../../user-docs/docs");
 interface GuideCatalogEntry {
   path: string;
   title: string;
+  searchText: string;
 }
 
 function extractDocumentTitle(
@@ -65,6 +66,11 @@ async function buildGuideCatalog(): Promise<GuideCatalogEntry[]> {
 
     entries.push({
       path: normalizedPath,
+      searchText: markdown
+        .replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+        .replace(/!?\[([^\]]*)\]\([^)\r\n]*\)/g, "$1")
+        .replace(/\s+/g, " ")
+        .trim(),
       title: extractDocumentTitle(
         markdown,
         normalizedPath,

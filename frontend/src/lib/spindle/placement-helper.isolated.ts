@@ -228,10 +228,11 @@ describe('preset editor toolbar registration', () => {
 })
 
 describe('non-preset placement lifecycle', () => {
-      test('preserves contextual guide metadata across tab registrations', () => {
+  test('preserves local pages and legacy guide metadata across tab registrations', () => {
     const guide = {
       title: 'Test guide',
-      markdown: '# Hello from Spindle',
+      markdown: '[Setup](setup.md)',
+      pages: [{ path: 'setup.md', markdown: '# Setup' }],
     }
 
     const drawer = createDrawerTabHandle(

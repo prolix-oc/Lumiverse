@@ -18,7 +18,7 @@ function lastAtRuleBlock(css: string, prelude: string): string {
 describe('LandingPage mobile toolbar', () => {
   test('preserves space for Chats search when the Suite adds the Characters tab', async () => {
     const css = await Bun.file(new URL('./LandingPage.module.css', import.meta.url)).text()
-    const mobile = lastAtRuleBlock(css, '@media (max-width: 600px)')
+    const mobile = lastAtRuleBlock(css, '@container landing (max-width: 600px)')
 
     expect(mobile).toMatch(/\.landingTabsWithSuite\s+\.landingTabLabel\s*\{[\s\S]*?clip:\s*rect\(0,\s*0,\s*0,\s*0\)/)
     expect(mobile).toMatch(/\.galleryWidthBtn\s*\{\s*display:\s*none/)
