@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { create } from 'zustand'
 import { JSDOM } from 'jsdom'
+import { closeGuide, guideReaderSession } from '@/lib/guides/reader-session'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://drawer.test', pretendToBeVisual: true })
 const globals = globalThis as unknown as Record<string, unknown>
@@ -34,7 +35,6 @@ const useStore = create<any>((set) => ({
 mock.module('@/store', () => ({ useStore }))
 mock.module('@/hooks/useIsMobile', () => ({ default: () => false }))
 mock.module('@/hooks/useLongPress', () => ({ useLongPress: () => ({ onContextMenu: () => {} }) }))
-mock.module('@/components/shared/GuideViewer', () => ({ GuideViewer: () => null }))
 mock.module('@/components/shared/ContextMenu', () => ({ default: () => null }))
 mock.module('./TabPanelContent', () => ({ default: () => null }))
 mock.module('./ViewportDrawer.module.css', () => ({ default: new Proxy({}, { get: (_target, key) => key }) }))
@@ -42,7 +42,10 @@ mock.module('motion/react', () => ({ motion: { div: 'div' }, AnimatePresence: ({
 mock.module('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: any) => options?.defaultValue ?? key }) }))
 mock.module('@/lib/i18n/resolveLabel', () => ({ translateDrawerField: (_id: string, _field: string, fallback: string) => fallback }))
 mock.module('@/lib/drawer-tab-registry', () => ({
-  DRAWER_TABS: ['profile', 'connections'].map(id => ({ id, tabName: id, shortName: id, tabIcon: () => null, keywords: [] })),
+  DRAWER_TABS: ['profile', 'connections'].map(id => ({
+    id, tabName: id, shortName: id, tabIcon: () => null, keywords: [],
+    guide: id === 'profile' ? { kind: 'builtin', path: 'characters/index.md' } : undefined,
+  })),
   adaptExtensionTabs: () => [], sanitizeHiddenDrawerTabIds: (ids: string[]) => ids,
   preloadDrawerTab: (id: string) => { preloads.push(id) },
 }))
@@ -110,4 +113,22 @@ test('touch dragging suppresses its click while the next tap still opens the dra
     act(() => { p.pointer('pointerdown', 300, 'touch'); p.pointer('pointerup', 300, 'touch'); p.click() })
     expect(useStore.getState().drawerOpen).toBe(true)
   } finally { p.close() }
+})
+
+test('opens a contextual guide that survives switching drawer tabs', () => {
+  const p = renderDrawer()
+  try {
+    act(() => { p.click(0) })
+    const guideButton = p.host.querySelector<HTMLButtonElement>('button.guideButton')!
+    act(() => { guideButton.click() })
+    expect(guideReaderSession.getState().request?.guide).toEqual({
+      kind: 'builtin', path: 'characters/index.md',
+    })
+    act(() => { p.host.querySelector<HTMLButtonElement>('[data-tab-id="connections"]')!.click() })
+    expect(useStore.getState().drawerTab).toBe('connections')
+    expect(guideReaderSession.getState().isOpen).toBe(true)
+  } finally {
+    closeGuide()
+    p.close()
+  }
 })

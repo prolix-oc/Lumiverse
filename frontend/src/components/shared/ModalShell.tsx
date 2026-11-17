@@ -7,7 +7,7 @@ import useIsMobile from '@/hooks/useIsMobile'
 
 // A library browser can open above a voice-settings dialog. Only the top
 // shell should dismiss on Escape, and scrolling stays locked until both close.
-const openShells: symbol[] = []
+const openShells: Array<{ id: symbol; zIndex: number }> = []
 let previousBodyOverflow = ''
 
 interface ModalShellProps {
@@ -63,23 +63,27 @@ export function ModalShell({
   const backdropPointerDownRef = useRef<EventTarget | null>(null)
   const shellId = useRef(Symbol('modal-shell'))
   const handleEscape = useEffectEvent((e: KeyboardEvent) => {
-    if (!e.defaultPrevented && closeOnEscape && e.key === 'Escape' && openShells.at(-1) === shellId.current) onClose()
+    if (e.defaultPrevented || !closeOnEscape || e.key !== 'Escape') return
+    const top = openShells.reduce((highest, shell) => shell.zIndex >= highest.zIndex ? shell : highest)
+    if (top.id !== shellId.current) return
+    e.preventDefault()
+    onClose()
   })
 
   useEffect(() => {
     if (!isOpen) return
     const id = shellId.current
     if (openShells.length === 0) previousBodyOverflow = document.body.style.overflow
-    openShells.push(id)
+    openShells.push({ id, zIndex })
     document.addEventListener('keydown', handleEscape)
     document.body.style.overflow = 'hidden'
     return () => {
       document.removeEventListener('keydown', handleEscape)
-      const index = openShells.indexOf(id)
+      const index = openShells.findIndex((shell) => shell.id === id)
       if (index !== -1) openShells.splice(index, 1)
       if (openShells.length === 0) document.body.style.overflow = previousBodyOverflow
     }
-  }, [isOpen])
+  }, [isOpen, zIndex])
 
   const handleBackdropPointerDown = useCallback((e: React.PointerEvent) => {
     backdropPointerDownRef.current = e.target === e.currentTarget ? e.currentTarget : null

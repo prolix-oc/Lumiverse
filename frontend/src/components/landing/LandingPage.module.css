@@ -10,6 +10,7 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  container: landing / inline-size;
   background: transparent;
 }
 
@@ -297,7 +298,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 600px) {
+@container landing (max-width: 600px) {
   .accountName {
     display: none;
   }
@@ -1319,7 +1320,7 @@
   color: var(--lumiverse-text-muted);
 }
 
-@media (max-width: 600px) {
+@container landing (max-width: 600px) {
   .header {
     padding-bottom: 4px;
     margin-bottom: 8px;
@@ -1381,7 +1382,7 @@
   }
 }
 
-@media (max-width: 364px) {
+@container landing (max-width: 364px) {
   .gridCards {
     grid-template-columns: 1fr;
   }

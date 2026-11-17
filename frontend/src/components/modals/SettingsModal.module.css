@@ -1,8 +1,8 @@
 .overlay {
   position: fixed;
-  inset: 0;
-  width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
-  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  inset: 0 auto auto var(--guide-dock-left, 0px);
+  width: calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) - var(--guide-dock-left, 0px) - var(--guide-dock-right, 0px));
+  height: calc(var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1))) - var(--guide-dock-bottom, 0px));
   z-index: 10001;
   display: flex;
   align-items: center;
@@ -18,6 +18,8 @@
   position: relative;
   width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(1200px, var(--lumiverse-content-max-width, 1200px)));
   height: clamp(400px, calc(88vh / var(--lumiverse-ui-scale, 1)), 860px);
+  max-width: 100%;
+  max-height: 100%;
   background: var(--lumiverse-bg-deep);
   border: 1px solid var(--lumiverse-border);
   border-radius: 16px;
@@ -41,6 +43,31 @@
   flex-shrink: 0;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.guideButton {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--lumiverse-radius-md, 8px);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.guideButton:hover,
+.guideButton:focus-visible {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+}
+
 .title {
   font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
@@ -56,7 +83,7 @@
 }
 
 .sidebar {
-  width: 180px;
+  width: min(180px, 28%);
   flex-shrink: 0;
   background: color-mix(in srgb, var(--lumiverse-primary) 6%, var(--lumiverse-bg-deep));
   border-right: 1px solid var(--lumiverse-border);

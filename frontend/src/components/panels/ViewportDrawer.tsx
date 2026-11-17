@@ -4,7 +4,7 @@ import { ChevronRight, CircleHelp, LayoutGrid, List, Settings, Sparkles } from '
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import { CloseButton } from '@/components/shared/CloseButton'
-import { GuideViewer } from '@/components/shared/GuideViewer'
+import { openGuide } from '@/lib/guides/reader-session'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
 import {
@@ -65,7 +65,6 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
   const panelContentRef = useRef<HTMLDivElement>(null)
   const [tabListScroll, setTabListScroll] = useState({ up: false, down: false })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
-  const [guideOpen, setGuideOpen] = useState(false)
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null)
   const preloadOnIntent = useDrawerTabPreload()
 
@@ -223,10 +222,6 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
   const panelTitle = activeFolder?.type === 'folder'
     ? activeFolder.name.trim() || t('viewportDrawer.folder', { defaultValue: 'Folder' })
     : activeTabTitle
-
-  useEffect(() => {
-    setGuideOpen(false)
-  }, [activeTab, activeFolderId])
 
   useEffect(() => {
     // A direct host/command navigation to a tab should leave folder browsing.
@@ -505,7 +500,9 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
                   <button
                     type="button"
                     className={styles.guideButton}
-                    onClick={() => setGuideOpen(true)}
+                    onClick={(event) => {
+                      if (activeTabConfig.guide) openGuide(activeTabConfig.guide, activeTabTitle, event.currentTarget)
+                    }}
                     aria-label={`Open guide for ${activeTabTitle}`}
                     title="Open guide"
                   >
@@ -595,15 +592,6 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
           <span data-spindle-mount="drawer_footer" data-spindle-scope="drawer:footer" style={{ display: 'contents' }} />
         </div>
       </div>
-
-      {!activeFolder && activeTabConfig.guide && (
-        <GuideViewer
-          isOpen={guideOpen}
-          onClose={() => setGuideOpen(false)}
-          guide={activeTabConfig.guide}
-          title={activeTabTitle}
-        />
-      )}
 
       <ContextMenu
         position={contextMenu}

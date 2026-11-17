@@ -42,7 +42,9 @@ mock.module('@/i18n', () => ({
 }))
 mock.module('@/lib/cssModuleRegistry', () => ({ CSS_MODULE_REGISTRY: [], generateSelector: () => '' }))
 mock.module('@/lib/whistle/capture.worklet.ts?worker&url', () => ({ default: '/test-capture-worklet.js' }))
+mock.module('@/components/settings/MemoryCortexSettings', () => ({ default: () => null }))
 const { useStore } = await import('@/store')
+const { closeGuide, guideReaderSession } = await import('@/lib/guides/reader-session')
 const { resetSettingsPersistence } = await import('@/store/slices/settings')
 const { default: SettingsModal } = await import('./SettingsModal')
 const setSetting = useStore.getState().setSetting
@@ -126,4 +128,18 @@ test('Quick Replies retains the open editor across category changes and resets w
   await act(async () => root.render(null))
   await act(async () => root.render(<SettingsModal onClose={() => {}} />))
   expect(document.querySelector('textarea[placeholder="Message"]')).toBeNull()
+})
+
+test('opens contextual help for Memory Cortex without closing Settings', async () => {
+  const closeSettings = mock(() => {})
+  await act(async () => {
+    useStore.setState({ settingsActiveView: 'memoryCortex' })
+    root.render(<SettingsModal onClose={closeSettings} />)
+  })
+  const help = document.querySelector<HTMLButtonElement>('button[aria-label="Open settings guide"]')!
+  await act(async () => help.click())
+  expect(guideReaderSession.getState().request?.guide).toEqual({ kind: 'builtin', path: 'chatting/memory-cortex.md' })
+  expect(guideReaderSession.getState().returnFocus).toBe(help)
+  expect(closeSettings).not.toHaveBeenCalled()
+  await act(async () => closeGuide())
 })

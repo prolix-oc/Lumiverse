@@ -1,4 +1,5 @@
 import type {
+  SpindleGuideDefinition,
   SpindleDrawerTabOptions,
   SpindleDrawerTabHandle,
   SpindleFloatWidgetOptions,
@@ -61,6 +62,16 @@ import type { PlacementGeometryBounds, SurfaceRectPrefs } from '@/types/store'
 import { placementGeometryKey as makePlacementGeometryKey } from '@/store/slices/spindle-placement'
 import { stampExtensionRoot } from './extension-root-stamp'
 import { DESKTOP_WIDGET_MAX_SIZE, isDesktopFloatingWidgetWindow } from '@/lib/desktop-floating-widget'
+
+function copyGuide(guide?: SpindleGuideDefinition): SpindleGuideDefinition | undefined {
+  if (!guide) return undefined
+  const pages = Array.isArray(guide.pages) ? guide.pages.flatMap((page) => {
+    if (!page || typeof page.path !== 'string' || typeof page.markdown !== 'string') return []
+    const { path, markdown, title } = page
+    return [typeof title === 'string' ? { path, markdown, title } : { path, markdown }]
+  }) : undefined
+  return { title: guide.title, markdown: guide.markdown, ...(pages && { pages }) }
+}
 
 export type PlacementGuard = () => void
 
@@ -456,12 +467,7 @@ export function createDrawerTabHandle(
     description: options.description,
     keywords: options.keywords,
     headerTitle: options.headerTitle,
-    guide: options.guide
-      ? {
-          markdown: options.guide.markdown,
-          title: options.guide.title,
-        }
-      : undefined,
+    guide: copyGuide(options.guide),
     iconUrl: options.iconUrl,
     iconSvg: options.iconSvg,
     badge: null,
@@ -668,12 +674,7 @@ export function createCharacterEditorTabHandle(
     id: tabId,
     extensionId,
     title: options.title,
-    guide: options.guide
-      ? {
-          markdown: options.guide.markdown,
-          title: options.guide.title,
-        }
-      : undefined,
+    guide: copyGuide(options.guide),
     root,
   })
     registered = true
@@ -826,12 +827,7 @@ export function createPresetEditorTabHandle(
     id: tabId,
     extensionId,
     title: options.title,
-    guide: options.guide
-      ? {
-          markdown: options.guide.markdown,
-          title: options.guide.title,
-        }
-      : undefined,
+    guide: copyGuide(options.guide),
     root,
   })
     registered = true
