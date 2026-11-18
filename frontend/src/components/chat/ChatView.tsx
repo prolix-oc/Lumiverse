@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router'
+import { useOutletContext, useNavigate, useParams } from 'react-router'
+import { createPortal } from 'react-dom'
 import { ArrowUp, List, ListChecks, LoaderCircle, Pencil, UserRound, X } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
@@ -128,6 +129,7 @@ function buildSpindleNotice(payload: SpindlePreGenerationActivityPayload, t: (ke
 export default function ChatView() {
   const { t } = useTranslation('chat')
   const { chatId } = useParams<{ chatId: string }>()
+  const chatBackdrop = useOutletContext<HTMLDivElement | null>()
   const navigate = useNavigate()
   const spindleActiveRef = useRef(new Map<string, SpindlePreGenerationActivityPayload>())
   const spindleLatestRef = useRef<SpindlePreGenerationActivityPayload | null>(null)
@@ -1204,16 +1206,8 @@ export default function ChatView() {
 
   if (!chatId) return null
 
-  return (
-    <div
-      data-component="ChatView"
-      className={clsx(
-        styles.container,
-        isStreaming && styles.streaming,
-        hasAnyBackground && styles.hasSceneBackground
-      )}
-      data-streaming={isStreaming || undefined}
-    >
+  const background = (
+    <>
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
       <WallpaperLayer
         wallpaper={displayedWallpaper}
@@ -1241,6 +1235,20 @@ export default function ChatView() {
         }}
       />
       <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
+    </>
+  )
+
+  return (
+    <div
+      data-component="ChatView"
+      className={clsx(
+        styles.container,
+        isStreaming && styles.streaming,
+        hasAnyBackground && styles.hasSceneBackground
+      )}
+      data-streaming={isStreaming || undefined}
+    >
+      {chatBackdrop ? createPortal(background, chatBackdrop) : background}
       <div ref={chatBodyRef} className={styles.body} data-lumiverse-surface="chat-body" data-chat-width-mode={chatWidthMode} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
         <div data-spindle-mount="chat_sidebar_left" data-spindle-scope={`chat:${chatId}:sidebar-left`} style={{ display: 'contents' }} />
         {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (

@@ -5,6 +5,22 @@
   place-items: center;
 }
 
+.appFrame {
+  position: fixed;
+  inset: 0;
+  background: var(--lumiverse-bg-deep);
+  /* Keep backdrop filters composited with the app's wallpaper and tint. */
+  isolation: isolate;
+}
+
+/* Keep the complete chat backdrop outside workspace insets and clipping. */
+.chatBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
 .app {
   position: fixed;
   inset: 0 var(--guide-dock-right, 0px) var(--guide-dock-bottom, 0px) var(--guide-dock-left, 0px);
@@ -29,13 +45,7 @@
      at larger UI scales can otherwise pan the whole app in Firefox. Views
      own their scrolling; clip also prevents programmatic shell scrolling. */
   overflow: clip;
-  background: var(--lumiverse-bg-deep);
-  /* Prevent Safari/WebKit backdrop-filter compositing from stacking across
-     layers. Without this, each child with backdrop-filter re-processes the
-     already-filtered content of siblings, causing progressive dimming.
-     Safe for all browsers — the app shell has an opaque background so
-     backdrop-filter children blur against rendered app content as intended. */
-  isolation: isolate;
+  z-index: 1;
   /* Safe area insets + desktop PWA window controls + Spindle dock panel insets */
   padding-top: calc(var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) + var(--spindle-dock-top, 0px));
   padding-right: var(--spindle-dock-right, 0px);
@@ -55,20 +65,20 @@
    WebKit backdrop-filter on every repaint. The color picker commits only its
    final value, so this bounded transition gives that single update a smooth
    handoff without rebuilding the native effect throughout the drag. */
-:global(html[data-tauri-desktop][data-desktop-background]) .app {
+:global(html[data-tauri-desktop][data-desktop-background]) .appFrame {
   background-color: var(--lumiverse-desktop-background);
   transition: background-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1));
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :global(html[data-tauri-desktop][data-desktop-background]) .app {
+  :global(html[data-tauri-desktop][data-desktop-background]) .appFrame {
     transition: none;
   }
 }
 
 /* Fixed-position descendants can escape a root-element overflow clip in
    WebKit. Clip the actual full-window app compositor layer as well. */
-:global(html[data-tauri-desktop]) .app {
+:global(html[data-tauri-desktop]) .appFrame {
   border-radius: var(--desktop-window-corner-radius);
   clip-path: inset(0 round var(--desktop-window-corner-radius));
 }

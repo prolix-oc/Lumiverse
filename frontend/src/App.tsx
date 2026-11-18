@@ -1,6 +1,6 @@
 import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
 import { Spinner } from '@/components/shared/Spinner'
-import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet } from 'react-router'
 import { listen } from '@tauri-apps/api/event'
 import { useTranslation } from 'react-i18next'
@@ -133,6 +133,7 @@ function Application() {
   }, [t])
 
   const isMobile = useIsMobile()
+  const [chatBackdrop, setChatBackdrop] = useState<HTMLDivElement | null>(null)
   const drawerSide = useStore((s) => s.drawerSettings.side)
   const duoAlwaysOpen = useStore((s) => s.drawerSettings.duoAlwaysOpen !== false)
   const duoLayout = useIOSDuoLayout(drawerSide, duoAlwaysOpen)
@@ -394,25 +395,27 @@ function Application() {
     <>
       <LazyMotion features={domAnimation} strict={false}>
         <MotionConfig reducedMotion="user">
-          <div
-            className={duoLayout ? `${styles.app} ${styles.duoApp}` : styles.app}
-            data-app-root=""
-            data-duo-layout={duoLayout?.axis}
-            data-duo-drawer-side={duoLayout?.axis === 'horizontal' ? drawerSide : undefined}
-            style={{
-              '--spindle-dock-left': `${dockInsets.left}px`,
-              '--spindle-dock-right': `${dockInsets.right}px`,
-              '--spindle-dock-top': `${dockInsets.top}px`,
-              '--spindle-dock-bottom': `${dockInsets.bottom}px`,
-              '--duo-window-keyboard-inset-bottom': 'var(--app-keyboard-inset-bottom, 0px)',
-            } as React.CSSProperties}
-          >
+          <div className={styles.appFrame} data-app-frame="">
+            <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+            <div ref={setChatBackdrop} className={styles.chatBackdrop} aria-hidden="true" />
+            <div
+              className={duoLayout ? `${styles.app} ${styles.duoApp}` : styles.app}
+              data-app-root=""
+              data-duo-layout={duoLayout?.axis}
+              data-duo-drawer-side={duoLayout?.axis === 'horizontal' ? drawerSide : undefined}
+              style={{
+                '--spindle-dock-left': `${dockInsets.left}px`,
+                '--spindle-dock-right': `${dockInsets.right}px`,
+                '--spindle-dock-top': `${dockInsets.top}px`,
+                '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+                '--duo-window-keyboard-inset-bottom': 'var(--app-keyboard-inset-bottom, 0px)',
+              } as React.CSSProperties}
+            >
               {safeTheme.active && (
                 <div className={styles.safeThemeBanner} role="status">
                   {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
                 </div>
               )}
-              <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
               <LiquidGlassFilters />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
@@ -422,7 +425,7 @@ function Application() {
                   data-duo-chat={duoLayout ? '' : undefined}
                   style={duoLayout ? duoChatStyle(duoLayout) as React.CSSProperties : undefined}
                 >
-                  <Suspense fallback={<Spinner />}><Outlet /></Suspense>
+                  <Suspense fallback={<Spinner />}><Outlet context={duoLayout ? null : chatBackdrop} /></Suspense>
                 </main>
                 <ViewportDrawer duoLayout={duoLayout} />
                 {!isDesktopFloatingWidgetWindow() && <WindowFileDropHost />}
@@ -438,6 +441,7 @@ function Application() {
                 <ChatHeads />
                 <ConnectionLostOverlay />
               </ErrorBoundary>
+            </div>
           </div>
         </MotionConfig>
       </LazyMotion>
