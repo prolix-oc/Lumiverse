@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type PointerEvent, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type PointerEvent, type ReactNode } from 'react'
 import { MIN_EXPRESSION_DOCK_PERCENT } from '@/types/expressions'
 import styles from './ExpressionDisplay.module.css'
 
@@ -27,6 +27,24 @@ export default function ExpressionDock({
 }: ExpressionDockProps) {
   const isTop = edge === 'top'
   const dockRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const dock = dockRef.current
+    const workspace = dock?.parentElement
+    if (edge === 'top' || !dock || !workspace) return
+
+    // Chat already gives the dock this width in the flex row.
+    const property = '--expression-dock-' + edge
+    const syncWidth = () => workspace.style.setProperty(property, dock.offsetWidth + 'px')
+    const observer = new ResizeObserver(syncWidth)
+    observer.observe(dock)
+    syncWidth()
+    return () => {
+      observer.disconnect()
+      workspace.style.removeProperty(property)
+    }
+  }, [edge])
+
   const gesture = useRef<ResizeGesture | null>(null)
   const [preview, setPreview] = useState<number | null>(null)
   const displayedSize = preview ?? size

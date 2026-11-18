@@ -74,7 +74,9 @@ const bundle = await build({
         return (
           <main className={appStyles.app} style={{ '--spindle-dock-right': '60px' }}>
             <div className={chatStyles.container}>
-              <div className={chatStyles.body} data-test-chat>Chat</div>
+              <div className={chatStyles.body}>
+                <div className={chatStyles.chatColumn + ' ' + chatStyles.chatColumnCentered} data-test-chat>Chat</div>
+              </div>
               <ExpressionDisplay isMobile={isMobile} onSideDockChange={setSide} />
               {portraitRail}
             </div>
@@ -129,6 +131,13 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         const options = page.getByRole('button', { name: 'Expression display options' })
         const dock = page.locator('[data-expression-dock]')
         const chat = page.locator('[data-test-chat]')
+        const setSidebarWidth = (side, width) => page.locator('main').evaluate((el, { side, width }) => {
+          el.style.setProperty('--chat-drawer-' + side, width + 'px')
+        }, { side, width })
+        const expectChatRight = right => page.waitForFunction(right => {
+          const chat = document.querySelector('[data-test-chat]')
+          return Math.abs(chat.getBoundingClientRect().right - right) <= 1
+        }, right)
         await page.getByRole('img', { name: 'smile' }).waitFor()
         const originalChat = await chat.boundingBox()
         const originalSprite = await page.getByRole('img', { name: 'smile' }).boundingBox()
@@ -195,6 +204,19 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
           assert.equal(await spriteImage.evaluate(el => getComputedStyle(el).objectPosition), '50% 100%')
         }
 
+        if (!mobile) {
+          // A sidebar narrower than the same-side dock is already accounted for.
+          await setSidebarWidth('right', 300)
+          await expectChatRight(dockRect.x)
+          // A wider sidebar owns only the part that extends into chat.
+          await setSidebarWidth('right', 700)
+          await expectChatRight(width - 700)
+          // Opposite edges are independent.
+          await setSidebarWidth('left', 220)
+          assert.equal((await chat.boundingBox()).x, 220)
+          await setSidebarWidth('left', 0)
+        }
+
         const grip = await handle.boundingBox()
         const x = grip.x + grip.width / 2
         const y = grip.y + grip.height / 2
@@ -206,6 +228,10 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
           return Number(grip.getAttribute('aria-valuenow')) < size
         }, originalSize)
         await assertArtworkShrank()
+        if (!mobile) {
+          await expectChatRight(width - 700)
+          await setSidebarWidth('right', 0)
+        }
         assert.equal(saved[sizeKey], originalSize, 'drag preview is local')
         assert.notEqual(await resizeHighlight(), 'none', 'dragging keeps the edge highlighted')
         const dragWrite = waitForWrite()
@@ -231,9 +257,12 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
           const leftDock = await dock.boundingBox()
           assert.ok(Math.abs((await chat.boundingBox()).x - leftDock.x - leftDock.width) <= 1)
           assert.ok(Math.abs((await gallery.boundingBox()).x - leftDock.x) <= 1)
-          await page.locator('main').evaluate(el => el.style.setProperty('--chat-drawer-left', '280px'))
+          await setSidebarWidth('left', 280)
           assert.ok(Math.abs((await gallery.boundingBox()).x - leftDock.x - 280) <= 1)
-          await page.locator('main').evaluate(el => el.style.removeProperty('--chat-drawer-left'))
+          assert.ok(Math.abs((await chat.boundingBox()).x - leftDock.x - leftDock.width) <= 1)
+          await setSidebarWidth('left', 520)
+          assert.ok(Math.abs((await chat.boundingBox()).x - 520) <= 1)
+          await setSidebarWidth('left', 0)
           await handle.focus()
           const leftKeyWrite = waitForWrite()
           await page.keyboard.press('ArrowLeft')
@@ -276,8 +305,13 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         await assertArtworkShrank()
         await choose('Hide Dock Background')
         assert.equal(await dock.getAttribute('data-dock-background'), null)
+        if (!mobile) await setSidebarWidth('right', 280)
         await choose('Floating view')
         assert.equal(await dock.count(), 0)
+        if (!mobile) {
+          await expectChatRight(width - 280)
+          await setSidebarWidth('right', 0)
+        }
         assert.deepEqual(await chat.boundingBox(), originalChat)
         await page.getByRole('img', { name: 'smile' }).waitFor()
         assert.deepEqual(await page.getByRole('img', { name: 'smile' }).boundingBox(), originalSprite)
