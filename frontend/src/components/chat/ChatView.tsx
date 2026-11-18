@@ -158,6 +158,7 @@ export default function ChatView() {
   const portraitPanelOpen = useStore((s) => s.portraitPanelOpen)
   const togglePortraitPanel = useStore((s) => s.togglePortraitPanel)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
+  const [expressionDockSide, setExpressionDockSide] = useState<'left' | 'right' | null>(null)
   const suiteExtensionEnabled = useStore((s) => hasEnabledFrontendExtension(s.extensions, 'lumiverse_suite'))
   const [portraitSurfaceMounted, setPortraitSurfaceMounted] = useState(false)
   const portraitSurfaceOccupied = suiteExtensionEnabled && portraitSurfaceMounted
@@ -1202,6 +1203,31 @@ export default function ChatView() {
     }
   }, [chatId, dockQuickToolbar, keepFloatingDockHost, quickToolbarSettings])
 
+  const portraitAtWorkspaceEdge = expressionDockSide === portraitPanelSide
+  const portraitSide = !portraitSurfaceOccupied && portraitPanelSide !== 'none' && (
+    <div className={clsx(
+      styles.portraitSide,
+      portraitPanelSide === 'left' ? styles.portraitSideLeft : styles.portraitSideRight,
+      portraitPanelOpen && styles.portraitSideOpen,
+    )}>
+      {portraitPanelSide === 'left' && !isMobile && <PortraitPanel side="left" />}
+      <button
+        type="button"
+        className={clsx(
+          styles.portraitTab,
+          portraitPanelSide === 'left' ? styles.portraitTabLeft : styles.portraitTabRight,
+          portraitPanelOpen && styles.portraitTabActive,
+        )}
+        onClick={togglePortraitPanel}
+        aria-label={t('chatView.togglePortraitPanel')}
+        aria-expanded={portraitPanelOpen}
+      >
+        <UserRound size={14} aria-hidden="true" />
+      </button>
+      {portraitPanelSide === 'right' && !isMobile && <PortraitPanel side="right" />}
+    </div>
+  )
+
   if (!chatId) return null
 
   return (
@@ -1243,19 +1269,7 @@ export default function ChatView() {
       <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
       <div ref={chatBodyRef} className={styles.body} data-lumiverse-surface="chat-body" data-chat-width-mode={chatWidthMode} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
         <div data-spindle-mount="chat_sidebar_left" data-spindle-scope={`chat:${chatId}:sidebar-left`} style={{ display: 'contents' }} />
-        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
-          <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
-            {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="left" />}
-            <button
-              type="button"
-              className={clsx(styles.portraitTab, styles.portraitTabLeft, portraitPanelOpen && styles.portraitTabActive)}
-              onClick={togglePortraitPanel}
-              aria-label={t('chatView.togglePortraitPanel')}
-            >
-              <UserRound size={14} />
-            </button>
-          </div>
-        )}
+        {!portraitAtWorkspaceEdge && portraitPanelSide === 'left' && portraitSide}
 
         <div className={clsx(styles.chatColumn, centerChatWithSidebar && styles.chatColumnCentered)} data-lumiverse-surface="chat-column">
           {(spindleNotice || visibleCortexNotice) && (
@@ -1377,19 +1391,7 @@ export default function ChatView() {
           </div>
         </div>
 
-        {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'right' && (
-          <div className={clsx(styles.portraitSide, styles.portraitSideRight, portraitPanelOpen && styles.portraitSideOpen)}>
-            <button
-              type="button"
-              className={clsx(styles.portraitTab, styles.portraitTabRight, portraitPanelOpen && styles.portraitTabActive)}
-              onClick={togglePortraitPanel}
-              aria-label={t('chatView.togglePortraitPanel')}
-            >
-              <UserRound size={14} />
-            </button>
-            {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="right" />}
-          </div>
-        )}
+        {!portraitAtWorkspaceEdge && portraitPanelSide === 'right' && portraitSide}
         <div data-spindle-mount="chat_sidebar_right" data-spindle-scope={`chat:${chatId}:sidebar-right`} style={{ display: 'contents' }} />
         <div data-spindle-mount="lorebook_half_workspace" data-spindle-scope={`chat:${chatId}:lorebook-half-workspace`} />
         <div data-spindle-mount="chat_surface_side" data-spindle-scope={`chat:${chatId}:surface-side`} />
@@ -1408,7 +1410,8 @@ export default function ChatView() {
           aria-hidden="true"
         />
       )}
-      <ExpressionDisplay />
+      <ExpressionDisplay isMobile={isMobile} onSideDockChange={setExpressionDockSide} />
+      {portraitAtWorkspaceEdge && portraitSide}
       <FloatingAvatarViewer />
     </div>
   )

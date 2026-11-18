@@ -1,8 +1,8 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
-import { Minus, X } from 'lucide-react'
+import { Ellipsis, Minus, X } from 'lucide-react'
 import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
@@ -10,22 +10,30 @@ import { EventType } from '@/types/ws-events'
 import { expressionsApi } from '@/api/expressions'
 import { resolveExpression } from '@/lib/expressionResolution'
 import { hasDisplayableExpressions } from '@/lib/chatExpressionAvailability'
-import { EXPRESSION_SIZE_PRESETS } from '@/types/expressions'
+import { EXPRESSION_DOCK_SIZES, EXPRESSION_SIZE_PRESETS, MIN_EXPRESSION_DOCK_PERCENT } from '@/types/expressions'
 import type { ExpressionConfig, ExpressionDisplaySize, ExpressionGroups } from '@/types/expressions'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
 import { toast } from '@/lib/toast'
+import { layoutViewportSize, toLayoutDelta, toLayoutPx } from '@/lib/uiScale'
+import ExpressionDock from './ExpressionDock'
 import styles from './ExpressionDisplay.module.css'
 
 type ExpressionMenuView =
   | { kind: 'display' }
+  | { kind: 'dock-size' }
   | { kind: 'single-picker' }
   | { kind: 'group-character-picker' }
   | { kind: 'group-expression-picker'; characterId: string }
   | { kind: 'multi-character-picker' }
   | { kind: 'multi-character-expression-picker'; groupName: string }
 
-export default function ExpressionDisplay() {
+interface ExpressionDisplayProps {
+  isMobile?: boolean
+  onSideDockChange?: (side: 'left' | 'right' | null) => void
+}
+
+export default function ExpressionDisplay({ isMobile = false, onSideDockChange }: ExpressionDisplayProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
@@ -36,7 +44,19 @@ export default function ExpressionDisplay() {
   const currentExpressionImageId = useStore((s) => s.currentExpressionImageId)
   const expressionCharacterId = useStore((s) => s.expressionCharacterId)
   const display = useStore((s) => s.expressionDisplay)
+  const isDocked = display.placement === 'dock'
+  const dockSide = display.dockSide === 'left' ? 'left' : 'right'
+  const dockEdge = isMobile ? 'top' : dockSide
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
+  const dockSizeKey = isMobile ? 'dockHeightPercent' : 'dockWidthPercent'
+  const dockPresets = EXPRESSION_DOCK_SIZES[dockSizeKey]
+  const savedDockSize = display[dockSizeKey]
+  const dockSize = Number.isFinite(savedDockSize)
+    ? Math.min(dockPresets.full, Math.max(MIN_EXPRESSION_DOCK_PERCENT, Math.round(savedDockSize)))
+    : dockPresets.compact
+  const setDockSize = useCallback((percent: number) => {
+    setExpressionDisplay({ [dockSizeKey]: percent })
+  }, [dockSizeKey, setExpressionDisplay])
   const toggleMinimized = useStore((s) => s.toggleExpressionMinimized)
   const setActiveExpression = useStore((s) => s.setActiveExpression)
   const setGroupExpression = useStore((s) => s.setGroupExpression)
@@ -239,7 +259,9 @@ export default function ExpressionDisplay() {
 
   // ── Sizing ──
   const [pos, setPos] = useState({ x: display.x, y: display.y })
-  const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
+  const [contextMenu, setContextMenu] = useState<(ContextMenuPos & { fromButton?: boolean }) | null>(null)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuOpenedFromButton = contextMenu?.fromButton === true
   const [menuView, setMenuView] = useState<ExpressionMenuView>({ kind: 'display' })
   const [menuTargetCharId, setMenuTargetCharId] = useState<string | null>(null)
   const dragging = useRef(false)
@@ -270,35 +292,33 @@ export default function ExpressionDisplay() {
     return { width: totalWidth, height: size.height }
   }, [isStackedExpressionMode, stackedExpressionKeys.length, size])
 
-  // Clamp position to screen bounds whenever display settings or size change
-  useEffect(() => {
-    const pad = 12
-    let x: number, y: number
-    if (display.x < 0 || display.y < 0) {
-      x = window.innerWidth - containerSize.width - 24
-      y = window.innerHeight - containerSize.height - 100
-    } else {
-      x = display.x
-      y = display.y
-    }
-    // Ensure the widget stays within viewport
-    x = Math.max(pad, Math.min(x, window.innerWidth - containerSize.width - pad))
-    y = Math.max(pad, Math.min(y, window.innerHeight - containerSize.height - pad))
-    setPos({ x, y })
-  }, [display.x, display.y, containerSize.width, containerSize.height])
-
-  // Re-clamp on window resize
-  useEffect(() => {
-    const onResize = () => {
+  const clampPos = useCallback(
+    (x: number, y: number) => {
+      const { width, height } = layoutViewportSize()
       const pad = 12
-      setPos((prev) => ({
-        x: Math.max(pad, Math.min(prev.x, window.innerWidth - containerSize.width - pad)),
-        y: Math.max(pad, Math.min(prev.y, window.innerHeight - containerSize.height - pad)),
-      }))
-    }
+      const w = display.minimized ? 40 : containerSize.width
+      const h = display.minimized ? 40 : containerSize.height + (display.frameless ? 0 : 28)
+      return {
+        x: Math.max(pad, Math.min(x, width - w - pad)),
+        y: Math.max(pad, Math.min(y, height - h - pad)),
+      }
+    },
+    [containerSize.width, containerSize.height, display.minimized, display.frameless]
+  )
+
+  // Clamp saved and default coordinates whenever the display or viewport changes.
+  useEffect(() => {
+    const { width, height } = layoutViewportSize()
+    const x = display.x < 0 || display.y < 0 ? width - containerSize.width - 24 : display.x
+    const y = display.x < 0 || display.y < 0 ? height - containerSize.height - 100 : display.y
+    setPos(clampPos(x, y))
+  }, [display.x, display.y, containerSize.width, containerSize.height, clampPos])
+
+  useEffect(() => {
+    const onResize = () => setPos((prev) => clampPos(prev.x, prev.y))
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [containerSize.width, containerSize.height])
+  }, [clampPos])
 
   const currentImageUrl = currentExpressionImageId
     ? expressionsApi.imageUrl(currentExpressionImageId)
@@ -332,19 +352,6 @@ export default function ExpressionDisplay() {
     }
   }, [isStackedExpressionMode, stackedExpressionKeys, multiCharacterExpressions, groupExpressions, groupConfigs, preloadImage, getStackedImageUrl])
 
-  const clampPos = useCallback(
-    (x: number, y: number) => {
-      const pad = 12
-      const w = display.minimized ? 40 : containerSize.width
-      const h = display.minimized ? 40 : containerSize.height + (display.frameless ? 0 : 28)
-      return {
-        x: Math.max(pad, Math.min(x, window.innerWidth - w - pad)),
-        y: Math.max(pad, Math.min(y, window.innerHeight - h - pad)),
-      }
-    },
-    [containerSize.width, containerSize.height, display.minimized, display.frameless]
-  )
-
   const dragStartPos = useRef({ x: 0, y: 0 })
   const DRAG_THRESHOLD = 5
 
@@ -356,7 +363,7 @@ export default function ExpressionDisplay() {
     isDragging.current = false
     dragging.current = true
     dragStartPos.current = { x: e.clientX, y: e.clientY }
-    offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+    offset.current = { x: toLayoutPx(e.clientX) - pos.x, y: toLayoutPx(e.clientY) - pos.y }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     e.preventDefault()
   }, [pos])
@@ -370,8 +377,7 @@ export default function ExpressionDisplay() {
       if (dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) return
       isDragging.current = true
     }
-    const raw = { x: e.clientX - offset.current.x, y: e.clientY - offset.current.y }
-    setPos(clampPos(raw.x, raw.y))
+    setPos(clampPos(toLayoutPx(e.clientX) - offset.current.x, toLayoutPx(e.clientY) - offset.current.y))
   }, [clampPos])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -401,11 +407,9 @@ export default function ExpressionDisplay() {
 
   const handleResizeMove = useCallback((e: React.PointerEvent) => {
     if (!resizing.current) return
-    const dx = e.clientX - resizeStart.current.x
-    const dy = e.clientY - resizeStart.current.y
+    const delta = toLayoutDelta(e.clientX - resizeStart.current.x, e.clientY - resizeStart.current.y)
     // Maintain 3:4 aspect ratio
-    const delta = Math.max(dx, dy)
-    const newWidth = Math.max(120, Math.min(600, resizeStart.current.w + delta))
+    const newWidth = Math.max(120, Math.min(600, resizeStart.current.w + Math.max(delta.x, delta.y)))
     const newHeight = Math.round(newWidth * (4 / 3))
     setCustomSize({ width: newWidth, height: Math.max(150, Math.min(750, newHeight)) })
   }, [])
@@ -422,13 +426,23 @@ export default function ExpressionDisplay() {
     setContextMenu(null)
     setMenuView({ kind: 'display' })
     setMenuTargetCharId(null)
-  }, [])
+    if (menuOpenedFromButton) {
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) menuButtonRef.current?.focus()
+      })
+    }
+  }, [menuOpenedFromButton])
 
-  const openContextMenu = useCallback((position: ContextMenuPos, targetCharId: string | null = null) => {
+  const openContextMenu = useCallback((position: ContextMenuPos & { fromButton?: boolean }, targetCharId: string | null = null) => {
     setMenuTargetCharId(targetCharId)
     setMenuView({ kind: 'display' })
     setContextMenu(position)
   }, [])
+
+  const openMenuFromButton = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    openContextMenu({ x: rect.left, y: rect.bottom, fromButton: true })
+  }
 
   const longPress = useLongPress({
     onLongPress: (pos) => openContextMenu(pos),
@@ -521,6 +535,22 @@ export default function ExpressionDisplay() {
       key: 'back-display',
       label: t('expressionDisplay.backToDisplayMenu'),
       onClick: () => setMenuView({ kind: 'display' }),
+    }
+
+    if (menuView.kind === 'dock-size' && isDocked) {
+      return [
+        backToDisplayItem,
+        { key: 'dock-size-divider', type: 'divider' },
+        ...(['compact', 'medium', 'full'] as const).map((preset) => ({
+          key: 'dock-size-' + preset,
+          label: t('expressionDisplay.dockSizePresets.' + preset),
+          active: dockSize === dockPresets[preset],
+          onClick: () => {
+            setDockSize(dockPresets[preset])
+            closeContextMenu()
+          },
+        })),
+      ]
     }
 
     if (menuView.kind === 'single-picker') {
@@ -655,13 +685,46 @@ export default function ExpressionDisplay() {
       items.push({ key: 'manual-divider', type: 'divider' as const })
     }
 
-    items.push(
-      ...(['small', 'medium', 'large'] as const).map((preset) => ({
+    items.push({
+      key: 'placement',
+      label: isDocked ? t('expressionDisplay.float') : t('expressionDisplay.dock'),
+      onClick: () => {
+        setExpressionDisplay({ placement: isDocked ? 'floating' : 'dock', minimized: false })
+        closeContextMenu()
+      },
+    })
+
+    if (isDocked) {
+      if (!isMobile) items.push({
+        key: 'dock-side',
+        label: dockSide === 'right' ? t('expressionDisplay.moveDockLeft') : t('expressionDisplay.moveDockRight'),
+        onClick: () => {
+          setExpressionDisplay({ dockSide: dockSide === 'right' ? 'left' : 'right' })
+          closeContextMenu()
+        },
+      })
+      items.push({
+        key: 'dock-size',
+        label: t('expressionDisplay.dockSize'),
+        onClick: () => setMenuView({ kind: 'dock-size' }),
+      }, {
+        key: 'dock-background',
+        label: display.dockBackground ? t('expressionDisplay.hideDockBackground') : t('expressionDisplay.showDockBackground'),
+        onClick: () => {
+          setExpressionDisplay({ dockBackground: !display.dockBackground })
+          closeContextMenu()
+        },
+      })
+    } else {
+      items.push(...(['small', 'medium', 'large'] as const).map((preset) => ({
         key: `size-${preset}`,
         label: t(`expressionDisplay.size${preset.charAt(0).toUpperCase()}${preset.slice(1)}` as 'expressionDisplay.sizeSmall'),
         active: display.sizePreset === preset,
         onClick: () => selectSize(preset),
-      })),
+      })))
+    }
+
+    items.push(
       { key: 'div-1', type: 'divider' as const },
       {
         key: 'opacity',
@@ -671,6 +734,7 @@ export default function ExpressionDisplay() {
             <span>{t('expressionDisplay.opacity')}</span>
             <input
               type="range"
+              aria-label={t('expressionDisplay.opacity')}
               className={styles.opacitySlider}
               min={0.1}
               max={1}
@@ -682,6 +746,9 @@ export default function ExpressionDisplay() {
         ),
       },
       { key: 'div-2', type: 'divider' as const },
+    )
+
+    if (!isDocked) items.push(
       {
         key: 'frame',
         label: display.frameless ? t('expressionDisplay.showFrame') : t('expressionDisplay.hideFrame'),
@@ -699,22 +766,23 @@ export default function ExpressionDisplay() {
         onClick: () => { toggleMinimized(); closeContextMenu() },
       },
       {
-        key: 'hide',
-        label: t('expressionDisplay.hide'),
-        onClick: () => { setExpressionDisplay({ enabled: false }); closeContextMenu() },
-      },
-      {
         key: 'reset',
         label: t('expressionDisplay.resetPosition'),
         onClick: () => {
-          const nx = window.innerWidth - containerSize.width - 24
-          const ny = window.innerHeight - containerSize.height - 100
-          setPos({ x: nx, y: ny })
-          setExpressionDisplay({ x: nx, y: ny })
+          const { width, height } = layoutViewportSize()
+          const position = clampPos(width - containerSize.width - 24, height - containerSize.height - 100)
+          setPos(position)
+          setExpressionDisplay(position)
           closeContextMenu()
         },
       },
     )
+
+    items.push({
+      key: 'hide',
+      label: t('expressionDisplay.hide'),
+      onClick: () => { setExpressionDisplay({ enabled: false }); closeContextMenu() },
+    })
 
     return items
   }, [
@@ -736,11 +804,19 @@ export default function ExpressionDisplay() {
     isGroupExpressionMode,
     isMultiCharacterCardMode,
     hasExpressions,
+    isDocked,
+    isMobile,
+    dockSide,
+    dockSize,
+    dockPresets,
+    setDockSize,
+    display.dockBackground,
     display.sizePreset,
     display.opacity,
     display.frameless,
     display.clickThrough,
     containerSize,
+    clampPos,
     selectSize,
     setExpressionDisplay,
     toggleMinimized,
@@ -751,12 +827,17 @@ export default function ExpressionDisplay() {
     t,
   ])
 
-  // ── Visibility gate ──
-  if (!display.enabled) return null
-  if (!isStackedExpressionMode && (!hasExpressions || !currentImageUrl)) return null
+  const visible = display.enabled && (isStackedExpressionMode || (hasExpressions && !!currentImageUrl))
+  const visibleSideDock = visible && isDocked && !isMobile ? dockSide : null
+
+  useLayoutEffect(() => {
+    onSideDockChange?.(visibleSideDock)
+  }, [onSideDockChange, visibleSideDock])
+
+  if (!visible) return null
 
   // ── Minimized state ──
-  if (display.minimized) {
+  if (!isDocked && display.minimized) {
     const handleMinimizedPointerUp = (e: React.PointerEvent) => {
       if (!dragging.current) return
       dragging.current = false
@@ -808,6 +889,133 @@ export default function ExpressionDisplay() {
     )
   }
 
+  const canOpenImageMenu = isDocked || !display.clickThrough
+  const canDragImage = !isDocked && canOpenImageMenu
+  const imageArea = isStackedExpressionMode ? (
+    /* ── Multi-sprite expression row ── */
+    <div
+      className={styles.groupRow}
+      onPointerDown={canDragImage ? handlePointerDown : undefined}
+      onPointerMove={canDragImage ? handlePointerMove : undefined}
+      onPointerUp={canDragImage ? handlePointerUp : undefined}
+    >
+      {stackedExpressionKeys.map((key, idx) => {
+        const imageUrl = getStackedImageUrl(key)
+        const label = getStackedLabel(key)
+        const isResponding = isGroupExpressionMode && isStreaming && respondingCharacterId === key
+        const isHovered = hoveredCharId === key
+        const isActive = isResponding || isHovered
+        const displayName = getStackedName(key)
+        const marginLeft = idx === 0 ? 0 : -groupSlotOverlap
+
+        return (
+          <div
+            key={key}
+            className={[
+              styles.groupSlot,
+              isActive ? styles.groupSlotActive : styles.groupSlotIdle,
+            ].join(' ')}
+            style={{
+              width: (size.width / containerSize.width) * 100 + '%',
+              marginLeft: (marginLeft / containerSize.width) * 100 + '%',
+              zIndex: isHovered ? 3 : isResponding ? 2 : 1,
+            }}
+            onMouseEnter={() => setHoveredCharId(key)}
+            onMouseLeave={() => setHoveredCharId(null)}
+            onContextMenu={canOpenImageMenu ? (e) => handleGroupSlotContextMenu(e, key) : undefined}
+          >
+            <AnimatePresence mode="sync">
+              {imageUrl && readyUrls.has(imageUrl) && (
+                <motion.img
+                  key={imageUrl}
+                  src={imageUrl}
+                  alt={label || displayName}
+                  className={styles.expressionImg}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3, ease: 'easeInOut' }}
+                  draggable={false}
+                />
+              )}
+            </AnimatePresence>
+            <span className={styles.groupNameTag}>
+              {displayName}{label ? ` — ${label}` : ''}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  ) : (
+    /* ── Single character expression ── */
+    <div
+      className={styles.imageContainer}
+      onPointerDown={canDragImage ? handlePointerDown : undefined}
+      onPointerMove={canDragImage ? handlePointerMove : undefined}
+      onPointerUp={canDragImage ? handlePointerUp : undefined}
+    >
+      <AnimatePresence mode="sync">
+        {currentImageUrl && readyUrls.has(currentImageUrl) && (
+          <motion.img
+            key={currentImageUrl}
+            src={currentImageUrl}
+            alt={currentExpression || ''}
+            className={styles.expressionImg}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            draggable={false}
+          />
+        )}
+      </AnimatePresence>
+      {currentExpression && (
+        <span className={styles.labelBadge}>{currentExpression}</span>
+      )}
+    </div>
+  )
+
+  const menuButton = (
+    <button
+      ref={menuButtonRef}
+      type="button"
+      className={isDocked ? styles.dockMenuButton : styles.handleBtn}
+      aria-label={t('expressionDisplay.options')}
+      aria-expanded={contextMenu !== null}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={openMenuFromButton}
+    >
+      <Ellipsis size={isDocked ? 20 : 14} aria-hidden="true" />
+    </button>
+  )
+  const menu = (
+    <ContextMenu
+      position={contextMenu}
+      items={contextMenuItems}
+      onClose={closeContextMenu}
+      focusOnOpen={menuOpenedFromButton}
+    />
+  )
+
+  if (isDocked) {
+    return (
+      <ExpressionDock
+        key={dockEdge}
+        edge={dockEdge}
+        size={dockSize}
+        maxSize={dockPresets.full}
+        onSizeChange={setDockSize}
+        resizeLabel={t('expressionDisplay.resizeDock')}
+        background={display.dockBackground}
+        opacity={display.opacity}
+        onContextMenu={handleContextMenu}
+        controls={<>{menuButton}{menu}</>}
+      >
+        {imageArea}
+      </ExpressionDock>
+    )
+  }
+
   // ── Drag handle name ──
   const handleDisplayName = isStackedExpressionMode
     ? stackedExpressionKeys.map(getStackedName).join(' / ')
@@ -837,131 +1045,27 @@ export default function ExpressionDisplay() {
         onTouchMove={!display.clickThrough ? longPress.onTouchMove : undefined}
         onTouchEnd={!display.clickThrough ? longPress.onTouchEnd : undefined}
       >
-        {/* Drag handle — always interactive even in click-through mode */}
-        {display.frameless ? (
-          <div
-            className={styles.dragHandleFrameless}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onContextMenu={display.clickThrough ? handleContextMenu : undefined}
-            onTouchStart={display.clickThrough ? longPress.onTouchStart : undefined}
-            onTouchMove={display.clickThrough ? longPress.onTouchMove : undefined}
-            onTouchEnd={display.clickThrough ? longPress.onTouchEnd : undefined}
-          >
-            <span className={styles.handleName}>{handleDisplayName}</span>
-            <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); toggleMinimized() }}>
-              <Minus size={12} />
-            </button>
-            <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); setExpressionDisplay({ enabled: false }) }}>
-              <X size={12} />
-            </button>
-          </div>
-        ) : (
-          <div
-            className={styles.dragHandle}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onContextMenu={display.clickThrough ? handleContextMenu : undefined}
-            onTouchStart={display.clickThrough ? longPress.onTouchStart : undefined}
-            onTouchMove={display.clickThrough ? longPress.onTouchMove : undefined}
-            onTouchEnd={display.clickThrough ? longPress.onTouchEnd : undefined}
-          >
-            <span className={styles.handleName}>{handleDisplayName}</span>
-            <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); toggleMinimized() }}>
-              <Minus size={12} />
-            </button>
-            <button type="button" className={styles.handleBtn} onClick={(e) => { e.stopPropagation(); setExpressionDisplay({ enabled: false }) }}>
-              <X size={12} />
-            </button>
-          </div>
-        )}
+        <div
+          className={display.frameless ? styles.dragHandleFrameless : styles.dragHandle}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onContextMenu={display.clickThrough ? handleContextMenu : undefined}
+          onTouchStart={display.clickThrough ? longPress.onTouchStart : undefined}
+          onTouchMove={display.clickThrough ? longPress.onTouchMove : undefined}
+          onTouchEnd={display.clickThrough ? longPress.onTouchEnd : undefined}
+        >
+          {menuButton}
+          <span className={styles.handleName}>{handleDisplayName}</span>
+          <button type="button" className={styles.handleBtn} aria-label={t('expressionDisplay.minimize')} onClick={(e) => { e.stopPropagation(); toggleMinimized() }}>
+            <Minus size={12} aria-hidden="true" />
+          </button>
+          <button type="button" className={styles.handleBtn} aria-label={t('expressionDisplay.hide')} onClick={(e) => { e.stopPropagation(); setExpressionDisplay({ enabled: false }) }}>
+            <X size={12} aria-hidden="true" />
+          </button>
+        </div>
 
-        {/* Expression image area */}
-        {isStackedExpressionMode ? (
-          /* ── Multi-sprite expression row ── */
-          <div
-            className={styles.groupRow}
-            onPointerDown={!display.clickThrough ? handlePointerDown : undefined}
-            onPointerMove={!display.clickThrough ? handlePointerMove : undefined}
-            onPointerUp={!display.clickThrough ? handlePointerUp : undefined}
-          >
-            {stackedExpressionKeys.map((key, idx) => {
-              const imageUrl = getStackedImageUrl(key)
-              const label = getStackedLabel(key)
-              const isResponding = isGroupExpressionMode && isStreaming && respondingCharacterId === key
-              const isHovered = hoveredCharId === key
-              const isActive = isResponding || isHovered
-              const displayName = getStackedName(key)
-              const marginLeft = idx === 0 ? 0 : -groupSlotOverlap
-
-              return (
-                <div
-                  key={key}
-                  className={[
-                    styles.groupSlot,
-                    isActive ? styles.groupSlotActive : styles.groupSlotIdle,
-                  ].join(' ')}
-                  style={{
-                    width: size.width,
-                    marginLeft,
-                    zIndex: isHovered ? 3 : isResponding ? 2 : 1,
-                  }}
-                  onMouseEnter={() => setHoveredCharId(key)}
-                  onMouseLeave={() => setHoveredCharId(null)}
-                  onContextMenu={!display.clickThrough ? (e) => handleGroupSlotContextMenu(e, key) : undefined}
-                >
-                  <AnimatePresence mode="sync">
-                    {imageUrl && readyUrls.has(imageUrl) && (
-                      <motion.img
-                        key={imageUrl}
-                        src={imageUrl}
-                        alt={label || displayName}
-                        className={styles.expressionImg}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.3, ease: 'easeInOut' }}
-                        draggable={false}
-                      />
-                    )}
-                  </AnimatePresence>
-                  <span className={styles.groupNameTag}>
-                    {displayName}{label ? ` — ${label}` : ''}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          /* ── Single character expression ── */
-          <div
-            className={styles.imageContainer}
-            onPointerDown={!display.clickThrough ? handlePointerDown : undefined}
-            onPointerMove={!display.clickThrough ? handlePointerMove : undefined}
-            onPointerUp={!display.clickThrough ? handlePointerUp : undefined}
-          >
-            <AnimatePresence mode="sync">
-              {currentImageUrl && readyUrls.has(currentImageUrl) && (
-                <motion.img
-                  key={currentImageUrl}
-                  src={currentImageUrl}
-                  alt={currentExpression || ''}
-                  className={styles.expressionImg}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3, ease: 'easeInOut' }}
-                  draggable={false}
-                />
-              )}
-            </AnimatePresence>
-            {currentExpression && (
-              <span className={styles.labelBadge}>{currentExpression}</span>
-            )}
-          </div>
-        )}
+        {imageArea}
 
         {/* Resize handle */}
         <div
@@ -972,7 +1076,7 @@ export default function ExpressionDisplay() {
         />
       </div>
 
-      <ContextMenu position={contextMenu} items={contextMenuItems} onClose={closeContextMenu} />
+      {menu}
     </>,
     document.body
   )

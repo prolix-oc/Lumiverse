@@ -181,11 +181,10 @@
 .wrapperRight .resizeHandle { left: 0; }
 .wrapperLeft .resizeHandle { right: 0; }
 
-.resizeHandle:hover,
-.resizeHandle:focus-visible {
+.resizeHandle:is(:hover, :focus-visible, [data-resizing]) {
   background: var(--lumiverse-primary-020);
   outline: none;
-  box-shadow: inset 2px 0 var(--lumiverse-primary);
+  box-shadow: var(--resize-handle-highlight, inset 2px 0 var(--lumiverse-primary));
 }
 
 .wrapperRight .drawer {

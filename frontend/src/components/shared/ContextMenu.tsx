@@ -36,6 +36,7 @@ interface ContextMenuProps {
   position: ContextMenuPos | null
   items: ContextMenuEntry[]
   onClose: () => void
+  focusOnOpen?: boolean
 }
 
 function isDivider(e: ContextMenuEntry): e is ContextMenuSection {
@@ -52,7 +53,7 @@ function isCustom(e: ContextMenuEntry): e is ContextMenuCustom {
 // as do Spindle extensions).
 const openMenus = new Map<symbol, () => void>()
 
-export default function ContextMenu({ position, items, onClose }: ContextMenuProps) {
+export default function ContextMenu({ position, items, onClose, focusOnOpen = false }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
   const instanceIdRef = useRef<symbol>(null as unknown as symbol)
   if (instanceIdRef.current === null) instanceIdRef.current = Symbol('ContextMenu')
@@ -165,6 +166,13 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     window.addEventListener('resize', clampPosition)
     return () => window.removeEventListener('resize', clampPosition)
   }, [position, items])
+
+  useEffect(() => {
+    const menu = ref.current
+    if (position && focusOnOpen && menu && !menu.contains(document.activeElement)) {
+      menu.querySelector<HTMLButtonElement>('button:enabled')?.focus()
+    }
+  }, [position, items, focusOnOpen])
 
   if (!position) return null
 

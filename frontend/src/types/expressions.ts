@@ -25,8 +25,20 @@ export const EXPRESSION_SIZE_PRESETS: Record<
   large: { width: 360, height: 450 },
 }
 
+export const EXPRESSION_DOCK_SIZES = {
+  dockWidthPercent: { compact: 25, medium: 35, full: 50 },
+  dockHeightPercent: { compact: 20, medium: 30, full: 40 },
+} as const
+
+export const MIN_EXPRESSION_DOCK_PERCENT = 15
+
 export interface ExpressionDisplaySettings {
   enabled: boolean
+  placement: 'floating' | 'dock'
+  dockBackground: boolean
+  dockSide: 'left' | 'right'
+  dockWidthPercent: number
+  dockHeightPercent: number
   sizePreset: ExpressionDisplaySize
   customWidth: number
   customHeight: number
@@ -40,6 +52,11 @@ export interface ExpressionDisplaySettings {
 
 export const DEFAULT_EXPRESSION_DISPLAY: ExpressionDisplaySettings = {
   enabled: true,
+  placement: 'floating',
+  dockBackground: false,
+  dockSide: 'right',
+  dockWidthPercent: EXPRESSION_DOCK_SIZES.dockWidthPercent.compact,
+  dockHeightPercent: EXPRESSION_DOCK_SIZES.dockHeightPercent.compact,
   sizePreset: 'medium',
   customWidth: 240,
   customHeight: 300,
