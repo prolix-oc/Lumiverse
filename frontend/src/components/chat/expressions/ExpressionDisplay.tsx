@@ -44,7 +44,10 @@ export default function ExpressionDisplay({ isMobile = false, onSideDockChange }
   const currentExpressionImageId = useStore((s) => s.currentExpressionImageId)
   const expressionCharacterId = useStore((s) => s.expressionCharacterId)
   const display = useStore((s) => s.expressionDisplay)
-  const isDocked = display.placement === 'dock'
+  const placementKey = isMobile ? 'mobilePlacement' : 'placement'
+  const dockBackgroundKey = isMobile ? 'mobileDockBackground' : 'dockBackground'
+  const isDocked = display[placementKey] === 'dock'
+  const dockBackground = display[dockBackgroundKey] ?? isMobile
   const dockSide = display.dockSide === 'left' ? 'left' : 'right'
   const dockEdge = isMobile ? 'top' : dockSide
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
@@ -689,7 +692,8 @@ export default function ExpressionDisplay({ isMobile = false, onSideDockChange }
       key: 'placement',
       label: isDocked ? t('expressionDisplay.float') : t('expressionDisplay.dock'),
       onClick: () => {
-        setExpressionDisplay({ placement: isDocked ? 'floating' : 'dock', minimized: false })
+        const placement = isDocked ? 'floating' : 'dock'
+        setExpressionDisplay(isMobile ? { mobilePlacement: placement } : { placement, minimized: false })
         closeContextMenu()
       },
     })
@@ -709,9 +713,9 @@ export default function ExpressionDisplay({ isMobile = false, onSideDockChange }
         onClick: () => setMenuView({ kind: 'dock-size' }),
       }, {
         key: 'dock-background',
-        label: display.dockBackground ? t('expressionDisplay.hideDockBackground') : t('expressionDisplay.showDockBackground'),
+        label: dockBackground ? t('expressionDisplay.hideDockBackground') : t('expressionDisplay.showDockBackground'),
         onClick: () => {
-          setExpressionDisplay({ dockBackground: !display.dockBackground })
+          setExpressionDisplay({ [dockBackgroundKey]: !dockBackground })
           closeContextMenu()
         },
       })
@@ -810,7 +814,8 @@ export default function ExpressionDisplay({ isMobile = false, onSideDockChange }
     dockSize,
     dockPresets,
     setDockSize,
-    display.dockBackground,
+    dockBackground,
+    dockBackgroundKey,
     display.sizePreset,
     display.opacity,
     display.frameless,
@@ -1006,7 +1011,7 @@ export default function ExpressionDisplay({ isMobile = false, onSideDockChange }
         maxSize={dockPresets.full}
         onSizeChange={setDockSize}
         resizeLabel={t('expressionDisplay.resizeDock')}
-        background={display.dockBackground}
+        background={dockBackground}
         opacity={display.opacity}
         onContextMenu={handleContextMenu}
         controls={<>{menuButton}{menu}</>}

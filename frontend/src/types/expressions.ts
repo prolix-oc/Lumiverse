@@ -35,7 +35,9 @@ export const MIN_EXPRESSION_DOCK_PERCENT = 15
 export interface ExpressionDisplaySettings {
   enabled: boolean
   placement: 'floating' | 'dock'
+  mobilePlacement: 'floating' | 'dock'
   dockBackground: boolean
+  mobileDockBackground: boolean
   dockSide: 'left' | 'right'
   dockWidthPercent: number
   dockHeightPercent: number
@@ -53,7 +55,9 @@ export interface ExpressionDisplaySettings {
 export const DEFAULT_EXPRESSION_DISPLAY: ExpressionDisplaySettings = {
   enabled: true,
   placement: 'floating',
+  mobilePlacement: 'floating',
   dockBackground: false,
+  mobileDockBackground: true,
   dockSide: 'right',
   dockWidthPercent: EXPRESSION_DOCK_SIZES.dockWidthPercent.compact,
   dockHeightPercent: EXPRESSION_DOCK_SIZES.dockHeightPercent.compact,

@@ -104,14 +104,23 @@ test('legacy expression settings keep their floating geometry and new dock setti
   const floating = store()
   await floating.loadSettings()
   expect(floating.expressionDisplay).toMatchObject({
-    ...legacy, placement: 'floating', dockBackground: false, dockSide: 'right', dockWidthPercent: 25, dockHeightPercent: 20,
+    ...legacy, placement: 'floating', mobilePlacement: 'floating', dockBackground: false, mobileDockBackground: true,
+    dockSide: 'right', dockWidthPercent: 25, dockHeightPercent: 20,
   })
 
   const saved = { ...legacy, placement: 'dock', dockBackground: true, dockSide: 'left', dockWidthPercent: 32, dockHeightPercent: 28 }
   rows.set('expressionDisplay', saved)
   const docked = store()
   await docked.loadSettings()
-  expect(docked.expressionDisplay).toMatchObject(saved)
+  expect(docked.expressionDisplay).toMatchObject({
+    ...saved, mobilePlacement: 'floating', mobileDockBackground: true,
+  })
+
+  const mobileOverride = { ...saved, placement: 'floating', mobilePlacement: 'dock', mobileDockBackground: false }
+  rows.set('expressionDisplay', mobileOverride)
+  const mobileDocked = store()
+  await mobileDocked.loadSettings()
+  expect(mobileDocked.expressionDisplay).toMatchObject(mobileOverride)
 })
 
 describe('portrait dock persistence', () => {

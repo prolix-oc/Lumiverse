@@ -155,7 +155,31 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
 
         await choose('Half-dock view')
         assert.equal(await dock.getAttribute('data-expression-dock'), mobile ? 'top' : 'right')
-        assert.equal(await dock.evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)')
+        const placementKey = mobile ? 'mobilePlacement' : 'placement'
+        const otherPlacementKey = mobile ? 'placement' : 'mobilePlacement'
+        const backgroundKey = mobile ? 'mobileDockBackground' : 'dockBackground'
+        const otherBackgroundKey = mobile ? 'dockBackground' : 'mobileDockBackground'
+        assert.equal(await dock.getAttribute('data-dock-background'), mobile ? 'true' : null)
+        assert.equal(saved[placementKey], 'dock')
+        assert.equal(saved[otherPlacementKey], 'floating')
+        assert.equal(saved[otherBackgroundKey], !mobile)
+        if (!mobile) {
+          await page.setViewportSize({ width: 390, height: 844 })
+          await dock.waitFor({ state: 'detached' })
+          await page.getByRole('img', { name: 'smile' }).waitFor()
+          await page.setViewportSize({ width, height: 844 })
+          await dock.waitFor()
+          assert.equal(await dock.getAttribute('data-expression-dock'), 'right')
+        }
+        if (mobile) {
+          await choose('Hide Dock Background')
+          assert.equal(await dock.getAttribute('data-dock-background'), null)
+          assert.equal(saved[backgroundKey], false)
+          assert.equal(saved[otherBackgroundKey], false)
+          await page.reload()
+          await dock.waitFor()
+          assert.equal(await dock.getAttribute('data-dock-background'), null)
+        }
         const handle = page.getByRole('separator', { name: 'Resize expression dock' })
         const gallery = page.getByRole('button', { name: 'Gallery', exact: true })
         const resizeHighlight = () => handle.evaluate(el => getComputedStyle(el).boxShadow)
@@ -291,6 +315,8 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         }
 
         await choose('Show Dock Background')
+        assert.equal(saved[backgroundKey], true)
+        assert.equal(saved[otherBackgroundKey], !mobile)
         assert.notEqual(await dock.evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)')
         await page.reload()
         await dock.waitFor()
@@ -308,6 +334,7 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         if (!mobile) await setSidebarWidth('right', 280)
         await choose('Floating view')
         assert.equal(await dock.count(), 0)
+        assert.equal(saved[placementKey], 'floating')
         if (!mobile) {
           await expectChatRight(width - 280)
           await setSidebarWidth('right', 0)
@@ -316,6 +343,15 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
         await page.getByRole('img', { name: 'smile' }).waitFor()
         assert.deepEqual(await page.getByRole('img', { name: 'smile' }).boundingBox(), originalSprite)
         assert.equal(saved.clickThrough, true)
+        if (!mobile) {
+          await page.setViewportSize({ width: 390, height: 844 })
+          await choose('Half-dock view')
+          assert.equal(await dock.getAttribute('data-expression-dock'), 'top')
+          await page.setViewportSize({ width, height: 844 })
+          await dock.waitFor({ state: 'detached' })
+          assert.equal(saved.placement, 'floating')
+          assert.equal(saved.mobilePlacement, 'dock')
+        }
         assert.deepEqual(errors, [])
         console.log(`${engine} ${width}px: dock resizing, hover highlight, gallery alignment, and persistence pass`)
       } finally {
