@@ -175,6 +175,18 @@ jobs:
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml system_audio::
           cargo test --locked --lib --manifest-path src-tauri/Cargo.toml webview_visibility::
 
+      - name: Test Windows first-run setup window
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        timeout-minutes: 5
+        working-directory: desktop
+        env:
+          # Embed the built setup page instead of navigating to the dev server.
+          TAURI_CONFIG: '{"build":{"devUrl":null}}'
+        run: >-
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml
+          bundled_server::tests::first_run_setup_keeps_windows_event_loop_responsive
+          -- --ignored --exact --nocapture --test-threads=1
+
       - name: Test Linux system audio boundaries
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         working-directory: desktop

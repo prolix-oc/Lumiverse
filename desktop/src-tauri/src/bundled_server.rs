@@ -151,11 +151,20 @@ fn handle_frame(app: &AppHandle, token: &str, text: &str) -> bool {
         }
         Some("setup") => {
             let handle = app.clone();
-            let _ = app.run_on_main_thread(move || {
+            let open = move || {
                 if let Err(error) = show_setup(handle) {
                     eprintln!("Could not open server setup: {error}");
                 }
-            });
+            };
+            // WebView2 creation can deadlock inside a Windows event callback.
+            // Keep the pipe reader free for setup replies while a worker opens
+            // the window. WebKit on macOS still needs the main thread.
+            #[cfg(windows)]
+            tauri::async_runtime::spawn_blocking(open);
+            #[cfg(not(windows))]
+            if let Err(error) = app.run_on_main_thread(open) {
+                eprintln!("Could not schedule server setup: {error}");
+            }
         }
         _ => return false,
     }
@@ -223,7 +232,9 @@ pub(crate) fn command(app: &AppHandle) -> Result<Command, String> {
     // The server owns its runtime/native libraries; AppRun's GTK overrides
     // belong to the desktop and must not affect Bun or its subprocesses.
     #[cfg(target_os = "linux")]
-    command.env_remove("LD_LIBRARY_PATH").env_remove("LD_PRELOAD");
+    command
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD");
     if app.state::<crate::profile::DesktopProfile>().isolated {
         let root = app
             .path()
@@ -427,5 +438,89 @@ pub fn force_stop<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             std::thread::sleep(Duration::from_millis(100));
         }
         crate::runner::kill_tree(&mut process.child.lock().unwrap());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// Run separately: WebView2 needs a Windows desktop, and a deadlocked
+    /// native event loop must fail the process instead of hanging the suite.
+    #[test]
+    #[ignore = "requires native Windows WebView2; run explicitly in desktop CI"]
+    fn first_run_setup_keeps_windows_event_loop_responsive() {
+        let mut context = tauri::generate_context!();
+        // Use real packaged setup assets without booting the tray or touching
+        // an installed user's settings, server, or WebView profile.
+        context.config_mut().app.windows.clear();
+        context.config_mut().build.dev_url = None;
+        context.config_mut().identifier =
+            format!("chat.lumiverse.tray.setup-test.{}", uuid::Uuid::new_v4());
+        let (completed, deadline) = std::sync::mpsc::channel();
+        let (loaded, page_ready) = std::sync::mpsc::channel();
+        let (responsive, observed) = std::sync::mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if deadline.recv_timeout(Duration::from_secs(30)).is_err() {
+                eprintln!("First-run setup blocked the Windows event loop or failed to open");
+                std::process::exit(1);
+            }
+        });
+        let app = tauri::Builder::default()
+            .any_thread()
+            .manage(BundledServerState::default())
+            .on_page_load(move |window, payload| {
+                if window.label() == SETUP_WINDOW
+                    && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+                {
+                    let _ = loaded.send(());
+                }
+            })
+            .setup(move |app| {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // Match the authenticated setup frame from the bundled
+                    // server's background stdout reader.
+                    assert!(handle_frame(
+                        &handle,
+                        "setup-test-token",
+                        &json!({ "token": "setup-test-token", "type": "setup" }).to_string(),
+                    ));
+                    let until = Instant::now() + Duration::from_secs(20);
+                    let window = loop {
+                        if let Some(window) = handle.get_webview_window(SETUP_WINDOW) {
+                            break window;
+                        }
+                        assert!(Instant::now() < until, "Setup window did not open");
+                        std::thread::sleep(Duration::from_millis(25));
+                    };
+                    page_ready
+                        .recv_timeout(Duration::from_secs(20))
+                        .expect("setup page finished loading in WebView2");
+                    assert!(window.is_visible().expect("read setup visibility"));
+                    assert_eq!(
+                        window.title().expect("read setup title"),
+                        "Set up Lumiverse"
+                    );
+                    // This callback can only run once window creation has
+                    // returned control to the native event loop.
+                    let owner = handle.clone();
+                    handle
+                        .run_on_main_thread(move || {
+                            responsive.send(()).expect("report event-loop probe");
+                            owner.exit(0);
+                        })
+                        .expect("schedule event-loop responsiveness probe");
+                });
+                Ok(())
+            })
+            .build(context)
+            .expect("build native setup test app");
+        let profile_dir = app.path().app_local_data_dir().expect("test profile path");
+        assert_eq!(app.run_return(|_, _| {}), 0);
+        observed.try_recv().expect("event-loop probe completed");
+        completed.send(()).expect("stop setup watchdog");
+        watchdog.join().expect("join setup watchdog");
+        let _ = std::fs::remove_dir_all(profile_dir);
     }
 }
