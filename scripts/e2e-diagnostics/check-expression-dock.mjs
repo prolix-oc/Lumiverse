@@ -168,6 +168,7 @@ for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ['ch
           assert.equal(await gallery.getAttribute('aria-expanded'), 'true')
           await gallery.click()
         } else {
+          await page.mouse.move(0, 0)
           assert.equal(await resizeHighlight(), 'none')
         }
         assert.equal(await handle.getAttribute('aria-valuenow'), mobile ? '20' : '25')
