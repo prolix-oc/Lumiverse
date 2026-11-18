@@ -17,6 +17,7 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Spinner } from '@/components/shared/Spinner'
 import { charactersApi } from '@/api/characters'
 import { toast } from '@/lib/toast'
+import { getGreetingTitle } from '@/lib/greetingMetadata'
 import { computeLineDiff, countDiffLines } from '@/lib/textDiff'
 import type {
   AlternateGreetingsUpdateMode,
@@ -30,6 +31,7 @@ import type {
   CharxAssetsUpdateMode,
   ExtensionsUpdateMode,
   FirstMesUpdateMode,
+  GreetingNamesUpdateMode,
   RegexUpdateMode,
   TagsUpdateMode,
   WorldBookUpdateMode,
@@ -50,6 +52,122 @@ const SCALAR_FIELDS: readonly CardScalarField[] = [
 
 function normalizeGreeting(value: string): string {
   return value.trim()
+}
+
+interface GreetingNameChange {
+  key: string
+  overallIndex: number
+  currentTitle: string | null
+  incomingTitle: string
+  kind: 'missing' | 'changed'
+}
+
+interface GreetingNameAnalysis {
+  incomingMainTitle: string | null
+  incomingAltTitles: (string | null)[]
+  hasAnyNames: boolean
+  findIncomingTitleForText: (text: string, preferred?: { isMain?: boolean; altIndex?: number }) => string | null
+  changes: GreetingNameChange[]
+  missingCount: number
+  changedCount: number
+  hasChanges: boolean
+}
+
+function analyzeGreetingNames(
+  target: Character,
+  preview: CardUpdatePreview,
+  firstMesMode: FirstMesUpdateMode,
+  alternateGreetingsMode: AlternateGreetingsUpdateMode,
+  keepExistingGreetingIndices: number[],
+): GreetingNameAnalysis {
+  const incomingExt = preview.incoming.extensions
+  const targetExt = target.extensions
+  const incomingAlternates = preview.incoming.alternate_greetings ?? []
+  const existingAlternates = target.alternate_greetings ?? []
+
+  const incomingMainTitle = getGreetingTitle(incomingExt, 0)
+  const incomingAltTitles = incomingAlternates.map((_, idx) => getGreetingTitle(incomingExt, idx + 1))
+
+  const findIncomingTitleForText = (
+    text: string,
+    preferred: { isMain?: boolean; altIndex?: number } = {},
+  ): string | null => {
+    const key = normalizeGreeting(text)
+    if (!key) return null
+    if (preferred.isMain && normalizeGreeting(preview.incoming.first_mes ?? '') === key) {
+      return incomingMainTitle
+    }
+    if (preferred.altIndex !== undefined && normalizeGreeting(incomingAlternates[preferred.altIndex] ?? '') === key) {
+      return incomingAltTitles[preferred.altIndex] ?? null
+    }
+    for (let i = 0; i < incomingAlternates.length; i++) {
+      if (normalizeGreeting(incomingAlternates[i] ?? '') === key && incomingAltTitles[i]) {
+        return incomingAltTitles[i]
+      }
+    }
+    if (normalizeGreeting(preview.incoming.first_mes ?? '') === key) {
+      return incomingMainTitle
+    }
+    return null
+  }
+
+  const changes: GreetingNameChange[] = []
+  if (firstMesMode === 'keep') {
+    const currentMainTitle = getGreetingTitle(targetExt, 0)
+    const matchedTitle = findIncomingTitleForText(target.first_mes ?? '', { isMain: true })
+    if (matchedTitle && matchedTitle !== currentMainTitle) {
+      changes.push({
+        key: 'main',
+        overallIndex: 0,
+        currentTitle: currentMainTitle,
+        incomingTitle: matchedTitle,
+        kind: currentMainTitle ? 'changed' : 'missing',
+      })
+    }
+  }
+
+  const retainedIndices =
+    alternateGreetingsMode === 'replace_all'
+      ? []
+      : alternateGreetingsMode === 'select'
+        ? keepExistingGreetingIndices
+        : existingAlternates.map((_, idx) => idx)
+
+  for (const idx of retainedIndices) {
+    const text = existingAlternates[idx]
+    if (!text) continue
+    const currentAltTitle = getGreetingTitle(targetExt, idx + 1)
+    const matchedTitle = findIncomingTitleForText(text, { altIndex: idx })
+    if (matchedTitle && matchedTitle !== currentAltTitle) {
+      changes.push({
+        key: `alt-${idx}`,
+        overallIndex: idx + 1,
+        currentTitle: currentAltTitle,
+        incomingTitle: matchedTitle,
+        kind: currentAltTitle ? 'changed' : 'missing',
+      })
+    }
+  }
+
+  const hasExistingNames =
+    getGreetingTitle(targetExt, 0) !== null ||
+    existingAlternates.some((_, idx) => getGreetingTitle(targetExt, idx + 1) !== null)
+  const hasIncomingNames =
+    incomingMainTitle !== null || incomingAltTitles.some((title) => title !== null)
+
+  const missingCount = changes.filter((c) => c.kind === 'missing').length
+  const changedCount = changes.filter((c) => c.kind === 'changed').length
+
+  return {
+    incomingMainTitle,
+    incomingAltTitles,
+    hasAnyNames: hasExistingNames || hasIncomingNames,
+    findIncomingTitleForText,
+    changes,
+    missingCount,
+    changedCount,
+    hasChanges: missingCount > 0 || changedCount > 0,
+  }
 }
 
 function buildInitialState(target: Character, preview: CardUpdatePreview) {
@@ -79,6 +197,21 @@ function buildInitialState(target: Character, preview: CardUpdatePreview) {
 
   const alternateGreetingsMode: AlternateGreetingsUpdateMode =
     newIncomingIndices.length > 0 ? 'append_new' : 'keep'
+  const keepExistingGreetingIndices = (target.alternate_greetings ?? []).map((_, idx) => idx)
+
+  const nameAnalysis = analyzeGreetingNames(
+    target,
+    preview,
+    firstMesMode,
+    alternateGreetingsMode,
+    keepExistingGreetingIndices,
+  )
+  const greetingNamesMode: GreetingNamesUpdateMode =
+    nameAnalysis.changedCount > 0
+      ? 'overwrite'
+      : nameAnalysis.missingCount > 0
+        ? 'merge_missing'
+        : 'keep'
 
   const existingTagsSet = new Set(target.tags ?? [])
   const hasNewTags = (incoming.tags ?? []).some((tag) => !existingTagsSet.has(tag))
@@ -96,8 +229,9 @@ function buildInitialState(target: Character, preview: CardUpdatePreview) {
     selectedFields: changedScalars,
     firstMesMode,
     alternateGreetingsMode,
-    keepExistingGreetingIndices: (target.alternate_greetings ?? []).map((_, idx) => idx),
+    keepExistingGreetingIndices,
     selectedIncomingGreetingIndices: newIncomingIndices,
+    greetingNamesMode,
     tagsMode,
     avatarMode: 'keep' as AvatarUpdateMode,
     extensionsMode: 'keep' as ExtensionsUpdateMode,
@@ -178,6 +312,7 @@ export default function CardUpdateModal({
   const [alternateGreetingsMode, setAlternateGreetingsMode] = useState<AlternateGreetingsUpdateMode>('keep')
   const [keepExistingGreetingIndices, setKeepExistingGreetingIndices] = useState<number[]>([])
   const [selectedIncomingGreetingIndices, setSelectedIncomingGreetingIndices] = useState<number[]>([])
+  const [greetingNamesMode, setGreetingNamesMode] = useState<GreetingNamesUpdateMode>('keep')
   const [tagsMode, setTagsMode] = useState<TagsUpdateMode>('keep')
   const [avatarMode, setAvatarMode] = useState<AvatarUpdateMode>('keep')
   const [extensionsMode, setExtensionsMode] = useState<ExtensionsUpdateMode>('keep')
@@ -244,6 +379,7 @@ export default function CardUpdateModal({
     setAlternateGreetingsMode(init.alternateGreetingsMode)
     setKeepExistingGreetingIndices(init.keepExistingGreetingIndices)
     setSelectedIncomingGreetingIndices(init.selectedIncomingGreetingIndices)
+    setGreetingNamesMode(init.greetingNamesMode)
     setTagsMode(init.tagsMode)
     setAvatarMode(init.avatarMode)
     setExtensionsMode(init.extensionsMode)
@@ -284,6 +420,28 @@ export default function CardUpdateModal({
     if (incomingAlternates.length !== existingAlternates.length) return true
     return incomingAlternates.some((g, idx) => g !== existingAlternates[idx])
   }, [target, preview, incomingAlternates, existingAlternates])
+
+  const greetingNamesInfo = useMemo(() => {
+    if (!target || !preview) {
+      return {
+        incomingMainTitle: null,
+        incomingAltTitles: [] as (string | null)[],
+        hasAnyNames: false,
+        findIncomingTitleForText: () => null,
+        changes: [] as GreetingNameChange[],
+        missingCount: 0,
+        changedCount: 0,
+        hasChanges: false,
+      } satisfies GreetingNameAnalysis
+    }
+    return analyzeGreetingNames(
+      target,
+      preview,
+      firstMesMode,
+      alternateGreetingsMode,
+      keepExistingGreetingIndices,
+    )
+  }, [target, preview, firstMesMode, alternateGreetingsMode, keepExistingGreetingIndices])
 
   const tagsInfo = useMemo(() => {
     if (!target || !preview) return { differs: false, added: [] as string[], removed: [] as string[] }
@@ -350,28 +508,69 @@ export default function CardUpdateModal({
         nextFields.add(field)
       }
     }
+    const nextFirstMesMode: FirstMesUpdateMode = firstMesDiffers ? 'replace' : 'keep'
+    const nextAlternateMode: AlternateGreetingsUpdateMode =
+      newIncomingCount > 0 ? 'append_new' : alternatesDiffer ? 'replace_all' : 'keep'
+    const nextNamesInfo = analyzeGreetingNames(
+      target,
+      preview,
+      nextFirstMesMode,
+      nextAlternateMode,
+      keepExistingGreetingIndices,
+    )
     setSelectedFields(nextFields)
-    setFirstMesMode(firstMesDiffers ? 'replace' : 'keep')
-    setAlternateGreetingsMode(newIncomingCount > 0 ? 'append_new' : alternatesDiffer ? 'replace_all' : 'keep')
+    setFirstMesMode(nextFirstMesMode)
+    setAlternateGreetingsMode(nextAlternateMode)
+    setGreetingNamesMode(
+      nextNamesInfo.changedCount > 0
+        ? 'overwrite'
+        : nextNamesInfo.missingCount > 0
+          ? 'merge_missing'
+          : 'keep',
+    )
     setTagsMode(tagsInfo.added.length > 0 ? 'merge' : tagsInfo.differs ? 'replace' : 'keep')
-  }, [target, preview, firstMesDiffers, newIncomingCount, alternatesDiffer, tagsInfo])
+  }, [target, preview, firstMesDiffers, newIncomingCount, alternatesDiffer, keepExistingGreetingIndices, tagsInfo])
 
   const applyPresetGreetingsOnly = useCallback(() => {
+    const nextFirstMesMode: FirstMesUpdateMode = firstMesDiffers
+      ? (firstMesMode === 'replace_and_demote' ? 'replace_and_demote' : 'replace')
+      : 'keep'
+    const nextAlternateMode: AlternateGreetingsUpdateMode =
+      newIncomingCount > 0 ? 'append_new' : alternatesDiffer ? 'replace_all' : 'keep'
     setSelectedFields(new Set())
-    setFirstMesMode((prev) => (firstMesDiffers ? (prev === 'replace_and_demote' ? 'replace_and_demote' : 'replace') : 'keep'))
-    setAlternateGreetingsMode(newIncomingCount > 0 ? 'append_new' : alternatesDiffer ? 'replace_all' : 'keep')
+    setFirstMesMode(nextFirstMesMode)
+    setAlternateGreetingsMode(nextAlternateMode)
+    if (target && preview) {
+      const nextNamesInfo = analyzeGreetingNames(
+        target,
+        preview,
+        nextFirstMesMode,
+        nextAlternateMode,
+        keepExistingGreetingIndices,
+      )
+      setGreetingNamesMode(
+        nextNamesInfo.changedCount > 0
+          ? 'overwrite'
+          : nextNamesInfo.missingCount > 0
+            ? 'merge_missing'
+            : 'keep',
+      )
+    } else {
+      setGreetingNamesMode('keep')
+    }
     setTagsMode('keep')
     setAvatarMode('keep')
     setExtensionsMode('keep')
     setWorldBookMode('keep')
     setRegexMode('keep')
     setCharxAssetsMode('keep')
-  }, [firstMesDiffers, newIncomingCount, alternatesDiffer])
+  }, [target, preview, firstMesDiffers, firstMesMode, newIncomingCount, alternatesDiffer, keepExistingGreetingIndices])
 
   const applyPresetClear = useCallback(() => {
     setSelectedFields(new Set())
     setFirstMesMode('keep')
     setAlternateGreetingsMode('keep')
+    setGreetingNamesMode('keep')
     setTagsMode('keep')
     setAvatarMode('keep')
     setExtensionsMode('keep')
@@ -380,10 +579,14 @@ export default function CardUpdateModal({
     setCharxAssetsMode('keep')
   }, [])
 
+  const effectiveGreetingNamesMode: GreetingNamesUpdateMode =
+    greetingNamesInfo.hasChanges ? greetingNamesMode : 'keep'
+
   const selectedChangeCount = useMemo(() => {
     let count = selectedFields.size
     if (firstMesMode !== 'keep') count++
     if (alternateGreetingsMode !== 'keep') count++
+    if (effectiveGreetingNamesMode !== 'keep') count++
     if (tagsMode !== 'keep') count++
     if (avatarMode !== 'keep') count++
     if (extensionsMode !== 'keep') count++
@@ -395,6 +598,7 @@ export default function CardUpdateModal({
     selectedFields.size,
     firstMesMode,
     alternateGreetingsMode,
+    effectiveGreetingNamesMode,
     tagsMode,
     avatarMode,
     extensionsMode,
@@ -405,11 +609,11 @@ export default function CardUpdateModal({
 
   const anyDifferencesDetected = useMemo(() => {
     if (!target || !preview) return false
-    if (firstMesDiffers || alternatesDiffer || tagsInfo.differs) return true
+    if (firstMesDiffers || alternatesDiffer || greetingNamesInfo.hasChanges || tagsInfo.differs) return true
     if (SCALAR_FIELDS.some((field) => (preview.incoming[field] ?? '') !== (target[field] ?? ''))) return true
     if (preview.hasAvatar || hasWorldBooks || hasRegexScripts || hasCharxAssets) return true
     return false
-  }, [target, preview, firstMesDiffers, alternatesDiffer, tagsInfo.differs, hasWorldBooks, hasRegexScripts, hasCharxAssets])
+  }, [target, preview, firstMesDiffers, alternatesDiffer, greetingNamesInfo.hasChanges, tagsInfo.differs, hasWorldBooks, hasRegexScripts, hasCharxAssets])
 
   const handleApply = useCallback(async () => {
     if (!target || !file || selectedChangeCount === 0 || applying || loadingTarget) return
@@ -425,6 +629,7 @@ export default function CardUpdateModal({
               selectedIncomingGreetingIndices,
             }
           : {}),
+        greetingNamesMode: effectiveGreetingNamesMode,
         tagsMode,
         avatarMode,
         extensionsMode,
@@ -450,6 +655,7 @@ export default function CardUpdateModal({
     alternateGreetingsMode,
     keepExistingGreetingIndices,
     selectedIncomingGreetingIndices,
+    effectiveGreetingNamesMode,
     tagsMode,
     avatarMode,
     extensionsMode,
@@ -610,61 +816,71 @@ export default function CardUpdateModal({
             )}
 
             {/* ── Greetings Section ── */}
-            {(firstMesDiffers || alternatesDiffer || newIncomingCount > 0 || showUnchanged) && (
+            {(firstMesDiffers || alternatesDiffer || newIncomingCount > 0 || greetingNamesInfo.hasChanges || (showUnchanged && greetingNamesInfo.hasAnyNames) || showUnchanged) && (
               <div className={styles.section}>
                 <div className={styles.sectionHeader}>
                   <span className={styles.sectionTitle}>{t('cardUpdate.sectionGreetings')}</span>
                 </div>
 
-                {(firstMesDiffers || showUnchanged) && (
-                  <div className={clsx(styles.cardBlock, firstMesDiffers && styles.cardBlockChanged)}>
-                    <div className={styles.cardBlockHeader}>
-                      <div className={styles.cardBlockLeft}>
-                        <span className={styles.fieldLabel}>{t('cardUpdate.fields.first_mes')}</span>
-                        <span className={clsx(styles.statusPill, firstMesDiffers ? styles.pillChanged : styles.pillSame)}>
-                          {firstMesDiffers ? t('cardUpdate.changed') : t('cardUpdate.unchanged')}
-                        </span>
-                        {firstMesDiffers && (() => {
-                          const counts = countDiffLines(computeLineDiff(target.first_mes ?? '', preview.incoming.first_mes ?? ''))
-                          return (
-                            <span className={styles.diffStats}>
-                              {counts.added > 0 && <span className={styles.statAdded}>+{counts.added}</span>}
-                              {counts.removed > 0 && <span className={styles.statRemoved}>-{counts.removed}</span>}
-                            </span>
-                          )
-                        })()}
-                      </div>
-                      <div className={styles.cardBlockRight}>
-                        <select
-                          className={styles.modeSelect}
-                          value={firstMesMode}
-                          onChange={(e) => setFirstMesMode(e.target.value as FirstMesUpdateMode)}
-                        >
-                          <option value="keep">{t('cardUpdate.modes.keepCurrent')}</option>
-                          <option value="replace">{t('cardUpdate.modes.replace')}</option>
-                          {(target.first_mes ?? '').trim().length > 0 && (
-                            <option value="replace_and_demote">
-                              {t('cardUpdate.modes.replaceAndDemote')}
-                            </option>
+                {(firstMesDiffers || showUnchanged) && (() => {
+                  const currentFirstTitle = getGreetingTitle(target.extensions, 0)
+                  const incomingFirstTitle = greetingNamesInfo.incomingMainTitle
+                  const firstTitleSummary = currentFirstTitle && incomingFirstTitle && currentFirstTitle !== incomingFirstTitle
+                    ? `${currentFirstTitle} → ${incomingFirstTitle}`
+                    : (firstMesMode !== 'keep' ? incomingFirstTitle : currentFirstTitle) || incomingFirstTitle
+                  return (
+                    <div className={clsx(styles.cardBlock, firstMesDiffers && styles.cardBlockChanged)}>
+                      <div className={styles.cardBlockHeader}>
+                        <div className={styles.cardBlockLeft}>
+                          <span className={styles.fieldLabel}>{t('cardUpdate.fields.first_mes')}</span>
+                          {firstTitleSummary && (
+                            <span className={styles.greetingNameTag}>{firstTitleSummary}</span>
                           )}
-                        </select>
-                        {firstMesDiffers && (
-                          <button
-                            type="button"
-                            className={styles.expandBtn}
-                            onClick={() => toggleDiffExpanded('first_mes')}
+                          <span className={clsx(styles.statusPill, firstMesDiffers ? styles.pillChanged : styles.pillSame)}>
+                            {firstMesDiffers ? t('cardUpdate.changed') : t('cardUpdate.unchanged')}
+                          </span>
+                          {firstMesDiffers && (() => {
+                            const counts = countDiffLines(computeLineDiff(target.first_mes ?? '', preview.incoming.first_mes ?? ''))
+                            return (
+                              <span className={styles.diffStats}>
+                                {counts.added > 0 && <span className={styles.statAdded}>+{counts.added}</span>}
+                                {counts.removed > 0 && <span className={styles.statRemoved}>-{counts.removed}</span>}
+                              </span>
+                            )
+                          })()}
+                        </div>
+                        <div className={styles.cardBlockRight}>
+                          <select
+                            className={styles.modeSelect}
+                            value={firstMesMode}
+                            onChange={(e) => setFirstMesMode(e.target.value as FirstMesUpdateMode)}
                           >
-                            {expandedDiffs.has('first_mes') ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                            <span>{t('cardUpdate.diff')}</span>
-                          </button>
-                        )}
+                            <option value="keep">{t('cardUpdate.modes.keepCurrent')}</option>
+                            <option value="replace">{t('cardUpdate.modes.replace')}</option>
+                            {(target.first_mes ?? '').trim().length > 0 && (
+                              <option value="replace_and_demote">
+                                {t('cardUpdate.modes.replaceAndDemote')}
+                              </option>
+                            )}
+                          </select>
+                          {firstMesDiffers && (
+                            <button
+                              type="button"
+                              className={styles.expandBtn}
+                              onClick={() => toggleDiffExpanded('first_mes')}
+                            >
+                              {expandedDiffs.has('first_mes') ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              <span>{t('cardUpdate.diff')}</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      {expandedDiffs.has('first_mes') && firstMesDiffers && (
+                        <DiffBlock oldText={target.first_mes ?? ''} newText={preview.incoming.first_mes ?? ''} />
+                      )}
                     </div>
-                    {expandedDiffs.has('first_mes') && firstMesDiffers && (
-                      <DiffBlock oldText={target.first_mes ?? ''} newText={preview.incoming.first_mes ?? ''} />
-                    )}
-                  </div>
-                )}
+                  )
+                })()}
 
                 {(alternatesDiffer || incomingAlternates.length > 0 || showUnchanged) && (
                   <div className={clsx(styles.cardBlock, alternatesDiffer && styles.cardBlockChanged)}>
@@ -712,6 +928,8 @@ export default function CardUpdateModal({
                               const checked = keepExistingGreetingIndices.includes(idx)
                               const previewKey = `existing-${idx}`
                               const isExpanded = expandedGreetings.has(previewKey)
+                              const existingTitle = getGreetingTitle(target.extensions, idx + 1)
+                              const matchedIncomingTitle = greetingNamesInfo.findIncomingTitleForText(greeting, { altIndex: idx })
                               return (
                                 <label key={previewKey} className={styles.greetingItem}>
                                   <input
@@ -730,6 +948,12 @@ export default function CardUpdateModal({
                                       <span className={styles.greetingTitle}>
                                         {t('cardUpdate.greetingNumber', { number: idx + 1 })}
                                       </span>
+                                      {existingTitle && (
+                                        <span className={styles.greetingNameTag}>{existingTitle}</span>
+                                      )}
+                                      {matchedIncomingTitle && matchedIncomingTitle !== existingTitle && (
+                                        <span className={styles.greetingNameTag}>{`→ ${matchedIncomingTitle}`}</span>
+                                      )}
                                       <span className={clsx(styles.statusPill, styles.pillSame)}>
                                         {t('cardUpdate.currentLabel')}
                                       </span>
@@ -774,6 +998,7 @@ export default function CardUpdateModal({
                                   : selectedIncomingGreetingIndices.includes(idx)
                               const previewKey = `incoming-${idx}`
                               const isExpanded = expandedGreetings.has(previewKey)
+                              const incomingTitle = greetingNamesInfo.incomingAltTitles[idx] ?? null
                               return (
                                 <label key={previewKey} className={styles.greetingItem}>
                                   <input
@@ -806,6 +1031,9 @@ export default function CardUpdateModal({
                                       <span className={styles.greetingTitle}>
                                         {t('cardUpdate.greetingNumber', { number: idx + 1 })}
                                       </span>
+                                      {incomingTitle && (
+                                        <span className={styles.greetingNameTag}>{incomingTitle}</span>
+                                      )}
                                       <span className={clsx(styles.statusPill, isDuplicate ? styles.pillSame : styles.pillNew)}>
                                         {isDuplicate ? t('cardUpdate.alreadyExists') : t('cardUpdate.newBadge')}
                                       </span>
@@ -836,6 +1064,78 @@ export default function CardUpdateModal({
                             })}
                           </>
                         )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(greetingNamesInfo.hasChanges || (showUnchanged && greetingNamesInfo.hasAnyNames)) && (
+                  <div className={clsx(styles.cardBlock, greetingNamesInfo.hasChanges && styles.cardBlockChanged)}>
+                    <div className={styles.cardBlockHeader}>
+                      <div className={styles.cardBlockLeft}>
+                        <span className={styles.fieldLabel}>{t('cardUpdate.fields.greetingNames')}</span>
+                        {greetingNamesInfo.hasChanges ? (
+                          greetingNamesInfo.changedCount === 0 && greetingNamesInfo.missingCount > 0 ? (
+                            <span className={clsx(styles.statusPill, styles.pillNew)}>
+                              {t('cardUpdate.newGreetingsCount', { count: greetingNamesInfo.missingCount })}
+                            </span>
+                          ) : (
+                            <span className={clsx(styles.statusPill, styles.pillChanged)}>
+                              {t('cardUpdate.changed')}
+                            </span>
+                          )
+                        ) : (
+                          <span className={clsx(styles.statusPill, styles.pillSame)}>
+                            {t('cardUpdate.unchanged')}
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles.cardBlockRight}>
+                        {greetingNamesInfo.hasChanges && (
+                          <select
+                            className={styles.modeSelect}
+                            value={greetingNamesMode}
+                            onChange={(e) => setGreetingNamesMode(e.target.value as GreetingNamesUpdateMode)}
+                          >
+                            <option value="keep">{t('cardUpdate.modes.keepCurrent')}</option>
+                            {greetingNamesInfo.missingCount > 0 && (
+                              <option value="merge_missing">
+                                {t('cardUpdate.modes.mergeMissingNames', { count: greetingNamesInfo.missingCount })}
+                              </option>
+                            )}
+                            <option value="overwrite">
+                              {t('cardUpdate.modes.overwriteMatchingNames', { count: greetingNamesInfo.changes.length })}
+                            </option>
+                          </select>
+                        )}
+                        {greetingNamesInfo.hasChanges && (
+                          <button
+                            type="button"
+                            className={styles.expandBtn}
+                            onClick={() => toggleDiffExpanded('greeting_names')}
+                          >
+                            {expandedDiffs.has('greeting_names') ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                            <span>{t('cardUpdate.diff')}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {greetingNamesInfo.hasChanges && (effectiveGreetingNamesMode !== 'keep' || expandedDiffs.has('greeting_names')) && (
+                      <div className={styles.greetingNameDiffList}>
+                        {greetingNamesInfo.changes.map((change) => (
+                          <div key={change.key} className={styles.greetingNameDiffRow}>
+                            <span className={styles.greetingNameTarget}>
+                              {change.overallIndex === 0
+                                ? t('cardUpdate.mainGreetingLabel')
+                                : t('cardUpdate.greetingNumber', { number: change.overallIndex })}
+                            </span>
+                            <span className={styles.greetingNameOld}>
+                              {change.currentTitle || t('cardUpdate.unnamedGreeting')}
+                            </span>
+                            <ArrowRight size={12} />
+                            <span className={styles.greetingNameNew}>{change.incomingTitle}</span>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

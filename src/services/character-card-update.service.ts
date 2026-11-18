@@ -118,6 +118,7 @@ const CARD_SCALAR_FIELD_SET = new Set<string>(CARD_SCALAR_FIELDS);
 
 export type FirstMesUpdateMode = "keep" | "replace" | "replace_and_demote";
 export type AlternateGreetingsUpdateMode = "keep" | "append_new" | "replace_all" | "select";
+export type GreetingNamesUpdateMode = "keep" | "merge_missing" | "overwrite";
 export type TagsUpdateMode = "keep" | "merge" | "replace";
 export type AvatarUpdateMode = "keep" | "replace_primary" | "add_alternate";
 export type ExtensionsUpdateMode = "keep" | "merge_portable" | "replace_portable";
@@ -131,6 +132,7 @@ export interface CardUpdateSelection {
   alternateGreetingsMode?: AlternateGreetingsUpdateMode;
   keepExistingGreetingIndices?: number[];
   selectedIncomingGreetingIndices?: number[];
+  greetingNamesMode?: GreetingNamesUpdateMode;
   tagsMode?: TagsUpdateMode;
   avatarMode?: AvatarUpdateMode;
   extensionsMode?: ExtensionsUpdateMode;
@@ -458,6 +460,123 @@ function regexSignature(script: { name?: string; scriptName?: string; find_regex
   return `${name}\u0000${find}\u0000${replace}`;
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeGreetingTitle(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function generateGreetingId(usedIds: Set<string>): string {
+  let candidate = "";
+  do {
+    candidate = `g_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  } while (usedIds.has(candidate));
+  return candidate;
+}
+
+interface GreetingSlotSource {
+  kind: "existing" | "incoming";
+  oldOverallIndex?: number;
+  incomingAltIndex?: number;
+  text: string;
+}
+
+interface IncomingGreetingRecord {
+  textKey: string;
+  id: string | null;
+  meta: Record<string, any> | null;
+  title: string | null;
+}
+
+function buildIncomingGreetingLookup(
+  incomingFirstMes: string,
+  incomingAlternates: string[],
+  incomingTools: Record<string, any> | null,
+) {
+  const mainMeta = isRecord(incomingTools?.mainGreeting) ? incomingTools.mainGreeting : null;
+  const mainEntry: IncomingGreetingRecord = {
+    textKey: normalizeGreetingKey(incomingFirstMes),
+    id: typeof mainMeta?.id === "string" && mainMeta.id ? mainMeta.id : null,
+    meta: mainMeta,
+    title: normalizeGreetingTitle(mainMeta?.title),
+  };
+
+  const inIndexMap = isRecord(incomingTools?.indexMap) ? incomingTools.indexMap : {};
+  const inGreetings = isRecord(incomingTools?.greetings) ? incomingTools.greetings : {};
+  const altEntries: IncomingGreetingRecord[] = incomingAlternates.map((text, idx) => {
+    const rawId = typeof inIndexMap[String(idx)] === "string" ? inIndexMap[String(idx)] : null;
+    const meta = rawId && isRecord(inGreetings[rawId]) ? inGreetings[rawId] : null;
+    return {
+      textKey: normalizeGreetingKey(text),
+      id: rawId,
+      meta,
+      title: normalizeGreetingTitle(meta?.title),
+    };
+  });
+
+  const findMatch = (
+    textKey: string,
+    preferred: { isMain?: boolean; altIndex?: number } = {},
+  ): IncomingGreetingRecord | null => {
+    if (!textKey) return null;
+    if (preferred.isMain && mainEntry.textKey === textKey) {
+      return mainEntry;
+    }
+    if (preferred.altIndex !== undefined) {
+      const slot = altEntries[preferred.altIndex];
+      if (slot && slot.textKey === textKey) {
+        return slot;
+      }
+    }
+    return (
+      altEntries.find((entry) => entry.textKey === textKey && entry.title !== null) ??
+      altEntries.find((entry) => entry.textKey === textKey) ??
+      (mainEntry.textKey === textKey ? mainEntry : null)
+    );
+  };
+
+  return { mainEntry, altEntries, findMatch };
+}
+
+function mergeExistingGreetingMetadata(
+  existingMeta: Record<string, any> | null,
+  incomingEntry: IncomingGreetingRecord | null,
+  mode: GreetingNamesUpdateMode,
+  usedIds: Set<string>,
+): { meta: Record<string, any> | null; titleChanged: boolean } {
+  const baseExisting = existingMeta ? structuredClone(existingMeta) : null;
+  if (mode === "keep" || !incomingEntry) {
+    return { meta: baseExisting, titleChanged: false };
+  }
+  const existingTitle = normalizeGreetingTitle(existingMeta?.title);
+  const incomingTitle = incomingEntry.title;
+  if (!incomingTitle) {
+    return { meta: baseExisting, titleChanged: false };
+  }
+  if (mode === "merge_missing" && existingTitle !== null) {
+    return { meta: baseExisting, titleChanged: false };
+  }
+  if (mode === "overwrite" && existingTitle === incomingTitle) {
+    return { meta: baseExisting, titleChanged: false };
+  }
+
+  const merged: Record<string, any> = {
+    ...(baseExisting ?? {}),
+    ...(incomingEntry.meta ? structuredClone(incomingEntry.meta) : {}),
+    title: incomingTitle,
+  };
+  if (typeof existingMeta?.id === "string" && existingMeta.id && !usedIds.has(existingMeta.id)) {
+    merged.id = existingMeta.id;
+  } else if (typeof merged.id !== "string" || !merged.id || usedIds.has(merged.id)) {
+    merged.id = generateGreetingId(usedIds);
+  }
+  return { meta: merged, titleChanged: true };
+}
+
 export async function applySelectiveCardUpdate(
   userId: string,
   existing: Character,
@@ -485,6 +604,7 @@ export async function applySelectiveCardUpdate(
   // 2. Greetings (first_mes + alternate_greetings)
   const firstMesMode: FirstMesUpdateMode = selection.firstMesMode ?? "keep";
   const alternateMode: AlternateGreetingsUpdateMode = selection.alternateGreetingsMode ?? "keep";
+  const greetingNamesMode: GreetingNamesUpdateMode = selection.greetingNamesMode ?? "keep";
 
   const incomingFirstMes = cardInput.first_mes ?? "";
   const incomingAlternates = Array.isArray(cardInput.alternate_greetings) ? cardInput.alternate_greetings : [];
@@ -501,9 +621,15 @@ export async function applySelectiveCardUpdate(
 
   let nextAlternates: string[] | null = null;
   let keptExistingIndices: number[] | null = null;
+  let alternateSlotSources: GreetingSlotSource[] | null = null;
 
   if (alternateMode === "replace_all") {
     nextAlternates = [...incomingAlternates];
+    alternateSlotSources = incomingAlternates.map((text, idx) => ({
+      kind: "incoming" as const,
+      incomingAltIndex: idx,
+      text,
+    }));
     incomingAlternates.forEach((_, index) => updatedGreetingIndices.add(index));
     addedAlternateGreetings = incomingAlternates.length;
     updatedFields.push("alternate_greetings");
@@ -515,14 +641,20 @@ export async function applySelectiveCardUpdate(
     for (const g of existingAlternates) seen.add(normalizeGreetingKey(g));
 
     const toAppend: string[] = [];
-    for (const g of incomingAlternates) {
+    const toAppendSources: GreetingSlotSource[] = [];
+    incomingAlternates.forEach((g, idx) => {
       const key = normalizeGreetingKey(g);
-      if (!key || seen.has(key)) continue;
+      if (!key || seen.has(key)) return;
       seen.add(key);
       toAppend.push(g);
-    }
+      toAppendSources.push({ kind: "incoming", incomingAltIndex: idx, text: g });
+    });
     if (toAppend.length > 0) {
       nextAlternates = [...existingAlternates, ...toAppend];
+      alternateSlotSources = [
+        ...existingAlternates.map((text, idx) => ({ kind: "existing" as const, oldOverallIndex: idx + 1, text })),
+        ...toAppendSources,
+      ];
       toAppend.forEach((_, index) => updatedGreetingIndices.add(existingAlternates.length + index));
       addedAlternateGreetings = toAppend.length;
       updatedFields.push("alternate_greetings");
@@ -539,6 +671,10 @@ export async function applySelectiveCardUpdate(
       : [];
     const added = incomingIndices.map((idx) => incomingAlternates[idx]);
     nextAlternates = [...kept, ...added];
+    alternateSlotSources = [
+      ...keepIndices.map((idx) => ({ kind: "existing" as const, oldOverallIndex: idx + 1, text: existingAlternates[idx] })),
+      ...incomingIndices.map((idx) => ({ kind: "incoming" as const, incomingAltIndex: idx, text: incomingAlternates[idx] })),
+    ];
     added.forEach((_, index) => updatedGreetingIndices.add(kept.length + index));
     addedAlternateGreetings = added.length;
     updatedFields.push("alternate_greetings");
@@ -555,6 +691,14 @@ export async function applySelectiveCardUpdate(
       ]);
       if (!existingKeys.has(normalizeGreetingKey(oldFirstMes))) {
         nextAlternates = [...baseAlternates, oldFirstMes];
+        alternateSlotSources = [
+          ...(alternateSlotSources ?? existingAlternates.map((text, idx) => ({
+            kind: "existing" as const,
+            oldOverallIndex: idx + 1,
+            text,
+          }))),
+          { kind: "existing", oldOverallIndex: 0, text: oldFirstMes },
+        ];
         demotedFirstMes = true;
         if (!updatedFields.includes("alternate_greetings")) {
           updatedFields.push("alternate_greetings");
@@ -610,53 +754,176 @@ export async function applySelectiveCardUpdate(
     }
   }
 
-  // Keep every greeting-indexed setting attached to the same retained content.
+  // Keep every greeting-indexed setting attached to the same retained content,
+  // and preserve/merge incoming Greeting Tools metadata (greeting names & notes).
   const mainReplaced = firstMesMode === "replace" || firstMesMode === "replace_and_demote";
-  if (mainReplaced || nextAlternates !== null) {
-    const retained = alternateMode === "replace_all" ? [] : keptExistingIndices ?? existingAlternates.map((_, i) => i);
-    const indexMap = new Map<number, number>();
-    if (!mainReplaced) indexMap.set(0, 0);
-    retained.forEach((oldIndex, newIndex) => indexMap.set(oldIndex + 1, newIndex + 1));
-    if (demotedFirstMes) indexMap.set(0, nextAlternates!.length);
-    const tools = workingExtensions.greeting_tools;
-    if (tools && typeof tools === "object" && !Array.isArray(tools)) {
-      const nextTools = { ...tools };
-      if (mainReplaced) nextTools.mainGreeting = null;
-      const titles: Record<string, any> = {};
-      const ids: Record<string, string> = {};
-      for (const [oldIndex, newIndex] of indexMap) {
-        if (newIndex === 0) continue;
-        const metadata = oldIndex === 0 ? tools.mainGreeting : tools.greetings?.[tools.indexMap?.[String(oldIndex - 1)]];
-        const id = oldIndex === 0 ? metadata?.id : tools.indexMap?.[String(oldIndex - 1)];
-        if (typeof id === "string") {
-          ids[String(newIndex - 1)] = id;
-          if (metadata) titles[id] = metadata;
-        }
+  const existingTools = isRecord(workingExtensions.greeting_tools) ? workingExtensions.greeting_tools : null;
+  const incomingTools = isRecord(cardInput.extensions?.greeting_tools) ? cardInput.extensions.greeting_tools : null;
+
+  if (
+    mainReplaced ||
+    nextAlternates !== null ||
+    (greetingNamesMode !== "keep" && (existingTools !== null || incomingTools !== null))
+  ) {
+    const incomingLookup = buildIncomingGreetingLookup(incomingFirstMes, incomingAlternates, incomingTools);
+    const finalSlotSources: GreetingSlotSource[] = alternateSlotSources ?? existingAlternates.map((text, idx) => ({
+      kind: "existing" as const,
+      oldOverallIndex: idx + 1,
+      text,
+    }));
+
+    // Collect kept existing greeting IDs first so incoming greetings never collide with them.
+    const reservedExistingIds = new Set<string>();
+    if (!mainReplaced && typeof existingTools?.mainGreeting?.id === "string" && existingTools.mainGreeting.id) {
+      reservedExistingIds.add(existingTools.mainGreeting.id);
+    }
+    for (const slot of finalSlotSources) {
+      if (slot.kind !== "existing") continue;
+      const oldIdx = slot.oldOverallIndex!;
+      const oldId = oldIdx === 0
+        ? existingTools?.mainGreeting?.id
+        : existingTools?.indexMap?.[String(oldIdx - 1)];
+      if (typeof oldId === "string" && oldId) {
+        reservedExistingIds.add(oldId);
       }
+    }
+
+    const assignedIds = new Set<string>();
+    let keptGreetingNamesUpdated = false;
+    const nextTools: Record<string, any> = existingTools
+      ? { ...existingTools }
+      : Object.fromEntries(
+          Object.entries(incomingTools ?? {}).filter(([k]) => k !== "mainGreeting" && k !== "indexMap" && k !== "greetings"),
+        );
+
+    if (mainReplaced) {
+      if (incomingLookup.mainEntry.meta) {
+        const clonedMain = structuredClone(incomingLookup.mainEntry.meta);
+        if (typeof clonedMain.id === "string" && clonedMain.id && reservedExistingIds.has(clonedMain.id)) {
+          clonedMain.id = generateGreetingId(reservedExistingIds);
+        }
+        if (typeof clonedMain.id === "string" && clonedMain.id) {
+          assignedIds.add(clonedMain.id);
+        }
+        nextTools.mainGreeting = clonedMain;
+      } else {
+        nextTools.mainGreeting = null;
+      }
+    } else {
+      const existingMain = isRecord(existingTools?.mainGreeting) ? existingTools.mainGreeting : null;
+      const matchingMain = incomingLookup.findMatch(normalizeGreetingKey(existing.first_mes ?? ""), { isMain: true });
+      const { meta: mergedMain, titleChanged } = mergeExistingGreetingMetadata(
+        existingMain,
+        matchingMain,
+        greetingNamesMode,
+        new Set([...assignedIds, ...reservedExistingIds]),
+      );
+      if (titleChanged) keptGreetingNamesUpdated = true;
+      if (mergedMain) {
+        if (typeof mergedMain.id === "string" && mergedMain.id) {
+          assignedIds.add(mergedMain.id);
+        }
+        nextTools.mainGreeting = mergedMain;
+      } else if (existingTools && "mainGreeting" in existingTools) {
+        nextTools.mainGreeting = existingTools.mainGreeting;
+      }
+    }
+
+    const titles: Record<string, any> = {};
+    const ids: Record<string, string> = {};
+    finalSlotSources.forEach((slot, newAltIdx) => {
+      if (slot.kind === "incoming") {
+        const entry = incomingLookup.altEntries[slot.incomingAltIndex!];
+        if (!entry?.meta) return;
+        const blocked = new Set([...assignedIds, ...reservedExistingIds]);
+        const chosenId = entry.id && !blocked.has(entry.id) ? entry.id : generateGreetingId(blocked);
+        assignedIds.add(chosenId);
+        const clonedMeta = structuredClone(entry.meta);
+        if (chosenId !== entry.id || typeof clonedMeta.id === "string") {
+          clonedMeta.id = chosenId;
+        }
+        ids[String(newAltIdx)] = chosenId;
+        titles[chosenId] = clonedMeta;
+        return;
+      }
+
+      const oldIdx = slot.oldOverallIndex!;
+      const oldId = oldIdx === 0
+        ? (typeof existingTools?.mainGreeting?.id === "string" ? existingTools.mainGreeting.id : null)
+        : (typeof existingTools?.indexMap?.[String(oldIdx - 1)] === "string" ? existingTools.indexMap[String(oldIdx - 1)] : null);
+      const oldMeta = oldIdx === 0
+        ? (isRecord(existingTools?.mainGreeting) ? existingTools.mainGreeting : null)
+        : (oldId && isRecord(existingTools?.greetings?.[oldId]) ? existingTools.greetings[oldId] : null);
+
+      const matchingIncoming = incomingLookup.findMatch(normalizeGreetingKey(slot.text), {
+        altIndex: oldIdx > 0 ? oldIdx - 1 : undefined,
+      });
+      const { meta: mergedMeta, titleChanged } = mergeExistingGreetingMetadata(
+        oldMeta,
+        matchingIncoming,
+        greetingNamesMode,
+        new Set([...assignedIds, ...reservedExistingIds]),
+      );
+      if (titleChanged) keptGreetingNamesUpdated = true;
+
+      if (mergedMeta) {
+        const chosenId = oldId && !assignedIds.has(oldId)
+          ? oldId
+          : typeof mergedMeta.id === "string" && mergedMeta.id && !assignedIds.has(mergedMeta.id) && !reservedExistingIds.has(mergedMeta.id)
+            ? mergedMeta.id
+            : generateGreetingId(new Set([...assignedIds, ...reservedExistingIds]));
+        assignedIds.add(chosenId);
+        if (chosenId !== oldId || typeof mergedMeta.id === "string") {
+          mergedMeta.id = chosenId;
+        }
+        ids[String(newAltIdx)] = chosenId;
+        titles[chosenId] = mergedMeta;
+      }
+    });
+
+    if (
+      existingTools !== null ||
+      (nextTools.mainGreeting !== null && nextTools.mainGreeting !== undefined) ||
+      Object.keys(ids).length > 0
+    ) {
       nextTools.indexMap = ids;
       nextTools.greetings = titles;
       workingExtensions.greeting_tools = nextTools;
+      extensionsModified = true;
     }
-    if (workingExtensions.greeting_backgrounds && typeof workingExtensions.greeting_backgrounds === "object") {
-      workingExtensions.greeting_backgrounds = Object.fromEntries(
-        Object.entries(workingExtensions.greeting_backgrounds)
-          .filter(([key]) => indexMap.has(Number(key)))
-          .map(([key, value]) => [indexMap.get(Number(key)), value]),
-      );
+
+    if (keptGreetingNamesUpdated) {
+      updatedFields.push("greeting_names");
     }
-    if (workingExtensions.avatar_bindings && typeof workingExtensions.avatar_bindings === "object") {
-      workingExtensions.avatar_bindings = Object.fromEntries(Object.entries(workingExtensions.avatar_bindings).flatMap(([id, raw]) => {
-        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
-        const binding = { ...raw } as Record<string, any>;
-        if (typeof binding.greeting_index === "number") {
-          const nextIndex = indexMap.get(binding.greeting_index);
-          if (nextIndex === undefined) delete binding.greeting_index;
-          else binding.greeting_index = nextIndex;
-        }
-        return Object.keys(binding).length ? [[id, binding]] : [];
-      }));
+
+    if (mainReplaced || nextAlternates !== null) {
+      const retained = alternateMode === "replace_all" ? [] : keptExistingIndices ?? existingAlternates.map((_, i) => i);
+      const indexMap = new Map<number, number>();
+      if (!mainReplaced) indexMap.set(0, 0);
+      retained.forEach((oldIndex, newIndex) => indexMap.set(oldIndex + 1, newIndex + 1));
+      if (demotedFirstMes) indexMap.set(0, nextAlternates!.length);
+
+      if (workingExtensions.greeting_backgrounds && typeof workingExtensions.greeting_backgrounds === "object") {
+        workingExtensions.greeting_backgrounds = Object.fromEntries(
+          Object.entries(workingExtensions.greeting_backgrounds)
+            .filter(([key]) => indexMap.has(Number(key)))
+            .map(([key, value]) => [indexMap.get(Number(key)), value]),
+        );
+      }
+      if (workingExtensions.avatar_bindings && typeof workingExtensions.avatar_bindings === "object") {
+        workingExtensions.avatar_bindings = Object.fromEntries(Object.entries(workingExtensions.avatar_bindings).flatMap(([id, raw]) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+          const binding = { ...raw } as Record<string, any>;
+          if (typeof binding.greeting_index === "number") {
+            const nextIndex = indexMap.get(binding.greeting_index);
+            if (nextIndex === undefined) delete binding.greeting_index;
+            else binding.greeting_index = nextIndex;
+          }
+          return Object.keys(binding).length ? [[id, binding]] : [];
+        }));
+      }
+      extensionsModified = true;
     }
-    extensionsModified = true;
   }
 
   if (parsed.filename && parsed.filename !== "unknown" && !workingExtensions._lumiverse_source_filename) {

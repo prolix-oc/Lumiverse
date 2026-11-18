@@ -1692,6 +1692,7 @@ export type CardScalarField =
 
 export type FirstMesUpdateMode = 'keep' | 'replace' | 'replace_and_demote'
 export type AlternateGreetingsUpdateMode = 'keep' | 'append_new' | 'replace_all' | 'select'
+export type GreetingNamesUpdateMode = 'keep' | 'merge_missing' | 'overwrite'
 export type TagsUpdateMode = 'keep' | 'merge' | 'replace'
 export type AvatarUpdateMode = 'keep' | 'replace_primary' | 'add_alternate'
 export type ExtensionsUpdateMode = 'keep' | 'merge_portable' | 'replace_portable'
@@ -1705,6 +1706,7 @@ export interface CardUpdateSelection {
   alternateGreetingsMode?: AlternateGreetingsUpdateMode
   keepExistingGreetingIndices?: number[]
   selectedIncomingGreetingIndices?: number[]
+  greetingNamesMode?: GreetingNamesUpdateMode
   tagsMode?: TagsUpdateMode
   avatarMode?: AvatarUpdateMode
   extensionsMode?: ExtensionsUpdateMode

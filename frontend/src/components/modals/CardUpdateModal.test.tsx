@@ -293,4 +293,70 @@ describe('CardUpdateModal', () => {
     expect(applyCardUpdate).not.toHaveBeenCalled()
   })
 
+  test('displays incoming and updated greeting names and submits greetingNamesMode', async () => {
+    const file = new File(['{}'], 'elena_named.json', { type: 'application/json' })
+    const namedTarget = {
+      ...existingCharacter,
+      alternate_greetings: ['Shared greeting'],
+      extensions: {
+        greeting_tools: {
+          indexMap: { '0': 'cur_0' },
+          greetings: { cur_0: { id: 'cur_0', title: 'Old Alt Name' } },
+        },
+      },
+    }
+    const namedPreview = {
+      ...preview,
+      incoming: {
+        ...preview.incoming,
+        first_mes: existingCharacter.first_mes,
+        alternate_greetings: ['Shared greeting', 'Brand new greeting 2'],
+        extensions: {
+          greeting_tools: {
+            mainGreeting: { id: 'in_main', title: 'New Main Name' },
+            indexMap: { '0': 'in_0', '1': 'in_1' },
+            greetings: {
+              in_0: { id: 'in_0', title: 'Renamed Alt' },
+              in_1: { id: 'in_1', title: 'Midnight Rooftop' },
+            },
+          },
+        },
+      },
+    }
+
+    await act(async () => {
+      root.render(
+        <CardUpdateModal
+          isOpen
+          file={file}
+          preview={namedPreview}
+          initialTargetCharacter={namedTarget}
+          onApplied={onApplied}
+          onClose={onClose}
+        />,
+      )
+    })
+    await flush()
+
+    expect(host.textContent).toContain('Greeting Names')
+    expect(host.textContent).toContain('New Main Name')
+    expect(host.textContent).toContain('Old Alt Name')
+    expect(host.textContent).toContain('Renamed Alt')
+    expect(host.textContent).toContain('Midnight Rooftop')
+
+    const applyBtn = Array.from(host.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Apply Updates'),
+    )!
+    await act(async () => {
+      applyBtn.click()
+    })
+    await flush()
+
+    expect(applyCardUpdate).toHaveBeenCalledTimes(1)
+    expect(applyCardUpdate.mock.calls[0]?.[2]).toMatchObject({
+      greetingNamesMode: 'overwrite',
+      alternateGreetingsMode: 'append_new',
+    })
+  })
+
 })

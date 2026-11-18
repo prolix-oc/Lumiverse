@@ -362,4 +362,115 @@ describe("character-card-update.service", () => {
     expect(character.extensions.expression_groups?.Alice?.happy).toBeTruthy();
   });
 
+  test("imports incoming greeting names for replaced first_mes and new alternate greetings without ID collisions", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "NamedGreetings",
+      first_mes: "Old main",
+      alternate_greetings: ["Existing alt"],
+      extensions: {
+        greeting_tools: {
+          mainGreeting: { id: "g_shared", title: "Old Main Name" },
+          indexMap: { "0": "g_alt" },
+          greetings: {
+            g_alt: { id: "g_alt", title: "Existing Alt Name" },
+          },
+        },
+      },
+    });
+
+    const parsed = await parseCardBundle(
+      makeJsonCard("named.json", {
+        name: "NamedGreetings",
+        first_mes: "Incoming main",
+        alternate_greetings: ["Existing alt", "New alt A", "New alt B"],
+        extensions: {
+          greeting_tools: {
+            version: 3,
+            mainGreeting: { id: "g_shared", title: "Midnight Intro" },
+            indexMap: { "0": "in_0", "1": "g_shared", "2": "in_2" },
+            greetings: {
+              in_0: { id: "in_0", title: "Incoming Alt Zero" },
+              g_shared: { id: "g_shared", title: "Colliding ID Alt" },
+              in_2: { id: "in_2", title: "Roof Encounter" },
+            },
+          },
+        },
+      }),
+    );
+
+    const { character: updated } = await applySelectiveCardUpdate(USER_ID, existing, parsed, {
+      firstMesMode: "replace_and_demote",
+      alternateGreetingsMode: "append_new",
+    });
+
+    expect(updated.alternate_greetings).toEqual(["Existing alt", "New alt A", "New alt B", "Old main"]);
+    const tools = updated.extensions.greeting_tools;
+    expect(tools.mainGreeting.title).toBe("Midnight Intro");
+    expect(tools.mainGreeting.id).not.toBe("g_shared");
+
+    const alt1Id = tools.indexMap["1"];
+    const alt2Id = tools.indexMap["2"];
+    const demotedId = tools.indexMap["3"];
+    expect(tools.greetings[tools.indexMap["0"]].title).toBe("Existing Alt Name");
+    expect(tools.greetings[alt1Id].title).toBe("Colliding ID Alt");
+    expect(alt1Id).not.toBe("g_shared");
+    expect(tools.greetings[alt2Id].title).toBe("Roof Encounter");
+    expect(demotedId).toBe("g_shared");
+    expect(tools.greetings[demotedId].title).toBe("Old Main Name");
+  });
+
+  test("greetingNamesMode supports merge_missing and overwrite on existing greetings without changing text", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "RenameOnly",
+      first_mes: "Same main",
+      alternate_greetings: ["Same alt 1", "Same alt 2"],
+      extensions: {
+        greeting_tools: {
+          indexMap: { "0": "local_alt_0" },
+          greetings: {
+            local_alt_0: { id: "local_alt_0", title: "Custom Local Alt 1", description: "Keep note" },
+          },
+        },
+      },
+    });
+
+    const parsed = await parseCardBundle(
+      makeJsonCard("rename.json", {
+        name: "RenameOnly",
+        first_mes: "Same main",
+        alternate_greetings: ["Same alt 1", "Same alt 2"],
+        extensions: {
+          greeting_tools: {
+            mainGreeting: { id: "in_main", title: "Prologue" },
+            indexMap: { "0": "in_0", "1": "in_1" },
+            greetings: {
+              in_0: { id: "in_0", title: "Updated Alt 1" },
+              in_1: { id: "in_1", title: "Newly Named Alt 2" },
+            },
+          },
+        },
+      }),
+    );
+
+    const merged = await applySelectiveCardUpdate(USER_ID, existing, parsed, {
+      greetingNamesMode: "merge_missing",
+    });
+    expect(merged.summary.updatedFields).toContain("greeting_names");
+    expect(merged.character.extensions.greeting_tools.mainGreeting.title).toBe("Prologue");
+    expect(merged.character.extensions.greeting_tools.greetings[merged.character.extensions.greeting_tools.indexMap["0"]].title)
+      .toBe("Custom Local Alt 1");
+    expect(merged.character.extensions.greeting_tools.greetings[merged.character.extensions.greeting_tools.indexMap["1"]].title)
+      .toBe("Newly Named Alt 2");
+
+    const overwritten = await applySelectiveCardUpdate(USER_ID, existing, parsed, {
+      greetingNamesMode: "overwrite",
+    });
+    const tools = overwritten.character.extensions.greeting_tools;
+    expect(tools.mainGreeting.title).toBe("Prologue");
+    expect(tools.indexMap["0"]).toBe("local_alt_0");
+    expect(tools.greetings.local_alt_0.title).toBe("Updated Alt 1");
+    expect(tools.greetings.local_alt_0.description).toBe("Keep note");
+    expect(tools.greetings[tools.indexMap["1"]].title).toBe("Newly Named Alt 2");
+  });
+
 });
