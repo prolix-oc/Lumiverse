@@ -30,6 +30,7 @@ This guide walks you through creating your first connection to an AI provider.
 | **API Key** | Your provider's API key |
 | **Preset** | A default preset to use with this connection |
 | **Default** | Whether this is your primary connection |
+| **Bypass status check** | Skip the provider request when testing this connection (see [Testing Your Connection](#testing-your-connection)) |
 
 4. Click **Save**
 
@@ -64,6 +65,9 @@ Common issues:
 - **Invalid API key** — Double-check the key
 - **Wrong API URL** — Make sure the endpoint matches your provider
 - **Model not found** — Verify the model name is correct for your provider
+
+!!! tip "Chat works but the test fails"
+    Some proxies and gateways handle chat requests but don't offer the endpoint the test calls, which is usually the model list. The test then reports an error for a connection that works. Turn on **Bypass status check** for that connection and the test reports "Status check bypassed" without contacting the provider. A missing API key is still reported.
 
 ---
 
