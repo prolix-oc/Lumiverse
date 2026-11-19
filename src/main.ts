@@ -18,7 +18,7 @@ import {
   startExtensionUpdateMonitor,
   stopExtensionUpdateMonitor,
 } from "./spindle/update-check.service";
-import { sendRunnerMessage } from "./services/runner-channel";
+import { onRunnerDisconnect, onRunnerMessage, runnerChannelAvailable, sendRunnerMessage } from "./services/runner-channel";
 import { scheduleLanceDbStartupMaintenance } from "./services/lancedb-maintenance-supervisor";
 
 // TLS terminates at Bun, before Hono receives a Request. Resolve and validate
@@ -507,13 +507,14 @@ async function gracefulShutdown(signal: string) {
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-if (process.env.LUMIVERSE_BUNDLE_READY_TOKEN && typeof process.send === "function") {
-  process.on("message", (message: unknown) => {
+if (process.env.LUMIVERSE_BUNDLE_READY_TOKEN && runnerChannelAvailable) {
+  onRunnerMessage((message: unknown) => {
     const request = message as { type?: string; token?: string } | null;
     if (request?.type === "bundle-shutdown" && request.token === process.env.LUMIVERSE_BUNDLE_READY_TOKEN) {
       void gracefulShutdown("launcher requested shutdown");
     }
   });
-  process.send({ type: "bundle-ready", token: process.env.LUMIVERSE_BUNDLE_READY_TOKEN });
-  process.on("disconnect", () => gracefulShutdown("launcher disconnected"));
+  const ready = { type: "bundle-ready", token: process.env.LUMIVERSE_BUNDLE_READY_TOKEN };
+  sendRunnerMessage(ready);
+  onRunnerDisconnect(() => { void gracefulShutdown("launcher disconnected"); });
 }

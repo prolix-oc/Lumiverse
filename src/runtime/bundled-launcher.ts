@@ -6,6 +6,7 @@ import { defaultBundleDirectories, parseBundleOptions, validatePort, validateSet
 import { extractServerBundle } from "./bundle-cache";
 import { configureBundleOwner, hasConfiguredOwner, openBundleBrowser, startBundleSetup, writeBundleSettings, type BundleSetup } from "./bundle-setup";
 import { BundleDesktopChannel } from "./bundle-desktop";
+import { spawnBundleBackend, type BundleBackend } from "./bundle-backend";
 
 const USAGE = `Lumiverse Server (experimental bundled distribution)
 
@@ -73,20 +74,23 @@ export async function runBundledServer(archive: string, manifest: ServerBundleMa
     return;
   }
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  console.log("[bundle] Preparing bundled runtime...");
   const root = await extractServerBundle(archive, manifest, cacheDir);
+  console.log("[bundle] Bundled runtime ready.");
   let setup: BundleSetup | undefined;
-  let child: Bun.Subprocess | undefined;
+  let child: BundleBackend | undefined;
   let desktop: BundleDesktopChannel | undefined;
   let readyToken = "";
   let stopping = false;
   let forceStop: ReturnType<typeof setTimeout> | undefined;
+  let startupTimer: ReturnType<typeof setTimeout> | undefined;
+  let startupFailure: string | undefined;
   const stop = (signal: "SIGINT" | "SIGTERM") => {
     stopping = true;
     setup?.stop();
     if (!child) process.exit(desktop ? 0 : signal === "SIGINT" ? 130 : 143);
     if (options.command === "serve") {
-      try { child.send({ type: "bundle-shutdown", token: readyToken }); }
-      catch { child.kill(signal); }
+      if (!child.send({ type: "bundle-shutdown", token: readyToken })) child.kill(signal);
     } else child.kill(signal);
     forceStop ??= setTimeout(() => {
       if (process.platform !== "win32") { try { process.kill(-child!.pid, "SIGKILL"); } catch {} }
@@ -94,6 +98,11 @@ export async function runBundledServer(archive: string, manifest: ServerBundleMa
       child!.kill("SIGKILL");
     }, 20_000);
     forceStop.unref();
+  };
+  const failStartup = (message: string) => {
+    startupFailure ??= message;
+    console.error(`[bundle] ${message}`);
+    stop("SIGTERM");
   };
   const onInterrupt = () => stop("SIGINT");
   const onTerminate = () => stop("SIGTERM");
@@ -117,6 +126,7 @@ export async function runBundledServer(archive: string, manifest: ServerBundleMa
       if (process.env.OWNER_PASSWORD) {
         await configureBundleOwner(settings, settingsPath, process.env.OWNER_USERNAME || "admin", process.env.OWNER_PASSWORD);
       } else if (desktop) {
+        console.log("[bundle] Waiting for desktop setup.");
         desktop.needsSetup();
         settings = await desktop.configuration;
       } else {
@@ -156,29 +166,40 @@ export async function runBundledServer(archive: string, manifest: ServerBundleMa
     let ready = false;
     const browserHost = ["::", "0.0.0.0"].includes(settings.host) ? "127.0.0.1" : settings.host.includes(":") ? `[${settings.host}]` : settings.host;
     const browserUrl = `${process.env.LUMIVERSE_TLS_CERT_FILE || process.env.LUMIVERSE_TLS_CONFIG_FILE ? "https" : "http"}://${browserHost}:${settings.port}/`;
-    child = Bun.spawn({
+    console.log("[bundle] Starting backend...");
+    child = spawnBundleBackend({
       cmd: [join(root, "bin", process.platform === "win32" ? "bun.exe" : "bun"),
         ...(["false", "0"].includes(process.env.LUMIVERSE_SMOL || "") ? [] : ["--smol"]), join(root, "app", entry)],
-      env: childEnv, stdin: desktop ? "ignore" : "inherit", stdout: "inherit", stderr: "inherit",
-      detached: !desktop && process.platform !== "win32",
-      ipc(message) {
+      env: childEnv, desktop: Boolean(desktop), serve: options.command === "serve",
+      onMessage(value) {
+        const message = value as { type?: string; token?: string } | null;
         if (message?.type !== "bundle-ready" || message.token !== readyToken || ready) return;
         if (stopping) { child!.send({ type: "bundle-shutdown", token: readyToken }); return; }
         ready = true;
+        clearTimeout(startupTimer);
         console.log(`[bundle] Open Lumiverse: ${browserUrl}`);
         process.send?.({ type: "lumiverse-ready", url: browserUrl });
         desktop?.ready(browserUrl, child!.pid);
         if (setup) setup.ready(browserUrl);
         else if (options.open) openBundleBrowser(browserUrl);
       },
+      onError: (message) => failStartup(`Backend control channel failed: ${message}`),
+      onDisconnect: () => { if (!stopping) failStartup("The backend disconnected from its launcher."); },
     });
+    // Owner setup and cold extraction finish before this deadline begins.
+    if (options.command === "serve") startupTimer = setTimeout(() => {
+      failStartup("The backend did not report ready within 3 minutes. Check the server log, then try again.");
+    }, 180_000);
     const exitCode = await child.exited;
+    if (startupFailure) desktop?.failed(startupFailure);
     if (exitCode !== 0 && !ready && setup) {
       setup.failed(`Lumiverse could not start (exit ${exitCode}). Check the server output, then launch again.`);
       await Bun.sleep(2000);
     }
-    process.exitCode = exitCode;
+    process.exitCode = startupFailure ? 1 : exitCode;
   } finally {
+    clearTimeout(startupTimer);
+    child?.close();
     if (forceStop) clearTimeout(forceStop);
     setup?.stop();
     desktop?.close();

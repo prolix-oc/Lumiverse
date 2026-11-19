@@ -1534,6 +1534,9 @@ async function boot(): Promise<void> {
     });
   });
 
+  await listen<string>("bundled-server-error", ({ payload }) => {
+    void alert("Lumiverse local server", payload, true);
+  });
   await client.init(settings.localServerSource);
   client.onState = (state) => {
     serverState = state;
@@ -1567,8 +1570,8 @@ async function boot(): Promise<void> {
     busyMessage = progressText;
     void updateMenu();
   };
-  client.onExit = () => {
-    serverState = "stopped";
+  client.onExit = (code) => {
+    serverState = code === 0 ? "stopped" : "crashed";
     lastStatus = null;
     if (!installingDesktopUpdate && !changingNetworkAccess) busyMessage = null;
     void refreshDiscordPresence();

@@ -1,7 +1,7 @@
 //! Owns the packaged server. Configuration crosses private stdio, never HTTP.
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -10,6 +10,35 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 use tokio::sync::oneshot;
 
 const SETUP_WINDOW: &str = "server-setup";
+
+/// Native dependencies can write Windows code-page bytes and progress text
+/// without a newline. Neither may prevent subsequent private frames arriving.
+fn read_output(
+    reader: impl io::Read,
+    mut frame: impl FnMut(&str) -> bool,
+    mut log: impl FnMut(&str),
+) -> io::Result<()> {
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        if reader.read_until(b'\n', &mut bytes)? == 0 {
+            return Ok(());
+        }
+        let line = String::from_utf8_lossy(&bytes);
+        let line = line.trim_end_matches(['\r', '\n']);
+        let mut parts = line.split('\u{1e}');
+        if let Some(text) = parts.next().filter(|text| !text.is_empty()) {
+            log(text);
+        }
+        for part in parts {
+            if !frame(part) {
+                log(part);
+            }
+        }
+    }
+}
+
 type Reply = Result<Value, String>;
 struct Running {
     child: Arc<Mutex<Child>>,
@@ -147,13 +176,18 @@ fn handle_frame(app: &AppHandle, token: &str, text: &str) -> bool {
             if let Some(status) = frame.get("status") {
                 *state.status.lock().unwrap() = status.clone();
                 let _ = app.emit_to("main", "bundled-server-status", status);
+                if let Some(error) = status.get("error").and_then(Value::as_str) {
+                    let _ = app.emit_to("main", "bundled-server-error", error);
+                }
             }
         }
         Some("setup") => {
             let handle = app.clone();
             let open = move || {
-                if let Err(error) = show_setup(handle) {
-                    eprintln!("Could not open server setup: {error}");
+                if let Err(error) = show_setup(handle.clone()) {
+                    let message = format!("Could not open server setup: {error}");
+                    eprintln!("{message}");
+                    let _ = handle.emit_to("main", "bundled-server-error", message);
                 }
             };
             // WebView2 creation can deadlock inside a Windows event callback.
@@ -163,7 +197,9 @@ fn handle_frame(app: &AppHandle, token: &str, text: &str) -> bool {
             tauri::async_runtime::spawn_blocking(open);
             #[cfg(not(windows))]
             if let Err(error) = app.run_on_main_thread(open) {
-                eprintln!("Could not schedule server setup: {error}");
+                let message = format!("Could not schedule server setup: {error}");
+                eprintln!("{message}");
+                let _ = app.emit_to("main", "bundled-server-error", message);
             }
         }
         _ => return false,
@@ -290,9 +326,34 @@ pub fn bundled_server_start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::runner::isolate_process_group(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Could not launch bundled server: {error}"))?;
+    let logs = Arc::new(Mutex::new(crate::runner::SessionLogs::new(&app)));
+    logs.lock().unwrap().write_line(
+        crate::runner::LogChannel::Stdout,
+        &format!(
+            "[desktop] Launching bundled server: {}",
+            command.get_program().to_string_lossy()
+        ),
+    );
+    if let Ok(directory) = std::env::current_dir() {
+        logs.lock().unwrap().write_line(
+            crate::runner::LogChannel::Stdout,
+            &format!("[desktop] Working directory: {}", directory.display()),
+        );
+    }
+    let mut child = command.spawn().map_err(|error| {
+        let message = format!("Could not launch bundled server: {error}");
+        logs.lock()
+            .unwrap()
+            .write_line(crate::runner::LogChannel::Stderr, &message);
+        message
+    })?;
+    logs.lock().unwrap().write_line(
+        crate::runner::LogChannel::Stdout,
+        &format!(
+            "[desktop] Bundled launcher started (PID {}). Waiting for its private channel.",
+            child.id()
+        ),
+    );
     let stdin = child.stdin.take().ok_or("Server input unavailable")?;
     let stdout = child.stdout.take().ok_or("Server output unavailable")?;
     let stderr = child
@@ -307,7 +368,6 @@ pub fn bundled_server_start(
     });
     *state.status.lock().unwrap() = json!({ "state": "starting", "port": 7860, "pid": null, "startedAt": null, "branch": "", "version": "", "updateAvailable": false, "commitsBehind": 0, "latestUpdateMessage": "" });
     drop(running);
-    let logs = Arc::new(Mutex::new(crate::runner::SessionLogs::new(&app)));
     for (reader, channel) in [
         (
             Box::new(stdout) as Box<dyn std::io::Read + Send>,
@@ -319,28 +379,64 @@ pub fn bundled_server_start(
         let token = token.clone();
         let logs = logs.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(reader).lines() {
-                let Ok(line) = line else {
-                    break;
-                };
-                if let Some(frame) = line.strip_prefix('\u{1e}') {
-                    if handle_frame(&app, &token, frame) {
-                        continue;
+            let mut connected = false;
+            let result = read_output(
+                reader,
+                |frame| {
+                    if !handle_frame(&app, &token, frame) {
+                        return false;
                     }
-                }
-                logs.lock().unwrap().write_line(channel, &line);
+                    if !connected {
+                        connected = true;
+                        logs.lock().unwrap().write_line(
+                            channel,
+                            "[desktop] Bundled server private channel connected.",
+                        );
+                    }
+                    if let Ok(value) = serde_json::from_str::<Value>(frame) {
+                        let message = match value.get("type").and_then(Value::as_str) {
+                            Some("setup") => Some(
+                                "[desktop] Bundled server requested first-run setup.".to_owned(),
+                            ),
+                            Some("status") => value["status"]["state"]
+                                .as_str()
+                                .map(|state| format!("[desktop] Bundled server state: {state}")),
+                            _ => None,
+                        };
+                        if let Some(message) = message {
+                            logs.lock().unwrap().write_line(channel, &message);
+                        }
+                    }
+                    true
+                },
+                |line| logs.lock().unwrap().write_line(channel, line),
+            );
+            if let Err(error) = result {
+                let message = format!("Could not read bundled server output: {error}");
+                logs.lock()
+                    .unwrap()
+                    .write_line(channel, &format!("[desktop] {message}"));
+                let _ = app.emit_to("main", "bundled-server-error", message);
             }
         });
     }
     std::thread::spawn(move || {
-        let success = loop {
+        let exit = loop {
             match child.lock().unwrap().try_wait() {
-                Ok(Some(status)) => break status.success(),
-                Err(_) => break false,
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
                 Ok(None) => {}
             }
             std::thread::sleep(Duration::from_millis(100));
         };
+        let success = exit.as_ref().is_ok_and(|status| status.success());
+        let message = match exit {
+            Ok(status) => format!("[desktop] Bundled launcher exited: {status}"),
+            Err(error) => format!("[desktop] Could not monitor bundled launcher: {error}"),
+        };
+        logs.lock()
+            .unwrap()
+            .write_line(crate::runner::LogChannel::Stdout, &message);
         let state = app.state::<BundledServerState>();
         let mut running = state.running.lock().unwrap();
         if running
@@ -362,6 +458,47 @@ pub fn bundled_server_start(
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn native_output_cannot_hide_later_protocol_frames() {
+        let mut output = b"native code-page output: \xff\xfe\r\nprogress without newline".to_vec();
+        output.extend_from_slice(b"\x1e{\"type\":\"status\"}\r\n\x1e{\"type\":\"setup\"}\n");
+        let mut frames = Vec::new();
+        let mut logs = Vec::new();
+        read_output(
+            output.as_slice(),
+            |frame| {
+                frames.push(serde_json::from_str::<Value>(frame).unwrap());
+                true
+            },
+            |line| logs.push(line.to_owned()),
+        )
+        .unwrap();
+        assert_eq!(
+            frames,
+            [json!({"type": "status"}), json!({"type": "setup"})]
+        );
+        assert_eq!(logs.len(), 2);
+        assert!(logs[0].starts_with("native code-page output:"));
+        assert_eq!(logs[1], "progress without newline");
+    }
+
+    #[test]
+    fn logs_unrecognized_records_and_final_unterminated_output() {
+        let mut logs = Vec::new();
+        read_output(
+            &b"\x1eordinary text\nlast line"[..],
+            |_| false,
+            |line| logs.push(line.to_owned()),
+        )
+        .unwrap();
+        assert_eq!(logs, ["ordinary text", "last line"]);
+    }
 }
 #[tauri::command]
 pub async fn bundled_server_stop(app: AppHandle, window: WebviewWindow) -> Result<(), String> {

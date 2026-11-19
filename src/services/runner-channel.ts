@@ -7,7 +7,14 @@ import {
 type MessageHandler = (message: IPCMessage) => void;
 
 const handlers = new Set<MessageHandler>();
+const disconnectHandlers = new Set<() => void>();
+let disconnected = false;
 let socketChannel: RunnerControlClient | null = null;
+
+function dispatchDisconnect(): void {
+  disconnected = true;
+  for (const handler of disconnectHandlers) handler();
+}
 
 function dispatch(message: unknown): void {
   if (!message || typeof message !== "object") return;
@@ -22,6 +29,7 @@ try {
     },
     onDisconnect() {
       console.warn("[runner-control] Runner control channel disconnected");
+      dispatchDisconnect();
     },
   });
 } catch (error) {
@@ -31,6 +39,7 @@ try {
 
 if (!socketChannel && typeof process.send === "function") {
   process.on("message", dispatch);
+  process.on("disconnect", dispatchDisconnect);
 }
 
 export const runnerChannelAvailable = socketChannel !== null || typeof process.send === "function";
@@ -38,6 +47,12 @@ export const runnerChannelAvailable = socketChannel !== null || typeof process.s
 export function onRunnerMessage(handler: MessageHandler): () => void {
   handlers.add(handler);
   return () => handlers.delete(handler);
+}
+
+export function onRunnerDisconnect(handler: () => void): () => void {
+  disconnectHandlers.add(handler);
+  if (disconnected) queueMicrotask(handler);
+  return () => disconnectHandlers.delete(handler);
 }
 
 export function sendRunnerMessage(message: IPCMessage): boolean {

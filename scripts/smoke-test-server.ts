@@ -17,10 +17,12 @@ const env: Record<string, string> = { PATH: "", NO_COLOR: "1" };
 for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR", "HOME", "USERPROFILE", "LOCALAPPDATA", "LANG"]) {
   if (process.env[key]) env[key] = process.env[key]!;
 }
+const windowsSystem = process.platform === "win32" ? join(env.SystemRoot || env.SYSTEMROOT || env.WINDIR, "System32") : "";
 const argumentsForRun = ["--no-open", "--config-dir", join(temporary, "config"), "--cache-dir", join(temporary, "cache"), "--data-dir", join(temporary, "data")];
 const unexpectedEnv = "OWNER_PASSWORD=unexpected-autoload-password\nPORT=1\n";
 await Bun.write(join(temporary, ".env"), unexpectedEnv);
 let server: Bun.Subprocess | undefined;
+let nativeInput: { end(): unknown } | undefined;
 let output = "";
 
 function launch(args: string[]) {
@@ -47,9 +49,13 @@ async function until<T>(read: () => T | undefined | Promise<T | undefined>, labe
 async function stop(viaIpc = process.platform === "win32"): Promise<void> {
   if (!server || server.exitCode !== null) return;
   const child = server;
-  if (viaIpc) child.send({ type: "lumiverse-shutdown" });
+  if (nativeInput) nativeInput.end();
+  else if (viaIpc) child.send({ type: "lumiverse-shutdown" });
   else child.kill("SIGTERM");
-  const timer = setTimeout(() => child.kill("SIGKILL"), 25_000);
+  const timer = setTimeout(() => {
+    if (process.platform === "win32") Bun.spawnSync([join(windowsSystem, "taskkill.exe"), "/PID", String(child.pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" });
+    else child.kill("SIGKILL");
+  }, 25_000);
   try { await child.exited; } finally { clearTimeout(timer); }
 }
 
@@ -171,9 +177,16 @@ try {
   const channelToken = randomBytes(32).toString("hex");
   const frames: Array<{ type: string; id?: string; success?: boolean; error?: string; data?: unknown; status?: { state: string; port: number } }> = [];
   let buffer = "";
-  const nativeArgs = [...argumentsForRun, "--desktop", "--config-dir", join(temporary, "native-config"), "--data-dir", join(temporary, "native-data")];
+  const nativeArgs = [...argumentsForRun, "--desktop", "--config-dir", join(temporary, "native-config"), "--cache-dir", join(temporary, "native-cache"), "--data-dir", join(temporary, "native-data")];
   const nativeLaunch = () => {
-    const child = Bun.spawn([binary, ...nativeArgs], { cwd: temporary, env: { ...env, LUMIVERSE_DESKTOP_CHANNEL_TOKEN: channelToken }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const cmd = process.platform === "win32"
+      ? [join(windowsSystem, "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+        resolve(import.meta.dir, "windows-native-pipe-host.ps1")]
+      : [binary, ...nativeArgs];
+    const child = Bun.spawn(cmd, { cwd: windowsSystem || temporary, env: { ...env, LUMIVERSE_DESKTOP_CHANNEL_TOKEN: channelToken,
+      LUMIVERSE_NATIVE_SMOKE_COMMAND: JSON.stringify([binary, ...nativeArgs]) }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    nativeInput = child.stdin;
     server = child;
     const drain = async (stream: ReadableStream<Uint8Array>, protocol: boolean) => {
       const decoder = new TextDecoder();
@@ -202,7 +215,7 @@ try {
     await native.child.stdin.flush();
     return until(() => frames.find((frame) => frame.id === id), `native ${type} callback`, 15_000);
   };
-  await until(() => frames.some((frame) => frame.type === "setup") ? true : undefined, "native setup request");
+  await until(() => frames.some((frame) => frame.type === "setup") ? true : undefined, "native setup request", 120_000);
   assert.equal((await callback("defaults")).success, true);
   const nativeSettings = { username: "native_owner", password, dataDir: join(temporary, "native-data"), port, host: "127.0.0.1" };
   assert.equal((await callback("configure", { ...nativeSettings, password: "short" })).success, false);
@@ -221,11 +234,11 @@ try {
   await until(() => frames.find((frame) => frame.status?.state === "running"), "native configured restart");
   assert.ok(!frames.some((frame) => frame.type === "setup"));
   // A native parent disappearing closes stdin. Its server must exit too.
-  native.child.stdin.end();
-  const exitTimer = setTimeout(() => native.child.kill("SIGKILL"), 25_000);
-  try { assert.equal(await native.child.exited, 0); } finally { clearTimeout(exitTimer); }
+  await stop();
+  assert.equal(await native.child.exited, 0);
   await native.drained;
   console.log("[smoke] Native setup callbacks, hashed credentials, restart, and parent-disconnect cleanup: OK");
+  if (process.platform === "win32") console.log("[smoke] Native Windows parent, hidden console, anonymous pipes, and cold extraction: OK");
 } catch (error) {
   console.error(output);
   throw error;

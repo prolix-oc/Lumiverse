@@ -35,6 +35,11 @@ export class BundleDesktopChannel {
     this.snapshot = { ...this.snapshot, state: "running", url, pid, startedAt: Date.now() };
     this.emit("status", { status: this.snapshot });
   }
+  failed(error: string) {
+    this.setupState = "failed";
+    this.snapshot = { ...this.snapshot, state: "crashed", pid: null, error };
+    this.emit("status", { status: this.snapshot });
+  }
   private onEnd = () => { if (!this.closed) this.stop(); };
   private onData = (chunk: string) => {
     this.buffer += chunk;

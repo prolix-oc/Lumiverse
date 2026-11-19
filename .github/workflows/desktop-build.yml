@@ -129,6 +129,7 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: >-
           bun test
+          src/runtime/bundle-backend.test.ts
           src/services/runner-control-transport.test.ts
           scripts/runner/server-manager.test.ts
           scripts/windows-msvc.test.ts

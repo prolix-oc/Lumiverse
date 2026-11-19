@@ -564,9 +564,20 @@ pub fn runner_start(
     suppress_console(&mut cmd);
     isolate_process_group(&mut cmd);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start runner via '{bun_path}': {e}"))?;
+    let logs = Arc::new(Mutex::new(SessionLogs::new(&app)));
+    logs.lock().unwrap().write_line(
+        LogChannel::Stdout,
+        &format!("[desktop] Launching checkout runner via '{bun_path}' in '{repo_dir}'."),
+    );
+    let mut child = cmd.spawn().map_err(|error| {
+        let message = format!("Failed to start runner via '{bun_path}': {error}");
+        logs.lock().unwrap().write_line(LogChannel::Stderr, &message);
+        message
+    })?;
+    logs.lock().unwrap().write_line(
+        LogChannel::Stdout,
+        &format!("[desktop] Checkout runner started (PID {}).", child.id()),
+    );
 
     let stdin = child.stdin.take().ok_or("Runner stdin unavailable")?;
     let stdout = child.stdout.take().ok_or("Runner stdout unavailable")?;
@@ -582,8 +593,6 @@ pub fn runner_start(
     // Both reader threads share the session store but keep independent channel
     // bindings. A delayed line can therefore never cross a restart boundary.
     // Markers are authenticated because stderr may also carry raw backend text.
-    let logs = Arc::new(Mutex::new(SessionLogs::new(&app)));
-
     // stdout: protocol frames. {type:"log"} frames carry server output
     // and go to the active server-session log; everything else is forwarded
     // to TS. Log-session frames are native-only lifecycle markers.
