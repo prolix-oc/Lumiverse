@@ -1,6 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import type { GenerationRequest } from "../types";
+import type { GenerationRequest, LlmMessage } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 /** Cached model metadata from OpenRouter's /models endpoint. */
@@ -62,6 +62,28 @@ let _providerListCache: { data: OpenRouterProviderEntry[]; fetchedAt: number } |
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENDPOINT_CACHE_ENTRIES = 100;
 
+// Upload/browser MIME labels for the formats documented by OpenRouter.
+const IMAGE_MIME_ALIASES: Readonly<Record<string, string>> = {
+  "image/jpg": "image/jpeg",
+  "image/pjpeg": "image/jpeg",
+  "image/x-png": "image/png",
+};
+
+const VIDEO_MIME_ALIASES: Readonly<Record<string, string>> = {
+  "video/quicktime": "video/mov",
+  "video/x-m4v": "video/mp4",
+  "video/mpg": "video/mpeg",
+};
+
+const AUDIO_FORMAT_ALIASES: Readonly<Record<string, string>> = {
+  mpeg: "mp3",
+  "x-mp3": "mp3",
+  "x-wav": "wav",
+  wave: "wav",
+  "x-aiff": "aiff",
+  "x-flac": "flac",
+};
+
 /** Routing variants use the base model's endpoints; catalog variants such as :free retain their identity. */
 export function normalizeOpenRouterEndpointModel(model: string): string | null {
   const normalized = model.trim().replace(/(?::(?:floor|nitro|exacto))+$/, "");
@@ -115,6 +137,39 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
       "X-Title": "Lumiverse",
       "X-OpenRouter-Categories": "ai-chat,roleplay",
     };
+  }
+
+  protected formatContent(message: LlmMessage): string | any[] {
+    if (typeof message.content === "string") return message.content;
+    return message.content.flatMap((part) => {
+      if (part.type === "image") {
+        const mimeType = part.mime_type.split(";", 1)[0].trim().toLowerCase();
+        // Chat Completions uses image_url with a data URL for private uploads.
+        // Omit optional detail to retain OpenRouter's auto default.
+        // https://openrouter.ai/docs/api_reference/overview
+        return [{ type: "image_url", image_url: {
+          url: `data:${IMAGE_MIME_ALIASES[mimeType] ?? mimeType};base64,${part.data}`,
+        } }];
+      }
+      if (part.type === "audio") {
+        // OpenRouter expects raw base64 plus a format, not a MIME type or data URL.
+        // Normalize older attachments too; only new uploads pass through audio.service.
+        // https://openrouter.ai/docs/guides/overview/multimodal/audio
+        const subtype = part.mime_type.split(";", 1)[0].trim().toLowerCase().split("/")[1];
+        return [{ type: "input_audio", input_audio: {
+          data: part.data,
+          format: AUDIO_FORMAT_ALIASES[subtype] ?? subtype,
+        } }];
+      }
+      if (part.type !== "video") return super.formatContent({ ...message, content: [part] });
+      const mimeType = part.mime_type.trim().toLowerCase();
+      // Chat Completions uses video_url (Responses uses input_video).
+      // Local attachments require inline data URLs, not private server URLs:
+      // https://openrouter.ai/docs/guides/overview/multimodal/videos
+      return [{ type: "video_url", video_url: {
+        url: `data:${VIDEO_MIME_ALIASES[mimeType] ?? mimeType};base64,${part.data}`,
+      } }];
+    });
   }
 
   /**

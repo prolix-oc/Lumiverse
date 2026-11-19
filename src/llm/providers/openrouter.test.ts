@@ -1,11 +1,197 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { clearOpenRouterMetadataCache, normalizeOpenRouterEndpointModel, OpenRouterProvider } from "./openrouter";
 import { injectConnectionMetadataFlags } from "../../services/generation/connection-metadata";
-import type { StreamChunk } from "../types";
+import type { GenerationRequest, StreamChunk } from "../types";
 
 const provider = new OpenRouterProvider();
 let fetchSpy: ReturnType<typeof spyOn> | undefined;
 afterEach(() => { fetchSpy?.mockRestore(); clearOpenRouterMetadataCache(); });
+
+describe("OpenRouter multimodal attachments", () => {
+  for (const stream of [false, true]) {
+    for (const videoOnly of [false, true]) {
+      test(`${stream ? "streaming" : "JSON"} sends ${videoOnly ? "a captionless video" : "mixed text, image, video, and audio"}`, async () => {
+        let sent: any;
+        fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (_url, init) => {
+          sent = JSON.parse(String(init?.body));
+          return stream
+            ? new Response('data: {"choices":[{"delta":{"content":"A video."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } })
+            : Response.json({ choices: [{ message: { content: "A video." }, finish_reason: "stop" }] });
+        }) as typeof fetch);
+        const video = { type: "video" as const, mime_type: "video/mp4", data: "dmlkZW8=" };
+        const request: GenerationRequest = {
+          model: "google/gemini-2.5-flash",
+          messages: [
+            { role: "system", content: "Describe the attachments." },
+            { role: "user", content: videoOnly ? [video] : [
+              { type: "text", text: "Compare these attachments." },
+              { type: "image", mime_type: "image/png", data: "aW1hZ2U=" },
+              video,
+              { type: "audio", mime_type: "audio/wav", data: "YXVkaW8=" },
+              { type: "text", text: "What happens in the video?" },
+            ] },
+          ],
+        };
+        const original = structuredClone(request);
+        if (stream) {
+          const chunks: StreamChunk[] = [];
+          for await (const chunk of provider.generateStream("placeholder", "", request)) chunks.push(chunk);
+          expect(chunks.map((chunk) => chunk.token).join("")).toBe("A video.");
+        } else {
+          expect((await provider.generate("placeholder", "", request)).content).toBe("A video.");
+        }
+        const expectedVideo = { type: "video_url", video_url: { url: "data:video/mp4;base64,dmlkZW8=" } };
+        expect(sent.messages).toEqual([
+          { role: "system", content: "Describe the attachments." },
+          { role: "user", content: videoOnly ? [expectedVideo] : [
+            { type: "text", text: "Compare these attachments." },
+            { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+            expectedVideo,
+            { type: "input_audio", input_audio: { data: "YXVkaW8=", format: "wav" } },
+            { type: "text", text: "What happens in the video?" },
+          ] },
+        ]);
+        expect(String(fetchSpy.mock.calls[0][0])).toBe("https://openrouter.ai/api/v1/chat/completions");
+        expect(sent.stream).toBe(stream);
+        expect(request).toEqual(original);
+      });
+    }
+  }
+
+  for (const [mimeType, expectedMime] of [
+    ["video/mp4", "video/mp4"],
+    ["video/mpeg", "video/mpeg"],
+    ["video/mov", "video/mov"],
+    ["video/webm", "video/webm"],
+    ["video/quicktime", "video/mov"],
+    ["video/x-m4v", "video/mp4"],
+    ["video/mpg", "video/mpeg"],
+  ]) {
+    test(`serializes ${mimeType} as an inline ${expectedMime} video`, () => {
+      expect(provider.serializeMessages([{ role: "user", content: [
+        { type: "video", mime_type: mimeType, data: "dmlkZW8=" },
+      ] }])).toEqual([{ role: "user", content: [
+        { type: "video_url", video_url: { url: `data:${expectedMime};base64,dmlkZW8=` } },
+      ] }]);
+    });
+  }
+});
+
+describe("OpenRouter image input", () => {
+  for (const stream of [false, true]) {
+    test.each([
+      ["image/png", "image/png"],
+      ["image/jpeg", "image/jpeg"],
+      ["image/webp", "image/webp"],
+      ["image/gif", "image/gif"],
+      ["image/jpg", "image/jpeg"],
+      ["image/pjpeg", "image/jpeg"],
+      ["image/x-png", "image/png"],
+      ["image/png; charset=binary", "image/png"],
+      [" IMAGE/JPEG ", "image/jpeg"],
+    ])(`${stream ? "streaming" : "JSON"} sends %s as an inline %s image`, async (mimeType, expectedMime) => {
+      let sent: any;
+      fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return stream
+          ? new Response('data: {"choices":[{"delta":{"content":"Two images."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } })
+          : Response.json({ choices: [{ message: { content: "Two images." }, finish_reason: "stop" }] });
+      }) as typeof fetch);
+      const image = { type: "image" as const, mime_type: mimeType, data: "aW1hZ2Ux" };
+      const request: GenerationRequest = { model: "google/gemini-2.5-flash", messages: [
+        { role: "system", content: "Describe the images." },
+        { role: "user", content: [image] },
+        { role: "assistant", content: "Show me another." },
+        { role: "user", content: [{ type: "text", text: "Compare these." }, image,
+          { type: "image", mime_type: "image/png", data: "aW1hZ2Uy" }] },
+      ] };
+      const original = structuredClone(request);
+      if (stream) {
+        const chunks: StreamChunk[] = [];
+        for await (const chunk of provider.generateStream("placeholder", "", request)) chunks.push(chunk);
+        expect(chunks.map((chunk) => chunk.token).join("")).toBe("Two images.");
+      } else {
+        expect((await provider.generate("placeholder", "", request)).content).toBe("Two images.");
+      }
+      const expectedImage = { type: "image_url", image_url: { url: `data:${expectedMime};base64,${image.data}` } };
+      expect(sent.messages).toEqual([
+        { role: "system", content: "Describe the images." },
+        { role: "user", content: [expectedImage] },
+        { role: "assistant", content: "Show me another." },
+        { role: "user", content: [{ type: "text", text: "Compare these." }, expectedImage,
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2Uy" } }] },
+      ]);
+      // detail is optional and defaults to auto; input images need no output modalities.
+      expect(sent.modalities).toBeUndefined();
+      expect(sent.stream).toBe(stream);
+      expect(request).toEqual(original);
+    });
+  }
+
+  test("preserves image-first ordering within a user message", () => {
+    expect(provider.serializeMessages([{ role: "user", content: [
+      { type: "image", mime_type: "image/png", data: "aW1hZ2U=" },
+      { type: "text", text: "Describe this image." },
+    ] }])).toEqual([{ role: "user", content: [
+      { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+      { type: "text", text: "Describe this image." },
+    ] }]);
+  });
+});
+
+describe("OpenRouter audio input", () => {
+  for (const stream of [false, true]) {
+    test.each([
+      ["audio/wav", "wav"],
+      ["audio/mp3", "mp3"],
+      ["audio/aiff", "aiff"],
+      ["audio/aac", "aac"],
+      ["audio/ogg", "ogg"],
+      ["audio/flac", "flac"],
+      ["audio/mpeg", "mp3"],
+      ["audio/x-mp3", "mp3"],
+      ["audio/x-wav", "wav"],
+      ["audio/wave", "wav"],
+      ["audio/x-aiff", "aiff"],
+      ["audio/x-flac", "flac"],
+      ["audio/ogg; codecs=opus", "ogg"],
+      [" AUDIO/WAV ", "wav"],
+      ["audio/webm", "webm"],
+    ])(`${stream ? "streaming" : "JSON"} sends %s as raw base64 with format %s`, async (mimeType, format) => {
+      let sent: any;
+      fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return stream
+          ? new Response('data: {"choices":[{"delta":{"content":"Heard it."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } })
+          : Response.json({ choices: [{ message: { content: "Heard it." }, finish_reason: "stop" }] });
+      }) as typeof fetch);
+      const audio = { type: "audio" as const, mime_type: mimeType, data: "YXVkaW8=" };
+      const request: GenerationRequest = { model: "google/gemini-2.5-flash", messages: [
+        { role: "user", content: [audio] },
+        { role: "assistant", content: "What should I listen for?" },
+        { role: "user", content: [{ type: "text", text: "Transcribe this." }, audio] },
+      ] };
+      const original = structuredClone(request);
+      if (stream) {
+        const chunks: StreamChunk[] = [];
+        for await (const chunk of provider.generateStream("placeholder", "", request)) chunks.push(chunk);
+        expect(chunks.map((chunk) => chunk.token).join("")).toBe("Heard it.");
+      } else {
+        expect((await provider.generate("placeholder", "", request)).content).toBe("Heard it.");
+      }
+      const expectedAudio = { type: "input_audio", input_audio: { data: audio.data, format } };
+      expect(sent.messages).toEqual([
+        { role: "user", content: [expectedAudio] },
+        { role: "assistant", content: "What should I listen for?" },
+        { role: "user", content: [{ type: "text", text: "Transcribe this." }, expectedAudio] },
+      ]);
+      expect(sent.modalities).toBeUndefined();
+      expect(sent.audio).toBeUndefined();
+      expect(sent.stream).toBe(stream);
+      expect(request).toEqual(original);
+    });
+  }
+});
 
 describe("OpenRouter endpoint discovery", () => {
   test("retains exact tier and region tags and caches by model and API URL", async () => {
