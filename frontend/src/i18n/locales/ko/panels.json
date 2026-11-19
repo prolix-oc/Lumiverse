@@ -590,6 +590,8 @@
     "stickyProviderHint": "캐시 적중을 위해 이전에 기록된 업스트림 프로바이더를 우선 사용합니다. NanoGPT는 장애 조치 시 프로바이더를 전환하는 대신 503을 반환하여 캐시 무결성을 보존합니다.",
     "useCodingPlanEndpoint": "Coding Plan 엔드포인트 사용",
     "useCodingPlanEndpointHint": "일반 /api/paas/v4 엔드포인트 대신 Z.AI Coding Plan 접근용 /api/coding/paas/v4 사용",
+    "bypassStatusCheck": "상태 확인 건너뛰기",
+    "bypassStatusCheckHint": "이 연결을 테스트할 때 제공자 확인 요청을 보내지 않습니다. 채팅은 되지만 테스트 요청을 거부하는 프록시에 사용하세요.",
     "enableAnthropicCachingHint": "반복되는 접두사에 대한 비용과 지연 시간을 줄이기 위해 프롬프트를 자동으로 캐시합니다",
     "anthropicPromptCacheTtlHint": "Anthropic의 기본 캐시 시간은 5분입니다. 쓰기 비용이 더 들더라도 후속 대화 간격이 긴 워크플로에는 1시간을 사용하십시오.",
     "useAutomaticCaching": "자동 캐싱 사용",

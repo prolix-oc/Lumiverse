@@ -51,6 +51,8 @@ export interface ConnectionTestResult {
   durationMs: number;
   timedOut: boolean;
   error: string | null;
+  /** True when the profile skips the provider probe via `metadata.bypass_status_check`. */
+  bypassed?: boolean;
 }
 
 export interface NanoGptUsageWindow {
@@ -272,6 +274,15 @@ function rowToProfile(row: any): ConnectionProfile {
     has_api_key: !!row.has_api_key,
     metadata: JSON.parse(row.metadata),
   };
+}
+
+/**
+ * Some proxies and gateways answer chat requests but reject the endpoint a
+ * provider's `validateKey` probes, which reports a working connection as
+ * failed. Profiles can opt out of that probe with `metadata.bypass_status_check`.
+ */
+export function isStatusCheckBypassed(profile: Pick<ConnectionProfile, "metadata"> | null | undefined): boolean {
+  return profile?.metadata?.bypass_status_check === true;
 }
 
 export function isModelRouletteProfile(profile: Pick<ConnectionProfile, "provider"> | null | undefined): boolean {
@@ -663,6 +674,18 @@ export async function testConnection(
       durationMs: Date.now() - startedAt,
       timedOut: false,
       error: `Missing API key for connection "${profile.name}"`,
+    };
+  }
+
+  if (isStatusCheckBypassed(profile)) {
+    return {
+      success: true,
+      message: "Status check bypassed",
+      provider: profile.provider,
+      durationMs: Date.now() - startedAt,
+      timedOut: false,
+      error: null,
+      bypassed: true,
     };
   }
 

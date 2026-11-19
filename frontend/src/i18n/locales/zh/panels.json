@@ -422,6 +422,8 @@
     "stickyProviderHint": "缓存命中时优先使用之前记录的上游提供商。故障切换时 NanoGPT 返回 503，不切换提供商，以保持缓存一致性。",
     "useCodingPlanEndpoint": "使用 Coding Plan 端点",
     "useCodingPlanEndpointHint": "使用 /api/coding/paas/v4 访问 Z.AI Coding Plan，而非通用 /api/paas/v4 端点",
+    "bypassStatusCheck": "跳过状态检查",
+    "bypassStatusCheckHint": "测试此连接时不向提供商发送检查请求。适用于可正常聊天但拒绝测试请求的代理。",
     "enableAnthropicCachingHint": "自动缓存提示词，降低重复前缀的成本与延迟",
     "anthropicPromptCacheTtlHint": "Anthropic 默认缓存 5 分钟。较慢跟进流程可用 1 小时，但写入成本更高。",
     "useAutomaticCaching": "使用自动缓存",

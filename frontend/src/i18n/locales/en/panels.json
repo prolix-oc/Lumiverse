@@ -590,6 +590,8 @@
     "stickyProviderHint": "Prefer the previously recorded upstream provider for cache hits. NanoGPT returns 503 on failover instead of switching providers, preserving cache integrity.",
     "useCodingPlanEndpoint": "Use Coding Plan Endpoint",
     "useCodingPlanEndpointHint": "Use /api/coding/paas/v4 for Z.AI Coding Plan access instead of the general /api/paas/v4 endpoint",
+    "bypassStatusCheck": "Bypass status check",
+    "bypassStatusCheckHint": "Skip the provider probe when testing this connection. Use it for proxies that work for chat but reject the test request.",
     "enableAnthropicCachingHint": "Automatically cache prompts to reduce cost and latency for repetitive prefixes",
     "anthropicPromptCacheTtlHint": "Anthropic defaults to a 5-minute cache. Use 1 hour for slower follow-up flows at higher write cost.",
     "useAutomaticCaching": "Use Automatic Caching",

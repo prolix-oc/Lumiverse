@@ -590,6 +590,8 @@
     "stickyProviderHint": "Bevorzugt den zuvor erfassten Upstream-Anbieter für Cache-Treffer. NanoGPT gibt bei einem Failover 503 zurück, anstatt den Anbieter zu wechseln, um die Cache-Integrität zu wahren.",
     "useCodingPlanEndpoint": "Coding-Plan-Endpunkt verwenden",
     "useCodingPlanEndpointHint": "/api/coding/paas/v4 für den Z.AI-Coding-Plan-Zugang statt des allgemeinen Endpunkts /api/paas/v4 verwenden",
+    "bypassStatusCheck": "Statusprüfung überspringen",
+    "bypassStatusCheckHint": "Überspringt die Anbieterprüfung beim Testen dieser Verbindung. Für Proxys, die im Chat funktionieren, aber die Testanfrage ablehnen.",
     "enableAnthropicCachingHint": "Prompts automatisch zwischenspeichern, um Kosten und Latenz bei wiederkehrenden Präfixen zu senken",
     "anthropicPromptCacheTtlHint": "Anthropic verwendet standardmäßig einen 5-Minuten-Cache. Verwende 1 Stunde für langsamere Folgeabläufe bei höheren Schreibkosten.",
     "useAutomaticCaching": "Automatisches Caching verwenden",

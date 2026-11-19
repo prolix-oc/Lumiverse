@@ -111,6 +111,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
   const [useSubscriptionApi, setUseSubscriptionApi] = useState(profile?.metadata?.use_subscription_api || false)
   const [nanoGptSettings, setNanoGptSettings] = useState<NanoGptConnectionSettings>(profile?.metadata?.nanogpt || {})
   const [useZaiCodingPlanEndpoint, setUseZaiCodingPlanEndpoint] = useState(profile?.metadata?.use_coding_plan_endpoint || false)
+  const [bypassStatusCheck, setBypassStatusCheck] = useState(profile?.metadata?.bypass_status_check === true)
   const [anthropicPromptCachingSettings, setAnthropicPromptCachingSettings] = useState<AnthropicPromptCachingSettings>(
     () => parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching)
   )
@@ -443,6 +444,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       delete metadata.region
       delete metadata.bedrock_endpoint
       delete metadata.openrouter
+      delete metadata.bypass_status_check
 
       onSave({
         name: name.trim(),
@@ -456,6 +458,11 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       return
     }
     delete metadata.connection_roulette
+    if (bypassStatusCheck) {
+      metadata.bypass_status_check = true
+    } else {
+      delete metadata.bypass_status_check
+    }
     if (showResponsesApiToggle) {
       metadata.use_responses_api = useResponsesApi
     } else {
@@ -532,7 +539,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       is_default: isDefault,
       metadata,
     }, folder.value)
-  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, folder.value, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, bypassStatusCheck, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, folder.value, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
 
   const canSubmit = name.trim().length > 0 && (!isRoulette || validRouletteConnectionIds.length > 0)
 
@@ -689,6 +696,14 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       </FormField>}
       {!isRoulette && <FormField label="">
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('connectionForm.setAsDefault')} />
+      </FormField>}
+      {!isRoulette && <FormField label="">
+        <Toggle.Checkbox
+          checked={bypassStatusCheck}
+          onChange={setBypassStatusCheck}
+          label={t('connectionForm.bypassStatusCheck')}
+          hint={t('connectionForm.bypassStatusCheckHint')}
+        />
       </FormField>}
       {showResponsesApiToggle && (
         <FormField label="">

@@ -422,6 +422,8 @@
     "stickyProviderHint": "Préférez le fournisseur en amont précédemment enregistré pour les accès au cache. NanoGPT renvoie 503 lors du basculement au lieu de changer de fournisseur, préservant ainsi l'intégrité du cache.",
     "useCodingPlanEndpoint": "Utilisez le point de terminaison du plan de codage",
     "useCodingPlanEndpointHint": "Utilisez /api/coding/paas/v4 pour l'accès au plan de codage Z.AI au lieu du point de terminaison général /api/paas/v4",
+    "bypassStatusCheck": "Ignorer la vérification du statut",
+    "bypassStatusCheckHint": "Ignore la requête de vérification du fournisseur lors du test de cette connexion. Utile pour les proxys qui fonctionnent en chat mais refusent la requête de test.",
     "enableAnthropicCachingHint": "Mettez automatiquement en cache les invites pour réduire le coût et la latence des préfixes répétitifs",
     "anthropicPromptCacheTtlHint": "Anthropic utilise par défaut un cache de 5 minutes. Utilisez 1 heure pour des flux de suivi plus lents à un coût d'écriture plus élevé.",
     "useAutomaticCaching": "Utilisez la mise en cache automatique",

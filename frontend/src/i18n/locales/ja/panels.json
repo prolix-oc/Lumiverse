@@ -422,6 +422,8 @@
     "stickyProviderHint": "キャッシュ ヒットについては、以前に記録された上流プロバイダを優先します。 NanoGPT は、フェールオーバー時にプロバイダーを切り替えるのではなく 503 を返し、キャッシュの整合性を維持します。",
     "useCodingPlanEndpoint": "コーディング プラン エンドポイントを使用する",
     "useCodingPlanEndpointHint": "Z.AI コーディング プラン アクセスには、一般的な /api/paas/v4 エンドポイントの代わりに /api/coding/paas/v4 を使用します",
+    "bypassStatusCheck": "ステータスチェックをスキップ",
+    "bypassStatusCheckHint": "この接続のテスト時にプロバイダーへの確認リクエストを送信しません。チャットでは動作するがテストリクエストを拒否するプロキシ向けです。",
     "enableAnthropicCachingHint": "プロンプトを自動的にキャッシュして、反復的なプレフィックスのコストと遅延を削減します",
     "anthropicPromptCacheTtlHint": "Anthropic のデフォルトは 5 分のキャッシュです。書き込みコストが高く、フォローアップ フローが遅い場合は 1 時間を使用します。",
     "useAutomaticCaching": "自動キャッシュを使用する",
