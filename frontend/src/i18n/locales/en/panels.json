@@ -591,7 +591,7 @@
     "useCodingPlanEndpoint": "Use Coding Plan Endpoint",
     "useCodingPlanEndpointHint": "Use /api/coding/paas/v4 for Z.AI Coding Plan access instead of the general /api/paas/v4 endpoint",
     "bypassStatusCheck": "Bypass status check",
-    "bypassStatusCheckHint": "Skip the provider probe when testing this connection. Use it for proxies that work for chat but reject the test request.",
+    "bypassStatusCheckHint": "Skip the request to the provider when testing this connection. Use it for proxies that work for chat but reject the test request.",
     "enableAnthropicCachingHint": "Automatically cache prompts to reduce cost and latency for repetitive prefixes",
     "anthropicPromptCacheTtlHint": "Anthropic defaults to a 5-minute cache. Use 1 hour for slower follow-up flows at higher write cost.",
     "useAutomaticCaching": "Use Automatic Caching",
