@@ -575,6 +575,8 @@
     "apiUrl": "API URL",
     "vertexApiUrlHint": "선택한 리전의 기본 Vertex AI 엔드포인트를 사용하려면 비워 두십시오",
     "defaultApiUrlHint": "기본 프로바이더 URL을 사용하려면 비워 두십시오",
+    "googleApiKeyLocation": "API 키 위치",
+    "googleApiKeyLocationHint": "API 키를 보내는 위치입니다. Google은 URL 쿼리를 사용합니다. Gemini 호환 게이트웨이는 헤더를 요구하는 경우가 많으니 게이트웨이 문서를 확인하세요.",
     "model": "모델",
     "modelHint": "새로고침 시 연결을 저장하기 전이라도 현재 입력된 값을 사용합니다.",
     "setAsDefault": "기본 연결로 설정",

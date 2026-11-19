@@ -407,6 +407,8 @@
     "apiUrl": "URL API",
     "vertexApiUrlHint": "Lascia vuoto per usare l'endpoint predefinito di Vertex AI con la regione selezionata",
     "defaultApiUrlHint": "Lascia vuoto per l'URL predefinito del provider",
+    "googleApiKeyLocation": "Posizione della chiave API",
+    "googleApiKeyLocationHint": "Dove viene inviata la chiave API. Google usa il parametro dell'URL. I gateway compatibili con Gemini spesso richiedono un header, consulta la loro documentazione.",
     "model": "Modello",
     "modelHint": "Aggiorna usa i valori correnti del modulo, anche prima che la connessione sia salvata.",
     "setAsDefault": "Imposta come connessione predefinita",

@@ -407,6 +407,8 @@
     "apiUrl": "API URL",
     "vertexApiUrlHint": "選択したリージョンでデフォルトの Vertex AI エンドポイントを使用する場合は空のままにしてください",
     "defaultApiUrlHint": "デフォルトのプロバイダー URL の場合は空のままにしてください",
+    "googleApiKeyLocation": "APIキーの送信方法",
+    "googleApiKeyLocationHint": "APIキーの送信先です。GoogleはURLクエリを使用します。Gemini互換ゲートウェイはヘッダーを求めることが多いため、ゲートウェイのドキュメントを確認してください。",
     "model": "モデル",
     "modelHint": "更新では、接続が保存される前でも現在のフォーム値が使用されます。",
     "setAsDefault": "デフォルトの接続として設定",

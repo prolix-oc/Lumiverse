@@ -1,6 +1,6 @@
 import { parseGoogleResponse, readGoogleStream } from "./google-response";
 import { omitDisabledPenalties } from "../generation-parameters";
-import type { LlmProvider } from "../provider";
+import type { LlmProvider, ProviderConnectionOptions } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type LlmMessage, type LlmMessagePart } from "../types";
@@ -30,6 +30,28 @@ export function sanitizeGeminiSchema(schema: unknown): unknown {
     } else out[k] = v;
   }
   return out;
+}
+
+/**
+ * Where the API key travels on Gemini-native requests. Google reads `?key=`
+ * and `x-goog-api-key`; many Gemini-compatible gateways read only
+ * `Authorization: Bearer`. The default keeps the query parameter so existing
+ * connections and reverse proxies in front of Google behave as before.
+ */
+export type GoogleApiKeyLocation = "query" | "header" | "bearer";
+
+export function normalizeGoogleApiKeyLocation(value: unknown): GoogleApiKeyLocation {
+  return value === "header" || value === "bearer" ? value : "query";
+}
+
+export function buildGoogleAuth(
+  url: string,
+  apiKey: string,
+  location: GoogleApiKeyLocation,
+): { url: string; headers: Record<string, string> } {
+  if (location === "header") return { url, headers: { "x-goog-api-key": apiKey } };
+  if (location === "bearer") return { url, headers: { Authorization: `Bearer ${apiKey}` } };
+  return { url: `${url}${url.includes("?") ? "&" : "?"}key=${apiKey}`, headers: {} };
 }
 
 export class GoogleProvider implements LlmProvider {
@@ -69,12 +91,16 @@ export class GoogleProvider implements LlmProvider {
   }
 
   async generate(apiKey: string, apiUrl: string, request: GenerationRequest): Promise<GenerationResponse> {
-    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:generateContent?key=${apiKey}`;
+    const { url, headers } = buildGoogleAuth(
+      `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:generateContent`,
+      apiKey,
+      normalizeGoogleApiKeyLocation(request.parameters?._google_api_key_location),
+    );
     const body = this.buildBody(request);
 
     const res = await fetchWithPreflightAbort(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
     }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
@@ -89,12 +115,16 @@ export class GoogleProvider implements LlmProvider {
     apiUrl: string,
     request: GenerationRequest
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const { url, headers } = buildGoogleAuth(
+      `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse`,
+      apiKey,
+      normalizeGoogleApiKeyLocation(request.parameters?._google_api_key_location),
+    );
     const body = this.buildBody(request);
 
     const res = await fetchWithPreflightAbort(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify(body),
     }, request.signal, { observer: request.onProviderRequest, provider: this.name, model: request.model, credentials: [apiKey] });
 
@@ -103,11 +133,14 @@ export class GoogleProvider implements LlmProvider {
     yield* readGoogleStream(res, this.displayName, request.parameters?._replay_thought_signatures === true, request.signal, request.onResponseActivity);
   }
 
-  async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
+  async validateKey(apiKey: string, apiUrl: string, options?: ProviderConnectionOptions): Promise<boolean> {
+    const { url, headers } = buildGoogleAuth(
+      `${this.baseUrl(apiUrl)}/v1beta/models`,
+      apiKey,
+      normalizeGoogleApiKeyLocation(options?.metadata?.google_api_key_location),
+    );
     try {
-      const res = await fetch(
-        `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`
-      );
+      const res = await fetch(url, { headers });
       if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
       return res.ok;
     } catch (err) {
@@ -121,8 +154,13 @@ export class GoogleProvider implements LlmProvider {
     }
   }
 
-  async listModels(apiKey: string, apiUrl: string): Promise<string[]> {
-    const data = await fetchProviderJson<any>(this.displayName, "model listing", `${this.baseUrl(apiUrl)}/v1beta/models?key=${apiKey}`);
+  async listModels(apiKey: string, apiUrl: string, options?: ProviderConnectionOptions): Promise<string[]> {
+    const { url, headers } = buildGoogleAuth(
+      `${this.baseUrl(apiUrl)}/v1beta/models`,
+      apiKey,
+      normalizeGoogleApiKeyLocation(options?.metadata?.google_api_key_location),
+    );
+    const data = await fetchProviderJson<any>(this.displayName, "model listing", url, { headers });
     return (data.models || [])
       .map((m: any) => m.name?.replace("models/", "") || m.name)
       .filter((n: string) => n.includes("gemini"))
@@ -196,7 +234,7 @@ export class GoogleProvider implements LlmProvider {
   }
 
   /** Keys that are internal to Lumiverse and should never be sent to any provider API. */
-  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming", "_replay_thought_signatures"]);
+  private static readonly INTERNAL_PARAMS = new Set(["max_context_length", "_include_usage", "_streaming", "_replay_thought_signatures", "_google_api_key_location"]);
 
   /** Keys explicitly handled by Google's buildBody — excluded from passthrough. */
   private static readonly HANDLED_PARAMS = new Set([

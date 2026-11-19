@@ -575,6 +575,8 @@
     "apiUrl": "API URL",
     "vertexApiUrlHint": "Leave empty to use default Vertex AI endpoint with selected region",
     "defaultApiUrlHint": "Leave empty for default provider URL",
+    "googleApiKeyLocation": "API key location",
+    "googleApiKeyLocationHint": "Where the API key is sent. Google uses the URL query. Gemini-compatible gateways often expect a header, so check the gateway's docs.",
     "model": "Model",
     "modelHint": "Refresh uses the current form values, even before the connection is saved.",
     "setAsDefault": "Set as default connection",

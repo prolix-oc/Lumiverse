@@ -1,4 +1,5 @@
 import type { GenerationParameters } from "../../llm/types";
+import { normalizeGoogleApiKeyLocation } from "../../llm/providers/google";
 
 export function injectConnectionMetadataFlags(
   connection: { provider: string; metadata?: Record<string, any> },
@@ -11,6 +12,10 @@ export function injectConnectionMetadataFlags(
 
   if (connection.provider === "nanogpt" && !connection.metadata?.use_subscription_api && connection.metadata?.nanogpt) {
     params._nanogpt = connection.metadata.nanogpt;
+  }
+
+  if (connection.provider === "google" && connection.metadata?.google_api_key_location !== undefined) {
+    params._google_api_key_location = normalizeGoogleApiKeyLocation(connection.metadata.google_api_key_location);
   }
 
   if (connection.provider !== "openrouter") return;

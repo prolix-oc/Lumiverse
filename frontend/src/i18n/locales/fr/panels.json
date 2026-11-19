@@ -407,6 +407,8 @@
     "apiUrl": "URL API",
     "vertexApiUrlHint": "Laissez vide pour utiliser le point de terminaison Vertex AI par défaut avec la région sélectionnée",
     "defaultApiUrlHint": "Laissez vide pour l'URL du fournisseur par défaut",
+    "googleApiKeyLocation": "Emplacement de la clé API",
+    "googleApiKeyLocationHint": "Où la clé API est envoyée. Google utilise le paramètre d'URL. Les passerelles compatibles Gemini attendent souvent un en-tête, consultez leur documentation.",
     "model": "Modèle",
     "modelHint": "Actualiser utilise les valeurs actuelles du formulaire, avant même que la connexion ne soit enregistrée.",
     "setAsDefault": "Définir comme connexion par défaut",

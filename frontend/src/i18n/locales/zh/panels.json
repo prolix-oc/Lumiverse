@@ -407,6 +407,8 @@
     "apiUrl": "API URL",
     "vertexApiUrlHint": "留空将使用所选区域的默认 Vertex AI 端点",
     "defaultApiUrlHint": "留空将使用该提供商默认 URL",
+    "googleApiKeyLocation": "API 密钥位置",
+    "googleApiKeyLocationHint": "API 密钥的发送位置。Google 使用 URL 查询参数。兼容 Gemini 的网关通常需要请求头，请查阅网关文档。",
     "model": "模型",
     "modelHint": "刷新会使用当前表单值，即使连接尚未保存。",
     "setAsDefault": "设为默认连接",

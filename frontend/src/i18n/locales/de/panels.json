@@ -575,6 +575,8 @@
     "apiUrl": "API-URL",
     "vertexApiUrlHint": "Leer lassen, um den Standard-Vertex-AI-Endpunkt mit der gewählten Region zu verwenden",
     "defaultApiUrlHint": "Leer lassen für die Standard-URL des Anbieters",
+    "googleApiKeyLocation": "Ort des API-Schlüssels",
+    "googleApiKeyLocationHint": "Wo der API-Schlüssel gesendet wird. Google nutzt den URL-Parameter. Gemini-kompatible Gateways erwarten oft einen Header, siehe die Doku des Gateways.",
     "model": "Modell",
     "modelHint": "Aktualisieren verwendet die aktuellen Formularwerte, auch bevor die Verbindung gespeichert ist.",
     "setAsDefault": "Als Standardverbindung festlegen",

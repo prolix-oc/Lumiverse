@@ -89,6 +89,18 @@ const BEDROCK_ENDPOINTS = [
   { value: 'runtime', label: 'Runtime (cross-region profiles)' },
 ]
 
+type GoogleApiKeyLocation = 'query' | 'header' | 'bearer'
+
+const GOOGLE_API_KEY_LOCATIONS = [
+  { value: 'query', label: 'URL query (?key=)' },
+  { value: 'header', label: 'x-goog-api-key header' },
+  { value: 'bearer', label: 'Authorization: Bearer header' },
+]
+
+function parseGoogleApiKeyLocation(value: unknown): GoogleApiKeyLocation {
+  return value === 'header' || value === 'bearer' ? value : 'query'
+}
+
 export default function ConnectionForm({ providers, profile, initialProvider, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const folder = useConnectionFolderDraft('llm', profile?.id)
   const { t } = useTranslation('panels')
@@ -149,6 +161,11 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
     profile?.metadata?.bedrock_endpoint === 'runtime' ? 'runtime' : 'mantle'
   )
 
+  // Google Gemini specific state
+  const [googleApiKeyLocation, setGoogleApiKeyLocation] = useState<GoogleApiKeyLocation>(
+    () => parseGoogleApiKeyLocation(profile?.metadata?.google_api_key_location)
+  )
+
   // OpenRouter specific state
   const [openrouterSettings, setOpenrouterSettings] = useState<OpenRouterConnectionSettings>(
     profile?.metadata?.openrouter || {}
@@ -163,6 +180,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
   const urlPlaceholder = selectedProvider?.default_url || 'https://api.openai.com/v1'
   const isRoulette = provider === MODEL_ROULETTE_PROVIDER
   const isVertexAI = provider === 'google_vertex'
+  const isGoogle = provider === 'google'
   const isPollinations = provider === 'pollinations'
   const isBedrock = provider === 'bedrock'
   const allProfiles = useStore((s) => s.profiles)
@@ -196,6 +214,11 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       } else {
         delete metadata.use_coding_plan_endpoint
       }
+      if (isGoogle && googleApiKeyLocation !== 'query') {
+        metadata.google_api_key_location = googleApiKeyLocation
+      } else {
+        delete metadata.google_api_key_location
+      }
       if (isVertexAI) {
         metadata.vertex_region = vertexRegion
       }
@@ -219,7 +242,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, isRoulette, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
+  }, [apiKey, apiUrl, isRoulette, isVertexAI, isBedrock, isGoogle, googleApiKeyLocation, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
 
   useEffect(() => {
     if (profile?.id) fetchModels()
@@ -439,6 +462,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       delete metadata.nanogpt
       delete metadata.reasoningBindings
       delete metadata.vertex_region
+      delete metadata.google_api_key_location
       delete metadata.sa_file_name
       delete metadata.region
       delete metadata.bedrock_endpoint
@@ -504,6 +528,11 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       delete metadata.region
       delete metadata.bedrock_endpoint
     }
+    if (isGoogle && googleApiKeyLocation !== 'query') {
+      metadata.google_api_key_location = googleApiKeyLocation
+    } else {
+      delete metadata.google_api_key_location
+    }
     if (isOpenRouter) {
       // Only persist non-empty settings
       const hasRouting = openrouterSettings.provider_routing && Object.values(openrouterSettings.provider_routing).some((v) =>
@@ -532,7 +561,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       is_default: isDefault,
       metadata,
     }, folder.value)
-  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, folder.value, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, folder.value, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isGoogle, googleApiKeyLocation, isOpenRouter, openrouterSettings])
 
   const canSubmit = name.trim().length > 0 && (!isRoulette || validRouletteConnectionIds.length > 0)
 
@@ -655,6 +684,15 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       {!isRoulette && !hideApiUrl && (
         <FormField label={t('connectionForm.apiUrl')} hint={isVertexAI ? t('connectionForm.vertexApiUrlHint') : t('connectionForm.defaultApiUrlHint')}>
           <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
+        </FormField>
+      )}
+      {!isRoulette && isGoogle && (
+        <FormField label={t('connectionForm.googleApiKeyLocation')} hint={t('connectionForm.googleApiKeyLocationHint')}>
+          <Select
+            value={googleApiKeyLocation}
+            onChange={(v) => setGoogleApiKeyLocation(parseGoogleApiKeyLocation(v))}
+            options={GOOGLE_API_KEY_LOCATIONS}
+          />
         </FormField>
       )}
       {!isRoulette && isBedrock && (

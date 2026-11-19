@@ -668,7 +668,7 @@ export async function testConnection(
 
   try {
     const valid = await withTimeout(
-      provider.validateKey(apiKey || "", resolveEffectiveApiUrl(profile)),
+      provider.validateKey(apiKey || "", resolveEffectiveApiUrl(profile), { metadata: profile.metadata }),
       timeoutMs,
       `Connection test for "${profile.name}" (${profile.provider})`
     );
@@ -749,7 +749,7 @@ export async function listConnectionModelsPreview(
       }
     }
 
-    const models = await provider.listModels(apiKey || "", apiUrl);
+    const models = await provider.listModels(apiKey || "", apiUrl, { metadata });
     return { models, model_labels, provider: providerId };
   } catch (err: any) {
     return { models: [], provider: providerId, error: describeProviderError(err, "Failed to fetch models") };
