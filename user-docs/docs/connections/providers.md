@@ -48,6 +48,18 @@ This is useful for:
 - **Regional endpoints** — Use a provider's regional API endpoint instead of the default
 - **Self-hosted mirrors** — Point to your own deployment of an API-compatible service
 
+### Gemini-compatible gateways
+
+A **Google** connection sends its API key as a `?key=` URL parameter, the way Google's own API expects. Many gateways that offer a Gemini-native endpoint read the key from a header instead and answer 401 when it arrives in the URL. Set **API key location** on the connection to whatever the gateway's documentation shows:
+
+| API key location | Sent as | Use for |
+|------------------|---------|---------|
+| **URL query (?key=)** | `?key=YOUR_KEY` | Google itself, and gateways that copy its query style. This is the default. |
+| **x-goog-api-key header** | `x-goog-api-key: YOUR_KEY` | Gateways that follow Google's documented header |
+| **Authorization: Bearer header** | `Authorization: Bearer YOUR_KEY` | Gateways that use OpenAI-style bearer auth |
+
+Leave it on **URL query** when the API URL points at Google, or at a reverse proxy that forwards to Google. Google rejects an API key sent as a Bearer token.
+
 ---
 
 ## Using the Custom Provider
