@@ -1,3 +1,5 @@
+import { scheduleMicrotask } from '@/lib/schedule-microtask'
+
 export const MESSAGE_ROW_MEASURING_ATTRIBUTE = 'data-message-row-measuring'
 
 export function readMessageRowHeight(row: HTMLElement, entry?: ResizeObserverEntry): number {
@@ -24,7 +26,7 @@ export function createMessageRowRevealQueue(
       rows.add(row)
       if (scheduled) return
       scheduled = true
-      queueMicrotask(() => {
+      scheduleMicrotask(() => {
         scheduled = false
         if (disposed) return
         const measurements = [...rows]

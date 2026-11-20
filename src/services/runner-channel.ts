@@ -1,4 +1,5 @@
 import type { IPCMessage } from "../types/operator";
+import { scheduleMicrotask } from "../shared/schedule-microtask";
 import {
   createRunnerControlClient,
   type RunnerControlClient,
@@ -51,7 +52,7 @@ export function onRunnerMessage(handler: MessageHandler): () => void {
 
 export function onRunnerDisconnect(handler: () => void): () => void {
   disconnectHandlers.add(handler);
-  if (disconnected) queueMicrotask(handler);
+  if (disconnected) scheduleMicrotask(handler);
   return () => disconnectHandlers.delete(handler);
 }
 
