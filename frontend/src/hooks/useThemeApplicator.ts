@@ -35,7 +35,7 @@ function debugDesktopAppearance(event: string, details: Record<string, unknown> 
 
     window.requestAnimationFrame(() => {
       const root = document.documentElement
-      const app = document.querySelector<HTMLElement>('[data-app-root]')
+      const app = document.querySelector<HTMLElement>('[data-app-frame]')
       const titlebar = document.querySelector<HTMLElement>('[data-lumiverse-titlebar]')
       const appStyle = app ? getComputedStyle(app) : null
       const titlebarStyle = titlebar ? getComputedStyle(titlebar.parentElement as Element) : null
