@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import type { AppStore } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 import { createGenerationSlice } from './generation'
+import { createExpressionSlice } from './expressions'
 import {
   createSettingsSlice,
   DEVICE_ENTER_TO_SEND_STORAGE_KEY,
@@ -20,6 +21,7 @@ function store(): AppStore {
   const state = {} as AppStore
   const set = (value: Partial<AppStore> | ((current: AppStore) => Partial<AppStore>)) => Object.assign(state, typeof value === 'function' ? value(state) : value)
   const get = () => state
+  Object.assign(state, createExpressionSlice(set as never, get, {} as never))
   Object.assign(state, createGenerationSlice(set as never, get, {} as never))
   Object.assign(state, createSettingsSlice(set as never, get, {} as never))
   return state
@@ -93,6 +95,32 @@ describe('mobile wallpaper persistence', () => {
     await restored.loadSettings()
     expect(restored.wallpaper).toEqual({ ...legacy, mobile: null })
   })
+})
+
+test('legacy expression settings keep their floating geometry and new dock settings hydrate', async () => {
+  const legacy = { x: 64, y: 80, clickThrough: true }
+  const rows = new Map<string, unknown>([['expressionDisplay', legacy]])
+  database(rows)
+  const floating = store()
+  await floating.loadSettings()
+  expect(floating.expressionDisplay).toMatchObject({
+    ...legacy, placement: 'floating', mobilePlacement: 'floating', dockBackground: false, mobileDockBackground: true,
+    dockSide: 'right', dockWidthPercent: 25, dockHeightPercent: 20,
+  })
+
+  const saved = { ...legacy, placement: 'dock', dockBackground: true, dockSide: 'left', dockWidthPercent: 32, dockHeightPercent: 28 }
+  rows.set('expressionDisplay', saved)
+  const docked = store()
+  await docked.loadSettings()
+  expect(docked.expressionDisplay).toMatchObject({
+    ...saved, mobilePlacement: 'floating', mobileDockBackground: true,
+  })
+
+  const mobileOverride = { ...saved, placement: 'floating', mobilePlacement: 'dock', mobileDockBackground: false }
+  rows.set('expressionDisplay', mobileOverride)
+  const mobileDocked = store()
+  await mobileDocked.loadSettings()
+  expect(mobileDocked.expressionDisplay).toMatchObject(mobileOverride)
 })
 
 describe('portrait dock persistence', () => {
