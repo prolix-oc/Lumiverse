@@ -446,6 +446,62 @@
   color: var(--lumiverse-text);
 }
 
+.greetingNameTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  background: var(--lumiverse-bg-darker, var(--lumiverse-surface));
+  color: var(--lumiverse-text-secondary, var(--lumiverse-text));
+  border: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.greetingNameDiffList {
+  border-top: 1px solid var(--lumiverse-border-subtle, var(--lumiverse-border));
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.greetingNameDiffRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+}
+
+.greetingNameTarget {
+  font-weight: 600;
+  color: var(--lumiverse-text-secondary, var(--lumiverse-text));
+}
+
+.greetingNameOld,
+.greetingNameNew {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.greetingNameOld {
+  color: var(--lumiverse-text-muted);
+  text-decoration: line-through;
+}
+
+.greetingNameNew {
+  color: var(--lumiverse-success-text, var(--lumiverse-success));
+  font-weight: 600;
+}
+
 .greetingPreview {
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);

@@ -293,4 +293,101 @@ describe('CardUpdateModal', () => {
     expect(applyCardUpdate).not.toHaveBeenCalled()
   })
 
+  test('displays incoming and updated greeting names and submits greetingNamesMode', async () => {
+    const file = new File(['{}'], 'elena_named.json', { type: 'application/json' })
+    const namedTarget = {
+      ...existingCharacter,
+      alternate_greetings: ['Shared greeting'],
+      extensions: {
+        greeting_tools: {
+          indexMap: { '0': 'cur_0' },
+          greetings: { cur_0: { id: 'cur_0', title: 'Old Alt Name' } },
+        },
+      },
+    }
+    const namedPreview = {
+      ...preview,
+      incoming: {
+        ...preview.incoming,
+        first_mes: existingCharacter.first_mes,
+        alternate_greetings: ['Shared greeting', 'Brand new greeting 2'],
+        extensions: {
+          greeting_tools: {
+            mainGreeting: { id: 'in_main', title: 'New Main Name' },
+            indexMap: { '0': 'in_0', '1': 'in_1' },
+            greetings: {
+              in_0: { id: 'in_0', title: 'Renamed Alt' },
+              in_1: { id: 'in_1', title: 'Midnight Rooftop' },
+            },
+          },
+        },
+      },
+    }
+
+    await act(async () => {
+      root.render(
+        <CardUpdateModal
+          isOpen
+          file={file}
+          preview={namedPreview}
+          initialTargetCharacter={namedTarget}
+          onApplied={onApplied}
+          onClose={onClose}
+        />,
+      )
+    })
+    await flush()
+
+    expect(host.textContent).toContain('Greeting Names')
+    expect(host.textContent).toContain('New Main Name')
+    expect(host.textContent).toContain('Old Alt Name')
+    expect(host.textContent).toContain('Renamed Alt')
+    expect(host.textContent).toContain('Midnight Rooftop')
+
+    const applyBtn = Array.from(host.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Apply Updates'),
+    )!
+    await act(async () => {
+      applyBtn.click()
+    })
+    await flush()
+
+    expect(applyCardUpdate).toHaveBeenCalledTimes(1)
+    expect(applyCardUpdate.mock.calls[0]?.[2]).toMatchObject({
+      greetingNamesMode: 'overwrite',
+      alternateGreetingsMode: 'append_new',
+    })
+  })
+
+  test('add missing names previews only additions and clears an unavailable mode after selecting greetings', async () => {
+    const target = { ...existingCharacter, alternate_greetings: ['Named alt'], extensions: {
+      greeting_tools: { indexMap: { 0: 'local' }, greetings: { local: { title: 'Local title' } } },
+    } }
+    const incoming = { ...preview, incoming: { ...preview.incoming, first_mes: target.first_mes,
+      alternate_greetings: target.alternate_greetings, description: target.description, tags: target.tags,
+      extensions: { greeting_tools: { mainGreeting: { title: 'New main title' },
+        indexMap: { 0: 'in' }, greetings: { in: { title: 'Updated alt title' } },
+      } },
+    } }
+    await act(async () => { root.render(<CardUpdateModal isOpen file={new File(['{}'], 'names.json')}
+      preview={incoming} initialTargetCharacter={target} onApplied={onApplied} onClose={onClose} />) })
+    await flush()
+    const names = Array.from(host.querySelectorAll('select')).find(select => select.querySelector('option[value="merge_missing"]'))!
+    await act(async () => { names.value = 'merge_missing'; names.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
+    await flush()
+    expect(host.textContent).toContain('New main title')
+    expect(host.textContent).not.toContain('Updated alt title')
+    const showUnchanged = Array.from(host.querySelectorAll('input')).find(input => input.type === 'checkbox')!
+    await act(async () => { showUnchanged.click() })
+    await flush()
+    const main = Array.from(host.querySelectorAll('select')).find(select => select.querySelector('option[value="replace_and_demote"]'))!
+    await act(async () => { main.value = 'replace'; main.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
+    await flush()
+    expect(names.value).toBe('keep')
+    const apply = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.includes('Apply Updates'))!
+    await act(async () => { apply.click() })
+    await flush()
+    expect(applyCardUpdate.mock.calls[0]?.[2].greetingNamesMode).toBe('keep')
+  })
+
 })

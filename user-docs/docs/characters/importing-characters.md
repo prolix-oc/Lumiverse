@@ -35,6 +35,8 @@ When importing a single local card, Lumiverse looks for existing characters with
 
 Review the field differences and choose what to apply. You can replace the main greeting, move the old main greeting into alternates, append only new greetings, or pick individual greetings to keep. Tags, avatar, portable extensions, world books, regex scripts, and CHARX assets have separate controls. Existing local assets and settings are kept unless you choose to update them.
 
+Greeting names from Greeting Tools metadata travel with newly added or replaced greetings. For greetings you keep, **Greeting Names** lets you keep local names, add names only where missing, or update matching names. Matching uses greeting text with surrounding whitespace ignored and prefers the same slot when text repeats. Existing local notes and IDs are preserved; an incoming card without a name does not clear your custom name. A main greeting moved into alternates keeps its local name.
+
 The character editor's **Update from Card** action opens the same dialog for that character. This supports JSON, PNG, CHARX, and JPEG cards containing an embedded ZIP bundle. Bulk and URL imports retain their existing import behavior.
 
 ---
