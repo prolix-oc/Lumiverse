@@ -38,7 +38,9 @@ let reloading = false
 
 // Register service worker for PWA support — autoUpdate sends SKIP_WAITING
 // automatically when a new SW is detected.
-registerSW({
+// The APK already carries its offline frontend. A PWA worker on its persistent
+// loopback origin can outlive an APK upgrade and serve a different bundle.
+if ((window as Window & { __LUMIVERSE_ANDROID_LOCAL__?: boolean }).__LUMIVERSE_ANDROID_LOCAL__ !== true) registerSW({
   immediate: true,
   // vite-plugin-pwa calls this only after an updated (including externally
   // updated) worker takes control. Keep the reload policy with the
