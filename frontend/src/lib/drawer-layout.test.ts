@@ -3,8 +3,10 @@ import type { DrawerLayoutItem, DrawerSettings } from '@/types/store'
 import {
   canonicalDrawerLayoutTabId,
   createDefaultDrawerLayout,
+  createDrawerLayoutFolderFromTabs,
   drawerLayoutItemKey,
   moveDrawerLayoutItem,
+  moveDrawerLayoutItemToRoot,
   reconcileDrawerLayout,
   reconcileExtensionDrawerSettings,
   removeDrawerLayoutContainer,
@@ -266,6 +268,71 @@ describe('drawer layout', () => {
       { type: 'tab', tabId: 'profile' },
       { type: 'tab', tabId: 'regex' },
     ])
+  })
+
+  test('a held tab-over-tab drop creates a folder at the target position', () => {
+    const layout: DrawerLayoutItem[] = [
+      { type: 'tab', tabId: 'a' },
+      { type: 'tab', tabId: 'b' },
+      { type: 'tab', tabId: 'c' },
+    ]
+    const next = createDrawerLayoutFolderFromTabs(layout, 'tab:a', 'tab:c')
+    expect(next).toHaveLength(2)
+    expect(next[0]).toEqual({ type: 'tab', tabId: 'b' })
+    expect(next[1]).toMatchObject({ type: 'folder', name: 'Folder', icon: 'folder', children: ['c', 'a'] })
+    expect((next[1] as Extract<DrawerLayoutItem, { type: 'folder' }>).id).toMatch(/^folder-/)
+    expect(layout).toHaveLength(3) // no mutation of persisted settings
+  })
+
+  test('dragging a child onto a root tab creates a sibling folder without nesting', () => {
+    const layout: DrawerLayoutItem[] = [
+      { type: 'folder', id: 'old', name: 'Old', children: ['a', 'b'] },
+      { type: 'tab', tabId: 'c' },
+    ]
+    const next = createDrawerLayoutFolderFromTabs(layout, 'tab:b', 'tab:c')
+    expect(next[0]).toEqual({ type: 'folder', id: 'old', name: 'Old', children: ['a'] })
+    expect(next[1]).toMatchObject({ type: 'folder', children: ['c', 'b'] })
+    expect(createDrawerLayoutFolderFromTabs(layout, 'folder:old', 'tab:c')).toEqual(layout)
+    expect(createDrawerLayoutFolderFromTabs(layout, 'tab:c', 'tab:a')).toEqual(layout)
+  })
+
+  test('a quick drop can place a tab ABOVE a folder, not just INSIDE it', () => {
+    const layout: DrawerLayoutItem[] = [
+      { type: 'folder', id: 'first', name: 'First', children: ['x', 'y'] },
+      { type: 'tab', tabId: 'z' },
+      { type: 'divider', id: 'line' },
+    ]
+    expect(moveDrawerLayoutItemToRoot(layout, 'tab:x', 'folder:first', 'before')).toEqual([
+      { type: 'tab', tabId: 'x' },
+      { type: 'folder', id: 'first', name: 'First', children: ['y'] },
+      { type: 'tab', tabId: 'z' },
+      { type: 'divider', id: 'line' },
+    ])
+    expect(moveDrawerLayoutItemToRoot(layout, 'tab:y', 'folder:first', 'after')).toEqual([
+      { type: 'folder', id: 'first', name: 'First', children: ['x'] },
+      { type: 'tab', tabId: 'y' },
+      { type: 'tab', tabId: 'z' },
+      { type: 'divider', id: 'line' },
+    ])
+  })
+
+  test('quick reordering and moving containers preserve root ordering', () => {
+    const layout: DrawerLayoutItem[] = [
+      { type: 'tab', tabId: 'a' },
+      { type: 'folder', id: 'tools', name: 'Tools', children: ['x'] },
+      { type: 'tab', tabId: 'b' },
+    ]
+    expect(moveDrawerLayoutItemToRoot(layout, 'tab:a', 'tab:b', 'after')).toEqual([
+      { type: 'folder', id: 'tools', name: 'Tools', children: ['x'] },
+      { type: 'tab', tabId: 'b' },
+      { type: 'tab', tabId: 'a' },
+    ])
+    expect(moveDrawerLayoutItemToRoot(layout, 'folder:tools', 'tab:a', 'before')).toEqual([
+      { type: 'folder', id: 'tools', name: 'Tools', children: ['x'] },
+      { type: 'tab', tabId: 'a' },
+      { type: 'tab', tabId: 'b' },
+    ])
+    expect(moveDrawerLayoutItemToRoot(layout, 'tab:x', 'folder:missing', 'before')).toEqual(layout)
   })
 
   test('deleting a folder spills its children back into the same root position', () => {

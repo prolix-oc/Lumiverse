@@ -69,6 +69,8 @@
     "coreLockedHint": "앱의 핵심 섹션에 언제든지 접근할 수 있도록 항상 표시됩니다.",
     "organizerSubtitle": "탭, 폴더, 이동 가능한 구분선을 사용하여 사이드바를 정리합니다. 핵심 탭은 폴더 안에 넣어도 항상 접근할 수 있습니다.",
     "organizerHint": "폴더와 구분선을 핸들로 끕니다. 탭을 폴더 헤더에 놓으면 폴더 안에 들어가며, 폴더 안의 탭을 루트 항목이나 루트 대상에 놓으면 다시 밖으로 꺼낼 수 있습니다.",
+    "expandFolder": "폴더 펼치기",
+    "collapseFolder": "폴더 접기",
     "changeFolderIcon": "폴더 아이콘 변경",
     "addFolder": "폴더 추가",
     "addDivider": "구분선 추가",

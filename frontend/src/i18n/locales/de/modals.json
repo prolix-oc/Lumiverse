@@ -69,6 +69,8 @@
     "coreLockedHint": "Immer sichtbar, damit du die Kernbereiche der App weiterhin erreichst.",
     "organizerSubtitle": "Organisiere die Seitenleiste mit Tabs, Ordnern und verschiebbaren Trennlinien. Kern-Tabs bleiben auch in Ordnern erreichbar.",
     "organizerHint": "Ziehe Ordner und Trennlinien an ihren Griffen. Lege einen Tab auf eine Ordnerkopfzeile, um ihn darin abzulegen; ziehe einen Tab aus einem Ordner auf ein Element der obersten Ebene oder das Ziel der obersten Ebene, um ihn wieder herauszunehmen.",
+    "expandFolder": "Ordner aufklappen",
+    "collapseFolder": "Ordner zuklappen",
     "changeFolderIcon": "Ordnersymbol ändern",
     "addFolder": "Ordner hinzufügen",
     "addDivider": "Trennlinie hinzufügen",

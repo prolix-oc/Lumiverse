@@ -69,6 +69,8 @@
     "coreLockedHint": "Always visible so you can still reach core app sections.",
     "organizerSubtitle": "Organize the sidebar with tabs, folders, and movable dividers. Core tabs stay accessible even when tucked into folders.",
     "organizerHint": "Drag folders and dividers by their handles. Drop a tab on a folder header to tuck it inside; drag a foldered tab onto a root item or the root target to pull it back out.",
+    "expandFolder": "Expand folder",
+    "collapseFolder": "Collapse folder",
     "changeFolderIcon": "Change folder icon",
     "addFolder": "Add Folder",
     "addDivider": "Add Divider",
