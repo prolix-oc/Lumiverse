@@ -115,6 +115,16 @@ bun run diagnose
 - `bun run diagnose:spindle`
   Runs a generic Spindle extension sweep against a chat page or custom target route and captures extension logs, websocket traffic, root snapshots, screenshots, and optional button probes.
 
+## Character system-card filtering
+
+Run `node scripts/e2e-diagnostics/check-character-system-filter.mjs` from the repository root.
+It uses a disposable in-memory database, the real host character routes, frontend character API,
+Spindle worker runtime and host dispatcher. Chromium, Firefox and WebKit at desktop/mobile
+widths cover defaults and opt-in, ordinary cards with the container name, legacy shadow cards,
+full-text and short search, pagination/totals, direct lookup, owner scoping, permission denial
+and reload. No account or personal data is used. `CHARACTER_FILTER_BROWSERS` selects engines.
+This checks the API path through browsers; it does not emulate native apps or the full library UI.
+
 ## Frontend UUID diagnostics
 
 Run `node scripts/e2e-diagnostics/check-spindle-uuid.mjs` from the repository root. It exercises the real frontend UUID helper on a non-loopback HTTP origin where `crypto.randomUUID` is unavailable, at desktop and iPhone-sized viewports in Chromium, Firefox and WebKit. Checks synchronous draft creation, UUID format and uniqueness, unload, and remount without a backend, credentials or personal data. Set `UUID_BROWSERS=chromium` to select one engine. Actual loader wiring and stale-generation rejection are covered by the isolated loader lifecycle tests.

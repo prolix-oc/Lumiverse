@@ -12,7 +12,7 @@ export { InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope } fro
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
-import { libraryHiddenCharacterSqlExclusion } from "../types/character";
+import { libraryHiddenCharacterSqlPredicate } from "./character-library-visibility";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
@@ -208,8 +208,8 @@ export function listCharacterSummaries(
     whereParams.push(options.chatId, userId);
   }
   if (options.includeSystem === false) {
-    const exclusion = libraryHiddenCharacterSqlExclusion("c");
-    whereClauses.push(exclusion.sql);
+    const exclusion = libraryHiddenCharacterSqlPredicate("c");
+    whereClauses.push(`NOT ${exclusion.sql}`);
     whereParams.push(...exclusion.params);
   }
 
@@ -390,8 +390,8 @@ function listCharacterSummariesDiscover(
     whereParams.push(options.chatId, userId);
   }
   if (options.includeSystem === false) {
-    const exclusion = libraryHiddenCharacterSqlExclusion("c");
-    whereClauses.push(exclusion.sql);
+    const exclusion = libraryHiddenCharacterSqlPredicate("c");
+    whereClauses.push(`NOT ${exclusion.sql}`);
     whereParams.push(...exclusion.params);
   }
 
@@ -748,8 +748,8 @@ export function listCharacters(
   const whereClauses = ["user_id = ?", "deleting = 0"];
   const whereParams: unknown[] = [userId];
   if (options.includeSystem === false) {
-    const exclusion = libraryHiddenCharacterSqlExclusion();
-    whereClauses.push(exclusion.sql);
+    const exclusion = libraryHiddenCharacterSqlPredicate();
+    whereClauses.push(`NOT ${exclusion.sql}`);
     whereParams.push(...exclusion.params);
   }
   const whereStr = whereClauses.join(" AND ");

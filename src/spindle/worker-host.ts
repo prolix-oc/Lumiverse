@@ -1384,6 +1384,7 @@ export class WorkerHost {
           "uuid-v1": 1,
           ...CONNECTION_ORGANIZATION_CAPABILITIES,
           "character-search-v1": 1,
+          "character-system-filter-v1": 1,
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
           "generation-message-sessions-v1": 1,

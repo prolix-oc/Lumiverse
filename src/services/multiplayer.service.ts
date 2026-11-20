@@ -40,6 +40,7 @@ import {
   LUMIVERSE_LIBRARY_HIDDEN_KEY,
   MULTIPLAYER_ROOMS_CHARACTER_NAME,
 } from "../types/character";
+import { libraryHiddenCharacterSqlPredicate } from "./character-library-visibility";
 import {
   type Room,
   type RoomSettings,
@@ -819,9 +820,10 @@ export function buildHydrationPayload(room: Room, selfParticipantId: string): {
 
 /** A per-user placeholder character that joined-room shadow chats group under. */
 function getOrCreatePlaceholderCharacter(userId: string): string {
+  const hidden = libraryHiddenCharacterSqlPredicate("c");
   const row = getDb()
-    .query("SELECT id FROM characters WHERE user_id = ? AND name = ? LIMIT 1")
-    .get(userId, MULTIPLAYER_ROOMS_CHARACTER_NAME) as { id: string } | null;
+    .query(`SELECT c.id FROM characters c WHERE c.user_id = ? AND c.deleting = 0 AND ${hidden.sql} ORDER BY c.created_at, c.id LIMIT 1`)
+    .get(userId, ...hidden.params) as { id: string } | null;
   if (row) {
     const existing = charactersSvc.getCharacter(userId, row.id);
     if (existing && existing.extensions?.[LUMIVERSE_LIBRARY_HIDDEN_KEY] !== true) {

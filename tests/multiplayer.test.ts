@@ -146,6 +146,9 @@ describe("multiplayer turn engine", () => {
   test("getOrCreatePlaceholderCharacter stamps legacy Multiplayer Rooms rows without the hidden flag", () => {
     const PEER = "peer-legacy-mp";
     const legacy = charactersSvc.createCharacter(PEER, { name: "Multiplayer Rooms" });
+    const shadow = chatsSvc.createChat(PEER, { character_id: legacy.id });
+    getDb().run("UPDATE chats SET metadata = ? WHERE id = ?", [JSON.stringify({ multiplayer: true, joined_room: { roomId: "legacy" } }), shadow.id]);
+    getDb().run("UPDATE characters SET updated_at = 123 WHERE id = ?", [legacy.id]);
     expect(legacy.extensions._lumiverse_library_hidden).toBeUndefined();
 
     const hostChatId = crypto.randomUUID();
@@ -154,6 +157,22 @@ describe("multiplayer turn engine", () => {
     const chat = chatsSvc.getChat(PEER, hostChatId)!;
     expect(chat.character_id).toBe(legacy.id);
     expect(charactersSvc.getCharacter(PEER, legacy.id)!.extensions._lumiverse_library_hidden).toBe(true);
+    expect(charactersSvc.getCharacter(PEER, legacy.id)!.updated_at).toBe(123);
+  });
+
+  test("joining a room does not turn an ordinary same-name card into a system card", () => {
+    const PEER = "peer-name-collision";
+    const ordinary = charactersSvc.createCharacter(PEER, { name: "Multiplayer Rooms", description: "My card" });
+    const chatId = crypto.randomUUID();
+    mp.ensureJoinedRoomChat(PEER, { chatId, roomId: crypto.randomUUID() });
+    const placeholderId = chatsSvc.getChat(PEER, chatId)!.character_id!;
+    expect(placeholderId).not.toBe(ordinary.id);
+    expect(charactersSvc.getCharacter(PEER, ordinary.id)!.extensions._lumiverse_library_hidden).toBeUndefined();
+
+    charactersSvc.updateCharacter(PEER, placeholderId, { name: "Renamed container" });
+    const secondChatId = crypto.randomUUID();
+    mp.ensureJoinedRoomChat(PEER, { chatId: secondChatId, roomId: crypto.randomUUID() });
+    expect(chatsSvc.getChat(PEER, secondChatId)!.character_id).toBe(placeholderId);
   });
 
   test("ensureJoinedRoomChat stores a reconnect token getJoinedRoomReconnect reads back", () => {
