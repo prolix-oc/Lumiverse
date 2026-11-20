@@ -221,9 +221,9 @@ function windowsPayload(arch: "x64" | "arm64" = "arm64", releaseRequest = deskto
   writeFileSync(installer, "finalized installer"); writeFileSync(join(directory, `lumiverse-server-win32-${arch}.exe`), server);
   writeFileSync(join(directory, "SHA256SUMS"), `${installerSha256}  Lumiverse-setup.exe\n`);
   writeFileSync(join(directory, "release.json"), JSON.stringify({ ...releaseRequest, arch, target: WINDOWS_TARGETS[arch], builderRun: identity.run, builderAttempt: identity.attempt }));
-  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "win32", arch, bunVersion: "1.4.4", sha256: serverSha256 }));
+  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "win32", arch, bunVersion: "1.4.5", sha256: serverSha256 }));
   writeFileSync(join(directory, "build.json"), JSON.stringify({ source: releaseRequest.sha, version: releaseRequest.version, architecture: arch,
-    target: WINDOWS_TARGETS[arch], bunVersion: "1.4.4", signed: false, serverSmokePassed: arch === "x64", sha256: installerSha256, serverSha256 }));
+    target: WINDOWS_TARGETS[arch], bunVersion: "1.4.5", signed: false, serverSmokePassed: arch === "x64", sha256: installerSha256, serverSha256 }));
   return { root, directory, installer, serverSha256, installerSha256 };
 }
 test("Windows signing accepts only the requested source, architecture, build attempt and exact installer bytes", () => {
@@ -282,9 +282,9 @@ function macOSPayload(macRequest: LinuxReleaseRequest = { ...desktopRequest, for
   if (tar.exitCode !== 0) throw new Error(tar.stderr.toString());
   writeFileSync(join(directory, "Lumiverse.dmg"), "installer");
   writeFileSync(join(directory, "release.json"), JSON.stringify({ ...macRequest, arch: "x64", target: MACOS_TARGET, builderRun: identity.run, builderAttempt: identity.attempt }));
-  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "darwin", arch: "x64", bunVersion: "1.4.4", sha256: hash(server) }));
+  writeFileSync(join(directory, "server-manifest.json"), JSON.stringify({ platform: "darwin", arch: "x64", bunVersion: "1.4.5", sha256: hash(server) }));
   writeFileSync(join(directory, "build.json"), JSON.stringify({ source: macRequest.sha, version: macRequest.version, architecture: "x64", target: MACOS_TARGET,
-    bunVersion: "1.4.4", signed: false, serverSmokePassed: true, serverSha256: hash(server), archiveSha256: hash(readFileSync(archive)), dmgSha256: hash("installer"),
+    bunVersion: "1.4.5", signed: false, serverSmokePassed: true, serverSha256: hash(server), archiveSha256: hash(readFileSync(archive)), dmgSha256: hash("installer"),
     applicationName: "Lumiverse Desktop.app", bundledServerSha256: hash(server), nativeSha256: hash(nativeBytes), nativePublished: false }));
   writeFileSync(join(native, "lancedb.darwin-x64.node"), nativeBytes);
   writeFileSync(join(native, "LICENSE"), "license");
