@@ -12,19 +12,30 @@ export interface SetSwipeVariablesInput { expected_variables: VariableValues; ex
 export interface VariableBoundary { index: number; before: VariableStateSeed }
 export interface ReconcileVariableOptions { selectedMessageId?: string; discarded?: VariableBoundary[] }
 
+/** Older writes could store the checkpoint array as JSON text inside extra. */
+export function readSwipeVariableRecords(extra?: Record<string, any>): (SwipeVariableRecord | null)[] | undefined {
+  let records = extra?.variableStateBySwipe;
+  if (typeof records === "string") {
+    try { records = JSON.parse(records); } catch { return; }
+  }
+  return Array.isArray(records) ? records : undefined;
+}
+
 export function readVariableBoundary(extra: Record<string, any>, swipeId: number, index: number): VariableBoundary | undefined {
-  const records = extra.variableStateBySwipe as (SwipeVariableRecord | null)[] | undefined;
+  const records = readSwipeVariableRecords(extra);
   const before = records?.[swipeId]?.before ?? records?.find(record => record?.before)?.before;
   return before ? { index, before } : undefined;
 }
 
 /** Preserve checkpoints written by background metadata transactions after a message was read. */
 export function preserveSwipeVariablesSql(extra: Record<string, any>, count: number, removedIndex?: number): string {
-  if (!Array.isArray(extra.variableStateBySwipe)) return "?";
+  if (!readSwipeVariableRecords(extra)) return "?";
   if (!Number.isSafeInteger(count) || count < 1 || (removedIndex !== undefined && (!Number.isSafeInteger(removedIndex) || removedIndex < 0))) throw new Error("Invalid swipe bounds");
   const records = removedIndex === undefined ? "json_extract(extra, '$.variableStateBySwipe')"
     : `json_remove(json_extract(extra, '$.variableStateBySwipe'), '$[${removedIndex}]')`;
-  return `json_set(?, '$.variableStateBySwipe', (SELECT json_group_array(json(value)) FROM json_each(${records}) WHERE key < ${count}))`;
+  // A scalar subquery returns SQL text on SQLite 3.54.1+. Mark it as JSON
+  // explicitly so json_set stores an array rather than a quoted array string.
+  return `json_set(?, '$.variableStateBySwipe', json((SELECT json_group_array(json(value)) FROM json_each(${records}) WHERE key < ${count})))`;
 }
 
 function object(value: unknown): value is Record<string, any> { return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -43,7 +54,7 @@ export function readVariableStateSeed(metadata: Record<string, any>): VariableSt
 /** Regeneration starts before the original reply while retaining subsequent external edits. */
 export function readGenerationVariableSeed(metadata: Record<string, any>, extra?: Record<string, any>, swipeId = 0, regenerate = false): VariableStateSeed {
   const current = readVariableStateSeed(metadata);
-  const records = extra?.variableStateBySwipe as (SwipeVariableRecord | null)[] | undefined;
+  const records = readSwipeVariableRecords(extra);
   const before = regenerate ? (records?.[swipeId]?.before ?? records?.find(record => record?.before)?.before) : undefined;
   if (!before) return current;
   const restored = restoreVariableCheckpoint(current.values, current.checkpoint, before.checkpoint);
@@ -81,7 +92,7 @@ export function trackVariableWrite(db: Database, chatId: string, before: Record<
   const row = message(db, chatId, source.messageId);
   if (!row) throw new Error("The variable source message was deleted");
   const extra = parse(row.extra);
-  const records = extra.variableStateBySwipe as (SwipeVariableRecord | null)[] | undefined;
+  const records = readSwipeVariableRecords(extra);
   const index = records?.findIndex(record => record?.id === source.stateId) ?? -1;
   const record = records?.[index];
   if (!record || record.version !== 1 || index >= JSON.parse(row.swipes).length) throw new Error("The variable source swipe is unavailable");
@@ -108,7 +119,8 @@ export function prepareNativeSwipeVariablesWithDb(db: Database, userId: string, 
     let tracking = tracker(metadata);
     const row = message(db, chatId, messageId);
     if (!row || row.is_user) throw new Error("Invalid variable source message");
-    const extra = parse(row.extra), records = Array.from({ length: JSON.parse(row.swipes).length }, (_, i) => extra.variableStateBySwipe?.[i] ?? null);
+    const extra = parse(row.extra), saved = readSwipeVariableRecords(extra);
+    const records = Array.from({ length: JSON.parse(row.swipes).length }, (_, i) => saved?.[i] ?? null);
     const index = stateId ? records.findIndex(record => record?.id === stateId) : swipeId;
     if (index < 0 || index >= records.length) throw new Error("The variable source swipe was deleted");
     const initial = seed ?? readVariableStateSeed(metadata);
@@ -150,7 +162,7 @@ export function setSwipeVariablesWithDb(db: Database, userId: string, chatId: st
     if (input.variables.length !== swipes.length) throw new Error("Variable states must match the swipe count");
     const epoch = tracking?.epoch ?? randomUUID();
     const extra = parse(row.extra);
-    if (Array.isArray(extra.variableStateBySwipe) && extra.variableStateBySwipe.some(Boolean)) throw new Error("This message already has saved swipe variables");
+    if (readSwipeVariableRecords(extra)?.some(Boolean)) throw new Error("This message already has saved swipe variables");
     const before = { values: current, checkpoint: tracking?.head ?? [], epoch };
     const records = input.variables.map(values => ({ version: 1 as const, id: randomUUID(), epoch, before, values,
       checkpoint: advanceVariableCheckpoint(tracking?.head ?? [], variableEffects(current, values), epoch) }));
@@ -178,13 +190,13 @@ export function reconcileSwipeVariablesWithDb(db: Database, userId: string, chat
       ?.filter(value => value.index > end.index_in_chat).sort((a, b) => a.index - b.index)[0]?.before : undefined;
     if (end && end.id !== last?.id && !boundary && (!tracking.messageId || message(db, chatId, tracking.messageId))) return null;
     let row = last && message(db, chatId, last.id);
-    let record = row ? parse(row.extra).variableStateBySwipe?.[row.swipe_id] as SwipeVariableRecord | undefined : undefined;
+    let record = row ? readSwipeVariableRecords(parse(row.extra))?.[row.swipe_id] : undefined;
     if (!record && !boundary && tracking.messageId && message(db, chatId, tracking.messageId)) return null;
     if (!record) {
-      const tracked = db.query("SELECT id FROM messages WHERE chat_id = ? AND is_user = 0 AND COALESCE(json_extract(extra, '$.spindle_role'), '') <> 'system' AND json_extract(extra, '$.variableStateBySwipe[' || swipe_id || '].version') = 1 ORDER BY index_in_chat DESC LIMIT 1")
+      const tracked = db.query("SELECT id FROM messages WHERE chat_id = ? AND is_user = 0 AND COALESCE(json_extract(extra, '$.spindle_role'), '') <> 'system' AND json_extract(json_extract(extra, '$.variableStateBySwipe'), '$[' || swipe_id || '].version') = 1 ORDER BY index_in_chat DESC LIMIT 1")
         .get(chatId) as { id: string } | null;
       row = tracked && message(db, chatId, tracked.id);
-      record = row ? parse(row.extra).variableStateBySwipe[row.swipe_id] : undefined;
+      record = row ? readSwipeVariableRecords(parse(row.extra))?.[row.swipe_id] : undefined;
     }
     const restored = restoreVariableCheckpoint(readVariableValues(before), tracking.head, boundary?.checkpoint ?? record?.checkpoint ?? []);
     const nextTracking: VariableTracking = { version: 1, revision: tracking.revision, epoch: tracking.epoch, head: restored.checkpoint,
@@ -203,7 +215,7 @@ export function remapSwipeVariableOwnerWithDb(db: Database, userId: string, chat
     const chat = db.query("SELECT metadata FROM chats WHERE id = ? AND user_id = ?").get(chatId, userId) as { metadata: string } | null;
     const tracking = chat && tracker(parse(chat.metadata));
     if (!tracking?.stateId || (tracking.messageId && message(db, chatId, tracking.messageId))) return;
-    const owners = db.query("SELECT m.id FROM messages m, json_each(m.extra, '$.variableStateBySwipe') s WHERE m.chat_id = ? AND json_extract(s.value, '$.id') = ? LIMIT 2")
+    const owners = db.query("SELECT m.id FROM messages m, json_each(json_extract(m.extra, '$.variableStateBySwipe')) s WHERE m.chat_id = ? AND json_extract(s.value, '$.id') = ? LIMIT 2")
       .all(chatId, tracking.stateId) as { id: string }[];
     if (owners.length > 1) throw new Error("Duplicate swipe variable owner");
     if (owners.length) db.query("UPDATE chats SET metadata = json_set(metadata, '$._swipe_variable_state.messageId', ?) WHERE id = ? AND user_id = ?")

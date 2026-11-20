@@ -66,7 +66,7 @@ test("message sessions include the prepared model in lifecycle events and recove
   expect(pool.getPoolEntry(id)?.model).toBe("prepared-model-0");
 });
 
-test("completion applies each preset's response rules, native carriers and variables before one selected-reply event", async () => {
+test.each([false, true])("completion applies each preset's response rules, native carriers and variables before one selected-reply event (encoded: %s)", async (encoded) => {
   const f = fixture();
   for (const [index, preset] of f.presets.entries()) {
     const script = createRegexScript(f.user, { name: "Response rule", preset_id: preset.id, find_regex: "RAW", replace_string: `P${index}:{{getvar::tone}}`,
@@ -82,6 +82,11 @@ test("completion applies each preset's response rules, native carriers and varia
     stream.observe({ token: content, reasoning: "RAW" }); f.save(index, content, "RAW"); stream.end(true);
   }
   chats.cycleSwipe(f.user, f.message.id, "right");
+  if (encoded) {
+    const extra = f.read().extra;
+    getDb().query("UPDATE messages SET extra=? WHERE id=?").run(JSON.stringify({ ...extra,
+      variableStateBySwipe: JSON.stringify(extra.variableStateBySwipe) }), f.message.id);
+  }
   const [a, b] = await Promise.all([f.owner.finish(id), f.owner.finish(id)]);
   expect(a).toEqual(b); expect(a.completed).toBe(true);
   expect(f.read().swipes).toEqual(["P0:T0 R0", "P1:T1 R1"]);

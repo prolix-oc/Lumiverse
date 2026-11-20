@@ -63,3 +63,27 @@ jobs:
           src/services/characters-bulk-tags.test.ts
           src/services/world-books-delete.test.ts
           src/services/user-data/export-locks.test.ts
+
+  swipe-variables:
+    name: Swipe variables (Bun ${{ matrix.bun-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux links Bun's SQLite: 1.4.4 uses 3.53.4; 1.4.5 uses 3.54.1,
+        # which strips JSON subtypes from scalar subqueries (issue #547).
+        bun-version: [1.4.4, 1.4.5]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+      - run: bun install --frozen-lockfile
+      - name: Test swipe checkpoints and native and extension generation
+        run: >-
+          bun test --isolate
+          src/utils/variable-checkpoint.test.ts
+          src/db/swipe-variable-state.test.ts
+          src/services/chats.service.test.ts
+          src/services/generate.service.provider-outcomes.test.ts
+          src/spindle/message-generation.test.ts

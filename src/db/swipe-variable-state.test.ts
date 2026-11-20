@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mutateChatWithDb } from "./chat-operations";
-import { preserveSwipeVariablesSql, prepareNativeSwipeVariablesWithDb, readGenerationVariableSeed, readVariableStateSeed, reconcileSwipeVariablesWithDb, remapSwipeVariableOwnerWithDb, setSwipeVariablesWithDb } from "./swipe-variable-state";
+import { preserveSwipeVariablesSql, prepareNativeSwipeVariablesWithDb, readGenerationVariableSeed, readVariableBoundary, readVariableStateSeed, reconcileSwipeVariablesWithDb, remapSwipeVariableOwnerWithDb, setSwipeVariablesWithDb } from "./swipe-variable-state";
 import { readVariableValues } from "../utils/variable-checkpoint";
 
 const databases: Database[] = [];
@@ -22,16 +22,19 @@ function fixture() {
   };
   const merge = (partial: Record<string, any>) => mutateChatWithDb(db, { action: "merge", userId: "user", id: "chat", partial });
   const select = (id: string, index: number) => { db.run("UPDATE messages SET swipe_id=? WHERE id=?", [index, id]); reconcileSwipeVariablesWithDb(db, "user", "chat", { selectedMessageId: id }); };
-  return { db, metadata, append, install, read, merge, select, count: () => metadata().chat_variables.count };
+  const encode = (id: string) => { const extra = read(id); extra.variableStateBySwipe = JSON.stringify(extra.variableStateBySwipe);
+    db.run("UPDATE messages SET extra=? WHERE id=?", [JSON.stringify(extra), id]); };
+  return { db, metadata, append, install, read, merge, select, encode, count: () => metadata().chat_variables.count };
 }
 
-test("bulk deletion rewinds through every removed reply and stops at intervening external edits", () => {
+test.each([false, true])("bulk deletion rewinds through every removed reply and stops at intervening external edits (encoded: %s)", (encoded) => {
   for (const manual of [false, true]) {
     const f = fixture();
     f.append("a", 0); expect(f.install("a", ["1", "10"])).toBe(true);
     f.append("b", 1); f.install("b", ["2", "20"]);
     if (manual) f.merge({ chat_variables: { ...f.metadata().chat_variables, count: "9" } });
     f.append("c", 2); f.install("c", [manual ? "10" : "3", "30"]);
+    if (encoded) for (const id of ["a", "b", "c"]) f.encode(id);
     f.db.run("DELETE FROM messages WHERE id IN ('b','c')");
     reconcileSwipeVariablesWithDb(f.db, "user", "chat");
     expect(f.count()).toBe(manual ? "9" : "1");
@@ -40,12 +43,14 @@ test("bulk deletion rewinds through every removed reply and stops at intervening
   }
 });
 
-test("native prompt and response writes belong to their immutable source swipe", () => {
+test.each([false, true])("native prompt and response writes belong to their immutable source swipe (encoded: %s)", (encoded) => {
   const f = fixture(); f.append("a", 0); f.install("a", ["1", "10"]);
+  if (encoded) f.encode("a");
   f.db.run("UPDATE messages SET swipes='[\"A\",\"B\",\"native\"]', swipe_id=2 WHERE id='a'");
   const stateId = prepareNativeSwipeVariablesWithDb(f.db, "user", "chat", "a", 2)!;
   const seed = readVariableStateSeed(f.metadata())!;
   prepareNativeSwipeVariablesWithDb(f.db, "user", "chat", "a", 2, seed, stateId);
+  if (encoded) f.encode("a");
   const write = (chat: string, global?: string) => mutateChatWithDb(f.db, { action: "merge", userId: "user", id: "chat", partial: {},
     variableSource: { messageId: "a", stateId, values: { chat: { ...seed.values.chat, count: chat }, ...(global ? { global: { flag: global } } : {}) } } });
   write("2"); expect(f.count()).toBe("2");
@@ -152,17 +157,47 @@ test("initial tracking preserves external changes made after assembly captured i
   expect(f.read("a").variableStateBySwipe[0].values.chat.count).toBe("1");
 });
 
-test("message extra writes preserve current checkpoints and remove only the deleted slot", () => {
+test.each([false, true])("message extra writes preserve current checkpoints and remove only the deleted slot (encoded: %s)", (encoded) => {
   const f = fixture(); f.append("a", 0); f.install("a", ["1", "10"]);
+  if (encoded) f.encode("a");
   const stale = f.read("a");
-  const current = f.read("a"); current.variableStateBySwipe[1].values.chat.count = "20";
+  const current = f.read("a");
+  if (encoded) current.variableStateBySwipe = JSON.parse(current.variableStateBySwipe);
+  current.variableStateBySwipe[1].values.chat.count = "20";
   f.db.run("UPDATE messages SET extra=? WHERE id='a'", [JSON.stringify(current)]);
+  if (encoded) f.encode("a");
   f.db.query(`UPDATE messages SET extra=${preserveSwipeVariablesSql(stale, 2)} WHERE id='a'`).run(JSON.stringify({ ...stale, other: true }));
+  expect(Array.isArray(f.read("a").variableStateBySwipe)).toBe(true);
   expect(f.read("a").variableStateBySwipe[1].values.chat.count).toBe("20");
   expect(f.read("a").other).toBe(true);
+  if (encoded) f.encode("a");
   f.db.query(`UPDATE messages SET extra=${preserveSwipeVariablesSql(stale, 1, 0)} WHERE id='a'`).run(JSON.stringify(stale));
   expect(f.read("a").variableStateBySwipe).toEqual([current.variableStateBySwipe[1]]);
   expect(preserveSwipeVariablesSql({}, 2)).toBe("?");
+});
+
+test("encoded history retains regeneration and deletion boundaries without overwriting external edits", () => {
+  const f = fixture(); f.append("a", 0); f.install("a", ["1", "10"]); f.encode("a");
+  const extra = f.read("a");
+  expect(readVariableBoundary(extra, 0, 4)?.before.values.chat.count).toBe("0");
+  // Missing selected history still uses a sibling's common starting boundary.
+  expect(readVariableBoundary(extra, 2, 4)?.index).toBe(4);
+  expect(readGenerationVariableSeed(f.metadata(), extra, 2, true).values.chat.count).toBe("0");
+  expect(readGenerationVariableSeed(f.metadata(), extra, 0, false).values.chat.count).toBe("1");
+  f.merge({ chat_variables: { ...f.metadata().chat_variables, count: "9" } });
+  expect(readGenerationVariableSeed(f.metadata(), extra, 0, true).values.chat.count).toBe("9");
+  expect(() => f.install("a", ["2", "20"])).toThrow("already has saved swipe variables");
+});
+
+test("checkpoint SQL preserves null slots, order and state IDs when shrinking or deleting a swipe", () => {
+  const f = fixture(); f.append("a", 0, ["A", "manual", "B", "C"]); f.install("a", ["1", "2", "3", "4"]);
+  const extra = f.read("a"); extra.variableStateBySwipe[1] = null;
+  f.db.run("UPDATE messages SET extra=? WHERE id='a'", [JSON.stringify(extra)]);
+  f.encode("a");
+  f.db.query(`UPDATE messages SET extra=${preserveSwipeVariablesSql(f.read("a"), 3)} WHERE id='a'`).run("{}");
+  expect(f.read("a").variableStateBySwipe).toEqual(extra.variableStateBySwipe.slice(0, 3));
+  f.db.query(`UPDATE messages SET extra=${preserveSwipeVariablesSql(f.read("a"), 2, 0)} WHERE id='a'`).run("{}");
+  expect(f.read("a").variableStateBySwipe).toEqual([null, extra.variableStateBySwipe[2]]);
 });
 
 test("sibling native swipes share ownership for newly introduced variables", () => {
@@ -180,8 +215,9 @@ test("sibling native swipes share ownership for newly introduced variables", () 
   }
 });
 
-test("copies remap the variable owner when a later assistant reply is untracked", () => {
+test.each([false, true])("copies remap the variable owner when a later assistant reply is untracked (encoded: %s)", (encoded) => {
   const f = fixture(); f.append("a", 0); f.install("a", ["1", "10"]); f.append("b", 1, ["manual"]);
+  if (encoded) f.encode("a");
   f.db.run("UPDATE messages SET id='copied-a' WHERE id='a'");
   remapSwipeVariableOwnerWithDb(f.db, "user", "chat");
   expect(f.metadata()._swipe_variable_state.messageId).toBe("copied-a");
@@ -192,8 +228,9 @@ test("copies remap the variable owner when a later assistant reply is untracked"
   f.select("copied-a", 1); expect(f.count()).toBe("10");
 });
 
-test("deleting a tracked reply across an untracked reply retains the surviving checkpoint", () => {
+test.each([false, true])("deleting a tracked reply across an untracked reply retains the surviving checkpoint (encoded: %s)", (encoded) => {
   const f = fixture(); f.append("a", 0); f.install("a", ["1", "10"]);
+  if (encoded) f.encode("a");
   f.append("b", 1, ["manual"]); f.append("c", 2); f.install("c", ["2", "20"]);
   f.db.run("DELETE FROM messages WHERE id='c'");
   reconcileSwipeVariablesWithDb(f.db, "user", "chat");

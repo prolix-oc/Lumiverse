@@ -25,7 +25,7 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import type { EditAndSendContext } from "../llm/types";
 import { EditAndSendContextError } from "../llm/types";
 import { readMessageRevision } from "../utils/message-revision";
-import { prepareNativeSwipeVariablesWithDb, preserveSwipeVariablesSql, readVariableBoundary, remapSwipeVariableOwnerWithDb, reconcileSwipeVariablesWithDb, setSwipeVariablesWithDb, trackVariableWrite, type ReconcileVariableOptions, type VariableBoundary, type SetSwipeVariablesInput } from "../db/swipe-variable-state";
+import { prepareNativeSwipeVariablesWithDb, preserveSwipeVariablesSql, readSwipeVariableRecords, readVariableBoundary, remapSwipeVariableOwnerWithDb, reconcileSwipeVariablesWithDb, setSwipeVariablesWithDb, trackVariableWrite, type ReconcileVariableOptions, type VariableBoundary, type SetSwipeVariablesInput } from "../db/swipe-variable-state";
 import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
 import { getMessageRole } from "../utils/message-role";
 import { paginatedQuery } from "./pagination";
@@ -272,7 +272,8 @@ function normalizeStoredMessageExtra(
       ? legacySwipeId
       : 0;
   const normalized: Record<string, unknown> = { ...(extra || {}) };
-  if (Array.isArray(normalized.variableStateBySwipe)) normalized.variableStateBySwipe = normalizeObjectEntries(normalized.variableStateBySwipe, safeSwipeCount);
+  const variableRecords = readSwipeVariableRecords(normalized);
+  if (variableRecords) normalized.variableStateBySwipe = normalizeObjectEntries(variableRecords, safeSwipeCount);
   if (normalized.spindle_metadata !== undefined) normalized.spindle_metadata = normalizeSpindleMessageMetadata(normalized.spindle_metadata, safeSwipeCount);
   const reasoningBySwipe = normalizeReasoningEntries(
     normalized.reasoningBySwipe,
@@ -3581,7 +3582,7 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
   }
 
   if (metadata._swipe_variable_state) {
-    const next = db.query("SELECT extra, swipe_id, index_in_chat FROM messages WHERE chat_id = ? AND index_in_chat > ? AND EXISTS (SELECT 1 FROM json_each(messages.extra, '$.variableStateBySwipe') WHERE json_type(value, '$.before') = 'object') ORDER BY index_in_chat LIMIT 1")
+    const next = db.query("SELECT extra, swipe_id, index_in_chat FROM messages WHERE chat_id = ? AND index_in_chat > ? AND EXISTS (SELECT 1 FROM json_each(json_extract(messages.extra, '$.variableStateBySwipe')) WHERE json_type(value, '$.before') = 'object') ORDER BY index_in_chat LIMIT 1")
       .get(chat.id, msg.index_in_chat) as { extra: string; swipe_id: number; index_in_chat: number } | null;
     const boundary = next && readVariableBoundary(parseMetadataObject(next.extra), next.swipe_id, next.index_in_chat);
     remapSwipeVariableOwnerWithDb(db, userId, newChatId);

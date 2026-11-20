@@ -109,10 +109,18 @@ async function run(provider: string, body: object[], options: { responses?: bool
   return { event, generationId: result.generationId, preset, connection, chat };
 }
 
-test("native generations preserve before and after variables through regeneration, continuation, old swipes and forks", async () => {
+test.each([false, true])("native generations preserve before and after variables through regeneration, continuation, old swipes and forks (encoded: %s)", async (encoded) => {
   const { event, chat, preset, connection } = await run("openai", [
     { choices: [{ delta: { content: "{{addchatvar::count::1}}Reply." }, finish_reason: "stop" }] },
   ], { presetName: "Variable history", promptContent: "{{addchatvar::count::1}}Before response: {{getchatvar::count}}" });
+  const encode = (id: string) => {
+    if (!encoded) return;
+    const extra = chats.getMessage(userId, id)!.extra;
+    getDb().query("UPDATE messages SET extra=? WHERE id=?").run(JSON.stringify({ ...extra,
+      variableStateBySwipe: JSON.stringify(extra.variableStateBySwipe) }), id);
+  };
+  expect(event.error).toBeUndefined();
+  encode(event.messageId);
   const count = () => chats.getChat(userId, chat.id)!.metadata.chat_variables.count;
   const generate = async (generation_type: "normal" | "regenerate" | "continue", message_id?: string) => {
     const result = await startGeneration({ userId, chat_id: chat.id, connection_id: connection.id,
@@ -121,6 +129,7 @@ test("native generations preserve before and after variables through regeneratio
     while (!ended.some(value => value.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
     const completed = ended.find(value => value.generationId === result.generationId);
     expect(completed?.error).toBeUndefined(); expect(completed?.messageId).toBeString();
+    encode(completed.messageId);
     return chats.getMessage(userId, completed.messageId)!;
   };
   expect(count()).toBe("2");
@@ -141,6 +150,7 @@ test("native generations preserve before and after variables through regeneratio
   expect(second.extra.variableStateBySwipe[0].before.values.chat.count).toBe("4");
   chats.cycleSwipe(userId, first.id, "right"); chats.cycleSwipe(userId, first.id, "left");
   expect(count()).toBe("6");
+  encode(first.id);
   const fork = chats.branchChat(userId, chat.id, first.id)!;
   expect(fork.metadata.chat_variables.count).toBe("2");
   expect(count()).toBe("6");
@@ -148,9 +158,11 @@ test("native generations preserve before and after variables through regeneratio
   chats.cycleSwipe(userId, copied.id, "right");
   expect(chats.getChat(userId, fork.id)!.metadata.chat_variables.count).toBe("4");
   chats.addSwipe(userId, second.id, "Manual alternative.");
+  encode(second.id);
   const userFork = chats.branchChat(userId, chat.id, laterUser.id)!;
   expect(userFork.metadata.chat_variables.count).toBe("4");
-  chats.deleteMessage(userId, second.id);
+  encode(second.id);
+  expect(chats.bulkDeleteMessages(userId, chat.id, [second.id])).toBe(1);
   expect(count()).toBe("4");
   chats.deleteMessage(userId, laterUser.id);
   expect(count()).toBe("2");
