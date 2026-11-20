@@ -4,6 +4,7 @@ import { councilViewForTab } from '@/lib/council-navigation'
 import { uuidv4 } from '@/lib/uuid'
 export const DEFAULT_EXTENSION_DIVIDER_ID = 'extensions'
 export const DRAWER_LAYOUT_ROOT_END_ID = 'drawer-layout:root-end'
+export const DRAWER_LAYOUT_ROOT_START_ID = 'drawer-layout:root-start'
 
 export type DrawerLayoutLocation =
   | { kind: 'root'; index: number; item: DrawerLayoutItem }
@@ -347,6 +348,55 @@ export function moveDrawerLayoutItem(layout: DrawerLayoutItem[], activeId: strin
   }
 
   return clean
+}
+
+/** Insert at a precise root boundary, including directly ABOVE a folder.
+ * A folder drop itself means "add to folder"; its edge is a different target. */
+export function moveDrawerLayoutItemToRoot(
+  layout: DrawerLayoutItem[],
+  activeId: string,
+  targetId: string,
+  side: 'before' | 'after',
+): DrawerLayoutItem[] {
+  const clean = sanitizeDrawerLayout(layout)
+  const active = findDrawerLayoutLocation(clean, activeId)
+  const target = findDrawerLayoutLocation(clean, targetId)
+  if (!active || !target || target.kind !== 'root' || activeId === targetId) return clean
+  const moving = active.kind === 'root' ? active.item : { type: 'tab' as const, tabId: active.tabId }
+  const next = removeAtLocation(clean, active)
+  const index = next.findIndex((item) => drawerLayoutItemKey(item) === targetId)
+  if (index < 0) return clean
+  next.splice(index + (side === 'after' ? 1 : 0), 0, moving)
+  return next
+}
+
+/** Discord-style dwell gesture: a tab held on another ROOT tab becomes a folder.
+ * Nested targets never create nested folders. Existing folders remain untouched. */
+export function createDrawerLayoutFolderFromTabs(
+  layout: DrawerLayoutItem[],
+  activeId: string,
+  targetId: string,
+  name = 'Folder',
+): DrawerLayoutItem[] {
+  const clean = sanitizeDrawerLayout(layout)
+  const active = findDrawerLayoutLocation(clean, activeId)
+  const target = findDrawerLayoutLocation(clean, targetId)
+  if (!active || !target || activeId === targetId || target.kind !== 'root' || target.item.type !== 'tab') return clean
+  const activeTabId = active.kind === 'folder-child'
+    ? active.tabId
+    : active.item.type === 'tab' ? active.item.tabId : null
+  if (!activeTabId) return clean
+  const next = removeAtLocation(clean, active)
+  const targetIndex = next.findIndex((item) => drawerLayoutItemKey(item) === targetId)
+  if (targetIndex < 0) return clean
+  next.splice(targetIndex, 1, {
+    type: 'folder',
+    id: createDrawerLayoutContainerId('folder'),
+    name: name.trim().slice(0, 80) || 'Folder',
+    icon: 'folder',
+    children: [target.item.tabId, activeTabId],
+  })
+  return next
 }
 
 export function removeDrawerLayoutContainer(layout: DrawerLayoutItem[], itemKey: string): DrawerLayoutItem[] {

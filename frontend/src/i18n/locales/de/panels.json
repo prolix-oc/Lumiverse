@@ -2950,6 +2950,9 @@
     "hideTabLabels": "Tab-Beschriftungen ausblenden",
     "showTabLabels": "Tab-Beschriftungen anzeigen",
     "configureTabs": "Tabs konfigurieren",
+    "arrangeIcons": "Sidebar-Symbole anordnen",
+    "arrangeDone": "Anordnung beenden",
+    "editFolder": "Ordner anpassen",
     "folderView": "Ordneransicht",
     "listView": "Listenansicht",
     "gridView": "Rasteransicht"
