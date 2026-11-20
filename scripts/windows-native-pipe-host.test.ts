@@ -12,7 +12,8 @@ test.skipIf(process.platform !== "win32")("Windows PowerShell 5.1 forwards nativ
   const token = "native-pipe-regression-token";
   let child: Bun.Subprocess | undefined;
   writeFileSync(fixture, `
-    const decoder = new TextDecoder();
+    // Preserve a BOM as text so an unsolicited preamble cannot be hidden.
+    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
     let buffer = "";
     for await (const bytes of Bun.stdin.stream()) {
       buffer += decoder.decode(bytes, { stream: true });

@@ -30,6 +30,10 @@ public static class NativePipeHost {
     }
 
     public static int Run(string executable, string[] arguments) {
+        // .NET Framework constructs StandardInput with Console.InputEncoding
+        // and flushes its preamble during Start(), even when only BaseStream
+        // is used afterward. Match Rust's raw UTF-8 pipe without injecting a BOM.
+        Console.InputEncoding = new UTF8Encoding(false);
         var quoted = new string[arguments.Length];
         for (int index = 0; index < arguments.Length; index++) quoted[index] = Quote(arguments[index]);
         using (var process = new Process()) {

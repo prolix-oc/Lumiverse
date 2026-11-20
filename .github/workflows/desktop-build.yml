@@ -132,6 +132,7 @@ jobs:
         run: >-
           bun test
           src/runtime/bundle-backend.test.ts
+          src/runtime/bundle-desktop.test.ts
           src/services/runner-control-transport.test.ts
           scripts/runner/server-manager.test.ts
           scripts/windows-msvc.test.ts
