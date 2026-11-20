@@ -38,6 +38,8 @@ on:
       - "scripts/runner/**"
       - "scripts/windows-msvc.ts"
       - "scripts/windows-msvc.test.ts"
+      - "scripts/windows-native-pipe-host*"
+      - "scripts/smoke-test-server.ts"
       - "src/main.ts"
       - "src/services/operator.service.ts"
       - "src/services/runner-channel.ts"
@@ -133,6 +135,7 @@ jobs:
           src/services/runner-control-transport.test.ts
           scripts/runner/server-manager.test.ts
           scripts/windows-msvc.test.ts
+          scripts/windows-native-pipe-host.test.ts
           scripts/tauri-finalized.test.ts
           desktop/src-tauri/permissions.test.ts
 

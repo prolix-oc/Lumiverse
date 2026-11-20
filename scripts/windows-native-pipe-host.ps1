@@ -2,7 +2,9 @@
 # libuv pipes and inherited console do not cover CreateProcess + anonymous
 # standard handles + CREATE_NO_WINDOW. Forward bytes without decoding them.
 $ErrorActionPreference = 'Stop'
-$launch = @(ConvertFrom-Json $env:LUMIVERSE_NATIVE_SMOKE_COMMAND)
+# Windows PowerShell 5.1 emits a JSON array as one pipeline object. Wrapping it
+# in @() would add another array and make every valid command have length 1.
+$launch = ConvertFrom-Json $env:LUMIVERSE_NATIVE_SMOKE_COMMAND
 if ($launch.Length -lt 2) { throw 'Missing native smoke command' }
 Add-Type -TypeDefinition @'
 using System;
