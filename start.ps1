@@ -48,7 +48,7 @@
     Upgrade Bun to the latest canary build before continuing
 
 .NOTES
-    Bun versions older than 1.4.4 are automatically upgraded to latest stable.
+    Bun versions older than 1.4.5 are automatically upgraded to latest stable.
 #>
 
 param(
@@ -81,7 +81,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$MinimumBunVersion = [version]"1.4.4"
+$MinimumBunVersion = [version]"1.4.5"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 

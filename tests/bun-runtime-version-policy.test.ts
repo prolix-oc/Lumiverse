@@ -21,7 +21,7 @@ async function read(path: string): Promise<string> {
 }
 
 describe("Bun runtime version policy", () => {
-  test("keeps runtime, types, Docker, desktop CI, and launchers on 1.4.4", async () => {
+  test("keeps runtime, types, Docker, desktop CI, and launchers on 1.4.5", async () => {
     const [rootPackage, frontendPackage, dockerfile, desktopBuild, desktopRelease, unixLauncher, windowsLauncher, backendRuntime, desktopRunner] =
       await Promise.all([
         Bun.file(join(root, "package.json")).json(),
@@ -35,32 +35,42 @@ describe("Bun runtime version policy", () => {
         read("scripts/runner.ts"),
       ]);
 
-    expect(rootPackage.packageManager).toBe("bun@1.4.4");
-    expect(rootPackage.engines?.bun).toBe(">=1.4.4");
+    expect(rootPackage.packageManager).toBe("bun@1.4.5");
+    expect(rootPackage.engines?.bun).toBe(">=1.4.5");
     const desktopPackage = await Bun.file(join(root, "desktop/package.json")).json();
     expect(desktopPackage.packageManager).toBe(rootPackage.packageManager);
     expect(desktopPackage.engines?.bun).toBe(rootPackage.engines.bun);
-    expect(rootPackage.devDependencies?.["bun-types"]).toBe("^1.4.4");
-    expect(frontendPackage.devDependencies?.["bun-types"]).toBe("^1.4.4");
-    expect(MIN_BUN_VERSION).toBe("1.4.4");
+    expect(rootPackage.devDependencies?.["bun-types"]).toBe("^1.4.5");
+    expect(frontendPackage.devDependencies?.["bun-types"]).toBe("^1.4.5");
+    expect(MIN_BUN_VERSION).toBe("1.4.5");
 
     const pinnedImage =
-      "oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4";
+      "oven/bun:1.4.5-slim@sha256:b780593f3e10918cbdaec3d5a08d52224b9198069a65eb47812085c2ec007643";
     expect(dockerfile.match(new RegExp(pinnedImage, "g"))).toHaveLength(3);
-    expect(desktopBuild).toContain("bun-version: 1.4.4");
-    expect(desktopRelease).toContain("bun-version: 1.4.4");
-    expect(unixLauncher).toContain('MINIMUM_BUN_VERSION="1.4.4"');
-    expect(windowsLauncher).toContain('$MinimumBunVersion = [version]"1.4.4"');
-    expect(MINIMUM_BUN_VERSION).toBe("1.4.4");
-    expect(requiredBunVersion(root)).toBe("1.4.4");
+    expect(desktopBuild).toContain("bun-version: 1.4.5");
+    expect(desktopRelease).toContain("bun-version: 1.4.5");
+    for (const workflow of [
+      "server-bundle", "desktop-nightly", "desktop-linux-complete",
+      "intel-lancedb", "intel-lancedb-complete", "mobile-contracts",
+      "sqlite-execution", "websocket",
+    ]) {
+      const content = await read(`.github/workflows/${workflow}.yml`);
+      const pins = [...content.matchAll(/bun-version: (\d+\.\d+\.\d+)/g)].map(match => match[1]);
+      expect(pins.length).toBeGreaterThan(0);
+      expect(pins.every(version => version === "1.4.5")).toBe(true);
+    }
+    expect(unixLauncher).toContain('MINIMUM_BUN_VERSION="1.4.5"');
+    expect(windowsLauncher).toContain('$MinimumBunVersion = [version]"1.4.5"');
+    expect(MINIMUM_BUN_VERSION).toBe("1.4.5");
+    expect(requiredBunVersion(root)).toBe("1.4.5");
     expect(backendRuntime).toContain("await bootstrapBunRuntime");
     expect(desktopRunner).toContain("await bootstrapBunRuntime");
     expect(await read("scripts/runner/server-manager.ts")).toContain("await ensureBunRuntime(PROJECT_ROOT)");
   });
 
-  test("rejects 1.4.3 and keeps the PowerShell upgrade gate before mode dispatch", async () => {
-    expect(meetsVersion("1.4.3", MIN_BUN_VERSION)).toBe(false);
-    expect(meetsVersion("1.4.4", MIN_BUN_VERSION)).toBe(true);
+  test("rejects 1.4.4 and keeps the PowerShell upgrade gate before mode dispatch", async () => {
+    expect(meetsVersion("1.4.4", MIN_BUN_VERSION)).toBe(false);
+    expect(meetsVersion("1.4.5", MIN_BUN_VERSION)).toBe(true);
 
     const launcher = await read("start.ps1");
     const gateStart = launcher.indexOf("function Ensure-MinimumBunVersion {");
@@ -80,12 +90,12 @@ describe("Bun runtime version policy", () => {
     const directory = mkdtempSync(join(tmpdir(), "lumiverse-bun-floor-"));
     try {
       for (const manifest of [
-        { engines: { bun: ">=1.4.3" } },
-        { packageManager: "bun@1.4.3" },
+        { engines: { bun: ">=1.4.4" } },
+        { packageManager: "bun@1.4.4" },
         {},
       ]) {
         writeFileSync(join(directory, "package.json"), JSON.stringify(manifest));
-        expect(requiredBunVersion(directory)).toBe("1.4.4");
+        expect(requiredBunVersion(directory)).toBe("1.4.5");
       }
       writeFileSync(join(directory, "package.json"), JSON.stringify({ engines: { bun: ">=1.5.0" } }));
       expect(requiredBunVersion(directory)).toBe("1.5.0");
@@ -95,13 +105,13 @@ describe("Bun runtime version policy", () => {
   });
 
   test.each([
-    { platform: "termux", before: "1.4.3", after: "1.4.4", success: true, components: ["bun", "wrapper"] },
-    { platform: "termux", before: "1.4.4", after: "1.4.4", success: true, components: [] },
-    { platform: "termux", before: "1.4.3", after: "unavailable", success: false, components: ["bun"] },
-    { platform: "termux", before: "1.4.3", after: "1.4.3", success: false, components: ["bun"] },
-    { platform: "termux", before: "1.4.3", after: "1.4.4", success: false, components: ["bun", "wrapper"], probeWorks: false },
-    { platform: "linux", before: "1.4.3", after: "1.4.4", success: true, components: [] },
-    { platform: "linux", before: "1.4.3", after: "unavailable", success: false, components: [] },
+    { platform: "termux", before: "1.4.4", after: "1.4.5", success: true, components: ["bun", "wrapper"] },
+    { platform: "termux", before: "1.4.5", after: "1.4.5", success: true, components: [] },
+    { platform: "termux", before: "1.4.4", after: "unavailable", success: false, components: ["bun"] },
+    { platform: "termux", before: "1.4.4", after: "1.4.4", success: false, components: ["bun"] },
+    { platform: "termux", before: "1.4.4", after: "1.4.5", success: false, components: ["bun", "wrapper"], probeWorks: false },
+    { platform: "linux", before: "1.4.4", after: "1.4.5", success: true, components: [] },
+    { platform: "linux", before: "1.4.4", after: "unavailable", success: false, components: [] },
   ])("launcher enforces the Bun floor on $platform ($before -> $after)", async ({ platform, before, after, success, components, probeWorks = true }) => {
     const launcher = await read("start.sh");
     const section = (start: string, end: string) => {
@@ -120,7 +130,7 @@ describe("Bun runtime version policy", () => {
       // Android execution probe are replaced; no personal runtime is modified.
       const shell = [
         "set -euo pipefail",
-        `IS_TERMUX=${platform === "termux"}; MINIMUM_BUN_VERSION=1.4.4`,
+        `IS_TERMUX=${platform === "termux"}; MINIMUM_BUN_VERSION=1.4.5`,
         "info() { :; }; ok() { :; }; warn() { :; }; err() { echo \"$*\" >&2; }",
         "_resolve_bun() { return 0; }",
         "verify_termux_bun_install_path() { if [[ \"$LUMIVERSE_TEST_PROBE_WORKS\" == false ]]; then echo 'Termux install probe failed' >&2; return 1; fi; }",
@@ -147,25 +157,25 @@ describe("Bun runtime version policy", () => {
       expect(result.stdout.toString().includes("continued")).toBe(success);
       expect(readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean)).toEqual(components);
       if (success) expect(result.stderr.toString()).toBe("");
-      else expect(result.stderr.toString()).toContain(probeWorks ? "still below the required 1.4.4" : "Termux install probe failed");
+      else expect(result.stderr.toString()).toContain(probeWorks ? "still below the required 1.4.5" : "Termux install probe failed");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, shellTestTimeoutMs);
 
   test("selects a versioned Windows runtime and compares prerelease versions numerically", () => {
-    expect(meetsBunVersion("1.4.3", "1.4.4")).toBe(false);
-    expect(meetsBunVersion("1.4.4-canary.1", "1.4.4")).toBe(true);
-    expect(meetsBunVersion("1.5.0", "1.4.4")).toBe(true);
-    expect(windowsRuntimeRoot("1.4.4", {
+    expect(meetsBunVersion("1.4.4", "1.4.5")).toBe(false);
+    expect(meetsBunVersion("1.4.5-canary.1", "1.4.5")).toBe(true);
+    expect(meetsBunVersion("1.5.0", "1.4.5")).toBe(true);
+    expect(windowsRuntimeRoot("1.4.5", {
       LOCALAPPDATA: "C:\\Users\\Alice\\AppData\\Local",
-    }, root)).toBe("C:\\Users\\Alice\\AppData\\Local\\Lumiverse\\runtimes\\bun-1.4.4");
+    }, root)).toBe("C:\\Users\\Alice\\AppData\\Local\\Lumiverse\\runtimes\\bun-1.4.5");
   });
 
   test("trusts an already-running non-Windows Bun without probing its raw executable", () => {
-    expect(canTrustCurrentBunRuntime("1.4.4", "1.4.4", "linux")).toBe(true);
-    expect(canTrustCurrentBunRuntime("1.5.0", "1.4.4", "darwin")).toBe(true);
-    expect(canTrustCurrentBunRuntime("1.4.3", "1.4.4", "linux")).toBe(false);
+    expect(canTrustCurrentBunRuntime("1.4.5", "1.4.5", "linux")).toBe(true);
+    expect(canTrustCurrentBunRuntime("1.5.0", "1.4.5", "darwin")).toBe(true);
+    expect(canTrustCurrentBunRuntime("1.4.4", "1.4.5", "linux")).toBe(false);
     // Keep Windows on the side-by-side runtime selection/probe path.
-    expect(canTrustCurrentBunRuntime("1.4.4", "1.4.4", "win32")).toBe(false);
+    expect(canTrustCurrentBunRuntime("1.4.5", "1.4.5", "win32")).toBe(false);
   });
 
   test("keeps launcher utility scripts behind the Termux-aware Bun wrapper", async () => {

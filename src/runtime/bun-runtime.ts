@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve, win32 } from "node:path";
 
-export const MINIMUM_BUN_VERSION = "1.4.4";
+export const MINIMUM_BUN_VERSION = "1.4.5";
 export const BUN_EXECUTABLE_ENV = "LUMIVERSE_BUN_EXECUTABLE";
 
 interface RuntimeEnvironment {

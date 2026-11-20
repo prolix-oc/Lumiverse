@@ -28,7 +28,7 @@ jobs:
           ref: staging
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - name: Skip unchanged bundled source since the last successful nightly
         id: release
         env:

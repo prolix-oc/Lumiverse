@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { resolveWindowsMsvc } from "./windows-msvc";
 
 /** Minimum Bun the desktop build requires (see desktop/README.md). */
-export const MIN_BUN_VERSION = "1.4.4";
+export const MIN_BUN_VERSION = "1.4.5";
 
 export type CheckStatus = "ok" | "missing" | "unverified";
 

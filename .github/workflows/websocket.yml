@@ -6,6 +6,9 @@ on:
       - 'src/ws/**'
       - 'src/app.ts'
       - 'src/main.ts'
+      - 'src/tls-config*'
+      - 'src/utils/safe-fetch*'
+      - 'src/llm/providers/**'
       - 'src/runtime/bun-runtime.ts'
       - 'scripts/runner/**'
       - 'scripts/install-bun-runtime.ps1'
@@ -41,7 +44,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
         working-directory: frontend
@@ -49,6 +52,8 @@ jobs:
         run: bun x tsc --noEmit
       - name: Test runtime floor, receive queues, streaming and room isolation
         run: bun --no-env-file test --isolate tests/bun-runtime-version-policy.test.ts src/ws/receive-queue.test.ts src/ws/transport.test.ts src/ws/handler.frontend-session.test.ts tests/multiplayer-ws.test.ts
+      - name: Test TLS trust, streaming responses, and provider adapters
+        run: bun --no-env-file test --isolate src/tls-config.test.ts src/utils/safe-fetch.test.ts src/llm/providers
       - name: Test browser reconnect and generation recovery
         working-directory: frontend
         run: bun --no-env-file test --isolate src/ws/client.test.ts src/lib/generation-recovery.test.ts

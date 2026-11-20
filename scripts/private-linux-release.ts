@@ -209,9 +209,9 @@ export function verifyWindowsPayload(root: string, request: LinuxReleaseRequest,
   const build = JSON.parse(readFileSync(join(directory, "build.json"), "utf8"));
   const manifest = JSON.parse(readFileSync(join(directory, "server-manifest.json"), "utf8"));
   if (build.source !== request.sha || build.version !== request.version || build.architecture !== arch
-    || build.target !== WINDOWS_TARGETS[arch] || build.bunVersion !== "1.4.4" || build.signed !== false
+    || build.target !== WINDOWS_TARGETS[arch] || build.bunVersion !== "1.4.5" || build.signed !== false
     || build.serverSmokePassed !== (arch === "x64") || manifest.platform !== "win32" || manifest.arch !== arch
-    || manifest.bunVersion !== "1.4.4" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
+    || manifest.bunVersion !== "1.4.5" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
     throw new Error("Windows server provenance mismatch");
   }
   const server = join(directory, `lumiverse-server-win32-${arch}.exe`);
@@ -249,9 +249,9 @@ export function verifyMacOSPayload(root: string, request: LinuxReleaseRequest, b
   const build = JSON.parse(readFileSync(join(directory, "build.json"), "utf8"));
   const manifest = JSON.parse(readFileSync(join(directory, "server-manifest.json"), "utf8"));
   if (build.source !== request.sha || build.version !== request.version || build.architecture !== "x64"
-    || build.target !== MACOS_TARGET || build.bunVersion !== "1.4.4" || build.signed !== false
+    || build.target !== MACOS_TARGET || build.bunVersion !== "1.4.5" || build.signed !== false
     || build.serverSmokePassed !== true || manifest.platform !== "darwin" || manifest.arch !== "x64"
-    || manifest.bunVersion !== "1.4.4" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
+    || manifest.bunVersion !== "1.4.5" || !/^[a-f0-9]{64}$/.test(manifest.sha256) || build.serverSha256 !== manifest.sha256) {
     throw new Error("macOS server provenance mismatch");
   }
   const checked = (name: string, expected: string) => {

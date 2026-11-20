@@ -20,7 +20,7 @@ set -euo pipefail
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
 #   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
-# Bun versions older than 1.4.4 are automatically upgraded to latest stable.
+# Bun versions older than 1.4.5 are automatically upgraded to latest stable.
 #
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
@@ -198,7 +198,7 @@ FORCE_BUILD=false
 AUTO_OPEN=false
 SAFE_THEME=false
 BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
-MINIMUM_BUN_VERSION="1.4.4"
+MINIMUM_BUN_VERSION="1.4.5"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;

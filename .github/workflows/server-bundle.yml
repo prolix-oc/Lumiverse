@@ -57,7 +57,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - name: Choose hosted platforms for the release channel
         id: platforms
         run: bun scripts/private-linux-release.ts matrix
@@ -94,7 +94,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - name: Dispatch without occupying a hosted runner during compilation
         env:
           PRIVATE_BUILDER: linux
@@ -111,7 +111,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - name: Dispatch without waiting for Windows compilation
         env:
           PRIVATE_BUILDER: windows
@@ -128,7 +128,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - name: Dispatch without waiting for Intel macOS compilation
         env:
           PRIVATE_BUILDER: macos
@@ -152,7 +152,7 @@ jobs:
           ref: ${{ inputs.source }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

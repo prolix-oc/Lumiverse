@@ -10,7 +10,7 @@ Lumiverse runs on your own machine. It needs **Bun** (a fast JavaScript runtime)
 
 ## Requirements
 
-- **Bun** v1.4.4 or later — [Install Bun](https://bun.sh) (the start scripts auto-install Bun if missing and auto-upgrade older versions to latest stable)
+- **Bun** v1.4.5 or later — [Install Bun](https://bun.sh) (the start scripts auto-install Bun if missing and auto-upgrade older versions to latest stable)
 - A modern web browser (Chrome, Firefox, Edge, Safari)
 - An API key from at least one AI provider (OpenAI, Anthropic, Google, etc.)
 
@@ -74,7 +74,7 @@ After the shell opens, continue with the normal startup command below.
     ./start.sh
     ```
 
-    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`. If Bun is older than 1.4.4, startup uses the `bun-termux` manager to atomically update both the Bun runtime and its wrapper before continuing.
+    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`. If Bun is older than 1.4.5, startup uses the `bun-termux` manager to atomically update both the Bun runtime and its wrapper before continuing.
 
     If `grun bun --version` works but the native Termux install path is still broken, `start.sh` now attempts a `bun-termux` rebuild before it lets first-run setup continue.
 
@@ -130,7 +130,7 @@ The start scripts accept flags to control behavior:
 
     | Flag | Description |
     |------|-------------|
-    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.4.4 |
+    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.4.5 |
     | `-b`, `--build` | Rebuild frontend before starting |
     | `--build-only` | Rebuild frontend only, don't start |
     | `--backend-only` | Start backend only, skip frontend |
@@ -145,15 +145,15 @@ The start scripts accept flags to control behavior:
     !!! note "Termux behavior"
         Bun's built-in `bun upgrade` command does not work on native Termux — it aborts with `'bun upgrade' is unsupported on systems without ld` because Termux uses Android's bionic libc, not glibc. On Termux:
 
-        * `--upgrade-bun` updates the Bun runtime through [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux), which downloads binaries directly from the [official Bun releases](https://github.com/oven-sh/bun/releases). There is no separate Termux Bun release to wait for. If the installed Bun version actually changes, Lumiverse then rebuilds the wrapper at `$HOME/.bun-termux`; if Bun is already current, the working wrapper is left untouched. The upstream manager installs updates through atomic renames, so an already-running wrapper does not cause Android's `Text file busy` error. Startup stops if the update fails to reach Bun 1.4.4 or later.
-        * `--upgrade-bun-canary` is **not supported** by Lumiverse's native Termux path. The start script skips that upgrade, then enforces the same Bun 1.4.4 minimum using stable releases. If you specifically need canary, run Lumiverse inside a [proot-distro Linux](https://github.com/termux/proot-distro) environment, where standard `bun upgrade --canary` works normally.
+        * `--upgrade-bun` updates the Bun runtime through [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux), which downloads binaries directly from the [official Bun releases](https://github.com/oven-sh/bun/releases). There is no separate Termux Bun release to wait for. If the installed Bun version actually changes, Lumiverse then rebuilds the wrapper at `$HOME/.bun-termux`; if Bun is already current, the working wrapper is left untouched. The upstream manager installs updates through atomic renames, so an already-running wrapper does not cause Android's `Text file busy` error. Startup stops if the update fails to reach Bun 1.4.5 or later.
+        * `--upgrade-bun-canary` is **not supported** by Lumiverse's native Termux path. The start script skips that upgrade, then enforces the same Bun 1.4.5 minimum using stable releases. If you specifically need canary, run Lumiverse inside a [proot-distro Linux](https://github.com/termux/proot-distro) environment, where standard `bun upgrade --canary` works normally.
         * If native Termux reports a broken install path, launcher validation attempts a wrapper rebuild automatically before failing the install path.
 
 === "Windows (`start.ps1`)"
 
     | Flag | Description |
     |------|-------------|
-    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.4.4 |
+    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.4.5 |
     | `-Build` or `-b` | Rebuild frontend before starting |
     | `-Mode build-only` | Rebuild frontend only |
     | `-Mode backend-only` | Start backend only |

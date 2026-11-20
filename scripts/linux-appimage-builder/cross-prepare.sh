@@ -2,7 +2,7 @@
 # Run in the ARM64 runtime container. Keep native server dependencies and all
 # architecture-sensitive checks on ARM64; Rust compilation happens separately.
 set -euo pipefail
-test "$(bun --version)" = 1.4.4
+test "$(bun --version)" = 1.4.5
 test "$(bun -p 'process.arch')" = arm64
 checks() {
   bun install --frozen-lockfile

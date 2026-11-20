@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-test "$(bun --version)" = 1.4.4
+test "$(bun --version)" = 1.4.5
 test "$(bun -p 'process.arch')" = "${LUMIVERSE_BUILD_ARCH:?expected build architecture}"
 case "$LUMIVERSE_BUILD_ARCH" in
   x64) expected_target=x86_64-unknown-linux-gnu; test_timeout=5000 ;;

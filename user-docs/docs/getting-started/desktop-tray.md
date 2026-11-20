@@ -25,7 +25,7 @@ require a checkout, an installed Bun runtime or Rust.
 Feature-branch artifacts from the
 [Build Desktop workflow](https://github.com/prolix-oc/Lumiverse/actions/workflows/desktop-build.yml)
 can be checkout-only companions. Their existing-checkout path requires Bun
-1.4.4 or later, the checkout and its dependencies. Source builds also require
+1.4.5 or later, the checkout and its dependencies. Source builds also require
 Rust and the native build libraries in the [desktop README](https://github.com/prolix-oc/Lumiverse/blob/staging/desktop/README.md#source-build-prerequisites).
 
 Windows requires WebView2. Official Linux AppImages bundle GTK 3, WebKitGTK 4.1

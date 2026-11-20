@@ -291,7 +291,7 @@ Running it does **not** require Cargo, a Rust toolchain, a system WebKitGTK
 package, or system GStreamer plugins. Fully bundled stable/nightly releases
 include the server and Bun; they need neither a checkout nor an installed Bun
 runtime. Checkout-only feature artifacts
-require [Bun](https://bun.sh) ≥ 1.4.4 and a Lumiverse checkout. Both can connect
+require [Bun](https://bun.sh) ≥ 1.4.5 and a Lumiverse checkout. Both can connect
 to a remote HTTPS instance.
 
 Download the artifact matching the machine (`amd64`/`x86_64` for most PCs or
@@ -349,7 +349,7 @@ bun run build:linux-appimage root@linux-builder --jobs 12 \
 
 An existing SSH profile also works as the host argument. The SSH identity must
 have Docker access, and the host key must already be trusted. The build runs as
-an unprivileged user inside Ubuntu 22.04, with Bun 1.4.4, Rust 1.95.0, and Node
+an unprivileged user inside Ubuntu 22.04, with Bun 1.4.5, Rust 1.95.0, and Node
 22.16.0. This preserves the nightly's OS/glibc baseline when the remote host is
 Arch or another newer distribution. Native package versions are recorded in
 the returned runtime manifest.
@@ -513,7 +513,7 @@ Run `bun run desktop:doctor` from the repository root to check all build
 requirements at once. It reports what is missing and the exact command to
 install it.
 
-- [Bun](https://bun.sh) ≥ 1.4.4 (also required by the server itself)
+- [Bun](https://bun.sh) ≥ 1.4.5 (also required by the server itself)
 - [Rust](https://rustup.rs) stable (Tauri v2 builds the native shell)
 
 Platform-specific build requirements:

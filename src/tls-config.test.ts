@@ -73,7 +73,10 @@ function writeManifest(directory: string, manifest: unknown): string {
   return path;
 }
 
-function startTlsServer(options: Bun.TLSOptions | Bun.TLSOptions[]): Bun.Server<undefined> {
+function startTlsServer(
+  options: Bun.TLSOptions | Bun.TLSOptions[],
+  respond = () => new Response("secure"),
+): Bun.Server<undefined> {
   // bun-types 1.4.2 has not exposed the runtime's new `http2` option yet, so
   // keep it in a spread just like the production server configuration.
   const tlsTransport = { tls: options, http2: true };
@@ -81,7 +84,7 @@ function startTlsServer(options: Bun.TLSOptions | Bun.TLSOptions[]): Bun.Server<
     hostname: "127.0.0.1",
     port: 0,
     ...tlsTransport,
-    fetch: () => new Response("secure"),
+    fetch: respond,
   });
 }
 
@@ -147,6 +150,54 @@ describe("loadTlsConfig", () => {
         status: 200,
         body: "secure",
       });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fetch reads a streamed response using an explicitly trusted certificate", async () => {
+    const server = startTlsServer({ cert: ONE_CERT, key: ONE_KEY }, () => new Response(
+      new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"token":"hello"}\n\n'));
+          await Bun.sleep(10);
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      }),
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    try {
+      const response = await fetch(`https://127.0.0.1:${server.port}/`, {
+        tls: { ca: ONE_CERT, serverName: "alt.example.test" },
+        keepalive: false,
+        signal: AbortSignal.timeout(3_000),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.body!) chunks.push(chunk);
+      expect(Buffer.concat(chunks).toString()).toBe('data: {"token":"hello"}\n\ndata: [DONE]\n\n');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("fetch rejects untrusted certificates and mismatched hostnames", async () => {
+    const server = startTlsServer({ cert: ONE_CERT, key: ONE_KEY });
+    try {
+      for (const tls of [
+        { serverName: "alt.example.test" },
+        { ca: TWO_CERT, serverName: "alt.example.test" },
+        { ca: ONE_CERT, serverName: "wrong.example.test" },
+      ]) {
+        await expect(fetch(`https://127.0.0.1:${server.port}/`, {
+          tls,
+          keepalive: false,
+          signal: AbortSignal.timeout(3_000),
+        })).rejects.toThrow();
+      }
     } finally {
       server.stop(true);
     }

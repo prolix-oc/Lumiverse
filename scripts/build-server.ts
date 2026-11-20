@@ -33,8 +33,8 @@ export function verifyWindowsRuntime(bytes: Uint8Array, arch: string): void {
 async function windowsArmRuntime(): Promise<string> {
   // Keep the embedded runtime pinned independently of the host Bun used to
   // compile the launcher. The final ARM64 runtime still needs native smoke.
-  if (Bun.version !== "1.4.4") throw new Error("Update the verified ARM64 runtime checksum when changing the pinned Bun version.");
-  const expected = "2d57a0eec0cb44d95c918c3f9734f60455a1306ae5085d76fc68f44e3ee30d09";
+  if (Bun.version !== "1.4.5") throw new Error("Update the verified ARM64 runtime checksum when changing the pinned Bun version.");
+  const expected = "41f57d49c3c6811888d9633c569e40b4eb1f7e92b5e5336e3abd3af03187d77a";
   const cache = join(ROOT, ".tmp", "windows-arm64-runtime", Bun.version);
   mkdirSync(cache, { recursive: true });
   const archive = join(cache, "bun.zip");

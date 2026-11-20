@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
       - run: bun install --frozen-lockfile
       - run: bun x tsc --noEmit
       - name: Test contention, responsiveness, interruption, and cleanup
@@ -47,6 +47,8 @@ jobs:
           src/db/migrate.test.ts
           src/db/maintenance.test.ts
           src/db/maintenance-scheduler.test.ts
+          src/db/swipe-variable-state.test.ts
+          src/services/chats.service.test.ts
           src/services/database-execution.test.ts
           src/services/async-database-callers.test.ts
           src/services/tokenizer-seed.test.ts
