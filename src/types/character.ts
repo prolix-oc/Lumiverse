@@ -48,6 +48,31 @@ export type UpdateCharacterInput = Partial<CreateCharacterInput>;
 /** Sentinel id for the synthetic character backing character-less chats. */
 export const ASSISTANT_CHARACTER_ID = "__assistant__";
 
+/** Per-user container card that multiplayer shadow chats group under. */
+export const MULTIPLAYER_ROOMS_CHARACTER_NAME = "Multiplayer Rooms";
+
+/** Extensions flag marking host-internal characters excluded from Spindle lists by default. */
+export const LUMIVERSE_LIBRARY_HIDDEN_KEY = "_lumiverse_library_hidden";
+
+export function isLibraryHiddenCharacter(
+  character: Pick<Character, "name" | "extensions"> | (Pick<CharacterSummary, "name"> & { extensions?: Record<string, unknown> }),
+): boolean {
+  if (character.name === MULTIPLAYER_ROOMS_CHARACTER_NAME) return true;
+  const flag = character.extensions?.[LUMIVERSE_LIBRARY_HIDDEN_KEY];
+  return flag === true || flag === 1 || flag === "true";
+}
+
+export function libraryHiddenCharacterSqlExclusion(alias?: string): { sql: string; params: string[] } {
+  const col = (name: string) => (alias ? `${alias}.${name}` : name);
+  return {
+    sql: `NOT (
+      COALESCE(json_extract(${col("extensions")}, '$.${LUMIVERSE_LIBRARY_HIDDEN_KEY}'), 0) IN (1, 'true')
+      OR ${col("name")} = ?
+    )`,
+    params: [MULTIPLAYER_ROOMS_CHARACTER_NAME],
+  };
+}
+
 /**
  * Synthetic stand-in for temporary character-less chats so prompt assembly,
  * macros, and attribution run unchanged. Never persisted; the sentinel id

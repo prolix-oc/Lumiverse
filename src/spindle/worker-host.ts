@@ -2171,7 +2171,14 @@ export class WorkerHost {
         break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
-        this.contentApi.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId, (msg as typeof msg & { search?: string }).search);
+        this.contentApi.handleCharactersList(
+          msg.requestId,
+          msg.limit,
+          msg.offset,
+          msg.userId,
+          (msg as typeof msg & { search?: string }).search,
+          (msg as typeof msg & { includeSystem?: boolean }).includeSystem,
+        );
         break;
       case "characters_get":
         this.contentApi.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);

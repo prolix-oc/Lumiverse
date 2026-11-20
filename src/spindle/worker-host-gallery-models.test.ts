@@ -127,7 +127,7 @@ test("character search passes scoped pagination and projects an owned thumbnail 
   restores.push(summaries, get, image);
   const response = await invoke({ type: "characters_list", search: "Mira", limit: 50, offset: 50 });
   expect(response.error).toBeUndefined();
-  expect(summaries).toHaveBeenCalledWith("alice", { limit: 50, offset: 50 }, { search: "Mira" });
+  expect(summaries).toHaveBeenCalledWith("alice", { limit: 50, offset: 50 }, { search: "Mira", includeSystem: false });
   expect(get).toHaveBeenCalledWith("alice", "c");
   expect(image).toHaveBeenCalledWith("alice", "portrait", { specificity: "sm" });
   expect(response.result).toMatchObject({ total: 61, data: [{ id: "c", avatar_url: "/thumbnail.png" }] });
@@ -135,6 +135,19 @@ test("character search passes scoped pagination and projects an owned thumbnail 
   expect(response.result.data[0].user_id).toBeUndefined();
   image.mockReturnValue(null);
   expect((await invoke({ type: "characters_get", characterId: "c" })).result.avatar_url).toBeNull();
+});
+
+test("characters.list excludes system cards by default and includes them when includeSystem is true", async () => {
+  const list = spyOn(charactersSvc, "listCharacters").mockReturnValue({ data: [], total: 0 } as any);
+  restores.push(list);
+
+  expect((await invoke({ type: "characters_list", limit: 20, offset: 0 })).error).toBeUndefined();
+  expect(list).toHaveBeenCalledWith("alice", { limit: 20, offset: 0 }, { includeSystem: false });
+
+  expect((await invoke({ type: "characters_list", limit: 20, offset: 0, includeSystem: true })).error).toBeUndefined();
+  expect(list).toHaveBeenCalledWith("alice", { limit: 20, offset: 0 }, { includeSystem: true });
+
+  expect((await invoke({ type: "characters_list", includeSystem: "yes" })).error).toContain("includeSystem");
 });
 
 test("character search rejects oversized queries and enforces Characters permission and scope", async () => {

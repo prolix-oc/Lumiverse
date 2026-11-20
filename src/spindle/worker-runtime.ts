@@ -3057,7 +3057,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   characters: {
-    async list(options?: { limit?: number; offset?: number; search?: string; userId?: string }): Promise<{ data: CharacterDTO[]; total: number }> {
+    async list(options?: { limit?: number; offset?: number; search?: string; userId?: string; includeSystem?: boolean }): Promise<{ data: CharacterDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "characters_list",
@@ -3066,6 +3066,7 @@ const spindleApi: RuntimeSpindleAPI = {
         offset: options?.offset,
         userId: options?.userId,
         ...{ search: options?.search },
+        ...{ includeSystem: options?.includeSystem },
       });
       return result as { data: CharacterDTO[]; total: number };
     },

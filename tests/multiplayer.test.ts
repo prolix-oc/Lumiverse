@@ -132,9 +132,28 @@ describe("multiplayer turn engine", () => {
     expect(chat.character_id).not.toBeNull(); // under the placeholder char → shows in lists
     expect(chatsSvc.getMessages(PEER, hostChatId)).toHaveLength(2); // snapshot persisted
 
+    const placeholder = charactersSvc.getCharacter(PEER, chat.character_id!)!;
+    expect(placeholder.name).toBe("Multiplayer Rooms");
+    expect(placeholder.extensions._lumiverse_library_hidden).toBe(true);
+    expect(charactersSvc.listCharacters(PEER, { limit: 50, offset: 0 }).data.some((c) => c.id === placeholder.id)).toBe(true);
+    expect(charactersSvc.listCharacters(PEER, { limit: 50, offset: 0 }, { includeSystem: false }).data.some((c) => c.id === placeholder.id)).toBe(false);
+
     // Idempotent: re-recording doesn't duplicate.
     expect(mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId, messages: [] }).ok).toBe(true);
     expect(chatsSvc.getMessages(PEER, hostChatId)).toHaveLength(2);
+  });
+
+  test("getOrCreatePlaceholderCharacter stamps legacy Multiplayer Rooms rows without the hidden flag", () => {
+    const PEER = "peer-legacy-mp";
+    const legacy = charactersSvc.createCharacter(PEER, { name: "Multiplayer Rooms" });
+    expect(legacy.extensions._lumiverse_library_hidden).toBeUndefined();
+
+    const hostChatId = crypto.randomUUID();
+    expect(mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId: crypto.randomUUID(), messages: [] }).ok).toBe(true);
+
+    const chat = chatsSvc.getChat(PEER, hostChatId)!;
+    expect(chat.character_id).toBe(legacy.id);
+    expect(charactersSvc.getCharacter(PEER, legacy.id)!.extensions._lumiverse_library_hidden).toBe(true);
   });
 
   test("ensureJoinedRoomChat stores a reconnect token getJoinedRoomReconnect reads back", () => {

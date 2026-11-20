@@ -37,6 +37,10 @@ import { mpidConfig } from "../multiplayer/config";
 import type { Message } from "../types/message";
 import type { WorldBookEntry } from "../types/world-book";
 import {
+  LUMIVERSE_LIBRARY_HIDDEN_KEY,
+  MULTIPLAYER_ROOMS_CHARACTER_NAME,
+} from "../types/character";
+import {
   type Room,
   type RoomSettings,
   type RoomStatus,
@@ -813,15 +817,31 @@ export function buildHydrationPayload(room: Room, selfParticipantId: string): {
 
 // ─── Peer-side "joined room" shadow chat (adds the room to the peer's history) ──
 
-const MP_PLACEHOLDER_CHARACTER_NAME = "Multiplayer Rooms";
-
 /** A per-user placeholder character that joined-room shadow chats group under. */
 function getOrCreatePlaceholderCharacter(userId: string): string {
   const row = getDb()
     .query("SELECT id FROM characters WHERE user_id = ? AND name = ? LIMIT 1")
-    .get(userId, MP_PLACEHOLDER_CHARACTER_NAME) as { id: string } | null;
-  if (row) return row.id;
-  return charactersSvc.createCharacter(userId, { name: MP_PLACEHOLDER_CHARACTER_NAME }).id;
+    .get(userId, MULTIPLAYER_ROOMS_CHARACTER_NAME) as { id: string } | null;
+  if (row) {
+    const existing = charactersSvc.getCharacter(userId, row.id);
+    if (existing && existing.extensions?.[LUMIVERSE_LIBRARY_HIDDEN_KEY] !== true) {
+      charactersSvc.updateCharacter(
+        userId,
+        row.id,
+        { extensions: { ...existing.extensions, [LUMIVERSE_LIBRARY_HIDDEN_KEY]: true } },
+        { emitEvent: false, preserveUpdatedAt: true },
+      );
+    }
+    return row.id;
+  }
+  return charactersSvc.createCharacter(
+    userId,
+    {
+      name: MULTIPLAYER_ROOMS_CHARACTER_NAME,
+      extensions: { [LUMIVERSE_LIBRARY_HIDDEN_KEY]: true },
+    },
+    { emitEvent: false },
+  ).id;
 }
 
 /**

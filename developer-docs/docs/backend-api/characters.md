@@ -12,6 +12,10 @@ Reading gallery image bytes with `spindle.images.readBinary()` also requires the
 // List characters (paginated)
 const { data, total } = await spindle.characters.list({ limit: 20, offset: 0 })
 
+// Host-internal container cards (e.g. "Multiplayer Rooms") are omitted by default.
+// Pass includeSystem: true only when an extension intentionally needs them.
+const { data: withSystem } = await spindle.characters.list({ limit: 20, includeSystem: true })
+
 // Search the full library on supporting hosts, with the same limit/offset pagination.
 if (spindle.host.capabilities['character-search-v1'] >= 1) {
   const matches = await spindle.characters.list({ limit: 50, offset: 0, search: 'Alice' })
@@ -73,8 +77,8 @@ const deleted = await spindle.characters.delete(newChar.id)
 
 | Method | Returns | Description |
 |---|---|---|
-| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset?, search?, userId? }`. Search is capped at 200 characters and requires `character-search-v1`. Defaults: limit 50, max 200. |
-| `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. |
+| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset?, search?, userId?, includeSystem? }`. Search is capped at 200 characters and requires `character-search-v1`. Defaults: limit 50, max 200. Host-internal system/container cards are omitted unless `includeSystem: true`. |
+| `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. Direct ID lookup still returns system/container cards. |
 | `getGallery(characterId)` | `Promise<CharacterGalleryItemDTO[]>` | List the character's gallery images in gallery order without changing saved character data. Returns `[]` if the character has no gallery or is not found. Optional on older hosts; check support before calling. |
 | `create(input)` | `Promise<CharacterDTO>` | Create a new character. `name` is required. |
 | `update(characterId, input)` | `Promise<CharacterDTO>` | Update a character. All fields are optional. |

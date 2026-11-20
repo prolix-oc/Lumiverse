@@ -234,7 +234,14 @@ export class WorkerHostContentApi {
     return out;
   }
 
-  handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string, search?: string): void {
+  handleCharactersList(
+    requestId: string,
+    limit?: number,
+    offset?: number,
+    userId?: string,
+    search?: string,
+    includeSystem?: boolean,
+  ): void {
     try {
       if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
@@ -244,11 +251,13 @@ export class WorkerHostContentApi {
       this.enforceScopedUser(resolvedUserId);
 
       if (search !== undefined && (typeof search !== "string" || search.length > 200)) throw new Error("search must be a string of at most 200 characters");
+      if (includeSystem !== undefined && typeof includeSystem !== "boolean") throw new Error("includeSystem must be a boolean");
       const pagination = { limit: Math.min(Math.max(Math.trunc(limit || 50), 1), 200), offset: Math.max(Math.trunc(offset || 0), 0) };
       const query = search?.trim();
+      const systemOpts = { includeSystem: includeSystem === true };
       const result = query
-        ? charactersSvc.listCharacterSummaries(resolvedUserId, pagination, { search: query })
-        : charactersSvc.listCharacters(resolvedUserId, pagination);
+        ? charactersSvc.listCharacterSummaries(resolvedUserId, pagination, { search: query, ...systemOpts })
+        : charactersSvc.listCharacters(resolvedUserId, pagination, systemOpts);
       const data = query
         ? result.data.map(c => charactersSvc.getCharacter(resolvedUserId, c.id)).filter(c => c !== null)
         : result.data;
