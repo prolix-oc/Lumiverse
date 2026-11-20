@@ -31,6 +31,11 @@ describe('desktop viewport zoom geometry', () => {
 class FakeStyle {
   transform = ''
   transformOrigin = ''
+  overflowX = ''
+  overflowY = ''
+  overscrollBehaviorX = ''
+  overscrollBehaviorY = ''
+  direction = 'ltr'
   private properties = new Map<string, string>()
   setProperty(key: string, value: string) { this.properties.set(key, value) }
   getPropertyValue(key: string) { return this.properties.get(key) ?? '' }
@@ -46,6 +51,13 @@ class FakeElement extends EventTarget {
   parent: FakeElement | null = null
   exempt = false
   attributes = new Set<string>()
+  scrollTop = 0
+  scrollHeight = 0
+  clientHeight = 0
+  scrollLeft = 0
+  scrollWidth = 0
+  clientWidth = 0
+  get parentElement() { return this.parent }
   hasAttribute(key: string) { return this.attributes.has(key) }
   closest(selector: string): FakeElement | null {
     if (selector === '[data-viewport-zoom-exempt]' && this.exempt) return this
@@ -88,7 +100,7 @@ const replacements = {
   Element: FakeElement,
   WheelEvent: FakeWheelEvent,
   MutationObserver: class { observe() {} disconnect() {} },
-  getComputedStyle: () => fakeDocument.documentElement.style,
+  getComputedStyle: (el?: FakeElement) => el?.style ?? fakeDocument.documentElement.style,
 }
 const originals = Object.fromEntries(Object.keys(replacements).map(key => [key, globals[key]]))
 Object.assign(globals, replacements)
@@ -184,5 +196,121 @@ describe('desktop viewport zoom input', () => {
     uninstall = installDesktopViewportZoom()
     expect(wheel(-100, { ctrlKey: true }).defaultPrevented).toBe(false)
     fakeDocument.documentElement.attributes.clear()
+  })
+
+  test('allows chat scrolling while zoomed and chains unconsumed scroll to pan', () => {
+    const chatList = new FakeElement()
+    chatList.style.overflowY = 'auto'
+    chatList.style.overflowX = 'hidden'
+    chatList.style.overscrollBehaviorY = 'contain'
+    chatList.clientHeight = 600
+    chatList.scrollHeight = 1200
+    chatList.scrollTop = 200
+    const message = new FakeElement()
+    message.parent = chatList
+
+    wheel(-Math.log(2) / 0.01, { ctrlKey: true }, message)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-200px, -300px, 0) scale(2)')
+
+    // Scrolling within the chat list leaves native scroll intact and does not pan.
+    expect(wheel(50, {}, message).defaultPrevented).toBe(false)
+    expect(wheel(-50, {}, message).defaultPrevented).toBe(false)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-200px, -300px, 0) scale(2)')
+
+    // Small incidental horizontal trackpad drift during vertical scroll does not pan sideways.
+    expect(wheel(50, { deltaX: 3 }, message).defaultPrevented).toBe(false)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-200px, -300px, 0) scale(2)')
+
+    // Intentional diagonal scroll pans horizontally while vertical chat scroll stays native.
+    expect(wheel(50, { deltaX: 30 }, message).defaultPrevented).toBe(false)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-230px, -300px, 0) scale(2)')
+
+    // Pure horizontal swipe over vertical-only chat pans horizontally.
+    expect(wheel(0, { deltaX: -20 }, message).defaultPrevented).toBe(true)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-210px, -300px, 0) scale(2)')
+
+    // Hitting top or bottom chat boundaries chains into viewport panning.
+    chatList.scrollTop = 0
+    expect(wheel(-40, {}, message).defaultPrevented).toBe(true)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-210px, -260px, 0) scale(2)')
+
+    // Treat fractional UI-scale bottom readings within 1px as at the bottom.
+    chatList.scrollTop = 599.4
+    expect(wheel(40, {}, message).defaultPrevented).toBe(true)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-210px, -300px, 0) scale(2)')
+  })
+
+  test('respects nested scroll containers, overscroll-behavior, composedPath, and pre-consumed events', () => {
+    const chatList = new FakeElement()
+    chatList.style.overflowY = 'auto'
+    chatList.style.overscrollBehaviorY = 'contain'
+    chatList.clientHeight = 600
+    chatList.scrollHeight = 1200
+    chatList.scrollTop = 200
+
+    const innerBox = new FakeElement()
+    innerBox.parent = chatList
+    innerBox.style.overflowY = 'auto'
+    innerBox.style.overflowX = 'auto'
+    innerBox.clientHeight = 100
+    innerBox.scrollHeight = 100
+    innerBox.clientWidth = 200
+    innerBox.scrollWidth = 400
+    innerBox.scrollLeft = 50
+
+    const islandChild = new FakeElement()
+    islandChild.parent = innerBox
+
+    // ctrl+wheel still zooms even if an earlier global listener (e.g. main.tsx) marked defaultPrevented.
+    const zoomEvent = new FakeWheelEvent({ deltaY: -Math.log(2) / 0.01, ctrlKey: true })
+    Object.defineProperty(zoomEvent, 'target', { value: islandChild })
+    zoomEvent.preventDefault()
+    fakeDocument.dispatchEvent(zoomEvent)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-200px, -300px, 0) scale(2)')
+
+    // Inner box has no vertical overflow (even with overscroll-behavior: contain), so vertical scroll reaches chatList.
+    innerBox.style.overscrollBehaviorY = 'contain'
+    expect(wheel(30, {}, islandChild).defaultPrevented).toBe(false)
+
+    // When inner box does overflow vertically at its boundary with overscroll-behavior: contain, it does not chain to chatList.
+    innerBox.scrollHeight = 300
+    innerBox.scrollTop = 0
+    expect(wheel(-30, {}, islandChild).defaultPrevented).toBe(true)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-200px, -270px, 0) scale(2)')
+
+    // Horizontal wheel inside overflowing innerBox scrolls natively; at edge without contain, pans viewport.
+    expect(wheel(0, { deltaX: 25 }, islandChild).defaultPrevented).toBe(false)
+    innerBox.scrollLeft = 200
+    expect(wheel(0, { deltaX: 25 }, islandChild).defaultPrevented).toBe(true)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-225px, -270px, 0) scale(2)')
+
+    // Already-prevented non-ctrl wheel event (e.g. horizontal bar hook) is ignored.
+    const consumedWheel = new FakeWheelEvent({ deltaY: 40 })
+    Object.defineProperty(consumedWheel, 'target', { value: app })
+    consumedWheel.preventDefault()
+    fakeDocument.dispatchEvent(consumedWheel)
+    expect(fakeDocument.body.style.transform).toContain('translate3d(-225px, -270px, 0) scale(2)')
+
+    // composedPath() finds scrollable ancestors across shadow DOM boundaries even when target is retargeted.
+    const shadowInner = new FakeElement()
+    const retargetedEvent = new FakeWheelEvent({ deltaY: 40 })
+    Object.defineProperty(retargetedEvent, 'target', { value: app })
+    Object.defineProperty(retargetedEvent, 'composedPath', { value: () => [shadowInner, chatList, fakeDocument.body] })
+    fakeDocument.dispatchEvent(retargetedEvent)
+    expect(retargetedEvent.defaultPrevented).toBe(false)
+
+    // Ignore 1px subpixel rounding overflow and overflow: hidden containers.
+    const subpixelBox = new FakeElement()
+    subpixelBox.style.overflowY = 'auto'
+    subpixelBox.clientHeight = 500
+    subpixelBox.scrollHeight = 501
+    expect(wheel(20, {}, subpixelBox).defaultPrevented).toBe(true)
+
+    const hiddenBox = new FakeElement()
+    hiddenBox.style.overflowY = 'hidden'
+    hiddenBox.clientHeight = 500
+    hiddenBox.scrollHeight = 1000
+    hiddenBox.scrollTop = 100
+    expect(wheel(20, {}, hiddenBox).defaultPrevented).toBe(true)
   })
 })
