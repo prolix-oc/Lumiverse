@@ -2177,8 +2177,8 @@ export class WorkerHost {
           msg.limit,
           msg.offset,
           msg.userId,
-          (msg as typeof msg & { search?: string }).search,
-          (msg as typeof msg & { includeSystem?: boolean }).includeSystem,
+          msg.search,
+          msg.includeSystem,
         );
         break;
       case "characters_get":
