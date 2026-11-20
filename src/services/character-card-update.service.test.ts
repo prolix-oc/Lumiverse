@@ -473,4 +473,84 @@ describe("character-card-update.service", () => {
     expect(tools.greetings[tools.indexMap["1"]].title).toBe("Newly Named Alt 2");
   });
 
+  test("name updates preserve local metadata and stable IDs for main and alternate greetings", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "Stable names", first_mes: "Main", alternate_greetings: ["Alt"],
+      extensions: { greeting_tools: {
+        mainGreeting: { id: "local_main", title: "Old main", description: "Local main note", custom: "local" },
+        indexMap: { 0: "local_alt" },
+        greetings: { local_alt: { id: "local_alt", title: "Old alt", description: "Local alt note", contentHash: 42 } },
+      } },
+    });
+    const parsed = await parseCardBundle(makeJsonCard("stable.json", {
+      name: existing.name, first_mes: "Main", alternate_greetings: ["Alt"],
+      extensions: { greeting_tools: {
+        mainGreeting: { id: "incoming_main", title: "New main", description: "Incoming main note", custom: "incoming" },
+        indexMap: { 0: "incoming_alt" },
+        greetings: { incoming_alt: { id: "incoming_alt", title: "New alt", description: "Incoming alt note", contentHash: 99 } },
+      } },
+    }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { greetingNamesMode: "overwrite" });
+    expect(character.extensions.greeting_tools.mainGreeting).toEqual({
+      id: "local_main", title: "New main", description: "Local main note", custom: "local",
+    });
+    expect(character.extensions.greeting_tools.greetings.local_alt).toEqual({
+      id: "local_alt", title: "New alt", description: "Local alt note", contentHash: 42,
+    });
+  });
+
+  test("appending greetings preserves metadata IDs even when no metadata object exists", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "ID only", alternate_greetings: ["Existing"],
+      extensions: { greeting_tools: { indexMap: { 0: "stable_id" }, greetings: {} } },
+    });
+    const parsed = await parseCardBundle(makeJsonCard("ids.json", { name: existing.name, alternate_greetings: ["New"] }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { alternateGreetingsMode: "append_new" });
+    expect(character.extensions.greeting_tools.indexMap["0"]).toBe("stable_id");
+  });
+
+  test("imported greeting IDs that match object prototype keys survive persistence", async () => {
+    const existing = createCharacter(USER_ID, { name: "Reserved key" });
+    const parsed = await parseCardBundle(makeJsonCard("reserved.json", {
+      name: existing.name, alternate_greetings: ["New"],
+      extensions: { greeting_tools: { indexMap: { 0: "__proto__" }, greetings: JSON.parse('{"__proto__":{"title":"Reserved title"}}') } },
+    }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { alternateGreetingsMode: "append_new" });
+    const tools = character.extensions.greeting_tools;
+    expect(Object.hasOwn(tools.greetings, tools.indexMap["0"])).toBe(true);
+    expect(tools.greetings[tools.indexMap["0"]].title).toBe("Reserved title");
+  });
+
+  test("demoting the main greeting preserves its name instead of applying an unpreviewed alternate name", async () => {
+    const existing = createCharacter(USER_ID, {
+      name: "Demotion", first_mes: "Old main", alternate_greetings: ["Existing alt"],
+      extensions: { greeting_tools: {
+        mainGreeting: { id: "local_main", title: "Local main" },
+        indexMap: { 0: "local_alt" }, greetings: { local_alt: { title: "Local alt" } },
+      } },
+    });
+    const parsed = await parseCardBundle(makeJsonCard("demote.json", {
+      name: existing.name, first_mes: "New main", alternate_greetings: ["Existing alt", "Old main"],
+      extensions: { greeting_tools: { indexMap: { 0: "in_alt", 1: "in_old" }, greetings: {
+        in_alt: { title: "Updated alt" }, in_old: { title: "Unpreviewed rename" },
+      } } },
+    }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, {
+      firstMesMode: "replace_and_demote", greetingNamesMode: "overwrite",
+    });
+    expect(character.extensions.greeting_tools.greetings.local_main.title).toBe("Local main");
+    expect(character.extensions.greeting_tools.greetings.local_alt.title).toBe("Updated alt");
+  });
+
+  test("matching a moved greeting uses its named main entry before an unnamed duplicate alternate", async () => {
+    const existing = createCharacter(USER_ID, { name: "Moved", first_mes: "Local main", alternate_greetings: ["Other", "Shared"] });
+    const parsed = await parseCardBundle(makeJsonCard("moved.json", {
+      name: existing.name, first_mes: "Shared", alternate_greetings: ["Shared"],
+      extensions: { greeting_tools: { mainGreeting: { title: "Main title" } } },
+    }));
+    const { character } = await applySelectiveCardUpdate(USER_ID, existing, parsed, { greetingNamesMode: "merge_missing" });
+    const tools = character.extensions.greeting_tools;
+    expect(tools.greetings[tools.indexMap["1"]].title).toBe("Main title");
+  });
+
 });

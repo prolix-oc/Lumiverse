@@ -1,3 +1,4 @@
+import { findMatchingGreeting } from "../shared/greeting-match";
 import { applyCharxModulesAndAssets } from "./charx-import.service";
 import { readDatabaseRows } from "../db/queries";
 import * as svc from "./characters.service";
@@ -509,7 +510,7 @@ function buildIncomingGreetingLookup(
   const inGreetings = isRecord(incomingTools?.greetings) ? incomingTools.greetings : {};
   const altEntries: IncomingGreetingRecord[] = incomingAlternates.map((text, idx) => {
     const rawId = typeof inIndexMap[String(idx)] === "string" ? inIndexMap[String(idx)] : null;
-    const meta = rawId && isRecord(inGreetings[rawId]) ? inGreetings[rawId] : null;
+    const meta = rawId && Object.hasOwn(inGreetings, rawId) && isRecord(inGreetings[rawId]) ? inGreetings[rawId] : null;
     return {
       textKey: normalizeGreetingKey(text),
       id: rawId,
@@ -522,21 +523,7 @@ function buildIncomingGreetingLookup(
     textKey: string,
     preferred: { isMain?: boolean; altIndex?: number } = {},
   ): IncomingGreetingRecord | null => {
-    if (!textKey) return null;
-    if (preferred.isMain && mainEntry.textKey === textKey) {
-      return mainEntry;
-    }
-    if (preferred.altIndex !== undefined) {
-      const slot = altEntries[preferred.altIndex];
-      if (slot && slot.textKey === textKey) {
-        return slot;
-      }
-    }
-    return (
-      altEntries.find((entry) => entry.textKey === textKey && entry.title !== null) ??
-      altEntries.find((entry) => entry.textKey === textKey) ??
-      (mainEntry.textKey === textKey ? mainEntry : null)
-    );
+    return findMatchingGreeting(textKey, mainEntry, altEntries, preferred);
   };
 
   return { mainEntry, altEntries, findMatch };
@@ -546,7 +533,6 @@ function mergeExistingGreetingMetadata(
   existingMeta: Record<string, any> | null,
   incomingEntry: IncomingGreetingRecord | null,
   mode: GreetingNamesUpdateMode,
-  usedIds: Set<string>,
 ): { meta: Record<string, any> | null; titleChanged: boolean } {
   const baseExisting = existingMeta ? structuredClone(existingMeta) : null;
   if (mode === "keep" || !incomingEntry) {
@@ -565,15 +551,10 @@ function mergeExistingGreetingMetadata(
   }
 
   const merged: Record<string, any> = {
-    ...(baseExisting ?? {}),
     ...(incomingEntry.meta ? structuredClone(incomingEntry.meta) : {}),
+    ...(baseExisting ?? {}),
     title: incomingTitle,
   };
-  if (typeof existingMeta?.id === "string" && existingMeta.id && !usedIds.has(existingMeta.id)) {
-    merged.id = existingMeta.id;
-  } else if (typeof merged.id !== "string" || !merged.id || usedIds.has(merged.id)) {
-    merged.id = generateGreetingId(usedIds);
-  }
   return { meta: merged, titleChanged: true };
 }
 
@@ -604,7 +585,9 @@ export async function applySelectiveCardUpdate(
   // 2. Greetings (first_mes + alternate_greetings)
   const firstMesMode: FirstMesUpdateMode = selection.firstMesMode ?? "keep";
   const alternateMode: AlternateGreetingsUpdateMode = selection.alternateGreetingsMode ?? "keep";
-  const greetingNamesMode: GreetingNamesUpdateMode = selection.greetingNamesMode ?? "keep";
+  const greetingNamesMode: GreetingNamesUpdateMode =
+    selection.greetingNamesMode === "merge_missing" || selection.greetingNamesMode === "overwrite"
+      ? selection.greetingNamesMode : "keep";
 
   const incomingFirstMes = cardInput.first_mes ?? "";
   const incomingAlternates = Array.isArray(cardInput.alternate_greetings) ? cardInput.alternate_greetings : [];
@@ -816,10 +799,15 @@ export async function applySelectiveCardUpdate(
         existingMain,
         matchingMain,
         greetingNamesMode,
-        new Set([...assignedIds, ...reservedExistingIds]),
       );
       if (titleChanged) keptGreetingNamesUpdated = true;
       if (mergedMain) {
+        if (titleChanged && (
+          typeof mergedMain.id !== "string" || !mergedMain.id ||
+          (mergedMain.id !== existingMain?.id && reservedExistingIds.has(mergedMain.id))
+        )) {
+          mergedMain.id = generateGreetingId(reservedExistingIds);
+        }
         if (typeof mergedMain.id === "string" && mergedMain.id) {
           assignedIds.add(mergedMain.id);
         }
@@ -829,7 +817,7 @@ export async function applySelectiveCardUpdate(
       }
     }
 
-    const titles: Record<string, any> = {};
+    const titles: Record<string, any> = Object.create(null);
     const ids: Record<string, string> = {};
     finalSlotSources.forEach((slot, newAltIdx) => {
       if (slot.kind === "incoming") {
@@ -853,7 +841,7 @@ export async function applySelectiveCardUpdate(
         : (typeof existingTools?.indexMap?.[String(oldIdx - 1)] === "string" ? existingTools.indexMap[String(oldIdx - 1)] : null);
       const oldMeta = oldIdx === 0
         ? (isRecord(existingTools?.mainGreeting) ? existingTools.mainGreeting : null)
-        : (oldId && isRecord(existingTools?.greetings?.[oldId]) ? existingTools.greetings[oldId] : null);
+        : (oldId && existingTools?.greetings && Object.hasOwn(existingTools.greetings, oldId) && isRecord(existingTools.greetings[oldId]) ? existingTools.greetings[oldId] : null);
 
       const matchingIncoming = incomingLookup.findMatch(normalizeGreetingKey(slot.text), {
         altIndex: oldIdx > 0 ? oldIdx - 1 : undefined,
@@ -861,8 +849,7 @@ export async function applySelectiveCardUpdate(
       const { meta: mergedMeta, titleChanged } = mergeExistingGreetingMetadata(
         oldMeta,
         matchingIncoming,
-        greetingNamesMode,
-        new Set([...assignedIds, ...reservedExistingIds]),
+        oldIdx === 0 ? "keep" : greetingNamesMode,
       );
       if (titleChanged) keptGreetingNamesUpdated = true;
 
@@ -878,6 +865,10 @@ export async function applySelectiveCardUpdate(
         }
         ids[String(newAltIdx)] = chosenId;
         titles[chosenId] = mergedMeta;
+      } else if (oldId && !assignedIds.has(oldId)) {
+        // An extension can reserve a stable ID before storing metadata for it.
+        assignedIds.add(oldId);
+        ids[String(newAltIdx)] = oldId;
       }
     });
 

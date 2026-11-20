@@ -18,6 +18,7 @@ import { Spinner } from '@/components/shared/Spinner'
 import { charactersApi } from '@/api/characters'
 import { toast } from '@/lib/toast'
 import { getGreetingTitle } from '@/lib/greetingMetadata'
+import { findMatchingGreeting } from '../../../../src/shared/greeting-match'
 import { computeLineDiff, countDiffLines } from '@/lib/textDiff'
 import type {
   AlternateGreetingsUpdateMode,
@@ -88,27 +89,21 @@ function analyzeGreetingNames(
   const incomingMainTitle = getGreetingTitle(incomingExt, 0)
   const incomingAltTitles = incomingAlternates.map((_, idx) => getGreetingTitle(incomingExt, idx + 1))
 
+  const mainEntry = { textKey: normalizeGreeting(preview.incoming.first_mes ?? ''), title: incomingMainTitle }
+  const altEntries = incomingAlternates.map((greeting, index) => ({
+    textKey: normalizeGreeting(greeting), title: incomingAltTitles[index],
+  }))
+
   const findIncomingTitleForText = (
     text: string,
     preferred: { isMain?: boolean; altIndex?: number } = {},
   ): string | null => {
-    const key = normalizeGreeting(text)
-    if (!key) return null
-    if (preferred.isMain && normalizeGreeting(preview.incoming.first_mes ?? '') === key) {
-      return incomingMainTitle
-    }
-    if (preferred.altIndex !== undefined && normalizeGreeting(incomingAlternates[preferred.altIndex] ?? '') === key) {
-      return incomingAltTitles[preferred.altIndex] ?? null
-    }
-    for (let i = 0; i < incomingAlternates.length; i++) {
-      if (normalizeGreeting(incomingAlternates[i] ?? '') === key && incomingAltTitles[i]) {
-        return incomingAltTitles[i]
-      }
-    }
-    if (normalizeGreeting(preview.incoming.first_mes ?? '') === key) {
-      return incomingMainTitle
-    }
-    return null
+    return findMatchingGreeting(
+      normalizeGreeting(text),
+      mainEntry,
+      altEntries,
+      preferred,
+    )?.title ?? null
   }
 
   const changes: GreetingNameChange[] = []
@@ -580,7 +575,9 @@ export default function CardUpdateModal({
   }, [])
 
   const effectiveGreetingNamesMode: GreetingNamesUpdateMode =
-    greetingNamesInfo.hasChanges ? greetingNamesMode : 'keep'
+    greetingNamesInfo.hasChanges &&
+    (greetingNamesMode !== 'merge_missing' || greetingNamesInfo.missingCount > 0)
+      ? greetingNamesMode : 'keep'
 
   const selectedChangeCount = useMemo(() => {
     let count = selectedFields.size
@@ -816,7 +813,7 @@ export default function CardUpdateModal({
             )}
 
             {/* ── Greetings Section ── */}
-            {(firstMesDiffers || alternatesDiffer || newIncomingCount > 0 || greetingNamesInfo.hasChanges || (showUnchanged && greetingNamesInfo.hasAnyNames) || showUnchanged) && (
+            {(firstMesDiffers || alternatesDiffer || newIncomingCount > 0 || greetingNamesInfo.hasChanges || showUnchanged) && (
               <div className={styles.section}>
                 <div className={styles.sectionHeader}>
                   <span className={styles.sectionTitle}>{t('cardUpdate.sectionGreetings')}</span>
@@ -1094,7 +1091,7 @@ export default function CardUpdateModal({
                         {greetingNamesInfo.hasChanges && (
                           <select
                             className={styles.modeSelect}
-                            value={greetingNamesMode}
+                            value={effectiveGreetingNamesMode}
                             onChange={(e) => setGreetingNamesMode(e.target.value as GreetingNamesUpdateMode)}
                           >
                             <option value="keep">{t('cardUpdate.modes.keepCurrent')}</option>
@@ -1122,7 +1119,7 @@ export default function CardUpdateModal({
                     </div>
                     {greetingNamesInfo.hasChanges && (effectiveGreetingNamesMode !== 'keep' || expandedDiffs.has('greeting_names')) && (
                       <div className={styles.greetingNameDiffList}>
-                        {greetingNamesInfo.changes.map((change) => (
+                        {greetingNamesInfo.changes.filter((change) => effectiveGreetingNamesMode !== 'merge_missing' || change.kind === 'missing').map((change) => (
                           <div key={change.key} className={styles.greetingNameDiffRow}>
                             <span className={styles.greetingNameTarget}>
                               {change.overallIndex === 0

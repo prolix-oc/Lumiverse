@@ -485,6 +485,13 @@
   color: var(--lumiverse-text-secondary, var(--lumiverse-text));
 }
 
+.greetingNameOld,
+.greetingNameNew {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .greetingNameOld {
   color: var(--lumiverse-text-muted);
   text-decoration: line-through;
