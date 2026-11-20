@@ -44,7 +44,7 @@ function parseGoogleChunk(data: any, replaySignatures: boolean): StreamChunk {
       prompt_tokens: usage.promptTokenCount || 0,
       completion_tokens: usage.candidatesTokenCount || 0,
       total_tokens: usage.totalTokenCount || 0,
-      ...(grounding ? { provider_raw: { groundingMetadata: grounding } } : {}),
+      provider_raw: { ...usage, ...(grounding ? { groundingMetadata: grounding } : {}) },
     } } : {}),
   };
 }
