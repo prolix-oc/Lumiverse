@@ -19,7 +19,7 @@
 
 :global([data-glass]) .contextMenu {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5),
     0 0 0 1px rgba(255, 255, 255, 0.04);
 }

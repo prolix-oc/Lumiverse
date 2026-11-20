@@ -1031,13 +1031,13 @@ export function updateEntityStatus(
 
 /** Extract the importance score from a fact's inline tag. Default 5 for untagged facts. */
 export function getFactImportance(fact: string): number {
-  const m = fact.match(/^\[i:(\d+)\]\s*/);
+  const m = fact.match(/^(?:\[branch:[^\]]+\]\s*)?\[i:(\d+)\]\s*/);
   return m ? parseInt(m[1], 10) : 5;
 }
 
 /** Strip all internal metadata tags from a fact for display/comparison. */
 export function stripFactTags(fact: string): string {
-  return fact.replace(/^\[i:\d+\]\s*/, "").replace(/^\[branch:[^\]]+\]\s*/, "");
+  return fact.replace(/^(?:\[(?:i:\d+|branch:[^\]]+)\]\s*)+/, "");
 }
 
 /**
@@ -1050,19 +1050,7 @@ export function stripFactTags(fact: string): string {
  * @param maxFacts - Cap on stored facts per entity (default 30). When exceeded,
  *   lowest-importance facts are dropped first.
  */
-export function addEntityFacts(
-  entityId: string,
-  newFacts: string[],
-  branchId?: string | null,
-  importance?: number,
-  maxFacts: number = 30,
-): void {
-  if (newFacts.length === 0) return;
-  const db = getDb();
-  const row = db.query("SELECT facts FROM memory_entities WHERE id = ?").get(entityId) as any;
-  if (!row) return;
-
-  const existing = safeJsonArray(row.facts);
+export function mergeEntityFactCandidates(existing: string[], newFacts: string[], branchId?: string | null, importance?: number): string[] {
   const lowerExisting = new Set(existing.map((f) => stripFactTags(f).toLowerCase()));
 
   const merged = [...existing];
@@ -1079,6 +1067,24 @@ export function addEntityFacts(
     }
   }
 
+  return merged;
+}
+
+export function addEntityFacts(
+  entityId: string,
+  newFacts: string[],
+  branchId?: string | null,
+  importance?: number,
+  maxFacts: number = 30,
+  provenance?: { chunkId: string; evidence: string },
+): void {
+  if (newFacts.length === 0) return;
+  const db = getDb();
+  const row = db.query("SELECT facts, metadata FROM memory_entities WHERE id = ?").get(entityId) as any;
+  if (!row) return;
+
+  const existing = safeJsonArray(row.facts);
+  const merged = mergeEntityFactCandidates(existing, newFacts, branchId, importance);
   // Importance-weighted trimming: drop lowest-importance facts first
   let trimmed: string[];
   if (merged.length > maxFacts) {
@@ -1090,14 +1096,25 @@ export function addEntityFacts(
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const newFactsAdded = trimmed.length > existing.length;
+  const newFactsAdded = merged.length > existing.length;
+  const metadata = safeJsonObject(row.metadata);
+  const evidence = { ...(metadata.factEvidence ?? {}) };
+  if (provenance) {
+    for (const fact of newFacts) {
+      const key = stripFactTags(fact).toLowerCase();
+      const sources = Array.isArray(evidence[key]) ? evidence[key] : [];
+      evidence[key] = [...sources.filter((source: any) => source.chunkId !== provenance.chunkId), { ...provenance, evidence: provenance.evidence.slice(0, 500) }].slice(-8);
+    }
+  }
+  const retained = new Set(trimmed.map((fact) => stripFactTags(fact).toLowerCase()));
+  metadata.factEvidence = Object.fromEntries(Object.entries(evidence).filter(([key]) => retained.has(key)));
   db.query(
     `UPDATE memory_entities SET
-      facts = ?,
+      facts = ?, metadata = ?,
       fact_extraction_status = CASE WHEN ? THEN 'ok' ELSE fact_extraction_status END,
       updated_at = ?
      WHERE id = ?`,
-  ).run(JSON.stringify(trimmed), newFactsAdded ? 1 : 0, now, entityId);
+  ).run(JSON.stringify(trimmed), JSON.stringify(metadata), newFactsAdded ? 1 : 0, now, entityId);
 }
 
 /**
@@ -1414,6 +1431,10 @@ export function deleteEntityIfNotUserEdited(entityId: string): boolean {
     | null;
   if (!row) return false;
   if (row.user_edited_at !== null) return false;
+
+  // An unedited endpoint can still carry a relationship the user curated.
+  if (db.query(`SELECT 1 FROM memory_relations WHERE
+    (source_entity_id = ? OR target_entity_id = ?) AND user_edited_at IS NOT NULL LIMIT 1`).get(entityId, entityId)) return false;
 
   db.transaction(() => {
     db.query("DELETE FROM memory_mentions WHERE entity_id = ?").run(entityId);

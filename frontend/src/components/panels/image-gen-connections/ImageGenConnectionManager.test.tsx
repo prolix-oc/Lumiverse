@@ -200,6 +200,9 @@ function TestImageGenConnectionItem({
 
 // These browser-dependent modules must load only after JSDOM and the API
 // substitutes below are installed; static imports would retain production modules.
+mock.module('../connection-manager/ConnectionCollection', () => ({
+  default: ({ profiles, renderProfile }: { profiles: ImageGenConnectionProfile[]; renderProfile: (profile: ImageGenConnectionProfile) => ReactNode }) => <>{profiles.map(renderProfile)}</>,
+}))
 mock.module('@/store', () => ({ useStore: useTestStore }))
 
 mock.module('@/api/listAllConnections', () => ({
@@ -248,8 +251,8 @@ mock.module('@dnd-kit/sortable', () => ({
   arrayMove: testArrayMove,
 }))
 
-mock.module('../connection-manager/useConnectionDragAndDrop', () => ({
-  useConnectionSensors: () => [],
+mock.module('@/hooks/useSortableList', () => ({
+  useSortableListSensors: () => [],
   useVerticalSortModifier: () => () => null,
 }))
 

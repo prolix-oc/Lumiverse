@@ -1369,6 +1369,29 @@ export function getActiveScripts(
   return getScopedScripts(userId, opts, [`instr(target, '"' || ? || '"') > 0`], [opts.target]);
 }
 
+/** Resolve a message's preset without changing the user's active preset or its saved enabled list. */
+export function getActiveScriptsForPreset(userId: string, opts: { presetId: string; characterId?: string; chatId?: string; target: RegexTarget }): RegexScript[] {
+  const saved = readStoredPresetRegexIdsRecord(userId, opts.presetId);
+  const params: any[] = [userId, opts.target, opts.presetId];
+  const enabled = saved.exists
+    ? saved.ids.length ? `id IN (${saved.ids.map(() => "?").join(",")})` : "0"
+    : "disabled = 0";
+  if (saved.exists) params.push(...saved.ids);
+  const scopes = ["scope = 'global'"];
+  if (opts.characterId) { scopes.push("(scope = 'character' AND scope_id = ?)"); params.push(opts.characterId); }
+  if (opts.chatId) { scopes.push("(scope = 'chat' AND scope_id = ?)"); params.push(opts.chatId); }
+  // Filter before parsing definitions; inactive versions and other presets never enter the chain.
+  const rows = getDb().query(`SELECT * FROM regex_scripts
+    WHERE user_id = ? AND instr(target, '"' || ? || '"') > 0
+      AND ((disabled = 0 AND (preset_id IS NULL OR owner_extension_identifier IS NOT NULL))
+        OR (preset_id = ? AND owner_extension_identifier IS NULL AND ${enabled}))
+      AND (${scopes.join(" OR ")})
+    ORDER BY CASE scope WHEN 'global' THEN 0 WHEN 'character' THEN 1 WHEN 'chat' THEN 2 END,
+      sort_order, created_at`).all(...params) as any[];
+  return rows.map(row => ({ ...rowToRegexScript(row), disabled: false }))
+    .filter(script => opts.target !== "display" || script.metadata?.regex_evidence?.quarantined !== true);
+}
+
 /**
  * Active scripts carrying the "memory" placement, for stripping content at
  * ingestion. Filters by placement, not target — a memory script applies

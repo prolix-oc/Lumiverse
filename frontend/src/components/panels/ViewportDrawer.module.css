@@ -40,6 +40,39 @@
   transform: translateX(0);
 }
 
+.wrapper.wrapperPinned {
+  position: absolute;
+  right: auto;
+  bottom: auto;
+  transform: none;
+  transition: none;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
+
+.wrapperPinned .drawer {
+  width: 100%;
+  min-width: 0;
+  box-shadow: none;
+}
+
+/* Slide the panel beyond the physical edge, including Duo's side status area.
+   Moving the whole wrapper inward exposes a strip of the closed panel. Keep
+   only its handle and the open panel's controls inside the safe area. */
+:global(html[data-tauri-mobile='ios']) .wrapper:not(.wrapperPinned) .drawer {
+  padding-left: calc(env(safe-area-inset-left, 0px) / var(--lumiverse-ui-scale, 1));
+  padding-right: calc(env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1));
+}
+
+:global(html[data-tauri-mobile='ios']) .wrapperRight:not(.wrapperOpen) .drawerTab {
+  transform: translateX(calc(0px - env(safe-area-inset-right, 0px) / var(--lumiverse-ui-scale, 1)));
+}
+
+:global(html[data-tauri-mobile='ios']) .wrapperLeft:not(.wrapperOpen) .drawerTab {
+  transform: translateX(calc(env(safe-area-inset-left, 0px) / var(--lumiverse-ui-scale, 1)));
+}
+
 /* ── Flush drawer tab ── */
 
 .drawerTab {

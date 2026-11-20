@@ -283,7 +283,7 @@ mod linux {
     #[cfg(all(test, unix))]
     mod tests {
         use super::*;
-        use std::{os::unix::fs::PermissionsExt, path::PathBuf};
+        use std::{io::Write, os::unix::fs::PermissionsExt, path::PathBuf};
         struct Host(PathBuf);
         impl Host {
             fn new(script: &str) -> Self {
@@ -291,7 +291,23 @@ mod linux {
                     std::env::temp_dir().join(format!("lumiverse host {}", uuid::Uuid::new_v4()));
                 std::fs::create_dir_all(&root).unwrap();
                 let path = root.join("xdg-open");
-                std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+                // A parallel fork can inherit a writable descriptor even after
+                // fs::write closes it here, making exec fail with ETXTBSY. Only
+                // the writer subprocess opens the executable, and it exits
+                // before any test launches it. See rust-lang/rust#114554.
+                let mut writer = std::process::Command::new("/bin/sh")
+                    .args(["-c", "cat > \"$1\"", "fixture-writer"])
+                    .arg(&path)
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                writer
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
+                    .unwrap();
+                assert!(writer.wait().unwrap().success());
                 std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
                 Self(root.canonicalize().unwrap())
             }
@@ -321,7 +337,7 @@ mod linux {
             )
             .await
             .unwrap_err();
-            assert!(error.contains('7'));
+            assert!(error.contains('7'), "{error}");
             assert!(!error.contains("private") && !error.contains("secret-token"));
         }
         #[tokio::test]
@@ -345,6 +361,49 @@ mod linux {
             )
             .await
             .unwrap();
+        }
+
+        #[tokio::test]
+        async fn fresh_launcher_fixtures_execute_during_parallel_process_spawns() {
+            use std::sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc,
+            };
+            let running = Arc::new(AtomicBool::new(true));
+            let workers: Vec<_> = (0..4)
+                .map(|_| {
+                    let running = running.clone();
+                    std::thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            // /bin/true is absent on macOS; use the same
+                            // portable shell required by the launcher fixture.
+                            assert!(std::process::Command::new("/bin/sh")
+                                .args(["-c", "exit 0"])
+                                .status()
+                                .unwrap()
+                                .success());
+                        }
+                    })
+                })
+                .collect();
+            let mut errors = Vec::new();
+            for _ in 0..200 {
+                let host = Host::new("exit 7");
+                let result = host_launch_with(
+                    host.environment(),
+                    OsStr::new("https://example.com"),
+                    Duration::from_secs(1),
+                )
+                .await;
+                if !matches!(&result, Err(error) if error.contains("exit status: 7")) {
+                    errors.push(result);
+                }
+            }
+            running.store(false, Ordering::Relaxed);
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            assert!(errors.is_empty(), "fixture launch failures: {errors:?}");
         }
     }
 }

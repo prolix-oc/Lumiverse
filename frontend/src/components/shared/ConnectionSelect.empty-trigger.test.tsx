@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { createElement } from 'react'
+import { createElement, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { JSDOM } from 'jsdom'
 
 const store = {
   profiles: [] as Array<{ id: string; name: string; provider: string; model?: string }>,
+  decisionProfiles: [] as Array<{ id: string; name: string; provider: string; model?: string; is_default: boolean }>,
   imageGenProfiles: [],
   ttsProfiles: [],
   sttProfiles: [],
@@ -62,17 +63,18 @@ describe('ConnectionSelect empty trigger icon', () => {
     root = null
     host = null
     store.profiles = []
+    store.decisionProfiles = []
   })
 
-  function render(props: { value: string }) {
+  function render(props: Partial<ComponentProps<typeof ConnectionSelect>> & { value: string }) {
     host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
     act(() => {
       root!.render(createElement(ConnectionSelect, {
         kind: 'llm',
-        value: props.value,
         onChange: () => undefined,
+        ...props,
       }))
     })
     return host
@@ -92,5 +94,26 @@ describe('ConnectionSelect empty trigger icon', () => {
     const select = node.querySelector('[data-searchable]')
     expect(select?.getAttribute('data-value')).toBe('conn-1')
     expect(select?.getAttribute('data-has-trigger-icon')).toBe('false')
+  })
+
+  test('Decision review pickers never select a default connection or pin its default model', async () => {
+    store.decisionProfiles = [{ id: 'decision-default', name: 'Default Decision', provider: 'typesafe', model: 'saved-default', is_default: true }]
+    const connections: string[] = []
+    const models: string[] = []
+    const node = render({ kind: 'decision', value: '', withModel: true, seedDefaultModel: false, modelValue: '',
+      onChange: (id) => connections.push(id), onModelChange: (model) => models.push(model) })
+    await act(async () => { await Promise.resolve() })
+    expect(node.querySelector('[data-searchable]')?.getAttribute('data-value')).toBe('')
+    expect(connections).toEqual([])
+    expect(models).toEqual([])
+  })
+
+  test('an explicitly selected Decision connection keeps an empty model override', async () => {
+    store.decisionProfiles = [{ id: 'decision-default', name: 'Default Decision', provider: 'typesafe', model: 'saved-default', is_default: true }]
+    const models: string[] = []
+    render({ kind: 'decision', value: 'decision-default', withModel: true, seedDefaultModel: false, modelValue: '',
+      onModelChange: (model) => models.push(model) })
+    await act(async () => { await Promise.resolve() })
+    expect(models).toEqual([])
   })
 })

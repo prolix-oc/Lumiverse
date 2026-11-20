@@ -24,7 +24,7 @@ import {
   resolveMessageVoices,
   voiceCoalesceKey,
 } from '@/lib/voiceResolution'
-import { getActiveMessageId, speak, speakSegments, stop, setTTSVolume, setTTSSpeed, unlockTTSAudio } from '@/lib/ttsAudio'
+import { getPlaybackSession, speak, speakSegments, stop, stopAllTTSPlayback, subscribeTTSPlayback, setTTSVolume, setTTSSpeed, unlockTTSAudio } from '@/lib/ttsAudio'
 import type { TtsConnectionProfile, VoiceRef } from '@/types/api'
 
 /**
@@ -109,9 +109,7 @@ export function planMessagePlayback(args: {
 
 /**
  * Synthesize and play a single message. Stops any in-flight playback first so
- * the queue never stacks across messages. The returned Promise resolves once
- * the last synth request has been issued (NOT once playback finishes —
- * callers that want end-of-playback should subscribe to ttsAudio events).
+ * the queue never stacks across messages. Playback continues asynchronously.
  *
  * Returns `false` when there's nothing playable (no segments, no voice
  * configured, etc.) so callers can fall back to a "nothing to play" UI.
@@ -131,18 +129,33 @@ export function startMessageTtsPlayback(args: {
    */
   replaceExistingAudio?: boolean
 }): boolean {
+  const playback = startMessageTtsPlaybackSession(args)
+  void playback?.synthesized.catch((error) => console.error('[TTS Playback] Synthesis failed:', error))
+  return playback !== null
+}
+
+/** Cancellable message playback for callers that need synthesis failures and ownership. */
+export function startMessageTtsPlaybackSession(
+  args: Parameters<typeof startMessageTtsPlayback>[0],
+  options?: { enabled: boolean },
+): {
+  synthesized: Promise<void>
+  cancel(): void
+} | null {
   const state = useStore.getState()
   const voiceSettings = state.voiceSettings
-  if (!voiceSettings.ttsEnabled) return false
+  // Chat callers inherit the chat toggle; explicit extension requests supply
+  // their own enablement after the Spindle Media permission check.
+  if (!(options?.enabled ?? voiceSettings.ttsEnabled)) return null
 
   const plan = planMessagePlayback({
     messageName: args.messageName,
     messageContent: args.messageContent,
     messageIsUser: args.messageIsUser,
   })
-  if (plan.length === 0) return false
+  if (plan.length === 0) return null
 
-  if (args.preempt !== false) stop()
+  if (args.preempt !== false) stopAllTTSPlayback()
   unlockTTSAudio()
   setTTSVolume(voiceSettings.ttsVolume)
   // Speed is delivered to the provider per segment via the synth call below
@@ -156,16 +169,20 @@ export function startMessageTtsPlayback(args: {
   )
   const chatId = state.activeChatId
   const targetSwipeId = readMessageSwipeId(args.messageId)
+  const controller = new AbortController()
+  const signal = controller.signal
+  const cancel = () => controller.abort()
   if (usesStreamingTransport) {
-    startStreamingPlayback({
+    const synthesized = startStreamingPlayback({
       chatId,
       messageId: args.messageId,
       swipeId: targetSwipeId,
       plan,
       ttsSpeed: voiceSettings.ttsSpeed,
       replaceExistingAudio: !!args.replaceExistingAudio,
+      signal,
     })
-    return true
+    return { synthesized, cancel }
   }
 
   const concurrency = Math.min(MAX_CONCURRENT_SYNTH, plan.length)
@@ -191,20 +208,24 @@ export function startMessageTtsPlayback(args: {
   // Run synth tasks with bounded concurrency. We use a simple cursor-based
   // worker pool — N workers pull the next index, fetch + handoff, repeat.
   let cursor = 0
+  let failure: unknown
   const runOne = async (): Promise<void> => {
     while (true) {
       const idx = cursor++
       if (idx >= plan.length) return
+      if (signal.aborted) {
+        resolvers[idx](null)
+        continue
+      }
       const item = plan[idx]
       try {
         const response = await ttsApi.synthesize(item.voice.connectionId, item.text, {
           ...voiceSynthesisOptions(item.voice, voiceSettings.ttsSpeed),
+          signal,
         })
         if (!response.ok) {
           const body = await response.text().catch(() => '')
-          console.error('[TTS Playback] Segment synth failed:', response.status, body)
-          resolvers[idx](null)
-          continue
+          throw new Error(body.trim() || `TTS synthesis failed (${response.status})`)
         }
         const mime = response.headers.get('content-type') || 'audio/mpeg'
         const buffer = await response.arrayBuffer()
@@ -214,13 +235,15 @@ export function startMessageTtsPlayback(args: {
         persistBuffers[idx] = { data: buffer.slice(0), mime }
         resolvers[idx](buffer)
       } catch (err) {
-        console.error('[TTS Playback] Segment synth threw:', err)
+        if (!signal.aborted) failure ??= err
         resolvers[idx](null)
       }
     }
   }
 
-  for (let i = 0; i < concurrency; i++) void runOne()
+  const synthesized = Promise.all(Array.from({ length: concurrency }, () => runOne())).then(() => {
+    if (failure !== undefined) throw failure
+  })
 
   // Capture chat id + the target swipe at the moment playback starts. If
   // the user switches chats or swipes to a different variant while the
@@ -234,9 +257,54 @@ export function startMessageTtsPlayback(args: {
     slots,
     persistBuffers,
     replaceExistingAudio: !!args.replaceExistingAudio,
+    signal,
   })
 
-  return true
+  return { synthesized, cancel }
+}
+
+/**
+ * Speak caller text with one connection's default voice. Nothing is saved.
+ * Stops in-flight playback first. Resolves once synthesis has finished (NOT
+ * once playback finishes); rejects when synthesis fails.
+ */
+export async function startTextTtsPlayback(args: { text: string; connectionId: string; signal?: AbortSignal }): Promise<void> {
+  const voiceSettings = useStore.getState().voiceSettings
+  const profile = resolveTtsConnectionProfile(args.connectionId)
+  stopAllTTSPlayback()
+  unlockTTSAudio()
+  setTTSVolume(voiceSettings.ttsVolume)
+  setTTSSpeed(1.0)
+  // Hold the session open until synthesis ends, as startStreamingPlayback does.
+  let release!: () => void
+  speakSegments([new Promise<null>((resolve) => { release = () => resolve(null) })])
+  const owner = getPlaybackSession()
+  try {
+    await synthesizeTtsSegments(args.connectionId, args.text, {
+      profile,
+      ...voiceSynthesisOptions({ connectionId: args.connectionId, voice: profile?.voice ?? '' }, voiceSettings.ttsSpeed),
+      signal: args.signal,
+      onPlayableSegment: (segment) => {
+        if (getPlaybackSession() === owner) speak(segment.data)
+      },
+    })
+  } finally {
+    release()
+  }
+}
+
+/** Replay a message's saved audio attachment through the engine, as MessageAudioPlayer's fallback does. */
+export function playSavedMessageAudio(messageId: string, audioId: string, signal?: AbortSignal): Promise<void> {
+  stopAllTTSPlayback()
+  unlockTTSAudio()
+  setTTSVolume(useStore.getState().voiceSettings.ttsVolume)
+  setTTSSpeed(1.0)
+  const loaded = fetch(audioApi.url(audioId), { credentials: 'include', signal }).then((response) => {
+    if (!response.ok) throw new Error(`TTS_AUDIO_LOAD_FAILED: ${response.status}`)
+    return response.arrayBuffer()
+  })
+  speakSegments([loaded], messageId)
+  return loaded.then(() => {})
 }
 
 /**
@@ -299,9 +367,9 @@ async function saveSegmentsToMessage(args: {
       swipeId: args.swipeId,
     },
   )
-  if (!result?.message) return false
+  if (!result?.message || args.signal?.aborted) return false
 
-  markFreshlyAttached(args.messageId, { autoPlay: args.autoPlayFreshMarker })
+  markFreshlyAttached(args.messageId, { autoPlay: args.autoPlayFreshMarker, playbackSession: getPlaybackSession() })
   useStore.getState().updateMessage(args.messageId, result.message)
   return true
 }
@@ -313,20 +381,22 @@ function startStreamingPlayback(args: {
   plan: PlanItem[]
   ttsSpeed: number
   replaceExistingAudio: boolean
-}): void {
+  signal: AbortSignal
+}): Promise<void> {
   let resolveHold: (value: ArrayBuffer | null) => void = () => {}
   const hold = new Promise<ArrayBuffer | null>((resolve) => {
     resolveHold = resolve
   })
   speakSegments([hold], args.messageId)
+  const owner = getPlaybackSession()
 
-  void (async () => {
+  return (async () => {
     const captured: SynthesizedTtsSegment[] = []
-    let hadFailure = false
+    let failure: unknown
     let cancelled = false
 
     const playSegment = (segment: SynthesizedTtsSegment) => {
-      if (getActiveMessageId() !== args.messageId) {
+      if (args.signal.aborted || getPlaybackSession() !== owner) {
         cancelled = true
         return
       }
@@ -335,7 +405,7 @@ function startStreamingPlayback(args: {
 
     try {
       for (const item of args.plan) {
-        if (getActiveMessageId() !== args.messageId) {
+        if (args.signal.aborted || getPlaybackSession() !== owner) {
           cancelled = true
           break
         }
@@ -344,36 +414,36 @@ function startStreamingPlayback(args: {
           const segments = await synthesizeTtsSegments(item.voice.connectionId, item.text, {
             profile: resolveTtsConnectionProfile(item.voice.connectionId),
             ...voiceSynthesisOptions(item.voice, args.ttsSpeed),
+            signal: args.signal,
             onPlayableSegment: playSegment,
           })
-          if (cancelled || getActiveMessageId() !== args.messageId) {
+          if (cancelled || args.signal.aborted || getPlaybackSession() !== owner) {
             cancelled = true
             break
           }
           captured.push(...segments)
         } catch (err) {
-          hadFailure = true
-          console.error('[TTS Playback] Segment synth threw:', err)
+          if (!args.signal.aborted) failure ??= err
         }
       }
     } finally {
       resolveHold(null)
     }
 
-    if (cancelled || hadFailure || captured.length === 0) return
+    if (failure !== undefined) throw failure
+    if (cancelled || args.signal.aborted || captured.length === 0) return
 
-    try {
-      await saveSegmentsToMessage({
-        chatId: args.chatId,
-        messageId: args.messageId,
-        swipeId: args.swipeId,
-        segments: captured,
-        replaceExistingAudio: args.replaceExistingAudio,
-        autoPlayFreshMarker: false,
-      })
-    } catch (err) {
+    void saveSegmentsToMessage({
+      chatId: args.chatId,
+      messageId: args.messageId,
+      swipeId: args.swipeId,
+      segments: captured,
+      replaceExistingAudio: args.replaceExistingAudio,
+      autoPlayFreshMarker: false,
+      signal: args.signal,
+    }).catch((err) => {
       console.warn('[TTS Playback] Failed to persist audio for message', args.messageId, err)
-    }
+    })
   })()
 }
 
@@ -406,9 +476,11 @@ async function persistAfterPlayback(args: {
   slots: Array<Promise<ArrayBuffer | null>>
   persistBuffers: Array<{ data: ArrayBuffer; mime: string } | null>
   replaceExistingAudio: boolean
+  signal?: AbortSignal
 }): Promise<void> {
   // Wait for all synth tasks to settle (resolved with buffer or null on failure).
   await Promise.all(args.slots)
+  if (args.signal?.aborted) return
 
   const captured = args.persistBuffers
   if (captured.some((c) => c === null)) {
@@ -428,6 +500,7 @@ async function persistAfterPlayback(args: {
       segments,
       replaceExistingAudio: args.replaceExistingAudio,
       autoPlayFreshMarker: false,
+      signal: args.signal,
     })
   } catch (err) {
     console.warn('[TTS Playback] Failed to persist audio for message', args.messageId, err)
@@ -496,76 +569,90 @@ export async function synthesizeSaveAndAutoPlay(args: {
   setTTSVolume(voiceSettings.ttsVolume)
   setTTSSpeed(1.0)
 
-  const persistBuffers: Array<SynthesizedTtsSegment[] | null> =
-    new Array(plan.length).fill(null)
+  const owner = getPlaybackSession()
+  const controller = new AbortController()
+  const signal = controller.signal
+  const abort = () => controller.abort()
+  args.signal?.addEventListener('abort', abort, { once: true })
+  if (args.signal?.aborted) abort()
+  const unsubscribe = subscribeTTSPlayback(() => {
+    if (getPlaybackSession() !== owner) controller.abort()
+  })
+  try {
+    const persistBuffers: Array<SynthesizedTtsSegment[] | null> =
+      new Array(plan.length).fill(null)
 
-  let cursor = 0
-  const runOne = async (): Promise<void> => {
-    while (true) {
-      const idx = cursor++
-      if (idx >= plan.length) return
-      if (args.signal?.aborted) return
-      const item = plan[idx]
-      try {
-        persistBuffers[idx] = await synthesizeTtsSegments(item.voice.connectionId, item.text, {
-          profile: resolveTtsConnectionProfile(item.voice.connectionId),
-          ...voiceSynthesisOptions(item.voice, voiceSettings.ttsSpeed),
-          signal: args.signal,
-        })
-      } catch (err) {
-        // AbortError is expected when the user cancels — don't noise the
-        // console for it.
-        if ((err as any)?.name !== 'AbortError') {
-          console.error('[TTS AutoPlay] Segment synth threw:', err)
+    let cursor = 0
+    const runOne = async (): Promise<void> => {
+      while (true) {
+        const idx = cursor++
+        if (idx >= plan.length) return
+        if (signal.aborted) return
+        const item = plan[idx]
+        try {
+          persistBuffers[idx] = await synthesizeTtsSegments(item.voice.connectionId, item.text, {
+            profile: resolveTtsConnectionProfile(item.voice.connectionId),
+            ...voiceSynthesisOptions(item.voice, voiceSettings.ttsSpeed),
+            signal,
+          })
+        } catch (err) {
+          // AbortError is expected when the user cancels — don't noise the
+          // console for it.
+          if ((err as any)?.name !== 'AbortError') {
+            console.error('[TTS AutoPlay] Segment synth threw:', err)
+          }
         }
       }
     }
-  }
 
-  const concurrency = Math.min(MAX_CONCURRENT_SYNTH, plan.length)
-  await Promise.all(Array.from({ length: concurrency }, () => runOne()))
+    const concurrency = Math.min(MAX_CONCURRENT_SYNTH, plan.length)
+    await Promise.all(Array.from({ length: concurrency }, () => runOne()))
 
-  // Cancelled mid-synth → bail without persisting or falling back to in-memory.
-  // The user explicitly asked us to stop, so don't start audio they no longer
-  // want.
-  if (args.signal?.aborted) return false
+    // Cancelled mid-synth → bail without persisting or falling back to in-memory.
+    // The user explicitly asked us to stop, so don't start audio they no longer
+    // want.
+    if (signal.aborted) return false
 
-  // Partial failure → don't persist a corrupt file. Play whatever we got
-  // through the in-memory engine so the user still hears audio.
-  if (persistBuffers.some((b) => b === null)) {
-    playInMemoryFromSegments(args.messageId, persistBuffers.flatMap((segments) => segments ?? []))
-    return false
-  }
-
-  const segments = persistBuffers.flatMap((segmentList) => segmentList ?? [])
-
-  try {
-    const saved = await saveSegmentsToMessage({
-      chatId,
-      messageId: args.messageId,
-      signal: args.signal,
-      swipeId: targetSwipeId,
-      segments,
-      replaceExistingAudio: true,
-      autoPlayFreshMarker: true,
-    })
-    if (args.signal?.aborted) return false
-    if (saved) {
-      return true
+    // Partial failure → don't persist a corrupt file. Play whatever we got
+    // through the in-memory engine so the user still hears audio.
+    if (persistBuffers.some((b) => b === null)) {
+      playInMemoryFromSegments(args.messageId, persistBuffers.flatMap((segments) => segments ?? []))
+      return false
     }
-    // Save returned no message (shouldn't happen) — fall through to in-memory.
-    playInMemoryFromSegments(args.messageId, segments)
-    return false
-  } catch (err) {
-    // Cancelled during the save round-trip — silent return, no fallback
-    // playback (user wanted to stop).
-    if ((err as any)?.name === 'AbortError' || args.signal?.aborted) return false
-    console.warn(
-      '[TTS AutoPlay] Save failed, falling back to in-memory playback:',
-      err,
-    )
-    playInMemoryFromSegments(args.messageId, segments)
-    return false
+
+    const segments = persistBuffers.flatMap((segmentList) => segmentList ?? [])
+
+    try {
+      const saved = await saveSegmentsToMessage({
+        chatId,
+        messageId: args.messageId,
+        signal,
+        swipeId: targetSwipeId,
+        segments,
+        replaceExistingAudio: true,
+        autoPlayFreshMarker: true,
+      })
+      if (signal.aborted) return false
+      if (saved) {
+        return true
+      }
+      // Save returned no message (shouldn't happen) — fall through to in-memory.
+      playInMemoryFromSegments(args.messageId, segments)
+      return false
+    } catch (err) {
+      // Cancelled during the save round-trip — silent return, no fallback
+      // playback (user wanted to stop).
+      if ((err as any)?.name === 'AbortError' || signal.aborted) return false
+      console.warn(
+        '[TTS AutoPlay] Save failed, falling back to in-memory playback:',
+        err,
+      )
+      playInMemoryFromSegments(args.messageId, segments)
+      return false
+    }
+  } finally {
+    args.signal?.removeEventListener('abort', abort)
+    unsubscribe()
   }
 }
 

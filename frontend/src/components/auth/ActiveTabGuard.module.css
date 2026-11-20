@@ -33,8 +33,8 @@
 :global([data-glass]) .card {
   background: var(--lcs-glass-bg);
   border-color: var(--lcs-glass-border);
-  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px));
-  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px));
+  backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) var(--lcs-liquid-filter, );
+  -webkit-backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) var(--lcs-liquid-filter, );
 }
 
 .scene {

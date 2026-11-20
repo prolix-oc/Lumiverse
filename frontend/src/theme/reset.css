@@ -78,10 +78,9 @@
 html[data-tauri-desktop] {
   --app-window-controls-overlay-top: var(--app-desktop-titlebar-height);
   --app-interactive-safe-top: var(--app-desktop-titlebar-height);
-  /* The Tauri frontend window is intentionally frameless and transparent.
-     Keep its document canvas transparent; concrete app/titlebar surfaces own
-     their rounded clipping below. WKWebView must not clip the root element —
-     doing so can discard the entire promoted document canvas. */
+  /* Translucent hosts keep their canvas clear. An opaque host installs its
+     persistent surface style before navigation, including square document
+     corners; the native compositor owns any remaining frame rounding. */
   --desktop-window-corner-radius: 12px;
   background: transparent;
   border-radius: var(--desktop-window-corner-radius);

@@ -530,8 +530,27 @@ export type WeaverVisualProvider =
   | "google_gemini"
   | "openrouter"
   | "sdapi"
-  | "swarmui";
-
+  | "swarmui"
+  | "openai"
+  | "pollinations"
+  | "custom_openai"
+  | "together"
+  | "xai"
+  | "venice"
+  | "venice_compat"
+  | "recraft"
+  | "deepinfra"
+  | "ideogram"
+  | "fireworks"
+  | "stability"
+  | "bfl"
+  | "fal"
+  | "replicate"
+  | "leonardo"
+  | "runware"
+  | "civitai"
+  | "civitai_chat"
+  | "huggingface";
 
 export type WeaverVisualImageInputMechanism = "edit" | "reference" | "init";
 

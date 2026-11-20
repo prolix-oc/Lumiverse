@@ -74,7 +74,23 @@ Generated images are persisted with thumbnails and a public URL, are addressable
 | **NanoGPT** | Cloud | Aggregator — access to Flux, HiDream, DALL·E 3, Imagen 4, Midjourney, Recraft, SDXL, SD 3.5, Reve, and others under one key. |
 | **Pollinations** | Cloud | Lightweight provider with optional `enhance`, transparency, and quality tiers. |
 | **OpenRouter** | Cloud | Use image-capable models through an OpenRouter connection. |
-| **OpenAI** | Cloud | Use an OpenAI image-generation connection. |
+| **OpenAI** | Cloud | Use an OpenAI image-generation connection (routes to `/images/edits` when a source image is supplied). |
+| **Custom (OpenAI-compatible image)** | Cloud / self-hosted | Point at any host with an OpenAI Images-shaped `/images/generations` (Together AI, xAI, Venice compat, Recraft, DeepInfra, LiteLLM, reverse proxies, gateways). Handles both `url` and `b64_json` results. |
+| **Together AI** | Cloud | FLUX and other diffusion families via the OpenAI-shaped endpoint. |
+| **xAI (Grok Imagine)** | Cloud | Grok Imagine image models; image editing via `/images/edits`. |
+| **Venice AI** | Cloud | Native `/image/generate` (negative prompt, aspect ratio + resolution tiers, style presets) plus an OpenAI-compatible connection. |
+| **Recraft** | Cloud | Recraft image models; SVG/raster sub-endpoints via the raw override. |
+| **DeepInfra** | Cloud | FLUX and other models; `b64_json` responses; LoRA adapters. |
+| **Ideogram** | Cloud | Ideogram models; `size` (4.x) or aspect ratio + rendering speed (3.0/2.x); edits ride on the generate endpoint. |
+| **Fireworks AI** | Cloud | FLUX and SDXL-class workflow endpoints. |
+| **Stability AI** | Cloud | Stable Image Core / Ultra / SD3 (multipart endpoints). |
+| **Black Forest Labs** | Cloud | FLUX.2 and FLUX 1.1 Pro; submit-and-poll. |
+| **fal.ai** | Cloud | Queue API with a broad model catalog; submit-and-poll. |
+| **Replicate** | Cloud | Official and community models; `Prefer: wait` plus polling. |
+| **Leonardo.Ai** | Cloud | Leonardo models; submit-and-poll. |
+| **Runware** | Cloud | Task-array REST API; can reference Civitai checkpoints directly. |
+| **Civitai** | Cloud | Native workflow API (LoRAs, ecosystems, cost preview, free tier) plus a chat-completions image path. |
+| **Hugging Face** | Cloud | `hf-inference` text-to-image route. |
 
 See [Setup & Providers](setup.md) for connection setup and per-provider quirks.
 

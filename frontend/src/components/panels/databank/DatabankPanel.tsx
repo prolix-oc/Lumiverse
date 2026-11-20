@@ -178,7 +178,7 @@ export default function DatabankPanel() {
     if (!activeChatId) { setChatDatabankIds([]); setChatMetadata({}); return }
     let cancelled = false
     const requestChatId = activeChatId
-    chatsApi.get(requestChatId).then((chat: any) => {
+    chatsApi.get(requestChatId, { messages: false }).then((chat: any) => {
       if (cancelled) return
       const meta = chat.metadata || {}
       setChatMetadata(meta)

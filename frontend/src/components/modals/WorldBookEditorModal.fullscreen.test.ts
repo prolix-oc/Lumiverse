@@ -10,7 +10,7 @@ describe('native World Book workspace', () => {
     expect(componentSource).toContain('const workspace = fullscreen || isMobile')
   })
   test('the fullscreen primitive omits desktop caps', () => {
-    expect(shellSource).toContain('maxWidth: fullscreen ? undefined : maxWidth')
-    expect(shellSource).toContain('maxHeight: fullscreen ? undefined :')
+    expect(shellSource).toContain("maxWidth: fullscreen ? 'none' :")
+    expect(shellSource).toContain("maxHeight: fullscreen ? 'none' :")
   })
 })

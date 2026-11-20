@@ -230,9 +230,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR"
 FRONTEND_DIR="${FRONTEND_PATH:-$SCRIPT_DIR/frontend}"
 # Keep these aligned with frontend/package.json overrides and optionalDependencies.
-# Rolldown 1.2.4 includes the Android ARMv8.0 SIGILL fix.
+# Rolldown >=1.2.4 includes the Android ARMv8.0 SIGILL fix.
 TERMUX_FRONTEND_NATIVE_DEPS=(
-  "@rolldown/binding-android-arm64@1.2.4"
+  "@oxc-transform-react/binding-android-arm64@0.154.0"
+  "@rolldown/binding-android-arm64@1.2.15"
   "lightningcss-android-arm64@1.33.0"
 )
 
@@ -824,7 +825,7 @@ verify_backend_dependencies() {
   local dir="$1"
   # glibc-runner/grun currently word-splits argv containing spaces on Termux.
   # Keep eval probes whitespace-free so fallback runtimes receive one intact -e arg.
-  (cd "$dir" && _bun -e "await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
+  (cd "$dir" && _bun -e "await(import('./src/sharp-preflight.ts')).then(m=>m.configureSharpNativeOverride());await(import('sharp')).then(m=>m.default({create:{width:1,height:1,channels:4,background:'#000000'}}).png().toBuffer());await(import('better-auth'));await(import('@better-auth/oauth-provider'))")
 }
 
 verify_frontend_dependencies() {

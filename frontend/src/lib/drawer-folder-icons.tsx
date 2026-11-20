@@ -63,6 +63,7 @@ export function DrawerFolderIcon({
   const safeCustomIcon = sanitizeDrawerCustomIconData(customIcon)
   if (!safeCustomIcon) {
     const Icon = getDrawerFolderIcon(icon)
+    // eslint-disable-next-line react-hooks/static-components -- The lookup returns a module-level Lucide component; it never creates a component.
     return <Icon size={size} strokeWidth={strokeWidth} className={className} />
   }
 

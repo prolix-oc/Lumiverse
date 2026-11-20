@@ -41,6 +41,37 @@ let inflight: PendingBatch | null = null;
 const queue: PendingBatch[] = [];
 let expectedExit = false;
 let shutdownRequested = false;
+let exitWaiters: Array<() => void> = [];
+
+function notifySubprocessExit(): void {
+  const waiters = exitWaiters;
+  exitWaiters = [];
+  for (const wake of waiters) wake();
+}
+
+function waitForSubprocessExit(timeoutMs: number): Promise<void> {
+  if (!subprocess) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    exitWaiters.push(finish);
+    const timer = setTimeout(finish, Math.max(0, timeoutMs));
+    if (typeof (timer as { unref?: () => void }).unref === "function") {
+      (timer as { unref: () => void }).unref();
+    }
+  });
+}
+
+function toCancellationError(reason: unknown): Error {
+  if (reason instanceof Error) return reason;
+  if (typeof reason === "string" && reason.length > 0) return new Error(reason);
+  return new Error("Chat chunk vectorization batch cancelled");
+}
 
 function createStartupError(message: string, stack?: string): Error {
   const err = new Error(message);
@@ -138,6 +169,7 @@ function handleExit(exitCode: number | null, signalCode: number | NodeJS.Signals
   ready = false;
   expectedExit = false;
   shutdownRequested = false;
+  notifySubprocessExit();
   clearStarting(launchError);
   failInflight(launchError);
   if (!wasExpected) {
@@ -210,7 +242,9 @@ function ensureSubprocess(): Promise<void> {
 
   subprocess = Bun.spawn({
     cmd: bunCmd(runtimePath),
-    env: process.env,
+    // The host owns the inference scheduler; child processes must not build a
+    // parallel queue. Their embedding batch is leased by the host instead.
+    env: { ...process.env, LUMIVERSE_INFERENCE_SCHEDULER: "child" },
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
@@ -318,15 +352,66 @@ export function warnChatChunkVectorizationFallback(): void {
 
 export function processChatChunkVectorizationBatchInSubprocess(
   tasks: ChatChunkVectorizationTask[],
+  options?: { signal?: AbortSignal },
 ): Promise<ChatChunkVectorizationBatchResult> {
+  const signal = options?.signal;
   return new Promise((resolve, reject) => {
-    queue.push({
+    let settled = false;
+    let removeAbortListener = () => {};
+
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      removeAbortListener();
+      settle();
+    };
+
+    const item: PendingBatch = {
       requestId: crypto.randomUUID(),
       tasks,
-      resolve,
-      reject,
+      resolve: (result) => finish(() => resolve(result)),
+      reject: (err) => finish(() => reject(err)),
       timeout: null,
-    });
+    };
+
+    const handleAbort = () => {
+      void (async () => {
+        const error = toCancellationError(signal?.reason);
+        const queuedIndex = queue.indexOf(item);
+        if (queuedIndex >= 0) {
+          queue.splice(queuedIndex, 1);
+          finish(() => reject(error));
+          return;
+        }
+        if (inflight === item) {
+          const proc = subprocess;
+          inflight = null;
+          clearInflightTimeout(item);
+          if (proc) {
+            // Stop the child so the embedding work actually ends, and wait for
+            // it to exit before the caller's admission lease is released.
+            expectedExit = true;
+            const exited = waitForSubprocessExit(
+              CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS + 500,
+            );
+            terminateSubprocess(proc, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
+            await exited;
+          }
+        }
+        finish(() => reject(error));
+      })();
+    };
+
+    if (signal?.aborted) {
+      finish(() => reject(toCancellationError(signal.reason)));
+      return;
+    }
+    if (signal) {
+      signal.addEventListener("abort", handleAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", handleAbort);
+    }
+
+    queue.push(item);
     pumpQueue();
   });
 }

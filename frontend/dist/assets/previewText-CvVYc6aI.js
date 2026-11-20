@@ -1,0 +1,1 @@
+function e(e){return e.replace(/[*_~`]+/g,``).replace(/^#{1,6}\s+/gm,``).replace(/^>\s?/gm,``).replace(/\s+/g,` `).trim()}export{e as t};

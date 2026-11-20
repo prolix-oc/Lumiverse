@@ -58,6 +58,13 @@ export interface ThemeConfig {
   baseColorsByMode?: { dark?: BaseColors; light?: BaseColors }
   radiusScale: number
   enableGlass: boolean
+  /**
+   * Opt-in "liquid glass" material. Refracts and blurs what sits behind
+   * surfaces with an SVG displacement filter instead of the flat frosted
+   * `enableGlass` layer. Ignored when `enableGlass` is off or the renderer is
+   * in efficiency mode, so it can never outlive the blur it depends on.
+   */
+  liquidGlass?: boolean
   fontScale: number
   /** CSS zoom applied to the body element for full UI scaling (0.5–1.5). */
   uiScale?: number

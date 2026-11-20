@@ -1,0 +1,45 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover:not(.active) {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.active {
+  border-color: var(--lumiverse-primary);
+}
+
+.name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model, .empty {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.empty {
+  padding: 12px;
+  text-align: center;
+}

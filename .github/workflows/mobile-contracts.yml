@@ -1,0 +1,38 @@
+name: Shared mobile contracts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Backend contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - name: Verify the backend has no native app source folders
+        run: |
+          bun -e 'import { existsSync } from "node:fs"; for (const path of ["ios", "android"]) if (existsSync(path)) throw new Error(`Native app source must stay in its separate repository: ${path}`);'
+      - name: Typecheck backend
+        run: bun x tsc --noEmit
+      - name: Test shared mobile APIs without app checkouts
+        run: bun run test:mobile-contracts

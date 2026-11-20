@@ -65,6 +65,7 @@ export function parseGoogleResponse(data: any, provider: string, replaySignature
  * outcome until EOF so early STOP envelopes cannot hide later output/errors. */
 export async function* readGoogleStream(
   res: Response, provider: string, replaySignatures: boolean, signal?: AbortSignal,
+  onResponseActivity?: () => void,
 ): AsyncGenerator<StreamChunk> {
   let reason: string | undefined;
   let stopReceivedAt: number | undefined;
@@ -85,7 +86,7 @@ export async function* readGoogleStream(
         explanation: chunk.stop_details.explanation || details?.explanation || null,
       };
     }
-    if (chunk.tool_calls) toolCalls.push(...chunk.tool_calls);
+    if (chunk.tool_calls) { onResponseActivity?.(); toolCalls.push(...chunk.tool_calls); }
     if (chunk.usage) usage = chunk.usage;
     delete chunk.finish_reason;
     delete chunk.stop_details;

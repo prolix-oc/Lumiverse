@@ -1,3 +1,5 @@
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { VERTEX_REGIONS } from './vertexConstants'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
@@ -26,7 +28,8 @@ import {
   type NanoGptCachingSettings,
 } from '@/lib/nanogpt-prompt-caching'
 import ModelCombobox from './ModelCombobox'
-import MultiChipSelect from './MultiChipSelect'
+import SearchableSelect from '@/components/shared/SearchableSelect'
+import { useConnectionLibrary } from '@/hooks/useConnectionLibrary'
 import OpenRouterSettings from './OpenRouterSettings'
 import NanoGptSettings from './NanoGptSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
@@ -40,7 +43,7 @@ interface ConnectionFormProps {
   providers: ProviderInfo[]
   profile?: ConnectionProfile
   initialProvider?: string
-  onSave: (input: CreateConnectionProfileInput) => void
+  onSave: (input: CreateConnectionProfileInput, folderId?: string) => void
   onCancel: () => void
   /** Called when OAuth auto-creates the connection during creation flow. */
   onOAuthCreated?: (profile: ConnectionProfile) => void
@@ -87,6 +90,7 @@ const BEDROCK_ENDPOINTS = [
 ]
 
 export default function ConnectionForm({ providers, profile, initialProvider, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
+  const folder = useConnectionFolderDraft('llm', profile?.id)
   const { t } = useTranslation('panels')
   const oauthCleanupRef = useRef<(() => void) | null>(null)
   const anthropicCacheTtlOptions = [
@@ -162,10 +166,12 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
   const isPollinations = provider === 'pollinations'
   const isBedrock = provider === 'bedrock'
   const allProfiles = useStore((s) => s.profiles)
+  const library = useConnectionLibrary('llm')
   const rouletteOptions = allProfiles
     .filter((p) => p.id !== profile?.id && p.provider !== MODEL_ROULETTE_PROVIDER)
     .map((p) => ({
       value: p.id,
+      group: library.folderName(p.id),
       label: `${p.name} (${p.provider}${p.model ? ` / ${p.model}` : ''})`,
     }))
   const rouletteOptionIds = new Set(rouletteOptions.map((o) => o.value))
@@ -370,6 +376,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       try {
         const result = await nanoGptApi.completeAuth(authorization.sessionToken, authorization.code)
         if (result.created && result.profile) {
+          saveConnectionFolder('llm', result.profile.id, folder.value)
           onOAuthCreated?.(result.profile)
         } else {
           setApiKey('')
@@ -384,7 +391,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       oauthCleanupRef.current = null
       setNanoGptOauthLoading(false)
     }
-  }, [name, onOAuthCreated, profile?.id, t])
+  }, [folder.value, name, onOAuthCreated, profile?.id, t])
 
   useEffect(() => () => {
     oauthCleanupRef.current?.()
@@ -445,7 +452,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
         model: '',
         is_default: isDefault,
         metadata,
-      })
+      }, folder.value)
       return
     }
     delete metadata.connection_roulette
@@ -524,8 +531,8 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       model: model.trim() || undefined,
       is_default: isDefault,
       metadata,
-    })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+    }, folder.value)
+  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, nanoGptSettings, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings,     bindReasoning, normalizedBoundReasoningSettings, boundPromptBias, profile?.metadata, folder.value, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
 
   const canSubmit = name.trim().length > 0 && (!isRoulette || validRouletteConnectionIds.length > 0)
 
@@ -534,6 +541,7 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       <FormField label={t('connectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('connectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
+      <ConnectionFolderField kind="llm" {...folder} />
       {!isRoulette && (
         <FormField label={t('connectionForm.provider')}>
           <Select value={provider} onChange={setProvider} options={providerOptions} />
@@ -543,12 +551,15 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
       {isRoulette && (
         <>
           <FormField label={t('connectionForm.rouletteConnections')} hint={t('connectionForm.rouletteConnectionsHint')}>
-            <MultiChipSelect
+            <SearchableSelect
+              multi
+              forceSearch
               options={rouletteOptions}
-              selected={rouletteConnectionIds}
+              groupOrder={library.folders.map(folder => folder.name)}
+              value={rouletteConnectionIds}
               onChange={setRouletteConnectionIds}
               placeholder={t('connectionForm.rouletteConnectionsPlaceholder')}
-              showValues={false}
+              ariaLabel={t('connectionForm.rouletteConnections')}
             />
           </FormField>
           <FormField label="">
@@ -876,7 +887,10 @@ export default function ConnectionForm({ providers, profile, initialProvider, on
             // Clear the manual key input since OAuth set it
             setApiKey('')
           }}
-          onConnectionCreated={onOAuthCreated}
+          onConnectionCreated={created => {
+            saveConnectionFolder('llm', created.id, folder.value)
+            onOAuthCreated?.(created)
+          }}
         />
       )}
       {!isRoulette && <FormField label="">

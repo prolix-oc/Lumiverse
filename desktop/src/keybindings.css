@@ -1,0 +1,17 @@
+#chord {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #45414f;
+  border-radius: 7px;
+  background: #201e27;
+  color: inherit;
+}
+#chord:focus-visible { outline: 2px solid #b9a7ff; outline-offset: 2px; }
+summary { cursor: pointer; }
+#manual-chord { margin-block: 12px; }
+#manual-chord label { display: inline-flex; align-items: center; gap: 5px; margin: 4px 12px 4px 0; }
+#bindings > p { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-bottom: 1px solid #45414f; }
+#bindings button { flex-shrink: 0; }
+#status { min-height: 1.5em; }

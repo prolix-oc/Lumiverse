@@ -8,7 +8,12 @@ import {
   getPersonaAvatarTiers,
   pickPersonaOriginalImageId,
   pickPersonaThumbImageId,
+  pickCharacterThumbImageId,
 } from './avatarUrls'
+
+test('the lightweight character index preserves cropped thumbnails', () => {
+  expect(pickCharacterThumbImageId({ id: 'c', image_id: 'original', avatar_crop_image_id: 'crop' })).toBe('crop')
+})
 
 describe('persona avatar URL helpers', () => {
   test('prefer the stored square crop for avatar-sized persona surfaces', () => {

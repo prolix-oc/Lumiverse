@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { canUseChatChunkVectorizationSubprocess } from "./chat-chunk-vectorization-client";
+import {
+  canUseChatChunkVectorizationSubprocess,
+  processChatChunkVectorizationBatchInSubprocess,
+} from "./chat-chunk-vectorization-client";
 
 describe("canUseChatChunkVectorizationSubprocess", () => {
   it("defaults to enabled on non-Windows runtimes", () => {
@@ -23,5 +26,15 @@ describe("canUseChatChunkVectorizationSubprocess", () => {
     expect(canUseChatChunkVectorizationSubprocess("win32", {
       LUMIVERSE_CHAT_VECTORIZATION_SUBPROCESS: "true",
     })).toBe(true);
+  });
+});
+
+describe("subprocess batch cancellation", () => {
+  it("rejects before dispatch when the admission lease is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("lease preempted"));
+    await expect(
+      processChatChunkVectorizationBatchInSubprocess([], { signal: controller.signal }),
+    ).rejects.toThrow("lease preempted");
   });
 });

@@ -15,6 +15,14 @@ Type your message in the input area and press **Enter** to send (or click the se
 !!! tip "Shift+Enter"
     Press **Shift+Enter** to add a new line without sending.
 
+### Formatting bar
+
+Enable **Settings → Chat → Input → Formatting bar** to show a compact floating pill above the composer. It is off by default, and your choice is saved with your account.
+
+Tap **B**, **I**, **U**, **"**, **'**, or **( )** to insert a pair of symbols with the caret between them. If you select text first, the button wraps that text and keeps it selected so you can apply another format. Underline inserts `<u>…</u>`; bold and italic use Markdown.
+
+The controls grow with font scaling and keep comfortable touch targets on touchscreens. Swipe the row horizontally when it does not fit in a narrow pane.
+
 ---
 
 ## Editing Messages
@@ -56,6 +64,26 @@ Think of swipes as a deck of cards — each one is a different take on the same 
 - **Regenerate** to add a new swipe to the deck
 - **Edit** any individual swipe
 - The currently displayed swipe is what the AI sees as "the message" in subsequent turns
+
+### Variables and swipes
+
+Lumiverse saves the starting and resulting macro variables for each newly generated swipe. Regenerating starts from the state before the original reply, so alternative replies apply their variable changes independently. Continuing a reply starts from its current state.
+
+Switching swipes on the final reply restores that swipe's variables. Switching an older reply leaves the current variables alone until later messages are deleted or you branch the chat at that point. Later manual variable edits are preserved.
+
+Existing replies without saved variable history cannot have their earlier state reconstructed.
+
+### Generate while reading
+
+On the final assistant reply, **Ctrl+click** the right swipe arrow (Windows/Linux)
+or **Cmd+click** it (Mac) to generate another swipe while keeping the current
+response selected. On mobile, **hold the right swipe arrow** for the same action;
+its context menu is suppressed. **Ctrl/Cmd+Right Arrow** also starts a background
+swipe when swipe navigation is enabled and you are not editing text. With the
+arrow focused, **Ctrl/Cmd+Enter** does the same.
+A pulsing dot points toward the generating swipe; it becomes steady when ready.
+Click that arrow normally when you want to read the new response. This action
+is unavailable while a generation is already running.
 
 ### Why Swipes Matter
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createFrontendSTTAPI } from './stt-api'
+import { createFrontendSTTAPI, type STTTranscribeExtras } from './stt-api'
+import { holdHostCapture, isHostCapturing, subscribeHostCapture } from '../sttHostCapture'
 import type { STTConfig, STTEngine, STTEngineStatus, STTResult, STTAudioFrame } from '../sttEngine'
 import type { SpindleSTTTranscript } from 'lumiverse-spindle-types'
 
@@ -42,6 +43,7 @@ function fixture() {
   let prepared = 0
   let config: STTConfig | undefined
   let operationSignal: AbortSignal | undefined
+  let extras: STTTranscribeExtras | undefined
   const transcription = deferred<SpindleSTTTranscript>()
   const teardown: Array<() => void> = []
   const bridge = createFrontendSTTAPI({
@@ -52,12 +54,13 @@ function fixture() {
     listProviders: () => [{ id: 'whistle', name: 'Whistle', onDevice: true, available: true, supportsAudioTranscription: true, languages: ['en'] }],
     createEngine(value) { captures++; config = value; return engine },
     async prepare(value, signal, status) { prepared++; config = value; operationSignal = signal; status?.({ phase: 'loading', progress: 0.5 }) },
-    transcribe(_audio, value, signal) { config = value; operationSignal = signal; return transcription.promise },
+    transcribe(_audio, value, signal, _status, options) { config = value; operationSignal = signal; extras = options; return transcription.promise },
+    isHostCapturing, subscribeHostCapture,
   })
   cleanups.push(bridge.dispose)
   return { ...bridge, engine, teardown, transcription,
     deny: () => { granted = false }, deactivate: () => { active = false },
-    config: () => config, captures: () => captures, prepared: () => prepared, signal: () => operationSignal,
+    config: () => config, captures: () => captures, prepared: () => prepared, signal: () => operationSignal, extras: () => extras,
   }
 }
 
@@ -171,5 +174,70 @@ describe('extension speech lifecycle', () => {
     f.deny(); f.engine.audio({ amplitude: 1, peak: 1, frequencies: [1] })
     await expect(session.result).rejects.toThrow('PERMISSION_DENIED:media')
     expect(frames).toBe(0); expect(f.engine.destroys).toBe(1)
+  })
+
+  test('passes copied keywords and the words flag to transcription', async () => {
+    const f = fixture(); const keywords = [' Lumi ', 'Seo-yeon']
+    const pending = f.api.transcribe(new Blob(['audio']), { keywords, words: true })
+    keywords.push('late')
+    expect(f.extras()).toEqual({ keywords: ['Lumi', 'Seo-yeon'], words: true })
+    f.transcription.resolve({ text: 'Hey Lumi', provider: 'whistle', words: [{ word: 'Hey', start: 0, end: 0.2, probability: 0.9 }] })
+    await expect(pending).resolves.toMatchObject({ words: [{ word: 'Hey' }] })
+    void f.api.transcribe(new Blob(['audio']))
+    expect(f.extras()).toEqual({ words: false })
+  })
+
+  test('rejects invalid keywords before transcription', async () => {
+    for (const keywords of [['Lumi\nSeo'], ['Lumi\n'], ['\rLumi'], ['Lumi\u2028Seo'], ['Lumi\0Seo'], [''], ['x'.repeat(101)], Array(501).fill('Lumi'), Array(1), 'Lumi', [3]]) {
+      const f = fixture()
+      const pending = f.api.transcribe(new Blob(['audio']), { keywords: keywords as string[] })
+      f.transcription.resolve({ text: 'unexpected transcription', provider: 'whistle' })
+      await expect(pending).rejects.toThrow('STT_OPTIONS_INVALID')
+      expect(f.extras()).toBeUndefined()
+    }
+  })
+
+  test('suppresses host activity after another listener unsubscribes or unloads it during delivery', () => {
+    const first = fixture(); const second = fixture()
+    const events: boolean[] = []
+    let unsubscribe = () => {}
+    first.api.onHostActivity!(() => unsubscribe())
+    unsubscribe = second.api.onHostActivity!((active) => events.push(active))
+    const release = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { release() }
+
+    first.dispose()
+    const unloading = fixture(); const unloaded = fixture()
+    unloading.api.onHostActivity!(() => unloaded.dispose())
+    unloaded.api.onHostActivity!((active) => events.push(active))
+    const end = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { end() }
+  })
+
+  test('rechecks extension liveness before delivering host activity', () => {
+    const f = fixture(); const events: boolean[] = []
+    f.api.onHostActivity!((active) => events.push(active))
+    f.deactivate()
+    const release = holdHostCapture()
+    try { expect(events).toEqual([]) } finally { release() }
+  })
+
+  test('reports host microphone activity without media and stops after unsubscribe or teardown', () => {
+    const f = fixture(); f.deny()
+    const first: boolean[] = []; const second: boolean[] = []
+    const unsubscribe = f.api.onHostActivity!((active) => first.push(active))
+    f.api.onHostActivity!((active) => { second.push(active); throw new Error('listener bug') })
+    expect(f.api.isHostCapturing!()).toBe(false)
+    const release = holdHostCapture()
+    expect(f.api.isHostCapturing!()).toBe(true)
+    release(); release()
+    unsubscribe()
+    const again = holdHostCapture()
+    f.teardown.forEach((teardown) => teardown())
+    again()
+    expect(first).toEqual([true, false])
+    expect(second).toEqual([true, false, true])
+    expect(() => f.api.onHostActivity!(() => {})).toThrow('SPINDLE_FRONTEND_INACTIVE')
+    expect(() => f.api.isHostCapturing!()).toThrow('SPINDLE_FRONTEND_INACTIVE')
   })
 })

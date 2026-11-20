@@ -2,12 +2,12 @@
  * Memory Cortex — Macro definitions.
  *
  * Provides prompt-injectable macros for cortex-enhanced memory data:
- *   {{entities}}          — Active entity snapshots with facts and relationships
+ *   {{entities}}          — Active entity snapshots with descriptions and facts
  *   {{entityFacts}}       — Facts about a specific entity: {{entityFacts::Kael}}
  *   {{relationships}}     — Active relationship edges between entities
  *   {{arc}}               — Current narrative arc summary
  *   {{memorySalience}}    — Highest-salience memory in retrieved set
- *   {{cortexActive}}      — "yes" if cortex is enabled and produced results
+ *   {{cortexActive}}      — "yes" if this prompt has Cortex content
  *   {{entityCount}}       — Number of entities in the current context
  *   {{characterColors}}   — Font color attributions per character (speech, thoughts, narration)
  */
@@ -52,7 +52,7 @@ export function registerCortexMacros(): void {
   registry.registerMacro({
     name: "entities",
     category: "memory",
-    description: "Active entity snapshots with facts and relationships from the Memory Cortex.",
+    description: "Active entity snapshots with descriptions and facts from the Memory Cortex. Use {{relationships}} for relationship edges.",
     args: [
       { name: "count", type: "integer", optional: true, description: "Max entities to include" },
     ],
@@ -142,7 +142,7 @@ export function registerCortexMacros(): void {
   registry.registerMacro({
     name: "cortexActive",
     category: "memory",
-    description: "Returns 'yes' if the Memory Cortex is enabled and produced results, 'no' otherwise.",
+    description: "Returns 'yes' when this prompt has Memory Cortex content, 'no' otherwise. Checks available context, not the master toggle.",
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const cortex = getCortex(ctx);
@@ -195,14 +195,6 @@ function formatEntitySnapshots(snapshots: EntitySnapshot[]): string {
 
     if (snap.topFacts.length > 0) {
       lines.push(`  Facts: ${snap.topFacts.join(". ")}.`);
-    }
-
-    if (snap.relationships.length > 0) {
-      const relStrs = snap.relationships.map((r) => {
-        const label = r.label ? ` — ${r.label}` : "";
-        return `${r.targetName} (${r.type}${label})`;
-      });
-      lines.push(`  Relations: ${relStrs.join(" | ")}`);
     }
   }
 

@@ -15,8 +15,8 @@
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 86%, transparent);
   border-bottom: 1px solid var(--lumiverse-border);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lumiverse-text) 4%, transparent);
-  backdrop-filter: blur(20px) saturate(1.08);
-  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+  backdrop-filter: blur(20px) saturate(1.08) var(--lcs-liquid-filter, );
+  -webkit-backdrop-filter: blur(20px) saturate(1.08) var(--lcs-liquid-filter, );
 }
 
 /* The Tauri shell is frameless; the frontend supplies its complete title bar. */

@@ -8,8 +8,39 @@
  * This is Tier 2 functionality: opt-in, async, never blocks generation.
  */
 
-import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship, SidecarGradedHeuristics } from "./types";
+import { isCortexDebugEnabled } from "./diagnostics";
+import type { SidecarExtractionResult, SidecarFontColor, DiscoveredAlias, EmotionalTag, NarrativeFlag, StatusChange, ExtractedEntity, ExtractedRelationship } from "./types";
+import { normalizeFontColor, type ThoughtDelimiters } from "./font-attribution";
+import { buildConversationHint, type CortexParticipant } from "./conversation-context";
 import { scoreChunkHeuristic } from "./salience-heuristic";
+import { buildCortexIdentityContext } from "./identity-context";
+
+interface ExtractionIdentityOptions {
+  characterNames?: string[];
+  participants?: CortexParticipant[];
+  knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
+  descriptionAliases?: Array<{ alias: string; canonicalName: string }>;
+}
+
+/** Resolve trusted identity labels before structural validation can discard a
+ * long/decorated author label and its otherwise valid relationship endpoint. */
+function normalizeExtractionNames(raw: any, options?: ExtractionIdentityOptions) {
+  const identity = buildCortexIdentityContext(options?.characterNames ?? [], options?.knownEntities ?? [],
+    new Map(options?.descriptionAliases?.map(({ alias, canonicalName }) => [alias, canonicalName])), options?.participants);
+  const rows = (value: any, fields: string[], identityFields = fields) => Array.isArray(value) ? value.map((entry: any) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const copy = { ...entry };
+    for (const field of fields) if (typeof copy[field] === "string") copy[field] = identity.canonicalize(copy[field]);
+    return copy;
+  }).filter((entry: any) => !entry || typeof entry !== "object"
+    || !identityFields.some((field) => typeof entry[field] === "string" && identity.isSharedLabel(entry[field]))) : value;
+  return { ...raw,
+    entities_present: rows(raw.entities_present, ["name"]), entities: rows(raw.entities, ["name"]),
+    relationships_shown: rows(raw.relationships_shown, ["source", "target"]), relationships: rows(raw.relationships, ["source", "target"]),
+    status_changes: rows(raw.status_changes, ["entity"]), color_attributions: rows(raw.color_attributions, ["character_name"]),
+    discovered_aliases: rows(raw.discovered_aliases, ["canonical_name"], ["canonical_name", "alias"]),
+  };
+}
 
 // ─── Tool-Based Structured Extraction ──────────────────────────
 // Native tool/function calling — every provider supports this natively.
@@ -41,74 +72,43 @@ const EXTRACTION_GLOBAL_RULES = `GLOBAL RULES
 - Use ONLY evidence from the exact passage.
 - Do NOT use genre knowledge, outside world knowledge, or likely guesses.
 - Do NOT invent names, relationships, motives, symbolism, themes, or implications.
-- If a detail is ambiguous, weakly implied, or unsupported, omit it.
-- Prefer omission over contamination. Missing data is acceptable; wrong data is harmful.`;
+- Omit ambiguous, weakly implied or unsupported claims; still extract every clearly supported claim in the passage.
+- Check for evidence before leaving a field empty. A connection demonstrated by a concrete action or utterance does not need a formal relationship declaration.
+- Supplied participant identity metadata can resolve passage references; it never proves an event or relationship.`;
 
 // Entity, alias, relationship, scoring and font color rules, shared verbatim by
 // both extraction paths so behavior stays identical regardless of batching.
-const EXTRACTION_RULES = `ENTITY RULES
-An entity is a proper name for a SPECIFIC, RECURRING character, place, item, faction, event, or named concept the story will refer back to. Throwaway descriptive labels, running gags, and one-off riffs are NOT entities, even when title-cased.
+const EXTRACTION_RULES = `ENTITIES AND IDENTITY
+- Extract specific named characters, locations, items, factions, events and concepts. A single clear mention is sufficient, including direct address or a reference to someone absent. Recurrence, importance and relationships are not prerequisites.
+- Preserve the complete proper name, including lowercase connecting words, punctuation and accents. Do not split a name into title-cased fragments or attach a card subtitle to it.
+- A scenario card or shared author label can represent multiple characters. Extract each individually evidenced character separately; never combine them into one character or use the shared label as an alias. Attribute actions, dialogue, thoughts, facts and relationships from local evidence in any narrative POV. A shared label alone does not establish which member acted or spoke.
+- Use supplied canonical names for established identities. Card display labels and supplied aliases identify that same entity; they are not additional entities. For a new identity use its exact proper name from the passage.
+- Exclude generic objects/descriptions, prose fragments, vocalizations, meta/system references and HUD scaffolding. An ordinary word can be a legitimate fictional name: judge its use, not a word blacklist.
+- Resolve references from local names, narration, dialogue attribution and established viewpoint in any POV. Message prefixes and conversation_participants supply identity hints. Explicit speaker, thinker and addressee evidence takes precedence. Leave ambiguous references unresolved; never treat every character in a message as its author.
+- Report a supported nickname or shortened reference in discovered_aliases with its canonical_name and evidence; never also emit it as a separate entity. Supplied canonical_aliases are identity mappings. Superficial similarity alone does not establish a new alias.
 
-Do NOT extract any of the following, regardless of capitalization:
-- Common words capitalized only because of sentence-start, formatting, or emphasis (including ALL-CAPS shouting).
-- Verbs, adjectives, adverbs, interjections, or sentence fragments.
-- Onomatopoeia and non-word vocalizations — clusters that represent a sound rather than name a thing or person.
-- Verb phrases (a transitive verb followed by its object), even when title-cased — these describe an action, not a recurring named entity.
-- Compound descriptive phrases whose HEAD word is a common English noun and the remainder is generic — these are running labels or jokes (modifier + common-noun head + optional generic given name), not separate entities. If you mentally remove the head common noun and the result is still a recognizable canonical name, treat the whole phrase as a nickname/alias of that canonical, not a new entity.
-- Common-noun objects even when title-cased, unless the passage explicitly elevates them with a proper title (e.g. naming a specific weapon, vessel, or artifact).
-- External real-world games, brands, apps, platforms, social networks, or trademarks, unless the story's setting itself IS that thing.
-- Meta-references used by every roleplay system: User, You, AI, Player, Narrator, Character, Assistant, System, Bot, Human, NPC, OOC.
-- Pronouns and pronoun-only references.
-- Tracker/header scaffolding such as timestamps, weather labels, status readouts, HUD labels, emoji wrappers, or repeated metadata blocks (unless they contain a real proper name that recurs outside the scaffold).
+RELATIONSHIPS
+- First check person-to-person connections, especially between the named user persona and the character. The user persona is an in-story character, eligible for the same relationship types as anyone else.
+- Resolve endpoints including message prefixes, supplied aliases, and unambiguous pronouns. Include both resolved endpoints in entities_present even when names are absent from the body.
+- Consider the full interpersonal dynamic: emotional, social, romantic, familial, adversarial, professional and power relationships. These are overlapping dimensions, not an exhaustive checklist. Recognize the nature of the bond from its meaning in context, without requiring particular words or behaviors.
+- Identify how characters regard, relate to and affect one another. A bond need not be named explicitly when its nature is clear from passage evidence; supported interpretation of that evidence is part of extraction.
+- Record concrete connections stated or demonstrated by dialogue, thoughts, actions or narration, including established bonds reaffirmed in this passage. A single supported interaction or commitment counts; no new status, long history or formal declaration is required. Bonds may be developing, established, changing, one-sided or mixed; preserve each independently supported dimension.
+- Use the full relationship type vocabulary as broad categories. Choose the closest supported type and use label to preserve the actual nature of the connection. Friendship falls within ally; romantic attachment within lover; antagonistic bonds within enemy. Other standard types are equally eligible. Use custom with a precise label when no standard type fits. Do not flatten every positive connection into ally or every negative connection into enemy, or omit a bond because it does not fit a familiar pattern.
+- A love interest is a relationship even before a formal partnership. Lover covers developing or established romantic attachment, including one-sided interest. Do not invent reciprocity, exclusivity, marriage or sex. Co-presence and routine conversation alone establish no interpersonal bond.
+- Negated, hypothetical or insincere claims do not establish the claimed connection. Evidence about a different pair does not establish this pair's bond. Words inside proper names or card titles are not relationship evidence.
+- Direction is source relative to target: parent = parent to child; child = child to parent; mentor = teacher/trainer to student; serves = subordinate to superior; owns = owner to possession; member_of = member to group; located_in = entity to place; fears = fearful entity to target. A student is not a child.
+- Then add supported item, location and group connections. Ownership or location links do not replace person-to-person connections. Before returning, check that no supported interpersonal connection was omitted or recorded only in key_facts. Do not create an interpersonal connection when none is supported.
 
-Prefer "no entity" over "wrong entity". When in doubt, omit.
+FACTS AND IMPORTANCE
+- key_facts are self-contained, concrete statements supported by the passage. Write the relevant canonical entity names explicitly instead of unresolved I/you/she/he references. Resolve these only when passage viewpoint and identity metadata make the subject clear.
+- Include durable developments such as agreements, promises, training commitments, confessions, discoveries, arrivals, departures and status changes. An uneventful passage can still contain a useful fact. Do not replace facts with themes, emotional impressions or personality judgments.
+- Score importance from 0 to 10 by lasting consequence, not prose intensity. Treat facts, relationships and importance as separate judgments; low importance alone does not mean there are no facts or relationships.
 
-KNOWN ENTITY RULE
-When known entities are supplied with aliases, ALWAYS use the canonical name in output, never the alias. For truly new entities, use the exact proper name from the passage.
-
-CANONICAL ALIAS RULE
-When a <canonical_aliases> block is present in the user message, treat it as authoritative — it comes from character/persona definitions, not heuristic guessing.
-- If the passage uses an alias from the left side, emit the canonical name on the right side everywhere (extract_entities, extract_relationships, status_changes, color_attributions).
-- Never emit an entity whose name is one of the aliases on the left side.
-- In arbiter mode, any heuristic candidate matching a left-side alias MUST appear in transformed_heuristic_entities mapping the alias to its canonical name.
-
-ALIAS RULE
-A nickname, diminutive, affectionate variant, descriptive riff, or shortened/extended form of a known character's name is an ALIAS, not a new entity. Report it via discovered_aliases pointing at the canonical name; do NOT also create a separate entity for it.
-
-Sufficient evidence for a discovered_alias is ANY ONE of:
-- Explicit declaration patterns: "call me X", "known as X", "X, nicknamed Y", "X (Y)".
-- A short form clearly derived from a known canonical (shares its root, initial syllables, or stem) used to refer to that character in context.
-- A compound nickname that CONTAINS a recognizable diminutive or part of a known canonical's name. Modifiers, adjectives, jokes, or descriptors prefixed/appended onto a recognizable shortened form do NOT create a new entity — the whole phrase is one alias of the canonical character.
-- A first-name-only or last-name-only reference that unambiguously resolves to a known full-name canonical in the chat.
-- Possessive or addressed forms ("my X", "hey X", "X's …") where the recipient is unambiguously a known character.
-
-When you detect an alias:
-1. Do NOT include the alias as its own entry in entities_present.
-2. DO include it in discovered_aliases with canonical_name = the known canonical, alias = the surface form, and brief evidence from the passage.
-3. In arbiter mode:
-   - If the alias appears in heuristic_entities, emit it in transformed_heuristic_entities (from = alias, to = canonical).
-   - If it appears in batch_existing_entities, emit it in rejected_existing_entities so the bad standalone entry gets cleaned up.
-
-Do NOT report aliases on superficial similarity alone (no shared substring, no shared role, no addressing, no clear in-passage referent). When unsure, omit.
-
-RELATIONSHIP RULES
-- Both source and target must be proper names present in the passage.
-- Only record a relationship when the passage directly supports an enduring or role-like connection, or explicitly states the relationship.
-- Do NOT create a relationship just because two named entities appear in the same scene, speak once, stand near each other, or are mentioned together.
-- Do NOT infer hidden history, likely alliances, family ties, or romance unless the passage itself supports it.
-- If the passage shows only a transient interaction with no stable relationship signal, return no relationship for that pair.
-
-SCORING RULES
-- Importance is about lasting narrative consequence, not prose intensity.
-- Score high for durable changes: deaths, betrayals, discoveries, promises, arrivals, departures, confessions, transformations, status shifts, major gains/losses.
-- Score low for filler, routine banter, scene dressing, repeated habits, or atmospheric prose with no lasting consequence.
-- key_facts must be concrete, verifiable statements traceable to the passage. Prefer durable developments over filler.
-- Do NOT put impressions, themes, personality judgments, or unsupported interpretations in key_facts.
-
-FONT COLOR RULES
-- Only report colors that are actually present in HTML color tags in the passage.
-- Map each color to the named character directly supported by the passage.
-- If the owner of a color is unclear, omit that attribution instead of guessing.`;
+FONT COLORS
+- Report only colors present in HTML color markup. Normalize short hex, named colors and rgb to #rrggbb.
+- Determine usage first: a thought/italic wrapper takes precedence over quotation marks, inside or outside the color tag. *...*, _..._, <i>, <em> and configured markers indicate thought; otherwise quoted dialogue is speech and descriptive/action prose is narration.
+- Identify the thinker from local attribution and established narrative viewpoint in any POV. Mentions of other characters do not by themselves change viewpoint. One author can write multiple characters; a shared label does not establish a thinker.
+- Attribute each color/usage to its speaker or thinker using local evidence. An addressed name, previous mapping or shared color does not prove ownership. A color can have both speech and thought: report both usage types when supported. Omit uncertain owners; never invent a color.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
 
@@ -123,29 +123,6 @@ TOOL CHECKLIST
 2. extract_entities
 3. extract_relationships
 4. extract_font_colors
-
-${EXTRACTION_RULES}`;
-
-// Arbiter mode: passage analysis PLUS a verdict on heuristic / existing-graph candidates.
-const ARBITER_EXTRACTION_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
-
-Convert ONE passage into structured data AND judge the candidate records supplied
-by the caller. Call ALL FIVE tools exactly once. Return empty arrays when a tool
-has nothing to report.
-
-${EXTRACTION_GLOBAL_RULES}
-- Treat each tool independently. A relationship or fact must be supported by the passage itself.
-- For grade_heuristic_candidates: judge ONLY the candidates listed in the user message. Do not invent new ones to reject. Confirm by omission — silence means the candidate is acceptable.
-  - Reject a heuristic candidate when it falls into any category from the ENTITY RULES "Do NOT extract" list, or when it isn't actually present in the passage.
-  - Transform a heuristic candidate when it refers to a real known entity but uses a different surface form (alias, diminutive, partial name, or sentence-start capitalization). Pair the alias-rule outcomes with transform entries here.
-- For rejected_existing_entities: flag a pre-existing graph entity whenever it falls into any category from the ENTITY RULES "Do NOT extract" list, OR when it is an alias of a known canonical character that should never have been persisted as a standalone entity. Importance disagreement alone is NOT grounds for rejection — only structural / categorical mistakes are.
-
-TOOL CHECKLIST
-1. score_salience
-2. extract_entities
-3. extract_relationships
-4. extract_font_colors
-5. grade_heuristic_candidates
 
 ${EXTRACTION_RULES}`;
 
@@ -185,7 +162,7 @@ const TOOL_SALIENCE: ToolDefinition = {
 
 const TOOL_ENTITIES: ToolDefinition = {
   name: "extract_entities",
-  description: "Extract only proper-name entities that appear in the passage. Reject capitalized common words, pronouns, meta references, and formatting noise. Use canonical known names when provided. Return empty arrays when nothing qualifies.",
+  description: "Extract named entities referenced by the passage, including canonical participants referred to through message prefixes or unambiguous I/you narration. Reject capitalized common words, meta references and formatting noise. Output canonical names, never pronouns. Return empty arrays when nothing qualifies.",
   parameters: {
     type: "object",
     properties: {
@@ -194,7 +171,7 @@ const TOOL_ENTITIES: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            name: { type: "string", description: "The entity's proper name exactly as it appears in the text." },
+            name: { type: "string", description: "The canonical proper name of a known entity or participant, resolved from passage references. For a new entity, use its exact proper name from the passage." },
             type: {
               type: "string",
               enum: ["character", "location", "item", "faction", "event", "concept"],
@@ -231,7 +208,7 @@ const TOOL_ENTITIES: ToolDefinition = {
             entity: { type: "string", description: "Proper name of the entity whose status changed." },
             change: {
               type: "string",
-              enum: ["injured", "healed", "died", "transformed", "betrayed", "allied", "departed", "arrived"],
+              enum: ["injured", "healed", "died", "destroyed", "transformed", "betrayed", "allied", "departed", "arrived"],
               description: "What explicitly happened to this entity in the passage.",
             },
             detail: { type: "string", description: "Brief factual description of the change, not interpretation." },
@@ -247,7 +224,7 @@ const TOOL_ENTITIES: ToolDefinition = {
 
 const TOOL_RELATIONSHIPS: ToolDefinition = {
   name: "extract_relationships",
-  description: "Extract only directly supported relationships between named entities in the passage. Do not infer relationships from co-presence alone. Return an empty array if no stable or explicit relationship is supported.",
+  description: "Check the full range of interpersonal bonds first, including connections involving the named user persona and character. Interpret the bond in context and use the full type vocabulary with a precise label; use custom when no standard type fits. Then add supported item/location/group links; these do not replace interpersonal relationships. Resolve canonical endpoints from passage references. Concrete evidence is sufficient without formal status; co-presence alone is not. Return an empty array only after checking for supported connections.",
   parameters: {
     type: "object",
     properties: {
@@ -256,19 +233,19 @@ const TOOL_RELATIONSHIPS: ToolDefinition = {
         items: {
           type: "object",
           properties: {
-            source: { type: "string", description: "Proper name of the first entity (must appear in passage)." },
-            target: { type: "string", description: "Proper name of the second entity (must appear in passage)." },
+            source: { type: "string", description: "Canonical name of the entity holding the relationship role, resolved from passage names, prefixes, aliases or unambiguous pronouns. Include it in extract_entities." },
+            target: { type: "string", description: "Canonical name of the entity the source's relationship points to, resolved from passage references. Include it in extract_entities." },
             type: {
               type: "string",
               enum: ["ally", "enemy", "lover", "parent", "child", "sibling", "mentor", "rival", "owns", "member_of", "located_in", "fears", "serves", "custom"],
-              description: "The relationship directly supported by the passage. Use custom when the connection is explicit but does not fit another enum.",
+              description: "Choose the closest supported category from the full enum. Categories describe broad connections, not fixed behaviors or required wording. ally includes friendship and affiliative bonds; lover covers romantic attachment; enemy covers antagonistic bonds. All other standard types are equally eligible. Use custom when no standard type fits, with label preserving the actual connection. Formal partnership or reciprocity is not required unless claimed.",
             },
-            label: { type: "string", description: "Short factual descriptor, e.g. 'childhood friends', 'captain of', 'sworn enemies'. Do not use poetic language." },
+            label: { type: "string", description: "Concise factual description of the actual bond, preserving its nature, current state and supported direction or asymmetry. Do not imply a stronger or more formal relationship than the evidence supports." },
             sentiment: { type: "number", minimum: -1, maximum: 1, description: "Emotional valence of the relationship as shown in the passage: -1.0 hostile, 0 neutral/unclear, 1.0 warm." },
           },
           required: ["source", "target", "type"],
         },
-        description: "Relationships directly supported by the passage. Empty array if none.",
+        description: "All clearly supported connections, with interpersonal relationships checked first. Do not omit a supported person-to-person connection because item/location links or key_facts were already reported. Empty array if none.",
       },
     },
     required: ["relationships"],
@@ -291,7 +268,7 @@ const TOOL_FONT_COLORS: ToolDefinition = {
             usage_type: {
               type: "string",
               enum: ["speech", "thought", "narration"],
-              description: "speech=quoted dialogue, thought=internal/italic text, narration=descriptive text.",
+              description: "thought=internal/italic channel (wrapping *...*, _..._, i/em or configured markers wins over quotes, inside or outside the color tag); speech=other quoted dialogue; narration=plain descriptive text. Report separate entries if a color has multiple usages.",
             },
           },
           required: ["hex_color", "character_name", "usage_type"],
@@ -303,65 +280,12 @@ const TOOL_FONT_COLORS: ToolDefinition = {
   },
 };
 
-const TOOL_GRADE_HEURISTIC_CANDIDATES: ToolDefinition = {
-  name: "grade_heuristic_candidates",
-  description: "Judge the candidate records supplied in the user message against the passage. Reject candidates that are not real proper-name entities or are not actually supported by the passage. Be especially aggressive about rejecting common English words that are only capitalized due to sentence position, dialogue formatting, or emphasis — these are the most frequent false positives. Transform candidates that refer to a real entity but use the wrong form. Confirmation is by omission — silence means the candidate is acceptable. Use empty arrays when nothing needs flagging.",
-  parameters: {
-    type: "object",
-    properties: {
-      rejected_heuristic_entities: {
-        type: "array",
-        items: { type: "string" },
-        description: "Exact names from the heuristic_entities candidate list that should NOT be persisted. Reject: verbs, adjectives, adverbs, abstract nouns (Beauty, Darkness, Silence, Power, Magic, Chaos, Destiny, Fate, Honor, Vengeance, Shadow, Truth, Nothing), common English words only capitalized because of sentence position or shouted dialogue or emphasis formatting, meta-references, and names not actually present in the passage. Examples: 'Beautiful' (adjective), 'Darkness' (abstract noun), 'Important' (adjective), 'Ancient' (adjective), 'Suddenly' (adverb), 'Nothing' (pronoun), 'Perhaps' (adverb). Match the candidate name verbatim.",
-      },
-      transformed_heuristic_entities: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            from: { type: "string", description: "The candidate name verbatim from the heuristic_entities list." },
-            to: { type: "string", description: "The canonical proper name this candidate actually refers to." },
-          },
-          required: ["from", "to"],
-        },
-        description: "Candidates that refer to a real entity but use the wrong name. Example: heuristic captured 'Marlowe' but the passage establishes 'Detective Marlowe' — transform from='Marlowe' to='Detective Marlowe'. Only use when the canonical form is supported by the passage.",
-      },
-      rejected_heuristic_relationships: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            source: { type: "string" },
-            target: { type: "string" },
-            type: { type: "string" },
-          },
-          required: ["source", "target", "type"],
-        },
-        description: "Exact triples from the heuristic_relationships list that are NOT supported by the passage (co-occurrence without a real connection, contradicted by the text, or involving rejected entities). Match source/target/type verbatim.",
-      },
-      rejected_existing_entities: {
-        type: "array",
-        items: { type: "string" },
-        description: "Names from the existing_graph_entities list that are not real proper-name entities (verbs, adjectives, abstract nouns like Darkness/Beauty/Power/Shadow/Silence/Chaos, adverbs, pronouns, sentence fragments, meta-references that were incorrectly persisted in a prior chunk). Be conservative — only reject obvious mistakes, not entities you simply find unimportant.",
-      },
-    },
-    required: [
-      "rejected_heuristic_entities",
-      "transformed_heuristic_entities",
-      "rejected_heuristic_relationships",
-      "rejected_existing_entities",
-    ],
-  },
-};
-
 const EXTRACTION_TOOLS: ToolDefinition[] = [TOOL_SALIENCE, TOOL_ENTITIES, TOOL_RELATIONSHIPS, TOOL_FONT_COLORS];
-const ARBITER_EXTRACTION_TOOLS: ToolDefinition[] = [...EXTRACTION_TOOLS, TOOL_GRADE_HEURISTIC_CANDIDATES];
 
 const salienceProperties = (TOOL_SALIENCE.parameters as any).properties;
 const entityProperties = (TOOL_ENTITIES.parameters as any).properties;
 const relationshipProperties = (TOOL_RELATIONSHIPS.parameters as any).properties;
 const fontColorProperties = (TOOL_FONT_COLORS.parameters as any).properties;
-const gradingProperties = (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).properties;
 
 /** One tool call for a whole rebuild batch. Tool arguments are substantially
  *  more reliable than asking smaller/local models to print a large JSON blob
@@ -387,12 +311,6 @@ const TOOL_ANALYZE_PASSAGE_BATCH: ToolDefinition = {
             status_changes: entityProperties.status_changes,
             color_attributions: fontColorProperties.color_attributions,
             discovered_aliases: entityProperties.discovered_aliases,
-            grading: {
-              type: "object",
-              properties: gradingProperties,
-              required: (TOOL_GRADE_HEURISTIC_CANDIDATES.parameters as any).required,
-              description: "Candidate grading for this passage. Omit when no arbiter block was supplied for the passage.",
-            },
           },
           required: [
             "index",
@@ -453,6 +371,7 @@ export function getToolChoiceParams(provider: string): Record<string, any> {
  */
 export function parseToolCallResults(
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>,
+  options?: ExtractionIdentityOptions,
 ): SidecarExtractionResult {
   let importance = 5;
   let emotionalTags: string[] = [];
@@ -463,13 +382,12 @@ export function parseToolCallResults(
   let relationships: Array<{ source: string; target: string; type: string; label: string; sentiment: number }> = [];
   let fontColors: SidecarFontColor[] = [];
   let discoveredAliases: DiscoveredAlias[] = [];
-  let gradedHeuristics: SidecarGradedHeuristics | undefined;
 
   for (const call of toolCalls) {
     // Sidecar providers are external and occasionally return sparse tool-call
     // arrays. Ignore malformed entries rather than failing the whole passage.
     if (!call || typeof call.name !== "string" || !call.args || typeof call.args !== "object") continue;
-    const args = call.args as any;
+    const args = normalizeExtractionNames(call.args, options);
     switch (call.name) {
       case "score_salience":
         importance = typeof args.importance === "number" ? args.importance : 5;
@@ -487,9 +405,6 @@ export function parseToolCallResults(
         break;
       case "extract_font_colors":
         fontColors = validateFontColors(args.color_attributions);
-        break;
-      case "grade_heuristic_candidates":
-        gradedHeuristics = validateGradedHeuristics(args);
         break;
     }
   }
@@ -515,41 +430,12 @@ export function parseToolCallResults(
     relationshipsShown: relationships as any[],
     fontColors,
     discoveredAliases,
-    gradedHeuristics,
   };
 }
 
 /** Get the extraction tools array (for passing to generate calls) */
 export function getExtractionTools(): ToolDefinition[] {
   return EXTRACTION_TOOLS;
-}
-
-function validateGradedHeuristics(args: any): SidecarGradedHeuristics {
-  const rejectedEntities = Array.isArray(args?.rejected_heuristic_entities)
-    ? args.rejected_heuristic_entities.filter((s: any) => typeof s === "string" && s.trim().length > 0).map((s: string) => s.trim())
-    : [];
-  const transformed = Array.isArray(args?.transformed_heuristic_entities)
-    ? args.transformed_heuristic_entities
-        .filter((t: any) => t && typeof t.from === "string" && typeof t.to === "string"
-          && t.from.trim().length > 0 && t.to.trim().length > 0
-          && t.from.trim().toLowerCase() !== t.to.trim().toLowerCase())
-        .map((t: any) => ({ from: t.from.trim(), to: t.to.trim() }))
-    : [];
-  const rejectedRels = Array.isArray(args?.rejected_heuristic_relationships)
-    ? args.rejected_heuristic_relationships
-        .filter((r: any) => r && typeof r.source === "string" && typeof r.target === "string" && typeof r.type === "string")
-        .map((r: any) => ({ source: r.source.trim(), target: r.target.trim(), type: r.type.trim() }))
-    : [];
-  const rejectedExisting = Array.isArray(args?.rejected_existing_entities)
-    ? args.rejected_existing_entities.filter((s: any) => typeof s === "string" && s.trim().length > 0).map((s: string) => s.trim())
-    : [];
-
-  return {
-    rejectedHeuristicEntities: rejectedEntities,
-    transformedHeuristicEntities: transformed,
-    rejectedHeuristicRelationships: rejectedRels,
-    rejectedExistingEntities: rejectedExisting,
-  };
 }
 
 // Legacy export kept for compatibility — now returns empty (tools handle everything)
@@ -652,33 +538,56 @@ function resolveAliasesInResult(
 // ─── Extraction ────────────────────────────────────────────────
 
 // Known entity/character hint block shared by single and batch prompts.
-function buildEntityHint(options?: {
-  characterNames?: string[];
-  knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-}): string {
+function buildEntityHint(options?: ExtractionIdentityOptions): string {
+  const identity = buildCortexIdentityContext(options?.characterNames ?? [], options?.knownEntities ?? [],
+    undefined, options?.participants);
+  let hint = "";
   if (options?.knownEntities?.length) {
-    const lines = options.knownEntities
+    const lines = options.knownEntities.filter((entity) => !identity.isSharedLabel(entity.name))
       .slice(0, 50) // Cap to avoid prompt bloat
       .map((e) => {
-        const aliasStr = e.aliases.length > 0 ? ` (aka ${e.aliases.join(", ")})` : "";
+        const aliases = e.aliases.filter((alias) => !identity.isSharedLabel(alias));
+        const aliasStr = aliases.length > 0 ? ` (aka ${aliases.join(", ")})` : "";
         return `- ${e.name} [${e.type}]${aliasStr}`;
       });
-    return `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
+    hint += `\n\n<known_entities>\nUse these canonical names when they match the passage. Never output an alias when a canonical name is listed here.\n${lines.join("\n")}\n</known_entities>`;
   }
   if (options?.characterNames?.length) {
-    return `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these names exactly if they appear.`;
+    hint += `\n\n<known_characters>\n${options.characterNames.join(", ")}\n</known_characters>\nUse these canonical participant names when the passage refers to them, including through prefixes or unambiguous pronouns.`;
   }
-  return "";
+  return hint;
+}
+
+/** An empty extraction is valid; a missing tool or missing field is not. */
+function validateExtractionObject(json: any): void {
+  if (!json || typeof json.importance !== "number" || !Number.isFinite(json.importance)
+    || json.importance < 0 || json.importance > 10) throw new Error("Invalid or missing importance");
+  for (const field of ["emotional_tones", "narrative_flags", "key_facts", "entities_present", "relationships_shown", "status_changes", "color_attributions", "discovered_aliases"]) {
+    if (!Array.isArray(json[field])) throw new Error(`Incomplete extraction: ${field}`);
+  }
+}
+
+function validateExtractionTools(calls: Array<{ name: string; args: Record<string, unknown> }>): void {
+  const required = ["score_salience", "extract_entities", "extract_relationships", "extract_font_colors"];
+  for (const name of required) {
+    if (calls.filter((call) => call?.name === name && call.args && typeof call.args === "object").length !== 1) {
+      throw new Error(`Incomplete extraction tool: ${name} (expected exactly one call; received tools=${JSON.stringify(calls.map((call) => call?.name ?? "unknown"))})`);
+    }
+  }
+  const args = (name: string): any => calls.find((call) => call?.name === name)!.args;
+  validateExtractionObject({ ...args("score_salience"), ...args("extract_entities"),
+    entities_present: args("extract_entities").entities,
+    relationships_shown: args("extract_relationships").relationships,
+    color_attributions: args("extract_font_colors").color_attributions });
 }
 
 // Validate a parsed JSON extraction object into a SidecarExtractionResult.
 function buildResultFromJsonObject(
   json: any,
-  options?: {
-    characterNames?: string[];
-    knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-  },
+  options?: ExtractionIdentityOptions,
 ): SidecarExtractionResult {
+  validateExtractionObject(json);
+  json = normalizeExtractionNames(json, options);
   const entities = validateEntities(json.entities_present).filter(
     (e) => !ENTITY_BLOCKLIST.has(e.name.toLowerCase().trim()),
   );
@@ -698,7 +607,6 @@ function buildResultFromJsonObject(
     relationshipsShown: relationships,
     fontColors: validateFontColors(json.color_attributions),
     discoveredAliases: validateDiscoveredAliases(json.discovered_aliases),
-    gradedHeuristics: json.grading ? validateGradedHeuristics(json.grading) : undefined,
   };
   if (options?.knownEntities?.length) {
     result = resolveAliasesInResult(result, options.knownEntities);
@@ -721,14 +629,9 @@ export async function extractWithSidecar(
   sidecarConnectionId: string,
   options?: {
     characterNames?: string[];
+    participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-    /** When provided, the sidecar is asked to judge these candidates and grading
-     *  is returned in the result's gradedHeuristics field. */
-    arbiter?: {
-      heuristicEntities: Array<{ name: string; type: string }>;
-      heuristicRelationships: Array<{ source: string; target: string; type: string }>;
-      existingGraphEntities: string[];
-    };
+    thoughtDelimiters?: ThoughtDelimiters;
     /** Sampling parameters forwarded to the underlying LLM call. Caller is
      *  responsible for passing the user-configured sidecar temperature/top_p/
      *  max_tokens here. Defaults to a low-temperature extraction profile when
@@ -753,52 +656,46 @@ export async function extractWithSidecar(
     signal?: AbortSignal;
   },
 ): Promise<SidecarExtractionResult | null> {
-  const arbiter = options?.arbiter;
-  const arbiterActive = !!arbiter
-    && (arbiter.heuristicEntities.length > 0
-      || arbiter.heuristicRelationships.length > 0
-      || arbiter.existingGraphEntities.length > 0);
+  const tag = options?.logTag ?? "single";
+  const startedAt = Date.now();
+  let stage = "prompt";
+  let responseSummary = "";
 
   try {
     // Build entity context for the prompt — prefer full entities with aliases over bare names
     const entityHint = buildEntityHint(options);
-    const arbiterBlock = arbiterActive ? buildArbiterBlock(arbiter!) : "";
-
-    const tools = arbiterActive ? ARBITER_EXTRACTION_TOOLS : EXTRACTION_TOOLS;
-    const systemPrompt = arbiterActive ? ARBITER_EXTRACTION_SYSTEM_PROMPT : EXTRACTION_SYSTEM_PROMPT;
-    const toolListing = arbiterActive
-      ? "score_salience, extract_entities, extract_relationships, extract_font_colors, and grade_heuristic_candidates"
-      : "score_salience, extract_entities, extract_relationships, and extract_font_colors";
 
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze the exact roleplay passage below. Call ${toolListing} exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${arbiterBlock}\n\n<passage>\n${content}\n</passage>`;
-    const tag = options?.logTag ?? "single";
+    const userContent = `Analyze the exact roleplay passage below. Call score_salience, extract_entities, extract_relationships, and extract_font_colors exactly once each. Use only the text below as evidence. Use empty arrays when nothing qualifies.${entityHint}${aliasBlock}${buildConversationHint(content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}${buildThoughtMarkerHint(options?.thoughtDelimiters)}\n\n<passage>\n${content}\n</passage>`;
     logSidecarDispatch(tag, {
       chunks: 1,
-      arbiter: arbiterActive,
       userContent,
       connectionId: sidecarConnectionId,
       tokenCounter: options?.tokenCounter,
     });
     const sentAt = Date.now();
+    stage = "request";
 
     const response = await generateRawFn({
 
       requestPurpose: "extraction",
       connectionId: sidecarConnectionId,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
       parameters: options?.samplingParameters ?? { temperature: 0.1 },
-      tools,
+      tools: EXTRACTION_TOOLS,
       signal: options?.signal,
     });
-    logSidecarResponse(tag, { ms: Date.now() - sentAt, hasToolCalls: !!response.tool_calls?.length });
+    stage = "response validation";
+    responseSummary = ` ${summarizeSidecarResponse(response)}`;
+    logSidecarResponse(tag, { ms: Date.now() - sentAt, responseSummary });
 
     // Tool calls: parse structured results from tool_calls
     if (response.tool_calls && response.tool_calls.length > 0) {
-      let result = parseToolCallResults(response.tool_calls);
+      validateExtractionTools(response.tool_calls);
+      let result = parseToolCallResults(response.tool_calls, options);
       // Resolve any remaining aliases to canonical names (safety net if LLM used alias)
       if (options?.knownEntities?.length) {
         result = resolveAliasesInResult(result, options.knownEntities);
@@ -809,16 +706,13 @@ export async function extractWithSidecar(
     // Fallback: try parsing the text content as JSON (some providers inline it)
     const json = extractJson(response.content);
     if (!json) {
-      if (options?.throwOnFailure) {
-        throw new Error("sidecar response had no tool_calls and no parseable JSON");
-      }
-      return null;
+      throw new Error(`sidecar response had no tool_calls and no parseable JSON (${summarizeSidecarResponse(response)})`);
     }
 
     return buildResultFromJsonObject(json, options);
   } catch (err) {
     if (options?.throwOnFailure) throw err;
-    console.warn("[memory-cortex] Sidecar extraction failed, falling back to heuristic:", err);
+    console.warn(`[memory-cortex] ${tag}: Sidecar extraction failed, falling back to heuristic (connection=${sidecarConnectionId} stage=${stage} elapsed=${Date.now() - startedAt}ms${responseSummary}):`, err);
     return null;
   }
 }
@@ -845,28 +739,8 @@ function buildAliasReconciliationBlock(
 Persona, character, and world-book definitions establish these alias→canonical name mappings. They take priority over guesses:
 - When the passage uses an alias on the left, use the canonical name on the right in your output (extract_entities, extract_relationships, status_changes, font color attributions).
 - Never emit an entity whose name is one of these aliases. The canonical name is always the correct identifier.
-- In arbiter mode, if a heuristic candidate's name is one of these aliases, you MUST emit a transformed_heuristic_entities entry mapping from the alias to the canonical name.
 ${lines}
 </canonical_aliases>`;
-}
-
-function buildArbiterBlock(arbiter: NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"]): string {
-  if (!arbiter) return "";
-  const sections: string[] = [];
-  if (arbiter.heuristicEntities.length > 0) {
-    const lines = arbiter.heuristicEntities.slice(0, 60).map((e) => `- ${e.name} [${e.type}]`).join("\n");
-    sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
-  }
-  if (arbiter.heuristicRelationships.length > 0) {
-    const lines = arbiter.heuristicRelationships.slice(0, 60).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
-    sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
-  }
-  if (arbiter.existingGraphEntities.length > 0) {
-    const lines = arbiter.existingGraphEntities.slice(0, 100).map((n) => `- ${n}`).join("\n");
-    sections.push(`<existing_graph_entities>\n${lines}\n</existing_graph_entities>`);
-  }
-  if (sections.length === 0) return "";
-  return `\n\nGRADE THESE CANDIDATES via grade_heuristic_candidates:\n${sections.join("\n\n")}`;
 }
 
 /**
@@ -907,7 +781,7 @@ Analyze EACH passage independently and convert it into structured data.
 
 OUTPUT FORMAT
 Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
+{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|destroyed|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}]}]}
 - Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
 - Use empty arrays for any field with nothing to report.
 
@@ -915,43 +789,6 @@ ${EXTRACTION_GLOBAL_RULES}
 - Score and extract each passage in isolation. Do NOT carry information between passages.
 
 ${EXTRACTION_RULES}`;
-
-// Arbiter variant of the batch system prompt: each passage may include
-// candidate records to grade. The output gains a "grading" field per result.
-const BATCH_ARBITER_SYSTEM_PROMPT = `${EXTRACTION_ENGINE_INTRO}
-
-You will receive several roleplay passages, each wrapped in <passage index="N"> tags.
-Some passages are followed by an <arbiter index="N"> block listing candidate
-records to judge. Analyze EACH passage independently AND, when its arbiter
-block is present, grade those candidates.
-
-OUTPUT FORMAT
-Call analyze_passage_batch exactly once with arguments matching this shape:
-{"results":[{"index":<the passage's index>,"importance":<integer 0-10>,"emotional_tones":[],"narrative_flags":[],"key_facts":[],"entities_present":[{"name":"","type":"character|location|item|faction|event|concept","role":"subject|object|present|referenced"}],"relationships_shown":[{"source":"","target":"","type":"ally|enemy|lover|parent|child|sibling|mentor|rival|owns|member_of|located_in|fears|serves|custom","label":"","sentiment":0}],"status_changes":[{"entity":"","change":"injured|healed|died|transformed|betrayed|allied|departed|arrived","detail":""}],"color_attributions":[{"hex_color":"#rrggbb","character_name":"","usage_type":"speech|thought|narration"}],"discovered_aliases":[{"canonical_name":"","alias":"","evidence":""}],"grading":{"rejected_heuristic_entities":[],"transformed_heuristic_entities":[{"from":"","to":""}],"rejected_heuristic_relationships":[{"source":"","target":"","type":""}],"rejected_existing_entities":[]}}]}
-- Emit exactly one results entry per passage, with "index" equal to that passage's index attribute.
-- Use empty arrays for any field with nothing to report.
-- Include "grading" ONLY for passages that had an <arbiter> block. For other passages, omit the grading field entirely.
-
-${EXTRACTION_GLOBAL_RULES}
-- Score and extract each passage in isolation. Do NOT carry information between passages.
-- For grading: judge ONLY the heuristic candidates listed in that passage's <arbiter> block. Confirmation is by omission — silence means the candidate is acceptable.
-  - Reject a heuristic candidate when it falls into any category from the ENTITY RULES "Do NOT extract" list, or when it isn't actually present in that passage.
-  - Transform a heuristic candidate when it refers to a real known entity but uses a different surface form (alias, diminutive, partial name, sentence-start capitalization).
-- For rejected_existing_entities: judge entries from the single batch-level <batch_existing_entities> list (NOT a per-passage list). Flag entries whenever they fall into any category from the ENTITY RULES "Do NOT extract" list, OR when they are aliases of a known canonical character that should never have been persisted as standalone entries. Importance disagreement alone is NOT grounds for rejection.
-
-${EXTRACTION_RULES}`;
-
-// Extract all passages in one LLM request. Results align with input order.
-// Missing or failed results stay null so the caller can apply its fallback
-// policy without issuing more provider requests.
-/** Per-chunk arbiter input for the batched path. Position-parallel to chunks.
- *  existingGraphEntities is intentionally NOT here — it's the same list across
- *  every chunk in a batch, so it's passed once via batchExistingEntities to
- *  avoid 5x prompt-token duplication. */
-export interface BatchArbiterChunk {
-  heuristicEntities: Array<{ name: string; type: string }>;
-  heuristicRelationships: Array<{ source: string; target: string; type: string }>;
-}
 
 export async function extractBatchWithSidecar(
   chunks: Array<{ index: number; content: string }>,
@@ -959,16 +796,9 @@ export async function extractBatchWithSidecar(
   sidecarConnectionId: string,
   options?: {
     characterNames?: string[];
+    participants?: CortexParticipant[];
     knownEntities?: Array<{ name: string; type: string; aliases: string[] }>;
-    /** Position-parallel to `chunks`. Entries may be null when a chunk has
-     *  nothing to grade. When any entry is non-null with content, the batch
-     *  uses the arbiter system prompt and embeds per-passage <arbiter> blocks. */
-    perChunkArbiter?: Array<BatchArbiterChunk | null>;
-    /** Names of entities already in the chat's graph that the sidecar may flag
-     *  via rejected_existing_entities. Rendered once at batch level (not per
-     *  passage) to avoid duplicating the same list 5x in the prompt. Subject
-     *  to the same conservative grading rules. */
-    batchExistingEntities?: string[];
+    thoughtDelimiters?: ThoughtDelimiters;
     /** alias → canonical name mappings from character/persona/world-book
      *  descriptions. Rendered once at batch level (applies to every passage). */
     descriptionAliases?: Array<{ alias: string; canonicalName: string }>;
@@ -981,94 +811,50 @@ export async function extractBatchWithSidecar(
   },
 ): Promise<Array<SidecarExtractionResult | null>> {
   if (chunks.length === 0) return [];
-  // Flatten batch-level existing entities into each per-chunk arbiter input
-  // when the single-chunk extractor is used (it doesn't have a batch level).
-  const singleChunkArbiterFor = (i: number): NonNullable<Parameters<typeof extractWithSidecar>[3]>["arbiter"] | undefined => {
-    const a = options?.perChunkArbiter?.[i];
-    const existing = options?.batchExistingEntities ?? [];
-    if (!a && existing.length === 0) return undefined;
-    return {
-      heuristicEntities: a?.heuristicEntities ?? [],
-      heuristicRelationships: a?.heuristicRelationships ?? [],
-      existingGraphEntities: existing,
-    };
-  };
-
   // One chunk does not benefit from batching.
   if (chunks.length === 1) {
     return [
-      await extractWithSidecar(chunks[0].content, generateRawFn, sidecarConnectionId, {
-        ...options,
-        arbiter: singleChunkArbiterFor(0),
-      }).catch(() => null),
+      await extractWithSidecar(chunks[0].content, generateRawFn, sidecarConnectionId, options),
     ];
   }
 
-  const arbiterActiveByIndex = (options?.perChunkArbiter ?? []).map(
-    (a) => !!a && (a.heuristicEntities.length > 0 || a.heuristicRelationships.length > 0),
-  );
-  const batchExistingActive = (options?.batchExistingEntities ?? []).length > 0;
-  const anyArbiterActive = arbiterActiveByIndex.some(Boolean) || batchExistingActive;
+  const tag = options?.logTag ?? "batch";
+  const startedAt = Date.now();
+  let stage = "prompt";
+  let responseSummary = "";
 
   try {
     const entityHint = buildEntityHint(options);
     // Array position is the prompt index so results map back positionally.
     const passages = chunks
-      .map((c, i) => {
-        const passage = `<passage index="${i}">\n${c.content}\n</passage>`;
-        if (!arbiterActiveByIndex[i]) return passage;
-        const arbiter = options!.perChunkArbiter![i]!;
-        const sections: string[] = [];
-        if (arbiter.heuristicEntities.length > 0) {
-          const lines = arbiter.heuristicEntities.slice(0, 40).map((e) => `- ${e.name} [${e.type}]`).join("\n");
-          sections.push(`<heuristic_entities>\n${lines}\n</heuristic_entities>`);
-        }
-        if (arbiter.heuristicRelationships.length > 0) {
-          const lines = arbiter.heuristicRelationships.slice(0, 40).map((r) => `- ${r.source} —[${r.type}]→ ${r.target}`).join("\n");
-          sections.push(`<heuristic_relationships>\n${lines}\n</heuristic_relationships>`);
-        }
-        const arbiterBlock = `<arbiter index="${i}">\n${sections.join("\n")}\n</arbiter>`;
-        return `${passage}\n${arbiterBlock}`;
-      })
+      .map((c, i) => `<passage index="${i}">\n${c.content}\n</passage>${buildConversationHint(c.content, options?.characterNames ?? [], options?.descriptionAliases, options?.participants)}`)
       .join("\n\n");
 
-    // Existing graph entities are batch-level: the same list applies to every
-    // passage, so we render it once instead of duplicating it per chunk.
-    const batchExisting = options?.batchExistingEntities ?? [];
-    const batchExistingBlock = batchExisting.length > 0
-      ? `\n\n<batch_existing_entities>\n${batchExisting.slice(0, 60).map((n) => `- ${n}`).join("\n")}\n</batch_existing_entities>`
-      : "";
-
-    const systemPrompt = anyArbiterActive ? BATCH_ARBITER_SYSTEM_PROMPT : BATCH_EXTRACTION_SYSTEM_PROMPT;
-    const arbiterInstruction = anyArbiterActive
-      ? " Where an <arbiter> block follows a passage, also populate that passage's grading field per the system prompt. The <batch_existing_entities> list (if present) applies to every passage; flag entries via rejected_existing_entities only when they are clearly not real proper-name entities."
-      : "";
-
     const aliasBlock = buildAliasReconciliationBlock(options?.descriptionAliases);
-    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${arbiterInstruction}${entityHint}${aliasBlock}${batchExistingBlock}\n\n${passages}`;
-    const tag = options?.logTag ?? "batch";
+    const userContent = `Analyze each roleplay passage below independently. Call analyze_passage_batch exactly once with exactly one results entry per passage. Use only the text inside each passage as evidence.${entityHint}${aliasBlock}${buildThoughtMarkerHint(options?.thoughtDelimiters)}\n\n${passages}`;
     logSidecarDispatch(tag, {
       chunks: chunks.length,
-      arbiter: anyArbiterActive,
       userContent,
       connectionId: sidecarConnectionId,
       tokenCounter: options?.tokenCounter,
-      batchExistingCount: (options?.batchExistingEntities ?? []).length,
     });
     const sentAt = Date.now();
+    stage = "request";
 
     const response = await generateRawFn({
 
       requestPurpose: "batch extraction",
       connectionId: sidecarConnectionId,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: BATCH_EXTRACTION_SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
       parameters: options?.samplingParameters ?? { temperature: 0.1 },
       tools: [TOOL_ANALYZE_PASSAGE_BATCH],
     });
     const responseMs = Date.now() - sentAt;
+    stage = "response validation";
+    responseSummary = ` ${summarizeSidecarResponse(response)}`;
 
     // Be defensive here as this is the boundary for provider-normalized data.
     // A malformed/sparse entry should simply be treated as no batch tool call,
@@ -1079,54 +865,67 @@ export async function extractBatchWithSidecar(
     const toolResults = batchToolCall?.args?.results;
     const parsed = Array.isArray(toolResults) ? toolResults : extractJsonArray(response.content);
     const byIndex = new Map<number, any>();
+    const duplicates = new Set<number>();
     if (parsed) {
       for (const item of parsed) {
-        if (item && typeof item.index === "number") byIndex.set(item.index, item);
+        if (item && Number.isInteger(item.index)) {
+          if (byIndex.has(item.index)) duplicates.add(item.index);
+          byIndex.set(item.index, item);
+        }
       }
     }
 
     const results: Array<SidecarExtractionResult | null> = new Array(chunks.length).fill(null);
-    const missing: number[] = [];
+    const failures: Array<{ index: number; reason: unknown }> = [];
     for (let i = 0; i < chunks.length; i++) {
-      const obj = byIndex.get(i);
+      const obj = duplicates.has(i) ? null : byIndex.get(i);
       if (obj) {
-        results[i] = buildResultFromJsonObject(obj, options);
+        try {
+          results[i] = buildResultFromJsonObject(obj, options);
+        } catch (err) { failures.push({ index: i, reason: err }); }
       } else {
-        missing.push(i);
+        failures.push({ index: i, reason: duplicates.has(i) ? "Duplicate passage index"
+          : parsed ? "Missing passage result" : "No parseable batch results" });
       }
     }
     logSidecarResponse(tag, {
       ms: responseMs,
-      hasToolCalls: !!batchToolCall,
-      parsed: chunks.length - missing.length,
-      missing: missing.length,
+      responseSummary,
+      parsed: chunks.length - failures.length,
+      missing: failures.length,
     });
 
-    if (missing.length > 0) {
-      console.warn(`[memory-cortex] ${tag}: ${missing.length}/${chunks.length} passage(s) missing from batch response`);
+    if (failures.length > 0) {
+      console.warn(`[memory-cortex] ${tag}: ${failures.length}/${chunks.length} passage(s) missing or invalid in batch response (connection=${sidecarConnectionId}${responseSummary}):`, failures);
     }
 
     return results;
-  } catch (err: any) {
-    console.warn(`[memory-cortex] ${options?.logTag ?? "batch"} failed (${err?.name ?? "Error"}: ${err?.message ?? err})`);
+  } catch (err: unknown) {
+    console.warn(`[memory-cortex] ${tag}: batch extraction failed (connection=${sidecarConnectionId} stage=${stage} elapsed=${Date.now() - startedAt}ms${responseSummary}):`, err);
     return chunks.map(() => null);
   }
 }
 
 // ─── Diagnostic logging ─────────────────────────────────────────
 
+/** Shape only: never log passage text or the provider's generated content. */
+function summarizeSidecarResponse(response: Awaited<ReturnType<SidecarGenerateFn>>): string {
+  const calls = Array.isArray(response?.tool_calls) ? response.tool_calls : [];
+  const names = calls.slice(0, 20).map((call) => typeof call?.name === "string" ? call.name.slice(0, 100) : "unknown");
+  return `content_chars=${typeof response?.content === "string" ? response.content.length : 0} tool_calls=${JSON.stringify(names)}${calls.length > 20 ? ` (${calls.length} total)` : ""}`;
+}
+
 function logSidecarDispatch(
   tag: string,
   opts: {
     chunks: number;
-    arbiter: boolean;
     userContent: string;
     connectionId: string;
     requestPurpose?: string;
     tokenCounter?: (text: string) => number;
-    batchExistingCount?: number;
   },
 ): void {
+  if (!isCortexDebugEnabled()) return;
   const chars = opts.userContent.length;
   // Prefer real tokenizer when supplied; fall back to char/4 estimate. The
   // estimate is rough but better than silence — and matches what the rest of
@@ -1137,22 +936,20 @@ function logSidecarDispatch(
     `chunks=${opts.chunks}`,
     `tokens≈${tokens}`,
     `chars=${chars}`,
-    opts.arbiter ? "arbiter=on" : "arbiter=off",
   ];
-  if (opts.batchExistingCount && opts.batchExistingCount > 0) {
-    parts.push(`existing=${opts.batchExistingCount}`);
-  }
   console.info(parts.join(" "));
 }
 
 function logSidecarResponse(
   tag: string,
-  opts: { ms: number; hasToolCalls: boolean; parsed?: number; missing?: number },
+  opts: { ms: number; responseSummary: string; parsed?: number; missing?: number },
 ): void {
+  if (!isCortexDebugEnabled()) return;
   const parts = [
     `[memory-cortex] ${tag} ← ${opts.ms}ms`,
-    opts.hasToolCalls ? "tool_calls=yes" : (opts.parsed !== undefined ? `parsed=${opts.parsed}/${opts.parsed + (opts.missing ?? 0)}` : "tool_calls=no"),
+    opts.responseSummary.trim(),
   ];
+  if (opts.parsed !== undefined) parts.push(`parsed=${opts.parsed}/${opts.parsed + (opts.missing ?? 0)}`);
   console.info(parts.join(" "));
 }
 
@@ -1483,20 +1280,26 @@ function validateRelationships(raw: any): ExtractedRelationship[] {
 
 const VALID_FONT_USAGE = new Set(["speech", "thought", "narration"]);
 
+function buildThoughtMarkerHint(markers?: ThoughtDelimiters): string {
+  return markers?.prefix && markers?.suffix
+    ? `\n\nConfigured thought delimiters (formatting data): ${JSON.stringify(markers)}. These indicate thought usage even when they wrap a color tag or contain quotes.` : "";
+}
+
 function validateFontColors(raw: any): SidecarFontColor[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter(
       (c: any) =>
         c &&
-        typeof c.hex_color === "string" &&
+        typeof c.hex_color === "string" && normalizeFontColor(c.hex_color) !== null &&
+        VALID_FONT_USAGE.has(c.usage_type) &&
         typeof c.character_name === "string" &&
         c.character_name.length > 0 &&
         !ENTITY_BLOCKLIST.has(c.character_name.toLowerCase().trim()) &&
         isValidEntityName(c.character_name),
     )
     .map((c: any) => ({
-      hexColor: c.hex_color.toLowerCase().trim(),
+      hexColor: normalizeFontColor(c.hex_color)!,
       characterName: c.character_name.trim(),
       usageType: VALID_FONT_USAGE.has(c.usage_type) ? c.usage_type : "narration",
     }));

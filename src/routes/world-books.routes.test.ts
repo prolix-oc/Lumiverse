@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 
 mock.module("../services/embeddings.service", () => ({
+  getChatMemoryDistanceThreshold: async () => 0,
+  isChatMemoryVectorizationEnabled: () => false,
   deleteWorldBookEntryEmbeddings: async () => {},
   deleteWorldBookEntryEmbeddingsBeforeSourceDelete: async <T>(
     _userId: string,

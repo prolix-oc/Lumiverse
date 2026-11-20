@@ -20,6 +20,15 @@ function writeBuild(dir: string, marker: string, complete = true): void {
   if (complete) writeFileSync(join(dir, 'sw.js'), marker)
 }
 
+function writeMappedBuild(dir: string): void {
+  writeBuild(dir, 'new')
+  const json = JSON.stringify({ imports: { '/assets/stable.js': '/assets/index.js' } })
+  writeFileSync(join(dir, 'importmap.json'), json)
+  for (const entry of ['index.html', 'widget.html']) {
+    writeFileSync(join(dir, entry), `<script type="importmap">${json}</script>`)
+  }
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop()!, { recursive: true, force: true })
@@ -82,6 +91,45 @@ describe('atomic frontend build promotion', () => {
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
     expect(existsSync(staged)).toBe(false)
     expect(existsSync(backup)).toBe(false)
+  })
+
+  for (const missing of ['importmap.json', 'assets/index.js']) {
+    test(`preserves the previous build when a mapped bundle lacks ${missing}`, async () => {
+      const root = makeTempDir()
+      const staged = join(root, 'staged')
+      const dist = join(root, 'dist')
+      writeMappedBuild(staged)
+      writeBuild(dist, 'old')
+      rmSync(join(staged, missing))
+      await expect(promoteFrontendBuild(staged, dist, join(root, 'backup'))).rejects.toThrow('incomplete')
+      expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
+    })
+  }
+
+  test('rejects a widget whose inline map belongs to a different build', async () => {
+    const root = makeTempDir()
+    const staged = join(root, 'staged')
+    writeMappedBuild(staged)
+    writeFileSync(join(staged, 'widget.html'), '<script type="importmap">{"imports":{}}</script>')
+    await expect(promoteFrontendBuild(staged, join(root, 'dist'), join(root, 'backup')))
+      .rejects.toThrow('widget.html import map differs')
+  })
+
+  test('Windows fallback promotes assets, map, both HTML entries, then the worker', async () => {
+    const root = makeTempDir()
+    const staged = join(root, 'staged')
+    const dist = join(root, 'dist')
+    const backup = join(root, 'backup')
+    writeMappedBuild(staged)
+    writeBuild(dist, 'old')
+    const promoted: string[] = []
+    const renamePath: typeof rename = async (source, destination) => {
+      if (source === dist && destination === backup) throw Object.assign(new Error('locked'), { code: 'EPERM' })
+      promoted.push(destination.slice(dist.length + 1))
+      return rename(source, destination)
+    }
+    await promoteFrontendBuild(staged, dist, backup, { platform: 'win32', renamePath, sleep: async () => {} })
+    expect(promoted).toEqual(['assets/index.js', 'importmap.json', 'index.html', 'widget.html', 'sw.js'])
   })
 
   test('atomically copies files when a transient Windows lock blocks the directory rename', async () => {

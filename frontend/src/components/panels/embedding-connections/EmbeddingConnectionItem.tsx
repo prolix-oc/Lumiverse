@@ -1,5 +1,9 @@
+import type { ConnectionPlacement } from '@/lib/connectionPlacement'
+import { useConnectionRow } from '@/components/panels/connection-manager/useConnectionRow'
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
+import { useTranslation } from 'react-i18next'
 import { useEffect, useState } from 'react'
-import { Edit3, Trash2, Zap } from 'lucide-react'
+import { Edit3, Trash2, Zap, GripVertical } from 'lucide-react'
 import clsx from 'clsx'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import { embeddingsApi, type EmbeddingConnectionProfile, type EmbeddingDriverOption } from '@/api/embeddings'
@@ -7,6 +11,7 @@ import EmbeddingConnectionForm, { type EmbeddingConnectionDraft } from './Embedd
 import styles from '../connection-manager/ConnectionItem.module.css'
 
 interface Props {
+  placement?: ConnectionPlacement
   profile: EmbeddingConnectionProfile
   providers: EmbeddingDriverOption[]
   onUpdate: (profile: EmbeddingConnectionDraft) => Promise<boolean>
@@ -14,8 +19,10 @@ interface Props {
   disabled?: boolean
 }
 
-export default function EmbeddingConnectionItem({ profile, providers, onUpdate, onDelete, disabled }: Props) {
-  const [editing, setEditing] = useState(false)
+export default function EmbeddingConnectionItem({ placement = 'list', profile, providers, onUpdate, onDelete, disabled }: Props) {
+  const { t } = useTranslation('panels')
+  const { editing, setEditing, isRecent, ...sortable } = useConnectionRow(profile.id, placement)
+  const { setNodeRef, style } = sortable
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
 
@@ -39,18 +46,25 @@ export default function EmbeddingConnectionItem({ profile, providers, onUpdate, 
   }
 
   return (
-    <div className={styles.item}>
+    <div ref={setNodeRef} style={style} data-dragging={sortable.isDragging || undefined} className={clsx(styles.item, sortable.isDragging && styles.itemDragging)}>
       {editing ? (
         <EmbeddingConnectionForm
           providers={providers}
           profile={profile}
-          onSave={async (next) => { if (await onUpdate(next)) setEditing(false) }}
+          onSave={async (next, folderId = '') => {
+            if (await onUpdate(next)) {
+              saveConnectionFolder('embedding', profile.id, folderId)
+              setEditing(false)
+            }
+          }}
           onCancel={() => setEditing(false)}
         />
       ) : (
         <>
           <div className={styles.itemRow}>
-            <div className={styles.itemBtn} style={{ cursor: 'default' }}>
+            {!isRecent && <button type="button" className={styles.dragHandle} {...sortable.attributes} {...sortable.listeners}
+              aria-label={t('connectionItem.dragToReorder')}><GripVertical size={16} /></button>}
+            <div className={styles.itemBtn} onMouseDown={event => sortable.listeners?.onMouseDown?.(event)} onTouchStart={event => sortable.listeners?.onTouchStart?.(event)} style={{ cursor: 'default' }}>
               <ProviderIcon kind="embedding" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
               <div className={styles.itemInfo}>
                 <span className={styles.itemName}>{profile.name || profile.provider}</span>

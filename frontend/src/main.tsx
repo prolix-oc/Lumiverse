@@ -4,12 +4,14 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router'
 import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
-import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
+import { navigateFromNotification } from './lib/notificationNavigation'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
-import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
+import { computeVisibleViewport, computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
+import { KEYBOARD_VIEWPORT_EVENT } from './lib/keyboardViewport'
 import { installIOSTouchScrollGuard, preventPageTouchZoom } from './lib/iosTouchScroll'
 import { installKeyboardFocusReveal } from './lib/keyboardFocusReveal'
 import { installIOSKeyboardScrollGuard } from './lib/iosKeyboardScroll'
+import { subscribeIOSNativeViewport } from './lib/iosNativeViewport'
 import { installIOSEditableFocusScrollPrevention } from './lib/iosEditableFocus'
 import { rememberRegistration } from './lib/swUpdater'
 import { claimServiceWorkerReload } from './lib/swUpdatePolicy'
@@ -17,13 +19,16 @@ import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { installDisplayPerformanceTelemetry, markDisplayInteractive, markDisplayMilestone } from './lib/displayPerformance'
 import { router } from './router'
+import { installAppNavigation } from './lib/app-navigation'
 import { installStreamDeckHandoffReceiver } from './lib/streamDeckHandoff'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
 import './theme/reset.css'
 import './theme/global.css'
+import { reportNativeCacheReady } from './lib/nativeCache'
 
 installDisplayPerformanceTelemetry('application')
+installAppNavigation(router.navigate)
 installWindowOpenGuard()
 installPwaLifecycleDiagnostics()
 installStreamDeckHandoffReceiver(path => { void router.navigate(path) })
@@ -65,7 +70,7 @@ registerSW({
 // Navigate when a push notification is clicked (SW posts NAVIGATE message)
 navigator.serviceWorker?.addEventListener('message', (event) => {
   if (event.data?.type === 'NAVIGATE') {
-    router.navigate(getSafeInAppNavigationUrl(event.data.url))
+    navigateFromNotification(window.location.href, event.data.url, path => { void router.navigate(path) })
   }
 })
 
@@ -116,6 +121,7 @@ const initialFullHeight = window.visualViewport
 const startedPortrait = window.matchMedia('(orientation: portrait)').matches
 let basePortrait = startedPortrait ? initialFullHeight : 0
 let baseLandscape = startedPortrait ? 0 : initialFullHeight
+let nativeIOSHeight: number | undefined
 
 function syncViewportVars() {
   const root = document.documentElement
@@ -141,12 +147,16 @@ function syncViewportVars() {
   if (!keyboardActive && height > base) base = height
   if (isPortrait) basePortrait = base
   else baseLandscape = base
+  // Native bounds include safe areas and can shrink on an iPad window resize.
+  // Do not let an older WebKit's shortened visual viewport become the full
+  // height, or retain the previous window's maximum after resizing.
+  const fullHeight = nativeIOSHeight ?? base
 
   // Standalone iOS composers prevent native focus scrolling, and the guard
   // below recovers real document scrolling. WebKit can still report transient
   // or stale offsetTop values; do not subtract those from keyboard clearance.
   const keyboardInsetBottom = computeViewportKeyboardInset({
-    fullHeight: base,
+    fullHeight,
     viewportHeight: height,
     offsetTop,
     keyboardActive,
@@ -154,17 +164,31 @@ function syncViewportVars() {
     keyboardMinInset: KEYBOARD_MIN_INSET,
     accessoryMinInset: isIOSStandaloneClient ? IOS_PWA_ACCESSORY_MIN_INSET : KEYBOARD_MIN_INSET,
   })
+  const visibleViewport = computeVisibleViewport({
+    fullHeight,
+    viewportHeight: viewport?.height ?? window.innerHeight,
+    offsetTop: viewport?.offsetTop ?? 0,
+    scale,
+    keyboardInsetBottom,
+    isIOSStandaloneClient,
+  })
 
   root.style.setProperty('--app-viewport-width', `${width}px`)
-  root.style.setProperty('--app-viewport-height', `${height}px`)
-  root.style.setProperty('--app-viewport-offset-top', `${offsetTop}px`)
+  root.style.setProperty('--app-viewport-height', `${Math.round(visibleViewport.height * scale)}px`)
+  root.style.setProperty('--app-viewport-offset-top', `${zoomed ? 0 : Math.round(visibleViewport.offsetTop)}px`)
   root.style.setProperty('--app-viewport-offset-left', `${offsetLeft}px`)
   root.style.setProperty('--app-visual-viewport-width', `${Math.round(viewport?.width ?? window.innerWidth)}px`)
-  root.style.setProperty('--app-visual-viewport-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`)
-  root.style.setProperty('--app-visual-viewport-offset-top', `${Math.round(viewport?.offsetTop ?? 0)}px`)
+  root.style.setProperty('--app-visual-viewport-height', `${Math.round(visibleViewport.height)}px`)
+  root.style.setProperty('--app-visual-viewport-offset-top', `${Math.round(visibleViewport.offsetTop)}px`)
   root.style.setProperty('--app-visual-viewport-offset-left', `${Math.round(viewport?.offsetLeft ?? 0)}px`)
   root.style.setProperty('--app-keyboard-inset-bottom', `${keyboardInsetBottom}px`)
   root.style.setProperty('--app-screen-height', `${Math.round(window.innerHeight)}px`)
+  // Android resizes the WebView for chat, but fullscreen editors keep their
+  // original frame and scroll the caret within the keyboard-visible portion.
+  if (getTauriMobilePlatform() === 'android') {
+    root.style.setProperty('--app-fullscreen-height', `${Math.round(base || height)}px`)
+  }
+  window.dispatchEvent(new Event(KEYBOARD_VIEWPORT_EVENT))
 }
 
 let viewportSyncFrame = 0
@@ -181,6 +205,11 @@ function scheduleViewportSync() {
     syncViewportVars()
   })
 }
+
+subscribeIOSNativeViewport(height => {
+  nativeIOSHeight = height
+  scheduleViewportSync()
+})
 
 scheduleViewportSync()
 window.addEventListener('resize', scheduleViewportSync, { passive: true })
@@ -223,6 +252,7 @@ document.addEventListener('focusout', () => {
 if (isIOSStandaloneClient) {
   installIOSEditableFocusScrollPrevention()
   installIOSKeyboardScrollGuard()
+  installKeyboardFocusReveal()
 }
 
 // Flag standalone PWA mode for CSS targeting.
@@ -323,10 +353,6 @@ document.addEventListener('wheel', (e) => {
 // and small tap movements must retain native click/focus behavior.
 if (isIOSStandalonePwa) {
   installIOSTouchScrollGuard()
-
-  // Ordinary fields need ancestor scrolling because PWA viewport panning is
-  // suppressed. Bounded editors retain native caret/scroll ownership.
-  installKeyboardFocusReveal()
 }
 
 // ── Mobile layout recovery after native popups / backgrounding ──
@@ -372,4 +398,5 @@ void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
     </StrictMode>,
   )
   markDisplayInteractive()
+  reportNativeCacheReady()
 })

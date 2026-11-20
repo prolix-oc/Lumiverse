@@ -76,6 +76,39 @@ function option(name: string) {
 }
 
 describe('SearchableSelect screen reader and keyboard behavior', () => {
+  test('recent shortcuts retain canonical options and have distinct keyboard positions', async () => {
+    await renderPicker({ recentValues: ['beta', 'missing', 'beta'] })
+    const recent = document.querySelector('[role="group"][aria-label="Recently Used"]')!
+    expect(recent.querySelectorAll('[role="option"]').length).toBe(1)
+    expect(document.querySelector('[role="group"][aria-label="Worlds"]')!.querySelectorAll('[role="option"]').length).toBe(3)
+    expect(document.activeElement === option('Beta')).toBe(true)
+    press(option('Beta'), 'ArrowDown')
+    expect(document.activeElement === option('Alpha')).toBe(true)
+    press(option('Alpha'), 'ArrowDown')
+    expect(document.activeElement?.textContent?.trim()).toBe('Beta')
+    expect(recent.contains(document.activeElement)).toBe(false)
+  })
+
+  test('honors saved folder order including Uncategorized and searches folder names', async () => {
+    await renderPicker({
+      forceSearch: true, groupOrder: ['', 'Zebra', 'Alpha'],
+      options: [
+        { value: 'a', label: 'First', group: 'Alpha' },
+        { value: 'z', label: 'Second', group: 'Zebra' },
+        { value: 'u', label: 'Third' },
+      ],
+    })
+    expect(Array.from(document.querySelectorAll('[role="group"]')).map(node => node.getAttribute('aria-label')))
+      .toEqual(['Uncategorized', 'Zebra', 'Alpha'])
+    const input = document.querySelector('input')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(input, 'zebra')
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    })
+    expect(Array.from(document.querySelectorAll('[role="option"]')).map(node => node.textContent?.trim()))
+      .toEqual(['Second'])
+  })
+
   for (const portal of [false, true]) {
     test(`names the list, exposes groups, and moves option focus (portal=${portal})`, async () => {
       const trigger = await renderPicker({ portal })
@@ -171,4 +204,45 @@ describe('SearchableSelect screen reader and keyboard behavior', () => {
     expect(document.activeElement === after).toBe(true)
     expect(document.querySelector('[role="listbox"]')).toBeNull()
   })
+})
+
+
+test('loads once near the scroll boundary and retains a keyboard-accessible retry button', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, loadMoreOnScroll: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')! as HTMLElement
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 600 }, scrollTop: { value: 300, writable: true } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  list.scrollTop = 350
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(1)
+  const more = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Load more')!
+  expect(more.disabled).toBe(false)
+  act(() => more.click())
+  expect(loads).toBe(2)
+})
+
+test('incremental select does not automatically load while busy', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, loading: true, loadMoreOnScroll: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')!
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 200 }, scrollTop: { value: 0 } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  expect(Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Loading…')?.disabled).toBe(true)
+})
+
+
+test('scroll pagination is opt-in for existing picker consumers', async () => {
+  let loads = 0
+  await renderPicker({ hasMore: true, onLoadMore: () => { loads++ } })
+  const list = document.querySelector('[role="listbox"]')!
+  Object.defineProperties(list, { clientHeight: { value: 200 }, scrollHeight: { value: 200 }, scrollTop: { value: 0 } })
+  act(() => list.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+  expect(loads).toBe(0)
+  const more = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Load more')!
+  act(() => more.click())
+  expect(loads).toBe(1)
 })

@@ -128,4 +128,37 @@ describe("baseline sync", () => {
       db.close();
     }
   });
+
+  test("baseline supports Android relay enrollment and preserves direct destination defaults", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      db.run(await Bun.file(join(import.meta.dir, "baseline.sql")).text());
+      db.run(`INSERT INTO "user" (id, name, email) VALUES ('user-1', 'Owner', 'owner@example.test')`);
+      const insert = db.query(`
+        INSERT INTO android_push_destinations
+          (id, user_id, device_id, transport, server_origin, token_hash, registered_at, enrollment_id)
+        VALUES (?, 'user-1', ?, 'fcm', 'https://example.test', ?, 1, ?)
+      `);
+      insert.run("direct-1", "device-1", "hash-1", null);
+      insert.run("direct-2", "device-2", "hash-2", null);
+      expect(db.query(`
+        SELECT delivery_mode, package_name, enrollment_id
+        FROM android_push_destinations WHERE id = 'direct-1'
+      `).get()).toEqual({
+        delivery_mode: "direct",
+        package_name: "chat.lumiverse.prototype",
+        enrollment_id: null,
+      });
+
+      insert.run("relay-1", "device-3", "hash-3", "enrollment-1");
+      db.run("UPDATE android_push_destinations SET delivery_mode = 'relay' WHERE id = 'relay-1'");
+      expect(() => insert.run("relay-2", "device-4", "hash-4", "enrollment-1"))
+        .toThrow("UNIQUE constraint failed");
+      expect(() => db.run("UPDATE android_push_destinations SET delivery_mode = 'invalid' WHERE id = 'relay-1'"))
+        .toThrow("CHECK constraint failed");
+    } finally {
+      db.close();
+    }
+  });
 });

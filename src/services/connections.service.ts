@@ -484,6 +484,7 @@ export async function createConnection(userId: string, input: CreateConnectionPr
       now, now
     );
 
+  eventBus.emit(EventType.CONNECTION_ORGANIZATION_CHANGED, { kind: 'llm' }, userId);
   return getConnection(userId, id)!;
 }
 
@@ -574,6 +575,7 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
 export async function deleteConnection(userId: string, id: string): Promise<boolean> {
   const deleted = getDb().query("DELETE FROM connection_profiles WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
   if (deleted) {
+    eventBus.emit(EventType.CONNECTION_ORGANIZATION_CHANGED, { kind: 'llm' }, userId);
     // Cleanup the connection's secret
     secretsSvc.deleteSecret(userId, connectionSecretKey(id));
     await settingsSvc.deleteSettingAsync(userId, `presetProfile:connection:${id}`);

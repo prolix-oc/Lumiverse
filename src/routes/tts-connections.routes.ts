@@ -68,6 +68,35 @@ app.post("/voices/preview", async (c) => {
   return c.json(result);
 });
 
+app.post("/voices/library", async (c) => {
+  const body = await c.req.json();
+  if (typeof body?.provider !== "string" || !body.provider) return c.json({ error: "provider is required" }, 400);
+  if (body.connection_id !== undefined && (typeof body.connection_id !== "string" || !body.connection_id)) {
+    return c.json({ error: "connection_id must be a non-empty string" }, 400);
+  }
+  for (const field of ["api_key", "api_url"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") return c.json({ error: `${field} must be a string` }, 400);
+  }
+  if (body.page !== undefined && (!Number.isSafeInteger(body.page) || body.page < 0)) {
+    return c.json({ error: "page must be a non-negative integer" }, 400);
+  }
+  if (body.page_size !== undefined && (!Number.isInteger(body.page_size) || body.page_size < 1 || body.page_size > 100)) {
+    return c.json({ error: "page_size must be between 1 and 100" }, 400);
+  }
+  for (const [field, maxLength] of [["search", 200], ["language", 32]] as const) {
+    if (body[field] !== undefined && (typeof body[field] !== "string" || body[field].length > maxLength)) {
+      return c.json({ error: `${field} must be a string of at most ${maxLength} characters` }, 400);
+    }
+  }
+  if (body.gender !== undefined && !["male", "female", "neutral"].includes(body.gender)) {
+    return c.json({ error: "Invalid gender filter" }, 400);
+  }
+  if (body.sort !== undefined && !["trending", "created_date", "cloned_by_count", "usage_character_count_1y"].includes(body.sort)) {
+    return c.json({ error: "Invalid voice library sort" }, 400);
+  }
+  return c.json(await svc.listConnectionVoiceLibrary(c.get("userId"), body));
+});
+
 app.post("/models/preview", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();

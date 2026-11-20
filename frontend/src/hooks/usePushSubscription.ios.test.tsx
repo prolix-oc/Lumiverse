@@ -13,10 +13,11 @@ Object.defineProperties(globalThis, {
 Object.defineProperty(dom.window, '__LUMIVERSE_MOBILE__', { value: true })
 Object.defineProperty(dom.window, '__LUMIVERSE_PLATFORM__', { value: 'ios' })
 let configured = true, available = true
+let delivery: 'direct' | 'relay' = 'direct', relayAvailable = true
 let rows: PushSubscriptionRecord[] = []
 const registration = { deviceId: 'ios-device-12345678', deviceToken: 'ab'.repeat(32), bundleId: 'chat.lumiverse.ios', environment: 'development' }
-const request = mock(async (action: string) => {
-  if (action === 'notifications.status') return { ...registration, available, permission: 'default', reason: available ? null : 'IPA needs push signing' }
+const request = mock(async (action: string, _payload?: Record<string, unknown>) => {
+  if (action === 'notifications.status') return { ...registration, available, relayAvailable, permission: 'default', reason: available ? null : 'IPA needs push signing' }
   if (action === 'notifications.register') return registration
   throw new Error('Unknown native action')
 })
@@ -29,7 +30,8 @@ const subscribeIOS = mock(async () => {
 const unsubscribe = mock(async () => { rows = [] })
 const testPush = mock(async () => ({ success: true, sent: 1 }))
 mock.module('@/api/push', () => ({ pushApi: {
-  getIOSInfo: async () => ({ configured, bundleId: registration.bundleId, reason: configured ? null : 'Server needs an APNs provider key' }),
+  getIOSInfo: async () => ({ configured, bundleId: registration.bundleId, delivery,
+    ...(delivery === 'relay' ? { relayUrl: 'https://apn-relay.lumiverse.chat' } : {}), reason: configured ? null : 'Server needs an APNs provider key' }),
   listSubscriptions: async () => rows, subscribeIOS, unsubscribe, test: testPush,
   getVapidPublicKey: () => { throw new Error('iOS must not request a browser key') },
 } }))
@@ -41,7 +43,7 @@ function Fixture() {
   return null
 }
 beforeEach(async () => {
-  configured = true; available = true; rows = []
+  configured = true; available = true; delivery = 'direct'; relayAvailable = true; rows = []
   request.mockClear(); subscribeIOS.mockClear(); unsubscribe.mockClear(); testPush.mockClear()
   root = createRoot(document.createElement('div'))
 })
@@ -75,7 +77,7 @@ test('missing provider credentials show a native setup error instead of browser 
   expect(current.registrationStatus).toBe('error')
   expect(current.registrationReason).toContain('APNs provider key')
   await expect(current.subscribe()).rejects.toThrow('APNs provider key')
-  expect(request.mock.calls.every(([action]) => action === 'notifications.status')).toBe(true)
+  expect(request.mock.calls.every(([action]) => action === 'notifications.status' || action === 'lifecycle.status')).toBe(true)
 })
 
 test('Personal Team builds report missing app signing before attempting registration', async () => {
@@ -85,4 +87,29 @@ test('Personal Team builds report missing app signing before attempting registra
   expect(current.registrationReason).toBe('IPA needs push signing')
   await expect(current.subscribe()).rejects.toThrow('IPA needs push signing')
   expect(subscribeIOS).not.toHaveBeenCalled()
+})
+
+test('relay enrollment explicitly selects the native verification flow and older IPAs fail with an update message', async () => {
+  delivery = 'relay'
+  await mount()
+  expect(current.registrationStatus).toBe('ready')
+  await act(async () => { await current.subscribe() })
+  expect(request).toHaveBeenCalledWith('notifications.register', { delivery: 'relay', relayUrl: 'https://apn-relay.lumiverse.chat' })
+  relayAvailable = false
+  await act(async () => { await current.refresh() })
+  expect(current.registrationReason).toContain('Update the iOS app')
+})
+
+test('native activation refreshes notification readiness while WebKit still reports hidden', async () => {
+  configured = false
+  await mount()
+  expect(current.registrationStatus).toBe('error')
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+  try {
+    configured = true
+    await act(async () => {
+      window.dispatchEvent(new dom.window.CustomEvent('lumiverse:ios-app-state', { detail: { state: 'active' } }))
+    })
+    expect(current.registrationStatus).toBe('ready')
+  } finally { Reflect.deleteProperty(document, 'visibilityState') }
 })

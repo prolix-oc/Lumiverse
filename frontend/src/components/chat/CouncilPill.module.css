@@ -40,7 +40,7 @@
 }
 
 :global([data-glass]) .indicator {
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
   box-shadow: var(--lumiverse-shadow-md), 0 2px 12px color-mix(in srgb, var(--lumiverse-primary) 20%, transparent);
 }
 

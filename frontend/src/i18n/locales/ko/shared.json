@@ -41,7 +41,8 @@
     "noVoices": "사용 가능한 음성이 없습니다 — 연결 기본값을 사용하십시오",
     "connectionDefault": "연결 기본값",
     "connectionAria": "{{label}} 연결",
-    "voiceAria": "{{label}} 음성"
+    "voiceAria": "{{label}} 음성",
+    "voiceLibrary": "음성 라이브러리"
   },
   "folderDropdown": {
     "noFolder": "폴더 없음",
@@ -85,6 +86,7 @@
     "confirm": "확인"
   },
   "searchableSelect": {
+    "recentlyUsed": "최근 사용",
     "selectedCount": "{{count}}개 선택됨",
     "placeholder": "선택…",
     "searchPlaceholder": "검색…",
@@ -150,5 +152,38 @@
     "noMatching": "일치하는 모델 없음",
     "loading": "모델을 불러오는 중...",
     "emptyDefault": "모델을 찾지 못했습니다. 직접 입력하십시오."
+  },
+  "voiceLibrary": {
+    "title": "ElevenLabs 음성 라이브러리",
+    "hint": "커뮤니티 음성을 찾아 바로 사용하세요. 라이브러리 음성을 API로 사용하려면 ElevenLabs 유료 요금제가 필요합니다.",
+    "search": "이름 또는 설명으로 음성 검색…",
+    "clearSearch": "음성 검색 지우기",
+    "language": "언어",
+    "searchLanguages": "언어 검색…",
+    "allLanguages": "모든 언어",
+    "gender": "성별",
+    "allGenders": "모든 성별",
+    "female": "여성",
+    "male": "남성",
+    "neutral": "중성",
+    "sort": "정렬 기준",
+    "trending": "인기 급상승",
+    "latest": "최신순",
+    "mostUsers": "사용자 수",
+    "mostUsed": "사용량",
+    "loading": "음성 불러오는 중…",
+    "empty": "검색 조건에 맞는 음성이 없습니다. 다른 검색어를 사용하거나 필터를 지우세요.",
+    "loadFailed": "음성 라이브러리를 불러오지 못했습니다.",
+    "retry": "다시 시도",
+    "selected": "선택됨",
+    "creditMultiplier": "{{rate}}배 크레딧",
+    "liveModeration": "실시간 검토",
+    "noticePeriod_one": "{{count}}일 전 사전 통지",
+    "noticePeriod_other": "{{count}}일 전 사전 통지",
+    "preview": "미리 듣기",
+    "previewAria": "{{name}} 미리 듣기",
+    "useVoice": "음성 사용",
+    "useVoiceAria": "{{name}} 사용",
+    "close": "닫기"
   }
 }

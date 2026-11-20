@@ -14,11 +14,10 @@ export interface RegexScriptEvidence {
 
 export type RegexExecTier = 'quarantined' | 'worker'
 
-// Session-scoped overlay. Entries carry a definition fingerprint so that after
-// a script edit the overlay is rebuilt from the server row instead of trusting
-// a stale in-memory entry. Quarantine itself survives edits (the backend keeps
-// the flag and this re-read picks it back up); the fingerprint exists so the
-// overlay and the persisted row cannot drift apart across an edit.
+// Session-scoped local mutations, keyed by definition. Untouched scripts read
+// stored evidence directly: evidence writes do not bump updated_at, so caching
+// those reads would hide metadata-only refetches. Local mutations take priority
+// over server snapshots of the same definition while persistence catches up.
 const sessionEvidence = new Map<string, { definitionKey: string; evidence: RegexScriptEvidence }>()
 
 // Quarantine is mutated from the async pipeline, outside React's knowledge, so
@@ -34,7 +33,8 @@ const evidenceListeners = new Set<() => void>()
 // in pipeline.ts because clearRegexScriptQuarantine() has to reset it, and
 // pipeline.ts already imports this module — importing back the other way would
 // create a cycle. pipeline.ts still owns the actual warning it emits.
-const announcedSkipKeys = new Set<string>()
+type RegexSkipKind = 'quarantined' | 'unavailable'
+const announcedSkipKeys = new Map<string, Set<RegexSkipKind>>()
 
 function definitionKey(script: RegexScript): string {
   return JSON.stringify([
@@ -78,11 +78,9 @@ export function readRegexScriptEvidence(script: RegexScript): RegexScriptEvidenc
   const key = definitionKey(script)
   const entry = sessionEvidence.get(script.id)
   if (entry?.definitionKey === key) return entry.evidence
-  const evidence = readStoredEvidence(script)
-  // Deliberately no notifyEvidenceChanged() here: this runs during render, and
-  // bumping the version from a read would loop useSyncExternalStore consumers.
-  sessionEvidence.set(script.id, { definitionKey: key, evidence })
-  return evidence
+  // Reads must not overwrite a local mutation made with another snapshot.
+  // Multiple message renders can still hold older versions of the same row.
+  return readStoredEvidence(script)
 }
 
 export function getRegexExecTier(script: RegexScript): { tier: RegexExecTier; reason: string } {
@@ -95,11 +93,13 @@ export function isRegexScriptQuarantined(script: RegexScript): boolean {
   return readRegexScriptEvidence(script).quarantined === true
 }
 
-// True the first time a given script is skipped, false afterwards, so the
-// pipeline warns once per script per session instead of on every message.
-export function shouldAnnounceRegexSkip(scriptId: string): boolean {
-  if (announcedSkipKeys.has(scriptId)) return false
-  announcedSkipKeys.add(scriptId)
+// Warn once per script and skip kind per session instead of on every message.
+// A temporary executor failure must not suppress a later quarantine warning.
+export function shouldAnnounceRegexSkip(scriptId: string, kind: RegexSkipKind = 'quarantined'): boolean {
+  const kinds = announcedSkipKeys.get(scriptId) ?? new Set<RegexSkipKind>()
+  if (kinds.has(kind)) return false
+  kinds.add(kind)
+  announcedSkipKeys.set(scriptId, kinds)
   return true
 }
 

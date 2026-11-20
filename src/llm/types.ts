@@ -181,6 +181,8 @@ export function flattenContentForDisplay(
 }
 
 export interface GenerationRequest {
+  /** Internal activity notification for streamed tool arguments; never serialized. */
+  onResponseActivity?: () => void;
   /** Internal observer of the finalized outbound body; never serialized to a provider. */
   onProviderRequest?: import("./request-observer").ProviderRequestObserver;
   messages: LlmMessage[];
@@ -210,6 +212,9 @@ export interface GenerationUsage {
 }
 
 export interface GenerationParameters {
+  /** Google/Vertex input media tokenization detail; not capture size or compression. */
+  media_resolution?: "low" | "medium" | "high" | "unspecified"
+    | "MEDIA_RESOLUTION_LOW" | "MEDIA_RESOLUTION_MEDIUM" | "MEDIA_RESOLUTION_HIGH" | "MEDIA_RESOLUTION_UNSPECIFIED";
   temperature?: number;
   max_tokens?: number;
   top_p?: number;
@@ -309,6 +314,8 @@ export interface AssemblyContext {
   skipPresetProfileBinding?: boolean;
   /** Whether macro handlers may commit side effects. Defaults to true. */
   macroCommit?: boolean;
+  /** Resolve active world info without running prompt blocks or memory retrieval. */
+  worldInfoQuery?: { reserveTokens?: number };
   /** Explicit override: use presetId directly, bypassing profile block states and variable values too. */
   forcePresetId?: boolean;
   generationType: GenerationType;
@@ -327,6 +334,8 @@ export interface AssemblyContext {
   editAndSendContext?: EditAndSendContext;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
   rejectedSwipe?: string;
+  /** Original selected attribution before a regenerate/swipe output slot was staged. */
+  rejectedPresetHistory?: import("../types/preset-history").PresetHistoryTarget;
   /** For continue: source message id of the assistant turn being extended. */
   continueMessageId?: string;
   /** For continue: separator to append to the target in the model prompt and saved reply. */
@@ -356,6 +365,8 @@ export interface AssemblyContext {
   /** Pre-fetched data to avoid redundant DB calls during assembly.
    *  When provided, assembly reads from this instead of querying DB. */
   prefetched?: PrefetchedData;
+  /** Main-process warm Cortex results, captured when an assembly worker is dispatched. */
+  cortexCache?: import("../services/memory-cortex/types").CortexCacheSnapshot;
   /** Optional abort signal. When fired, in-flight embedding requests
    *  (WI vector retrieval) are cancelled and assembly short-circuits with
    *  an AbortError so the caller can unwind cleanly. */
@@ -367,6 +378,7 @@ export interface AssemblyContext {
  * one or more individual DB queries inside `assemblePrompt()`.
  */
 export interface PrefetchedData {
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
   chat: import("../types/chat").Chat;
   messages: import("../types/message").Message[];
   character: import("../types/character").Character;
@@ -520,6 +532,8 @@ export interface AssemblyResult {
   resolvedPreset?: { id: string; name: string; metadata?: Record<string, unknown> };
   /** Whether a directly word-terminated streaming response should lose its final word. */
   trimIncompleteWords?: boolean;
+  /** Collapse the final prompt after extensions have edited its structured messages. */
+  collapseMessages?: boolean;
   /** The resolved assistant prefill text (from promptBias / assistantPrefill / assistantImpersonation).
    *  When set, the last message in `messages` is an assistant message containing this text.
    *  The generate service must prepend this to the LLM response content since the model
@@ -576,12 +590,15 @@ export interface AssemblyResult {
    *  this writer owns; merged via mergeChatMetadata so concurrent user edits
    *  to chat metadata are not clobbered. */
   deferredWiState?: { chatId: string; partial: Record<string, any> };
+  /** Internal worker handoff; the host schedules this after assembly completes. */
+  deferredCortexWarmJob?: import("../services/cortex-warm-worker").CortexWarmJob;
   /** True if the {{lumiaCouncilDeliberation}} macro was resolved during assembly. */
   deliberationHandledByMacro?: boolean;
   /** The macro environment built during assembly — used downstream for regex script macro substitution. */
   macroEnv?: MacroEnv;
   /** Snapshot of the macro environment before chat-history evaluation mutates it. */
   macroEnvSeed?: MacroEnv;
+  variableStateSeed?: import("../utils/variable-checkpoint").VariableStateSeed;
 }
 
 export interface AssemblyBreakdownEntry {

@@ -5,6 +5,7 @@ import type { SpindleManifest } from 'lumiverse-spindle-types'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { DecoratorOptions } from './dom-decorator-service'
 
 type FakeRoot = {
   parentElement: object | null
@@ -314,6 +315,9 @@ mock.module('./display-resolver-registry', () => ({
   registerDisplayResolver: () => () => {},
   unregisterDisplayResolver() {},
   revokeInlineCardWrappingOptOut() {},
+  shouldSkipFormattingHealing: () => false,
+  shouldSkipInlineCardWrapping: () => false,
+  subscribeDisplayFormatting: () => () => {},
 }))
 mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCache() {},
@@ -451,6 +455,7 @@ globalThis.fetch = (async () => new Response(lifecycleModuleSource)) as unknown 
 
 
 const { getLoadedExtensions, loadFrontendExtension, unloadFrontendExtension, unloadAllFrontendExtensions, routeBackendMessage, routeFrontendProcessEvent } = await import('./loader')
+const { flushDomDecoratorWork } = await import('./dom-decorator-service')
 mock.restore()
 trackWindowHandlers = true
 
@@ -466,8 +471,11 @@ const manifest: SpindleManifest = {
 
 type LifecycleContext = {
   ready(): void
+  host: { capabilities: Readonly<Record<string, number>> }
+  uuid: { v4(): string; v7(): string }
   ui: {
     mount(point: string): FakeRoot
+    registerDomDecorator(options: Omit<DecoratorOptions, 'owner' | 'generation'>): () => void
     presetEditor: {
       extension: {
         getState(): unknown
@@ -644,6 +652,54 @@ afterAll(async () => {
 })
 
 describe('loader lifecycle orchestration', () => {
+  test('prepares extension roots and decorators before chat reveal and cleans up during entry', async () => {
+    const extensionId = 'chat_entry_mounts'
+    const createChat = (chatId: string) => {
+      const chat = documentMock.createElement('section')
+      chat.innerHTML = `<div data-spindle-mount="chat_top_dock"></div>
+        <div data-spindle-mount="chat_composer_above" data-spindle-scope="chat:${chatId}:composer-above"></div>`
+      return chat
+    }
+    let chat = createChat('first')
+    let root: FakeRoot | undefined
+    documentMock.body.setAttribute('data-chat-chrome-entering', 'true')
+    documentMock.body.append(chat)
+    lifecycleGlobals.__lifecycleExerciseSetup = (context: LifecycleContext) => {
+      root = context.ui.mount('chat_top_dock')
+      context.ui.registerDomDecorator({
+        mount: 'chat_composer_above',
+        html: '<span data-entry-decorator>Ready before reveal</span>',
+      })
+    }
+    try {
+      await loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
+      flushDomDecoratorWork()
+      expect(documentMock.body.hasAttribute('data-chat-chrome-entering')).toBe(true)
+      expect(root?.parentElement === chat.firstElementChild).toBe(true)
+      expect(chat.querySelector('[data-entry-decorator]')?.textContent).toBe('Ready before reveal')
+
+      // A second chat can replace the first before either entrance finishes.
+      const nextChat = createChat('second')
+      chat.replaceWith(nextChat)
+      chat = nextChat
+      await flushLifecycleTasks()
+      flushDomDecoratorWork()
+      expect(root?.parentElement === chat.firstElementChild).toBe(true)
+      expect(chat.querySelectorAll('[data-entry-decorator]').length).toBe(1)
+
+      await unloadFrontendExtension(extensionId)
+      chat.append(documentMock.createElement('div'))
+      await flushLifecycleTasks()
+      flushDomDecoratorWork()
+      expect(root?.parentElement === null).toBe(true)
+      expect(chat.querySelectorAll('[data-spindle-extension-root]').length).toBe(0)
+    } finally {
+      await unloadFrontendExtension(extensionId)
+      chat.remove()
+      documentMock.body.removeAttribute('data-chat-chrome-entering')
+    }
+  })
+
   test('unload purges retained UI registrations without a live loader record', async () => {
     await unloadFrontendExtension('disabled_without_loaded_record')
 
@@ -825,6 +881,19 @@ describe('loader lifecycle orchestration', () => {
 
       expect(fetchCount).toBe(2)
       expect(getLoadedExtensions().has('reload_after_invalidation')).toBe(true)
+      const context = lifecycleGlobals.__lifecycleContext as LifecycleContext
+      expect(context.host.capabilities['frontend-uuid-v1']).toBe(1)
+      expect(context.uuid.v4()).toMatch(/^uuid-v4-/)
+      expect(context.uuid.v7()).toMatch(/^uuid-v7-/)
+      const retained = context.uuid.v4
+      await unloadFrontendExtension('reload_after_invalidation')
+      expect(() => retained()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+      expect(() => context.uuid.v7()).toThrow('SPINDLE_FRONTEND_INACTIVE')
+      await loadFrontendExtension('reload_after_invalidation', { ...manifest, identifier: 'reload_after_invalidation' })
+      const remounted = lifecycleGlobals.__lifecycleContext as LifecycleContext
+      expect(remounted.uuid).not.toBe(context.uuid)
+      expect(remounted.uuid.v4()).toMatch(/^uuid-v4-/)
+      expect(() => retained()).toThrow('SPINDLE_FRONTEND_INACTIVE')
       await unloadFrontendExtension('reload_after_invalidation')
     } finally {
       globalThis.fetch = originalFetch
@@ -1173,7 +1242,7 @@ test('tab takeover disposes the runtime and rejects retained or newly loaded fro
   const release = activeTab.claim('takeover-account')
   try {
     await loadFrontendExtension('tab_takeover', { ...manifest, identifier: 'tab_takeover' })
-    const context = lifecycleGlobals.__lifecycleContext as { sendToBackend(value: unknown): void }
+    const context = lifecycleGlobals.__lifecycleContext as LifecycleContext & { sendToBackend(value: unknown): void }
     expect(getLoadedExtensions().has('tab_takeover')).toBe(true)
     window.localStorage.setItem('lumiverse:active-tab:takeover-account', 'replacement')
     window.dispatchEvent(new dom.window.StorageEvent('storage', {
@@ -1183,6 +1252,8 @@ test('tab takeover disposes the runtime and rejects retained or newly loaded fro
     expect(getLoadedExtensions().has('tab_takeover')).toBe(false)
     expect(lifecycleGlobals.__lifecycleTeardownCalls).toBe(1)
     expect(() => context.sendToBackend({ type: 'late-write' })).toThrow('Another tab is active')
+    expect(() => context.uuid.v4()).toThrow('Another tab is active')
+    expect(() => context.uuid.v7()).toThrow('Another tab is active')
     await expect(loadFrontendExtension('late_load', manifest)).rejects.toThrow('Another tab is active')
   } finally { release() }
 })

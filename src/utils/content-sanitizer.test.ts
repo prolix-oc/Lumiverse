@@ -105,6 +105,19 @@ describe("stripNonProseTags", () => {
     ).toBe('Before <span style="color: #abc">tinted</span> after');
   });
 
+  test("retains italic and configured thought wrappers around colors but excludes UI islands", () => {
+    const options = { keepFontTags: true, preserveFontInnerTags: ["thinking"] };
+    for (const tag of ["i", "em", "thinking"]) {
+      const colored = `<${tag}><font color="#abc">A private thought.</font></${tag}>`;
+      expect(stripNonProseTags(colored, options)).toBe(colored);
+      expect(stripNonProseTags(`<div>${colored}</div>`, options)).toBe("");
+      expect(stripNonProseTags(`<hud>${colored}</hud>`, options)).toBe("");
+    }
+    const span = '<span class="thought" style="color: #abc"><i>A thought.</i></span>';
+    expect(stripNonProseTags(span, options)).toBe(span);
+    expect(stripNonProseTags('<span style="background-color: #abc">UI</span>', options)).toBe("");
+  });
+
   test("kills font tags that live inside a non-prose block even when keepFontTags is set", () => {
     expect(
       stripNonProseTags(

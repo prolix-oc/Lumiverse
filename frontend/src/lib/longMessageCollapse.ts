@@ -31,6 +31,7 @@ export function getLongMessageCollapseHeight(
 export function isLongMessageCollapseEligible(input: {
   enabled: boolean
   isUser: boolean
+  includeUserMessages?: boolean
   depth?: number
   collapseDepth?: number
   chatId?: string
@@ -44,7 +45,7 @@ export function isLongMessageCollapseEligible(input: {
     : 0
 
   return input.enabled
-    && !input.isUser
+    && (!input.isUser || input.includeUserMessages === true)
     && depth >= collapseDepth
     && !!input.chatId
     && !!input.messageId

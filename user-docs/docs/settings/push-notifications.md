@@ -29,10 +29,30 @@ Lumiverse Desktop registers as a native destination. Its device identity and rev
 
 The iOS app uses Apple's native push service (APNs), so it does not require
 browser Push API support. It needs an IPA signed with the Push Notifications
-capability and a server configured with the matching Apple provider key. Free
+capability. The official app uses the Lumiverse notification relay, automatically
+verifies the device, and encrypts notification previews between your backend and
+your iPhone. A one-time connection alert may appear while enabling notifications.
+Self-built IPAs can use their owner's Apple provider credentials on the backend. Free
 Personal Team signing cannot enable APNs; the iOS notification settings show
 missing app or server configuration. Once configured, notifications can arrive
 while the app is backgrounded or closed.
+
+If iOS cannot decrypt a preview, it shows a generic Lumiverse alert. The relay
+sees delivery metadata and generic Live Activity progress. Enable notifications
+on this iPhone before using Live Activities through the relay.
+
+The Android app also registers a native destination. Completion alerts can show
+the character's avatar; failure alerts show the connection and error details.
+Tapping an alert opens its chat on the enrolled server. Android 13 and later ask
+for notification permission, and Android's app settings offer separate channels
+for completion and error alerts.
+
+When hosting on the phone, native notifications work while the embedded backend
+is running. When connected to a remote server, both the APK and server need
+matching Firebase configuration. Settings reports missing configuration before
+enrollment. Force-stopping the app prevents remote delivery until it is reopened;
+notifications do not keep an on-device generation running after Android stops the
+backend. Changing servers or signing out clears the app's native enrollment.
 
 ---
 

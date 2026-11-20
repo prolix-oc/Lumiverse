@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react'
+import { playHaptic } from '@/lib/haptics'
 
 export interface LongPressPos {
   x: number
@@ -68,7 +69,7 @@ export function useLongPress({ onLongPress, delay = 500, moveThreshold = 10 }: U
       targetRef.current = null
       if (!t) return
       firedRef.current = true
-      navigator.vibrate?.(50)
+      playHaptic('impact', 50)
       t.dispatchEvent(new MouseEvent('contextmenu', {
         bubbles: true,
         cancelable: true,

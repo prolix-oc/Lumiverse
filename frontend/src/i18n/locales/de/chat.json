@@ -64,6 +64,15 @@
     "assistant": "Assistent"
   },
   "input": {
+    "formatting": {
+      "label": "Nachrichtenformatierung",
+      "bold": "Fett",
+      "italic": "Kursiv",
+      "underline": "Unterstrichen",
+      "quotes": "Anführungszeichen",
+      "singleQuotes": "Einfache Anführungszeichen",
+      "parentheses": "Klammern"
+    },
     "placeholder": "Nachricht eingeben\u2026",
     "backHome": "Zurück zur Startseite",
     "regenerate": "Neu generieren",
@@ -276,7 +285,9 @@
     "failedSaveChatPersona": "Persona für diesen Chat konnte nicht gespeichert werden",
     "noPresetForPromptVariables": "Wähle ein Preset, bevor du Prompt-Variablen änderst",
     "failedLoadPromptVariables": "Prompt-Variablen konnten nicht geladen werden",
-    "failedSavePromptVariables": "Prompt-Variablen konnten nicht gespeichert werden"
+    "failedSavePromptVariables": "Prompt-Variablen konnten nicht gespeichert werden",
+    "roomMessageUnconfirmed": "Der Raum hat deine Nachricht nicht bestätigt. Dein Entwurf wurde behalten; prüfe den Chat, bevor du es erneut versuchst.",
+    "messageDraftKept": "Nachricht konnte nicht bestätigt werden — dein Entwurf wurde behalten"
   },
   "addGroupMember": {
     "title": "Gruppenmitglied hinzufügen",
@@ -309,6 +320,22 @@
     "showFewer": "Weniger anzeigen"
   },
   "chatView": {
+    "cortexFailedBatches": "Fehlgeschlagene Stapel: {{count}}",
+    "cortexBatchProgress": "{{current}}/{{total}} Stapel · {{queued}} in Warteschlange",
+    "cortexElapsed": "{{seconds}} s vergangen",
+    "cortexBatchActivity": "Stapel {{batch}} · {{phase}}",
+    "cortexBatchChunks": "Abschnitte: {{count}}",
+    "cortexActiveBatches": "Aktive Speicherstapel",
+    "cortexActivity": {
+      "queued": "In Warteschlange",
+      "waiting": "Warten auf Anbieter",
+      "thinking": "Denkt nach",
+      "responding": "Antwortet",
+      "reviewing": "Prüft",
+      "preparing": "Vorbereitung",
+      "saving": "Speichern",
+      "consolidating": "Konsolidierung"
+    },
     "togglePortraitPanel": "Porträtbereich ein-/ausblenden",
     "exitSelectionMode": "Auswahlmodus beenden",
     "selectMessages": "Nachrichten auswählen",

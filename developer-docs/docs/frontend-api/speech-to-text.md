@@ -14,7 +14,9 @@ external service, or separate model installation is needed for Whistle.
 Feature-detect `ctx.stt` and `ctx.host.capabilities['speech-to-text-v1'] >= 1`.
 `lumiverse-spindle-types` 0.6.39 declares the optional API and exports its options,
 session, transcript, provider, PCM, audio frame, and status types. It remains
-optional for compatibility with older hosts and API mocks.
+optional for compatibility with older hosts and API mocks. Version 0.6.55 declares
+`keywords`, `words`, `onHostActivity`, and `isHostCapturing`; feature-detect them with the
+`speech-to-text-options-v1` capability.
 
 Declare `"media"` in `spindle.json`. `listProviders()` is free; `prepare()`,
 `start()`, and `transcribe()` require that permission. Recording also uses the
@@ -66,6 +68,8 @@ AudioWorklet uses the same fallback capture as chat.
 | `prepare(options?)` | Prepares Whistle's shared runtime/model without a microphone request. Other providers validate availability and require no model preparation. |
 | `start(options?)` | Starts capture immediately and returns a session with `provider`, `ready`, `result`, `stop()`, and `cancel()`. |
 | `transcribe(audio, options?)` | Transcribes supplied audio without a microphone request. Whistle accepts a browser-decodable `Blob` or `{ samples: Float32Array, sampleRate: number }` mono PCM. Connections accept a `Blob`. Web Speech does not support supplied audio. |
+| `onHostActivity(listener)` | Free. Calls `listener(true)` when the chat composer's own microphone session starts and `listener(false)` when it ends. Returns an unsubscribe function. Available with `speech-to-text-options-v1`. |
+| `isHostCapturing()` | Free. `true` while the chat composer's own microphone session is active. Available with `speech-to-text-options-v1`. |
 
 All processing methods accept `provider`, `language`, `connectionId`, `signal`,
 and `onStatus`. Language and connection default to the user's Voice settings.
@@ -95,6 +99,31 @@ const fromPcm = await ctx.stt!.transcribe({
 }, { provider: 'whistle' });
 ```
 
+### Keywords and word timings
+
+With `ctx.host.capabilities['speech-to-text-options-v1'] >= 1`, `transcribe()` also
+accepts two options:
+
+- `keywords`: names and words to favour, such as character names. Up to 500 entries,
+  each 1-100 characters after trimming, without line breaks or NUL characters.
+  Other values reject with `STT_OPTIONS_INVALID`.
+- `words: true`: the transcript also has `words`, a list of `{ word, start, end, probability }`.
+  `start` and `end` are seconds from the start of the supplied audio, `probability` is the
+  decoder's confidence from 0 to 1. Words keep their punctuation (`"one."`).
+
+Only Whistle uses these options. STT connections ignore `keywords` and return no `words`;
+check `transcript.words` before using it. Capture with `start()` does not take them.
+
+```ts
+const transcript = await ctx.stt!.transcribe(audioBlob, {
+  provider: 'whistle',
+  language: 'en',
+  keywords: ['Lumi', 'Seo-yeon'],
+  words: true,
+});
+const unsure = transcript.words?.filter((word) => word.probability < 0.5) ?? [];
+```
+
 Whistle supplied audio is limited to ten minutes and 64 MiB for encoded input.
 PCM sample rates must be between 8 kHz and 192 kHz. Long audio uses sequential
 bounded windows with overlap. Encoded format support follows the host's audio
@@ -110,7 +139,20 @@ pending session promises with `AbortError`. An `AbortSignal` cancels the local
 operation without cancelling another consumer's shared Whistle preparation.
 
 Only one extension recording session can own the microphone in a document at a
-time; another start fails with `STT_BUSY`. Supplied-audio transcription does not
+time; another start fails with `STT_BUSY`. The chat composer's microphone button does
+not take part in this lock. An extension that listens all the time can pause while
+the user dictates with it:
+
+```ts
+const unsubscribe = ctx.stt?.onHostActivity?.((active) => {
+  if (active) pauseListening();
+  else resumeListening();
+});
+```
+
+The composer session counts as active from the button press until its final
+transcription finishes. Recordings started by extensions with `start()` are not
+reported. Unload removes the listener. Supplied-audio transcription does not
 claim microphone ownership. Unload, reload, tab takeover, and `media` permission
 revocation cancel pending operations and suppress late transcripts. Retained
 API references from an unloaded extension reject with `SPINDLE_FRONTEND_INACTIVE`.

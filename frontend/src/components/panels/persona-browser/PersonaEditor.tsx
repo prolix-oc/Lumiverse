@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -103,6 +104,7 @@ export default function PersonaEditor({
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
+  const catalog = useCharacterCatalog()
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const setCharacterPersonaBinding = useStore((s) => s.setCharacterPersonaBinding)
@@ -340,8 +342,8 @@ export default function PersonaEditor({
     [availableTags, t],
   )
   const matchingCharacterCount = useMemo(
-    () => tagBinding ? characters.filter((character) => characterMatchesPersonaTagBinding(character.tags || [], tagBinding)).length : 0,
-    [characters, tagBinding],
+    () => tagBinding ? catalog.filter((character) => characterMatchesPersonaTagBinding(character.tags || [], tagBinding)).length : 0,
+    [catalog, tagBinding],
   )
   const matchingActivePersonaIds = useMemo(
     () => activeCharacter ? getMatchingPersonaTagBindingIds(allPersonas, personaTagBindings, activeCharacter.tags || []) : [],

@@ -30,6 +30,8 @@ export default function ExpressionDisplay() {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
   const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const savedExpression = activeChatMetadata?.active_expression
   const currentExpression = useStore((s) => s.currentExpression)
   const currentExpressionImageId = useStore((s) => s.currentExpressionImageId)
   const expressionCharacterId = useStore((s) => s.expressionCharacterId)
@@ -58,12 +60,14 @@ export default function ExpressionDisplay() {
 
   // Fetch expression config directly from API (store character data may be stale)
   const [exprConfig, setExprConfig] = useState<ExpressionConfig | null>(null)
+  const [loadedConfigCharId, setLoadedConfigCharId] = useState<string | null>(null)
   const [multiCharacterGroups, setMultiCharacterGroups] = useState<ExpressionGroups>({})
   const [configVersion, setConfigVersion] = useState(0)
   const resolvedCharId = expressionCharacterId || activeCharacterId
 
   // Refetch when character is edited (e.g. expressions saved in editor)
   useEffect(() => {
+    setLoadedConfigCharId(null)
     if (!resolvedCharId) return
     const unsub = wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string }) => {
       if (payload.id === resolvedCharId) {
@@ -79,13 +83,17 @@ export default function ExpressionDisplay() {
       setMultiCharacterGroups({})
       return
     }
+    let cancelled = false
     Promise.all([
       expressionsApi.get(resolvedCharId).catch(() => null),
       expressionsApi.getGroups(resolvedCharId).catch(() => ({} as ExpressionGroups)),
     ]).then(([config, groups]) => {
+      if (cancelled) return
+      setLoadedConfigCharId(resolvedCharId)
       setExprConfig(config)
       setMultiCharacterGroups(groups)
     })
+    return () => { cancelled = true }
   }, [resolvedCharId, configVersion])
 
   // Track the last resolved character+config pair to avoid loops
@@ -103,25 +111,26 @@ export default function ExpressionDisplay() {
 
   // Resolve default expression when config loads or character/chat changes
   useEffect(() => {
-    if (!activeChatId || !hasExpressions || !exprConfig || !resolvedCharId) return
+    if (!activeChatId || activeChatMetadata === null || !hasExpressions || !exprConfig || !resolvedCharId || loadedConfigCharId !== resolvedCharId) return
 
-    // Don't override if an expression was already restored (e.g. from chat metadata)
+    const configKey = `${activeChatId}:${resolvedCharId}:${savedExpression ?? ''}:${exprConfig.defaultExpression}:${Object.keys(exprConfig.mappings).join(',')}`
+    // Preserve live detection and manual choices that arrived during loading.
     const { currentExpression: existing, expressionCharacterId: existingCharId } = useStore.getState()
     if (existing && existingCharId === resolvedCharId) {
-      lastResolvedKey.current = `${resolvedCharId}:${exprConfig.defaultExpression}:${Object.keys(exprConfig.mappings).join(',')}`
+      lastResolvedKey.current = configKey
       return
     }
 
-    // Build a key from character + config identity to detect real changes
-    const configKey = `${resolvedCharId}:${exprConfig.defaultExpression}:${Object.keys(exprConfig.mappings).join(',')}`
     if (lastResolvedKey.current === configKey) return
     lastResolvedKey.current = configKey
 
-    const fallback = resolveExpression(exprConfig)
+    const fallback = resolveExpression(exprConfig,
+      typeof savedExpression === 'string' && exprConfig.mappings[savedExpression]
+        ? { label: savedExpression, imageId: exprConfig.mappings[savedExpression] } : null)
     if (fallback) {
       setActiveExpression(fallback.label, fallback.imageId, resolvedCharId)
     }
-  }, [activeChatId, hasExpressions, exprConfig, resolvedCharId, setActiveExpression])
+  }, [activeChatId, activeChatMetadata, hasExpressions, exprConfig, resolvedCharId, loadedConfigCharId, setActiveExpression, savedExpression])
 
   // ── Group expression config fetching ──
   const [groupConfigs, setGroupConfigs] = useState<Map<string, ExpressionConfig>>(new Map())

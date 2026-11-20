@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, type ReactNode } from 'react'
+import { useRef, useEffect, useEffectEvent, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { getUiScale } from '@/lib/uiScale'
 import clsx from 'clsx'
@@ -57,11 +57,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
   const instanceIdRef = useRef<symbol>(null as unknown as symbol)
   if (instanceIdRef.current === null) instanceIdRef.current = Symbol('ContextMenu')
 
-  // Keep the latest onClose accessible from the module-level registry without
-  // re-running the open/close effect whenever an inline `() => setX(null)`
-  // onClose prop gets a new identity.
-  const onCloseRef = useRef(onClose)
-  useEffect(() => { onCloseRef.current = onClose })
+  const dismissFromEffect = useEffectEvent(() => onClose())
 
   // Enforce the single-menu invariant. When this instance transitions to
   // visible, close every other registered menu and register ourselves. On
@@ -72,7 +68,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     for (const [key, close] of Array.from(openMenus)) {
       if (key !== me) close()
     }
-    openMenus.set(me, () => onCloseRef.current())
+    openMenus.set(me, () => dismissFromEffect())
     return () => {
       openMenus.delete(me)
     }
@@ -92,10 +88,10 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     const openedAt = performance.now()
     const handleDown = (e: MouseEvent | PointerEvent) => {
       if (performance.now() - openedAt < 150) return
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (ref.current && !ref.current.contains(e.target as Node)) dismissFromEffect()
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') dismissFromEffect()
     }
     // Dismiss on scroll, but only when the scroll moves the region the menu is
     // anchored to. Scroll events don't bubble, so capture phase hears every
@@ -114,7 +110,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
         target === document.documentElement ||
         target === document.body
       ) {
-        onClose()
+        dismissFromEffect()
         return
       }
       if (!(target instanceof Element)) return
@@ -126,7 +122,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
         position.y >= rect.top &&
         position.y <= rect.bottom
       ) {
-        onClose()
+        dismissFromEffect()
       }
     }
     document.addEventListener('mousedown', handleDown)
@@ -139,7 +135,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
       document.removeEventListener('keydown', handleKey)
       window.removeEventListener('scroll', handleScroll, true)
     }
-  }, [position, onClose])
+  }, [position])
 
   // Clamp to viewport.
   //

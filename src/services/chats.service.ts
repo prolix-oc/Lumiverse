@@ -1,18 +1,21 @@
+import { isDeepStrictEqual } from "node:util";
 import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
-import { executeDatabaseOperation } from "../db/execution";
+import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
 import { createHash } from "node:crypto";
-import { shieldMessageLiterals } from "../macros/message-literals";
-import { getDatabasePath, getDb } from "../db/connection";
+import { shieldMessageLiterals, withMessageLiteralExtra, type MessageLiteralContent } from "../macros/message-literals";
+import type { VariableValues } from "../utils/variable-checkpoint";
+import { getDatabasePath, getDb, getDbGeneration, onDbReset } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers, getCharacterAsync } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Character } from "../types/character";
-import type { Chat, ChatAppearanceAction, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import type { Chat, ChatAppearanceAction, ConditionalChatMetadataInput, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type {
   Message,
+  DisplayMessageSource,
   CreateMessageInput,
   UpdateMessageInput,
   ChatMessageSearchResult,
@@ -22,6 +25,9 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import type { EditAndSendContext } from "../llm/types";
 import { EditAndSendContextError } from "../llm/types";
 import { readMessageRevision } from "../utils/message-revision";
+import { prepareNativeSwipeVariablesWithDb, preserveSwipeVariablesSql, readVariableBoundary, remapSwipeVariableOwnerWithDb, reconcileSwipeVariablesWithDb, setSwipeVariablesWithDb, trackVariableWrite, type ReconcileVariableOptions, type VariableBoundary, type SetSwipeVariablesInput } from "../db/swipe-variable-state";
+import { normalizeSpindleMessageMetadata } from "../utils/message-metadata";
+import { getMessageRole } from "../utils/message-role";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as audioSvc from "./audio.service";
@@ -58,6 +64,20 @@ function isHiddenFromRecent(metadata: Record<string, any>): boolean {
 
 function isGroupMetadata(metadata: Record<string, any>): boolean {
   return metadata.group === true || metadata.group === 1;
+}
+
+/** Saved home visibility applies to every recent-chat consumer, including
+ * native widgets and integrations that don't send landing-page query options.
+ */
+function readHiddenRecentCharacterIds(userId: string, additionalIds: string[] = []): Set<string> {
+  const row = getDb().query("SELECT value FROM settings WHERE user_id = ? AND key = ?")
+    .get(userId, "landingHiddenCharacterIds") as { value: string } | null;
+  let saved: unknown;
+  try { saved = row ? JSON.parse(row.value) : []; } catch { saved = []; }
+  return new Set([
+    ...(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string" && id.length > 0) : []),
+    ...additionalIds,
+  ]);
 }
 
 function getGroupMemberIds(metadata: Record<string, any>): string[] {
@@ -189,7 +209,7 @@ function normalizeReasoningDurationEntries(
 ): (number | null)[] {
   const normalized = Array.isArray(value)
     ? value.slice(0, swipeCount).map((entry) =>
-        typeof entry === "number" && Number.isFinite(entry) && entry > 0
+        typeof entry === "number" && Number.isFinite(entry) && entry >= 0
           ? entry
           : null,
       )
@@ -252,6 +272,8 @@ function normalizeStoredMessageExtra(
       ? legacySwipeId
       : 0;
   const normalized: Record<string, unknown> = { ...(extra || {}) };
+  if (Array.isArray(normalized.variableStateBySwipe)) normalized.variableStateBySwipe = normalizeObjectEntries(normalized.variableStateBySwipe, safeSwipeCount);
+  if (normalized.spindle_metadata !== undefined) normalized.spindle_metadata = normalizeSpindleMessageMetadata(normalized.spindle_metadata, safeSwipeCount);
   const reasoningBySwipe = normalizeReasoningEntries(
     normalized.reasoningBySwipe,
     safeSwipeCount,
@@ -301,7 +323,7 @@ function normalizeStoredMessageExtra(
   } else if (
     typeof normalized.reasoningDuration === "number" &&
     Number.isFinite(normalized.reasoningDuration) &&
-    normalized.reasoningDuration > 0
+    normalized.reasoningDuration >= 0
   ) {
     reasoningDurationBySwipe[safeLegacySwipeId] = normalized.reasoningDuration;
   }
@@ -419,7 +441,7 @@ function projectActiveSwipeExtra(
   if (
     typeof activeReasoningDuration === "number" &&
     Number.isFinite(activeReasoningDuration) &&
-    activeReasoningDuration > 0
+    activeReasoningDuration >= 0
   ) {
     projected.reasoningDuration = activeReasoningDuration;
   } else {
@@ -464,6 +486,15 @@ function removeSwipeScopedExtraEntry(
   removedSwipeId: number,
 ): Record<string, unknown> {
   const normalized = normalizeStoredMessageExtra(extra, swipeCount, legacySwipeId);
+  if (Array.isArray(normalized.variableStateBySwipe)) {
+    const records = [...normalized.variableStateBySwipe]; records.splice(removedSwipeId, 1);
+    normalized.variableStateBySwipe = records;
+  }
+  const spindleMetadata = normalized.spindle_metadata as Record<string, unknown> | undefined;
+  if (Array.isArray(spindleMetadata?.preset_contexts)) {
+    const contexts = [...spindleMetadata.preset_contexts]; contexts.splice(removedSwipeId, 1);
+    normalized.spindle_metadata = { ...spindleMetadata, preset_contexts: contexts };
+  }
   if (Array.isArray(normalized.promptActivationBySwipe)) {
     const entries = [...normalized.promptActivationBySwipe];
     entries.splice(removedSwipeId, 1);
@@ -581,6 +612,7 @@ const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
   "generationOutcomeBySwipe",
   "usageBySwipe",
   "reasoningCarrierBySwipe",
+  "variableStateBySwipe",
 ] as const;
 
 /**
@@ -609,6 +641,9 @@ function preserveSwipeScopedExtraArrays(
 ): Record<string, unknown> {
   if (!stored) return incoming;
   const merged = { ...incoming };
+  // Variable checkpoints are host-owned; echoed message extras cannot replace them.
+  if (stored.variableStateBySwipe !== undefined) merged.variableStateBySwipe = stored.variableStateBySwipe;
+  else delete merged.variableStateBySwipe;
   for (const key of SWIPE_SCOPED_EXTRA_ARRAY_KEYS) {
     if (merged[key] === undefined && stored[key] !== undefined) {
       merged[key] = stored[key];
@@ -692,6 +727,7 @@ export function listRecentChats(
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: RecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
+  const hiddenCharacterIds = readHiddenRecentCharacterIds(userId);
 
   const rows = withRecentChatRecovery("loading recent chats", () =>
     db.query(`
@@ -712,7 +748,8 @@ export function listRecentChats(
 
   const parsedRows = rows
     .map((row: any) => ({ ...row, metadata: parseMetadataObject(row.metadata) }))
-    .filter((row: any) => !isHiddenFromRecent(row.metadata));
+    .filter((row: any) => !isHiddenFromRecent(row.metadata)
+      && (isGroupMetadata(row.metadata) || !hiddenCharacterIds.has(row.character_id)));
 
   const filteredRows = searchTerm
     ? parsedRows.filter((row: any) => {
@@ -811,17 +848,56 @@ function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentCh
   }]));
 }
 
+// A bounded, disposable read model. SQLite's connection change counter covers
+// local writes; data_version covers supervised-worker and other connections.
+// Unlike event-only invalidation this also sees imports, cascades and direct SQL.
+const recentSummaryCache = new Map<string, { version: string; rows: any[] }>();
+const recentSortedCache = new WeakMap<any[], Map<string, any[]>>();
+onDbReset(() => recentSummaryCache.clear());
+
+function recentChatSummaryRows(userId: string): any[] {
+  const db = getDb();
+  const changeState = db.query('SELECT total_changes() AS changes, data_version FROM pragma_data_version')
+    .get() as { data_version: number; changes: number };
+  const version = `${getDbGeneration()}:${changeState.data_version}:${changeState.changes}`;
+  const cached = recentSummaryCache.get(userId);
+  if (cached?.version === version) return cached.rows;
+  const rows = withRecentChatRecovery("loading grouped recent chats", () => db.query(`
+    SELECT c.id, c.character_id, c.name, c.metadata, c.created_at, c.updated_at,
+      ch.name AS character_name
+    FROM chats c LEFT JOIN characters ch ON ch.id = c.character_id
+    WHERE c.user_id = ? AND c.character_id IS NOT NULL ORDER BY c.updated_at DESC
+  `).all(userId) as any[]).map(row => {
+    const metadata = parseMetadataObject(row.metadata);
+    // Retain only the grouping/filter inputs, never arbitrary extension data.
+    return { ...row, metadata: {
+      group: metadata.group, character_ids: metadata.character_ids,
+      branched_from: metadata.branched_from, hidden_from_recent: metadata.hidden_from_recent,
+      multiplayer: metadata.multiplayer,
+    } };
+  });
+  recentSummaryCache.delete(userId);
+  // Bound cache memory independently of account/library size.
+  if (rows.length <= 20_000 && JSON.stringify(rows).length <= 2_000_000) recentSummaryCache.set(userId, { version, rows });
+  while (recentSummaryCache.size > 4) recentSummaryCache.delete(recentSummaryCache.keys().next().value!);
+  return rows;
+}
+
 export function listRecentChatsGrouped(
   userId: string,
   pagination: PaginationParams,
   options: GroupedRecentChatOptions = {},
+  /** Internal callers may reuse a just-read, server-owned settings snapshot. */
+  savedHiddenCharacterIds?: string[],
 ): PaginatedResult<GroupedRecentChat> {
   const db = getDb();
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: GroupedRecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
   const favoriteCharacterIds = new Set(options.favoriteCharacterIds ?? []);
-  const hiddenCharacterIds = new Set(options.hiddenCharacterIds ?? []);
+  const hiddenCharacterIds = savedHiddenCharacterIds === undefined
+    ? readHiddenRecentCharacterIds(userId, options.hiddenCharacterIds)
+    : new Set([...savedHiddenCharacterIds, ...(options.hiddenCharacterIds ?? [])]);
   const isDefaultRecentSort = !searchTerm
     && favoriteCharacterIds.size === 0
     && sort === 'recent'
@@ -829,127 +905,118 @@ export function listRecentChatsGrouped(
 
   // Parse metadata in JS so a single malformed row cannot make SQLite abort
   // the landing-page recent-chat query while evaluating json_extract().
-  const rows = withRecentChatRecovery("loading grouped recent chats", () =>
-    isDefaultRecentSort
-      ? db.query(`
-          SELECT id, character_id, name, metadata, updated_at
-          FROM chats
-          WHERE user_id = ? AND character_id IS NOT NULL
-          ORDER BY updated_at DESC
-        `).all(userId) as any[]
-      : db.query(`
-          SELECT
-            c.id,
-            c.character_id,
-            c.name,
-            c.metadata,
-            c.created_at,
-            c.updated_at,
-            ch.name AS character_name,
-            ch.avatar_path AS character_avatar_path,
-            ch.image_id AS character_image_id,
-            ch.extensions AS character_extensions
-          FROM chats c
-          LEFT JOIN characters ch ON ch.id = c.character_id
-          WHERE c.user_id = ? AND c.character_id IS NOT NULL
-          ORDER BY c.updated_at DESC
-        `).all(userId) as any[]
-  );
+  const rows = recentChatSummaryRows(userId);
 
   // Parse metadata first, then filter out chats the user has explicitly
   // hidden from the landing-page recent list. Build the lineage lookup from
   // the full set so forking/grouping resolution stays correct even when a
   // hidden chat sits in a group's ancestry.
-  const allParsedRows = rows.map((row) => {
-    const metadata = parseMetadataObject(row.metadata);
-    const isGroup = isGroupMetadata(metadata);
-    return { ...row, metadata, isGroup, groupKey: null as string | null };
-  });
-  const parsedRows = allParsedRows.filter((row) => {
-    if (isHiddenFromRecent(row.metadata)) return false;
-    // Character visibility applies only to solo cards. Group chats remain
-    // chat-scoped entities even when one of their members is hidden from home.
-    return row.isGroup || !hiddenCharacterIds.has(row.character_id);
-  });
+  const queryKey = JSON.stringify([searchTerm, sort, direction, [...favoriteCharacterIds].sort(), [...hiddenCharacterIds].sort()]);
+  const sortedCache = recentSortedCache.get(rows) ?? new Map<string, any[]>();
+  recentSortedCache.set(rows, sortedCache);
+  const buildSortedRows = (): any[] => {
+    const allParsedRows = rows.map((row) => {
+      const metadata = row.metadata;
+      const isGroup = isGroupMetadata(metadata);
+      return { ...row, metadata, isGroup, groupKey: null as string | null };
+    });
+    const parsedRows = allParsedRows.filter((row) => {
+      if (isHiddenFromRecent(row.metadata)) return false;
+      // Character visibility applies only to solo cards. Group chats remain
+      // chat-scoped entities even when one of their members is hidden from home.
+      return row.isGroup || !hiddenCharacterIds.has(row.character_id);
+    });
 
-  const soloCounts = new Map<string, number>();
-  const groupCounts = new Map<string, number>();
-  for (const row of parsedRows) {
-    if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
-  }
-
-  // Build a metadata lookup so we can resolve each group chat's lineage root.
-  // Branches inherit the root's member-set key — without this, mutating the
-  // parent's membership (or a branch's) after forking pushes the branch into
-  // a separate landing-page entry, which users perceive as "new group chats
-  // spawning on every fork."
-  const metadataById = new Map<string, Record<string, any>>();
-  for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
-
-  const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
-    const visited = new Set<string>([rowId]);
-    let currentMeta = metadata;
-    for (let i = 0; i < 64; i++) {
-      const parentId = typeof currentMeta?.branched_from === "string" ? currentMeta.branched_from : null;
-      if (!parentId || visited.has(parentId)) break;
-      const parentMeta = metadataById.get(parentId);
-      if (!parentMeta || !isGroupMetadata(parentMeta)) break;
-      visited.add(parentId);
-      currentMeta = parentMeta;
+    const soloCounts = new Map<string, number>();
+    const groupCounts = new Map<string, number>();
+    for (const row of parsedRows) {
+      if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
     }
-    return getGroupMemberKey(currentMeta);
-  };
 
-  for (const row of parsedRows) {
-    if (!row.isGroup) continue;
-    const groupKey = resolveGroupDedupKey(row.id, row.metadata);
-    row.groupKey = groupKey;
-    if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
-  }
+    // Build a metadata lookup so we can resolve each group chat's lineage root.
+    // Branches inherit the root's member-set key — without this, mutating the
+    // parent's membership (or a branch's) after forking pushes the branch into
+    // a separate landing-page entry, which users perceive as "new group chats
+    // spawning on every fork."
+    const metadataById = new Map<string, Record<string, any>>();
+    for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
 
-  // Dedup on the rows pre-sorted by updated_at DESC so the surviving row
-  // is always the most recent chat per solo character / group member set.
-  const seenSoloCharacterIds = new Set<string>();
-  const seenGroupKeys = new Set<string>();
-  const dedupedRows = parsedRows.filter((row) => {
-    if (row.isGroup) {
-      if (!row.groupKey) return true;
-      if (seenGroupKeys.has(row.groupKey)) return false;
-      seenGroupKeys.add(row.groupKey);
+    const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
+      const visited = new Set<string>([rowId]);
+      let currentMeta = metadata;
+      for (let i = 0; i < 64; i++) {
+        const parentId = typeof currentMeta?.branched_from === "string" ? currentMeta.branched_from : null;
+        if (!parentId || visited.has(parentId)) break;
+        const parentMeta = metadataById.get(parentId);
+        if (!parentMeta || !isGroupMetadata(parentMeta)) break;
+        visited.add(parentId);
+        currentMeta = parentMeta;
+      }
+      return getGroupMemberKey(currentMeta);
+    };
+
+    for (const row of parsedRows) {
+      if (!row.isGroup) continue;
+      const groupKey = resolveGroupDedupKey(row.id, row.metadata);
+      row.groupKey = groupKey;
+      if (groupKey) groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
+    }
+
+    // Dedup on the rows pre-sorted by updated_at DESC so the surviving row
+    // is always the most recent chat per solo character / group member set.
+    const seenSoloCharacterIds = new Set<string>();
+    const seenGroupKeys = new Set<string>();
+    const dedupedRows = parsedRows.filter((row) => {
+      if (row.isGroup) {
+        if (!row.groupKey) return true;
+        if (seenGroupKeys.has(row.groupKey)) return false;
+        seenGroupKeys.add(row.groupKey);
+        return true;
+      }
+      if (seenSoloCharacterIds.has(row.character_id)) return false;
+      seenSoloCharacterIds.add(row.character_id);
       return true;
-    }
-    if (seenSoloCharacterIds.has(row.character_id)) return false;
-    seenSoloCharacterIds.add(row.character_id);
-    return true;
-  });
+    });
 
-  const displayName = (row: any): string => {
-    if (row.isGroup) return (row.name || row.character_name || '').toString();
-    return (row.character_name || row.name || '').toString();
+    const displayName = (row: any): string => {
+      if (row.isGroup) return (row.name || row.character_name || '').toString();
+      return (row.character_name || row.name || '').toString();
+    };
+
+    const filteredRows = searchTerm
+      ? dedupedRows.filter((row) => {
+          const chatName = (row.name || '').toLowerCase();
+          const charName = (row.character_name || '').toLowerCase();
+          return chatName.includes(searchTerm) || charName.includes(searchTerm);
+        })
+      : dedupedRows;
+
+    const sign = direction === 'asc' ? 1 : -1;
+    const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
+      const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
+      const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
+      if (aFavorite !== bFavorite) return bFavorite - aFavorite;
+      if (sort === 'name') {
+        return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
+      }
+      const aVal = sort === 'created' ? (a.created_at ?? 0) : (a.updated_at ?? 0);
+      const bVal = sort === 'created' ? (b.created_at ?? 0) : (b.updated_at ?? 0);
+      return sign * (aVal - bVal);
+    });
+    return sortedRows.map(row => ({ ...row, chat_count: row.isGroup
+      ? (row.groupKey ? groupCounts.get(row.groupKey) ?? 1 : 1)
+      : soloCounts.get(row.character_id) ?? 1 }));
   };
-
-  const filteredRows = searchTerm
-    ? dedupedRows.filter((row) => {
-        const chatName = (row.name || '').toLowerCase();
-        const charName = (row.character_name || '').toLowerCase();
-        return chatName.includes(searchTerm) || charName.includes(searchTerm);
-      })
-    : dedupedRows;
-
-  const sign = direction === 'asc' ? 1 : -1;
-  const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
-    const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
-    const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
-    if (aFavorite !== bFavorite) return bFavorite - aFavorite;
-    if (sort === 'name') {
-      return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
-    }
-    const aVal = sort === 'created' ? (a.created_at ?? 0) : (a.updated_at ?? 0);
-    const bVal = sort === 'created' ? (b.created_at ?? 0) : (b.updated_at ?? 0);
-    return sign * (aVal - bVal);
-  });
+  let sortedRows = sortedCache.get(queryKey);
+  if (!sortedRows) {
+    sortedRows = buildSortedRows();
+    if (sortedCache.size >= 4) sortedCache.delete(sortedCache.keys().next().value!);
+    sortedCache.set(queryKey, sortedRows);
+  }
   const pageRows = sortedRows.slice(pagination.offset, pagination.offset + pagination.limit);
-  const characterInfoById = isDefaultRecentSort ? loadRecentChatCharacterInfo(db, pageRows) : null;
+  // Avatars and extension blobs do not participate in filtering or sorting.
+  // Hydrate them once per returned character, including the favorites path.
+  const characterInfoById = loadRecentChatCharacterInfo(db, pageRows);
 
   return {
     data: pageRows.map((row: any) => {
@@ -965,7 +1032,7 @@ export function listRecentChatsGrouped(
         latest_chat_id: row.id,
         latest_chat_name: row.name || '',
         updated_at: row.updated_at,
-        chat_count: isGroup ? (row.groupKey ? groupCounts.get(row.groupKey) ?? 1 : 1) : (soloCounts.get(row.character_id) ?? 1),
+        chat_count: row.chat_count,
         is_group: isGroup,
         multiplayer: !!metadata?.multiplayer,
         ...(isGroup && getGroupMemberIds(metadata).length > 0 ? {
@@ -1129,8 +1196,8 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
 let _stmtChatById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtChatByIdGen = -1;
 
-export async function getChatAsync(userId: string, id: string): Promise<Chat | null> {
-  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } });
+export async function getChatAsync(userId: string, id: string, options?: DatabaseExecutionOptions): Promise<Chat | null> {
+  const row = await executeDatabaseOperation<any>({ kind: "read", statement: { sql: "SELECT * FROM chats WHERE id = ? AND user_id = ?", bindings: [id, userId], mode: "get" } }, options);
   return row ? rowToChat(row) : null;
 }
 
@@ -1463,6 +1530,85 @@ function diffLeafBagInto(out: string[], prev: unknown, next: unknown, prefix: st
     }
     out.push(`${prefix}.${k}`);
   }
+}
+
+export function prepareNativeSwipeVariables(userId: string, chatId: string, messageId: string, swipeId: number,
+  seed?: import("../utils/variable-checkpoint").VariableStateSeed, stateId?: string, preserveBefore = false): string | undefined {
+  const before = getChat(userId, chatId);
+  if (!before) return;
+  const id = prepareNativeSwipeVariablesWithDb(getDb(), userId, chatId, messageId, swipeId, seed, stateId, preserveBefore);
+  const after = getChat(userId, chatId)!;
+  if (!isDeepStrictEqual(before.metadata, after.metadata)) finishChatUpdate(userId, chatId, { before, after, changed: true });
+  return id;
+}
+
+export function setSwipeVariables(userId: string, chatId: string, messageId: string, input: SetSwipeVariablesInput): boolean {
+  const before = getChat(userId, chatId);
+  if (!before) throw new Error("Chat not found");
+  if (!setSwipeVariablesWithDb(getDb(), userId, chatId, messageId, input)) return false;
+  const after = getChat(userId, chatId)!;
+  finishChatUpdate(userId, chatId, { before, after, changed: true });
+  eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: getMessage(userId, messageId)! }, userId);
+  return true;
+}
+
+export function reconcileSwipeVariables(userId: string, chatId: string, options?: ReconcileVariableOptions): void {
+  const chat = getChat(userId, chatId);
+  if (!chat) return;
+  const change = reconcileSwipeVariablesWithDb(getDb(), userId, chatId, options);
+  if (change) finishChatUpdate(userId, chatId, { before: { ...chat, metadata: change.before }, after: { ...chat, metadata: change.after }, changed: true });
+}
+
+export interface GeneratedSwipeCommit {
+  stateId: string;
+  expectedContent: string;
+  expectedReasoning: string;
+  expectedContext: unknown;
+  rendered: MessageLiteralContent;
+  fields: Record<string, unknown>;
+  variables?: VariableValues;
+  presetContext?: unknown;
+}
+
+/** Final text, response variables and provenance commit together after asynchronous processing. */
+export function commitGeneratedSwipe(userId: string, chatId: string, messageId: string, input: GeneratedSwipeCommit): boolean {
+  let metadataChange: ChatUpdateResult | null | undefined;
+  let selectedContentChanged = false;
+  const committed = getDb().transaction(() => {
+    let message = getMessage(userId, messageId);
+    if (message?.chat_id !== chatId) return false;
+    const index = message.extra.variableStateBySwipe?.findIndex((state: any) => state?.id === input.stateId) ?? -1;
+    if (index < 0 || index >= message.swipes.length || message.swipes[index] !== input.expectedContent ||
+        (message.extra.reasoningBySwipe?.[index] ?? "") !== input.expectedReasoning ||
+        !isDeepStrictEqual(message.extra.spindle_metadata?.preset_contexts?.[index], input.expectedContext)) return false;
+    if (input.variables) {
+      metadataChange = mutateChatWithDb(getDb(), { action: "merge", userId, id: chatId, partial: {},
+        variableSource: { messageId, stateId: input.stateId, values: input.variables, replaceScopes: ["global", "chat"] } });
+      message = getMessage(userId, messageId)!;
+    }
+    const swipes = [...message.swipes]; swipes[index] = input.rendered.content;
+    let extra = withMessageLiteralExtra(message.extra, input.rendered);
+    if (input.presetContext !== undefined) {
+      const contexts = [...(extra.spindle_metadata?.preset_contexts ?? [])]; contexts[index] = input.presetContext;
+      extra = { ...extra, spindle_metadata: { ...extra.spindle_metadata, preset_contexts: contexts } };
+    }
+    const scoped = { ...extra };
+    for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete scoped[key];
+    const normalized = normalizeStoredMessageExtra({ ...scoped, ...input.fields }, swipes.length, index);
+    selectedContentChanged = message.content !== swipes[message.swipe_id];
+    getDb().query(`UPDATE messages SET swipes = ?, content = ?, extra = ?${messagesHaveRevisionColumn() ? ", revision = revision + 1" : ""} WHERE id = ? AND chat_id = ?`)
+      .run(JSON.stringify(swipes), swipes[message.swipe_id]!, JSON.stringify(normalized), messageId, chatId);
+    return true;
+  }).immediate();
+  if (!committed) return false;
+  if (metadataChange) finishChatUpdate(userId, chatId, metadataChange);
+  eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: getMessage(userId, messageId)! }, userId);
+  if (selectedContentChanged) scheduleMemoryRebuildForActiveMessageChange(userId, chatId, messageId, "generation completion");
+  return true;
+}
+
+export function compareAndSetChatMetadata(userId: string, id: string, input: ConditionalChatMetadataInput): Chat | null {
+  return finishChatUpdate(userId, id, mutateChatWithDb(getDb(), { action: "compare-metadata", userId, id, input }));
 }
 
 export function updateChat(
@@ -1980,7 +2126,7 @@ function getMsgStmts() {
   }
   if (!_stmtMsgAll) _stmtMsgAll = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC");
   if (!_stmtMsgCount) _stmtMsgCount = db.query("SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?");
-  if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC LIMIT ?");
+  if (!_stmtMsgTail) _stmtMsgTail = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat DESC, m.id DESC LIMIT ?");
   if (!_stmtMsgById) _stmtMsgById = db.query("SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.id = ? AND c.user_id = ?");
   if (!_stmtMsgRolesBefore) _stmtMsgRolesBefore = db.query("SELECT m.id, m.index_in_chat, m.is_user, m.extra FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat < ? ORDER BY m.index_in_chat DESC LIMIT ?");
   return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById, rolesBefore: _stmtMsgRolesBefore };
@@ -1998,9 +2144,39 @@ export function messagesHaveRevisionColumn(): boolean {
   return _msgRevisionCol;
 }
 
-export function getMessages(userId: string, chatId: string): Message[] {
+export function getMessages(userId: string, chatId: string, opts?: { light?: boolean }): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
-  return rows.map(rowToMessage);
+  return rows.map(opts?.light ? rowToMessageLight : rowToMessage);
+}
+
+/** Only display provenance crosses the database subprocess boundary. Message
+ * bodies, other swipe text and unrelated extras are not inputs to this stage. */
+export async function getDisplayMessageSourcesByIds(
+  userId: string, chatId: string, ids: string[],
+): Promise<Map<string, DisplayMessageSource>> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return new Map();
+  const rows = await executeDatabaseOperation<any[]>({ kind: "read", statement: {
+    sql: `SELECT m.id, m.chat_id, m.swipe_id,
+       CASE WHEN json_valid(m.swipes) THEN
+         CASE WHEN json_type(m.swipes) = 'array' THEN json_array_length(m.swipes) ELSE 1 END
+         ELSE 1 END AS swipe_count,
+       CASE WHEN json_valid(m.extra) THEN json_object(
+         'macro_literal_braces', json_extract(m.extra, '$.macro_literal_braces'),
+         'spindle_metadata', json_object(
+           'preset_contexts', json_extract(m.extra, '$.spindle_metadata.preset_contexts')
+         )
+       ) ELSE '{}' END AS extra
+     FROM messages m JOIN chats c ON m.chat_id = c.id
+     WHERE c.user_id = ? AND m.chat_id = ? AND m.id IN (${uniqueIds.map(() => "?").join(",")})`,
+    bindings: [userId, chatId, ...uniqueIds], mode: "all",
+  } }, { priority: "interactive" });
+  return new Map(rows.map((row): [string, DisplayMessageSource] => {
+    const extra = JSON.parse(row.extra) as Record<string, unknown>;
+    // Preserve the full-message reader's bounds for saved swipe contexts.
+    extra.spindle_metadata = normalizeSpindleMessageMetadata(extra.spindle_metadata, row.swipe_count);
+    return [row.id, { id: row.id, chat_id: row.chat_id, swipe_id: row.swipe_id, extra }];
+  }));
 }
 
 /**
@@ -2073,6 +2249,26 @@ export function listMessagesTail(userId: string, chatId: string, limit: number, 
     limit,
     offset,
   };
+}
+
+/** Keyset history paging stays stable when messages after the boundary are added or deleted. */
+export async function listMessagesBefore(
+  userId: string, chatId: string, before: { index: number; id: string }, limit: number,
+  opts?: { light?: boolean },
+) {
+  const rows = await executeDatabaseOperation<any[]>({
+    kind: "read", statement: {
+      sql: `SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id
+        WHERE m.chat_id = ? AND c.user_id = ? AND m.index_in_chat <= ?
+          AND (m.index_in_chat < ? OR m.id < ?)
+        ORDER BY m.index_in_chat DESC, m.id DESC LIMIT ?`,
+      bindings: [chatId, userId, before.index, before.index, before.id, limit + 1], mode: "all",
+    },
+  });
+  const has_more = rows.length > limit;
+  if (has_more) rows.length = limit;
+  rows.reverse();
+  return { data: rows.map(opts?.light ? rowToMessageLight : rowToMessage), has_more, limit };
 }
 
 const CHAT_FIND_MAX_RESULTS = 10_000;
@@ -2167,6 +2363,8 @@ export interface AssociativeRegexActionUsage {
   script_id: string;
   action_id: string;
   used_at: number;
+  /** Distinguish a source block from another block whose display offset overlaps it. */
+  source_instance_id?: string;
 }
 
 const ASSOCIATIVE_REGEX_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
@@ -2195,10 +2393,34 @@ export type ClaimAssociativeRegexActionResult =
 export interface AssociativeRegexActionBatchInput {
   messageId: string;
   instanceId: string;
+  /** Server-reconstructed identities for the same block after display transforms. */
+  instanceAliases?: string[];
+  usageInstanceId?: string;
   scriptId: string;
   actionId: string;
   multiSelect: boolean;
   stateEffects?: Array<{ key: string; value: string }>;
+}
+
+function regexActionInstances(input: { instanceId: string; instanceAliases?: string[]; usageInstanceId?: string }): string[] {
+  return [...new Set([input.instanceId, ...(input.usageInstanceId ? [input.usageInstanceId] : []), ...(input.instanceAliases ?? [])])];
+}
+
+function priorRegexActionUsage(
+  usage: Record<string, AssociativeRegexActionUsage>,
+  input: { instanceId: string; instanceAliases?: string[]; usageInstanceId?: string; actionId: string; multiSelect?: boolean },
+  includePartialBlock = true,
+): AssociativeRegexActionUsage | undefined {
+  for (const instance of regexActionInstances(input)) {
+    const belongsToBlock = (prior: AssociativeRegexActionUsage | undefined) => prior && typeof prior === "object" && (
+      !input.usageInstanceId || (prior.source_instance_id ? prior.source_instance_id === input.usageInstanceId
+        // Pre-upgrade numeric keys came from the server's source coordinates.
+        : instance !== input.instanceId || input.instanceAliases?.includes(instance))
+    );
+    const prior = usage[instance] ?? usage[`${instance}:${input.actionId}`]
+      ?? (!input.multiSelect && includePartialBlock ? Object.entries(usage).find(([key, value]) => key.startsWith(`${instance}:`) && belongsToBlock(value))?.[1] : undefined);
+    if (belongsToBlock(prior)) return prior;
+  }
 }
 
 export type ClaimAssociativeRegexActionsResult =
@@ -2236,15 +2458,12 @@ export function claimAssociativeRegexActions(
       }
 
       const usageByInstance = usageMaps.get(input.messageId)!;
-      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
+      const instance = input.usageInstanceId ?? input.instanceId;
+      const claimKey = input.multiSelect ? `${instance}:${input.actionId}` : instance;
       const uniqueKey = `${input.messageId}:${claimKey}`;
       if (seenClaims.has(uniqueKey)) continue;
       seenClaims.add(uniqueKey);
-      const prior = usageByInstance[input.instanceId]
-        ?? usageByInstance[claimKey]
-        ?? (!input.multiSelect
-          ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
-          : undefined);
+      const prior = priorRegexActionUsage(usageByInstance, input);
       if (prior && typeof prior === "object") return { status: "used" as const, usage: prior };
     }
 
@@ -2256,14 +2475,16 @@ export function claimAssociativeRegexActions(
     const now = Math.floor(Date.now() / 1000);
     for (const input of inputs) {
       const usageByInstance = usageMaps.get(input.messageId)!;
-      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
-      if (usageByInstance[claimKey]) continue;
+      if (priorRegexActionUsage(usageByInstance, input, false)) continue;
       const usage: AssociativeRegexActionUsage = {
         script_id: input.scriptId,
         action_id: input.actionId,
         used_at: now,
+        ...(input.usageInstanceId ? { source_instance_id: input.usageInstanceId } : {}),
       };
-      usageByInstance[claimKey] = usage;
+      for (const instance of new Set([input.instanceId, input.usageInstanceId ?? input.instanceId])) {
+        usageByInstance[input.multiSelect ? `${instance}:${input.actionId}` : instance] = usage;
+      }
       usages.push(usage);
       for (const effect of input.stateEffects ?? []) {
         if (chatVariables[effect.key] === effect.value) continue;
@@ -2283,7 +2504,7 @@ export function claimAssociativeRegexActions(
         .run(JSON.stringify(nextExtra), messageId, chatId);
     }
     if (chatStateChanged) {
-      const metadata = { ...(chatBefore.metadata || {}), chat_variables: chatVariables };
+      const metadata = trackVariableWrite(db, chatId, chatBefore.metadata, { ...(chatBefore.metadata || {}), chat_variables: chatVariables });
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
         .run(JSON.stringify(metadata), now, chatId, userId);
     }
@@ -2318,6 +2539,8 @@ export function claimAssociativeRegexAction(
   messageId: string,
   input: {
     instanceId: string;
+    instanceAliases?: string[];
+    usageInstanceId?: string;
     scriptId: string;
     actionId: string;
     multiSelect?: boolean;
@@ -2342,12 +2565,7 @@ export function claimAssociativeRegexAction(
       stored && typeof stored === "object" && !Array.isArray(stored)
         ? { ...stored }
         : {};
-    const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
-    const prior = usageByInstance[input.instanceId]
-      ?? usageByInstance[claimKey]
-      ?? (!input.multiSelect
-        ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
-        : undefined);
+    const prior = priorRegexActionUsage(usageByInstance, input);
     if (prior && typeof prior === "object") {
       return { status: "used" as const, usage: prior };
     }
@@ -2356,8 +2574,11 @@ export function claimAssociativeRegexAction(
       script_id: input.scriptId,
       action_id: input.actionId,
       used_at: Math.floor(Date.now() / 1000),
+      ...(input.usageInstanceId ? { source_instance_id: input.usageInstanceId } : {}),
     };
-    usageByInstance[claimKey] = usage;
+    for (const instance of new Set([input.instanceId, input.usageInstanceId ?? input.instanceId])) {
+      usageByInstance[input.multiSelect ? `${instance}:${input.actionId}` : instance] = usage;
+    }
     const nextExtra = normalizeStoredMessageExtra(
       { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
       existing.swipes.length,
@@ -2375,7 +2596,7 @@ export function claimAssociativeRegexAction(
       chatStateChanged = true;
     }
     const metadata = chatStateChanged
-      ? { ...(chatBefore.metadata || {}), chat_variables: chatVariables }
+      ? trackVariableWrite(db, chatId, chatBefore.metadata, { ...(chatBefore.metadata || {}), chat_variables: chatVariables })
       : chatBefore.metadata;
     if (chatStateChanged) {
       db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
@@ -2414,39 +2635,48 @@ export function claimAssociativeRegexAction(
   };
 }
 
-export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string): Message {
+export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string, beforeId?: string, authored = false): Message {
   const id = messageId ?? crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
   const maxIndex = getDb()
     .query("SELECT COALESCE(MAX(index_in_chat), -1) as max_idx FROM messages WHERE chat_id = ?")
     .get(chatId) as any;
-  const nextIndex = (maxIndex?.max_idx ?? -1) + 1;
+  const before = beforeId === undefined ? null : getMessage(userId, beforeId);
+  if (beforeId !== undefined && (!before || before.chat_id !== chatId)) throw new Error('Insertion target is not in this chat');
+  const nextIndex = before?.index_in_chat ?? (maxIndex?.max_idx ?? -1) + 1;
 
   const swipes = [input.content];
   const swipeDates = [now];
 
-  getDb()
-    .query(
-      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
-      now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
-      JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
-      input.parent_message_id || null, input.branch_id || null, now
-    );
-
-  getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+  const insert = () => {
+    if (before) {
+      getDb().query(`UPDATE messages SET index_in_chat = index_in_chat + 1${messagesHaveRevisionColumn() ? ', revision = revision + 1' : ''} WHERE chat_id = ? AND index_in_chat >= ?`).run(chatId, nextIndex);
+    }
+    getDb()
+      .query(
+        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id, chatId, nextIndex, input.is_user ? 1 : 0, input.name, input.content,
+        now, 0, JSON.stringify(swipes), JSON.stringify(swipeDates),
+        JSON.stringify(normalizeStoredMessageExtra(input.extra || {}, swipes.length, 0)),
+        input.parent_message_id || null, input.branch_id || null, now
+      );
+    getDb().query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(now, chatId, userId);
+  };
+  if (before) getDb().transaction(insert)();
+  else insert();
 
   // getMessage without userId — internal use after validated chat
   const row = getDb().query("SELECT * FROM messages WHERE id = ?").get(id) as any;
   const message = rowToMessage(row);
-  eventBus.emit(EventType.MESSAGE_SENT, { chatId, message }, userId);
+  eventBus.emit(EventType.MESSAGE_SENT, { chatId, message, ...(authored ? { authored: true } : {}), ...(before ? { inserted: true } : {}) }, userId);
 
   if (userId) {
-    updateChatChunks(userId, chatId, message).catch(err => {
+    if (before) scheduleMemoryRebuildForActiveMessageChange(userId, chatId, message.id, 'message insertion');
+    else updateChatChunks(userId, chatId, message).catch(err => {
       console.warn("[chats] Failed to update chunks:", err);
     });
   }
@@ -2483,7 +2713,7 @@ export function appendMessageAttachment(
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
 
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
 
   const updated: Message = { ...existing, extra: projectActiveSwipeExtra(normalizedExtra, existing.swipe_id) };
@@ -2602,7 +2832,7 @@ export function removeMessageAttachment(
   const normalizedExtra = normalizeStoredMessageExtra(nextExtra, existing.swipes.length, existing.swipe_id);
 
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
 
   // Safe to call after the UPDATE: image cleanup can now determine whether a
@@ -2628,12 +2858,12 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
     existing.swipe_id,
   );
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
 /** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
-const SWIPE_SCOPED_EXTRA_KEYS = [
+export const SWIPE_SCOPED_EXTRA_KEYS = [
   "promptActivation",
   "reasoning",
   "reasoningDuration",
@@ -2685,7 +2915,7 @@ export function setSwipeScopedExtra(
     targetSwipeId,
   );
   getDb()
-    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .query(`UPDATE messages SET extra = ${preserveSwipeVariablesSql(existing.extra, existing.swipes.length)} WHERE id = ? AND chat_id = ?`)
     .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
 }
 
@@ -2779,7 +3009,8 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     values.push(newSwipeId);
   }
   if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (normalizedExtra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(normalizedExtra)); }
+  if (input.is_user !== undefined) { fields.push("is_user = ?"); values.push(input.is_user ? 1 : 0); }
+  if (normalizedExtra !== undefined) { fields.push(`extra = ${preserveSwipeVariablesSql(existing.extra, newSwipes.length)}`); values.push(JSON.stringify(normalizedExtra)); }
 
   if (fields.length === 0) return existing;
   if (messagesHaveRevisionColumn()) fields.push("revision = revision + 1");
@@ -2787,6 +3018,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   values.push(existing.chat_id);
 
   getDb().query(`UPDATE messages SET ${fields.join(", ")} WHERE id = ? AND chat_id = ?`).run(...values);
+  if ((patchedSwipeId || newSwipes.length !== existing.swipes.length) && existing.extra.variableStateBySwipe) reconcileSwipeVariables(userId, existing.chat_id, { selectedMessageId: id });
   const updated = getMessage(userId, id)!;
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
   if (swipeShapeTouched) {
@@ -2808,6 +3040,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // even without a `content` patch — check the resolved active content
   // against the prior active content to catch that case.
   const activeContentChanged =
+    getMessageRole(updated) !== getMessageRole(existing) ||
     (patchedContent && contentSwipeId === newSwipeId) ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
   if (activeContentChanged && input.skipChunkRebuild !== true) {
@@ -2816,7 +3049,10 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
       memoryCortex.invalidateLinkedCortexCache(updated.chat_id);
     } catch { /* ignore if not loaded */ }
 
-    rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]).catch(err => {
+    const chunkUpdate = input.finalizesStaged && !existing.is_user && !existing.content
+      ? finalizeStagedMessageChunks(userId, updated.chat_id, updated.id)
+      : rebuildChatChunksFromMessages(userId, updated.chat_id, [updated.id]);
+    chunkUpdate.catch(err => {
       console.warn("[chats] Failed to rebuild chunks after message edit:", err);
     });
   }
@@ -2918,11 +3154,12 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   if (messageIds.length > 500) throw new Error("Maximum 500 messages per batch");
 
   const db = getDb();
-  const getStmt = db.query("SELECT id, extra, index_in_chat FROM messages WHERE id = ? AND chat_id = ?");
+  const getStmt = db.query("SELECT id, extra, swipe_id, index_in_chat FROM messages WHERE id = ? AND chat_id = ?");
   const deleteStmt = db.query("DELETE FROM messages WHERE id = ? AND chat_id = ?");
 
   let deleted = 0;
   const deletedIds: string[] = [];
+  const discarded: VariableBoundary[] = [];
   const attachmentsToCleanup: any[] = [];
   let earliestDeletedIndex: number | null = null;
 
@@ -2934,6 +3171,8 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
       attachmentsToCleanup.push(...collectMessageAttachments(row));
       const result = deleteStmt.run(msgId, chatId);
       if (result.changes > 0) {
+        const boundary = readVariableBoundary(parseMetadataObject(row.extra), row.swipe_id, row.index_in_chat);
+        if (boundary) discarded.push(boundary);
         breakdownSvc.deleteBreakdownForMessage(userId, msgId);
         earliestDeletedIndex = earliestDeletedIndex == null
           ? row.index_in_chat
@@ -2959,6 +3198,8 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   }
 
   cleanupMessageAttachments(userId, attachmentsToCleanup);
+
+  if (deleted > 0 && chat.metadata._swipe_variable_state) reconcileSwipeVariables(userId, chatId, { discarded });
 
   for (const msgId of deletedIds) {
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId, messageId: msgId }, userId);
@@ -3001,6 +3242,10 @@ export function deleteMessage(userId: string, id: string): boolean {
   })();
   if (result.changes > 0) {
     const chat = getChat(userId, msg.chat_id);
+    if (chat?.metadata._swipe_variable_state) {
+      const boundary = readVariableBoundary(msg.extra, msg.swipe_id, msg.index_in_chat);
+      reconcileSwipeVariables(userId, msg.chat_id, { discarded: boundary ? [boundary] : [] });
+    }
     if (chat?.metadata?.context_history_anchor_message_id === id) {
       mergeChatMetadata(userId, msg.chat_id, {
         context_history_anchor_message_id: undefined,
@@ -3053,7 +3298,7 @@ function userContentRevisionSql(message: Message, content: string): string {
     : "";
 }
 
-export function addSwipe(userId: string, messageId: string, content: string): Message | null {
+export function addSwipe(userId: string, messageId: string, content: string, options?: { select?: boolean }): Message | null {
   const msg = getMessage(userId, messageId);
   if (!msg) return null;
 
@@ -3061,6 +3306,8 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   const swipes = [...msg.swipes, content];
   const swipeDates = [...msg.swipe_dates, now];
   const newSwipeId = swipes.length - 1;
+  const selectedSwipeId = options?.select === false ? msg.swipe_id : newSwipeId;
+  const selectedContent = options?.select === false ? msg.content : content;
   const normalizedExtra = normalizeStoredMessageExtra(
     msg.extra,
     swipes.length,
@@ -3068,12 +3315,12 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
   );
 
   getDb()
-    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, content)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}${userContentRevisionSql(msg, selectedContent)} WHERE id = ? AND chat_id = ?`)
     .run(
       JSON.stringify(swipes),
       JSON.stringify(swipeDates),
-      newSwipeId,
-      content,
+      selectedSwipeId,
+      selectedContent,
       JSON.stringify(normalizedExtra),
       messageId,
       msg.chat_id,
@@ -3090,7 +3337,7 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
     },
     userId,
   );
-  if (content !== msg.content) {
+  if (selectedContent !== msg.content) {
     scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe add");
   }
   return updated;
@@ -3109,8 +3356,8 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
   );
 
   const updates = swipeIdx === msg.swipe_id
-    ? "swipes = ?, content = ?, extra = ?"
-    : "swipes = ?, extra = ?";
+    ? `swipes = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}`
+    : `swipes = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length)}`;
   const values = swipeIdx === msg.swipe_id
     ? [JSON.stringify(swipes), content, JSON.stringify(normalizedExtra), messageId, msg.chat_id]
     : [JSON.stringify(swipes), JSON.stringify(normalizedExtra), messageId, msg.chat_id];
@@ -3175,7 +3422,7 @@ export function deleteSwipe(
   );
 
   getDb()
-    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, newContent)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipes = ?, swipe_dates = ?, swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, swipes.length, swipeIdx)}${userContentRevisionSql(msg, newContent)} WHERE id = ? AND chat_id = ?`)
     .run(
       JSON.stringify(swipes),
       JSON.stringify(swipeDates),
@@ -3186,6 +3433,7 @@ export function deleteSwipe(
       msg.chat_id,
     );
 
+  if (msg.extra.variableStateBySwipe) reconcileSwipeVariables(userId, msg.chat_id, { selectedMessageId: messageId });
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
     EventType.MESSAGE_SWIPED,
@@ -3220,8 +3468,10 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
   );
 
   getDb()
-    .query(`UPDATE messages SET swipe_id = ?, content = ?, extra = ?${userContentRevisionSql(msg, nextContent)} WHERE id = ? AND chat_id = ?`)
+    .query(`UPDATE messages SET swipe_id = ?, content = ?, extra = ${preserveSwipeVariablesSql(msg.extra, msg.swipes.length)}${userContentRevisionSql(msg, nextContent)} WHERE id = ? AND chat_id = ?`)
     .run(nextIdx, nextContent, JSON.stringify(normalizedExtra), messageId, msg.chat_id);
+
+  if (msg.extra.variableStateBySwipe) reconcileSwipeVariables(userId, msg.chat_id, { selectedMessageId: messageId });
 
   const updated = getMessage(userId, messageId)!;
   eventBus.emit(
@@ -3330,6 +3580,13 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
       .run(JSON.stringify(metadata), newChatId, userId);
   }
 
+  if (metadata._swipe_variable_state) {
+    const next = db.query("SELECT extra, swipe_id, index_in_chat FROM messages WHERE chat_id = ? AND index_in_chat > ? AND EXISTS (SELECT 1 FROM json_each(messages.extra, '$.variableStateBySwipe') WHERE json_type(value, '$.before') = 'object') ORDER BY index_in_chat LIMIT 1")
+      .get(chat.id, msg.index_in_chat) as { extra: string; swipe_id: number; index_in_chat: number } | null;
+    const boundary = next && readVariableBoundary(parseMetadataObject(next.extra), next.swipe_id, next.index_in_chat);
+    remapSwipeVariableOwnerWithDb(db, userId, newChatId);
+    reconcileSwipeVariablesWithDb(db, userId, newChatId, { discarded: boundary ? [boundary] : [] });
+  }
   return {
     sourceChatId: chat.id,
     newChatId,
@@ -3360,20 +3617,21 @@ function emitCreatedChatBranch(userId: string, created: CreatedChatBranch): Chat
 }
 
 export function branchChat(userId: string, chatId: string, atMessageId: string, requestedName?: string): Chat | null {
-  const chat = getChat(userId, chatId);
-  if (!chat) return null;
-  const msg = getMessage(userId, atMessageId);
-  if (!msg || msg.chat_id !== chatId) return null;
-
-  let created: CreatedChatBranch;
+  let created: CreatedChatBranch | null;
 
   try {
-    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg, requestedName))();
+    created = getDb().transaction(() => {
+      const chat = getChat(userId, chatId);
+      if (!chat) return null;
+      const msg = getMessage(userId, atMessageId);
+      if (!msg || msg.chat_id !== chatId) return null;
+      return createChatBranchRows(userId, chat, msg, requestedName);
+    }).immediate();
   } catch (err) {
     console.error("[chats] Branch failed:", err);
     return null;
   }
-  return emitCreatedChatBranch(userId, created);
+  return created ? emitCreatedChatBranch(userId, created) : null;
 }
 
 export type EditAndSendMode = "normal" | "swipe";
@@ -4076,6 +4334,7 @@ export function buildMacroEnvForChat(userId: string, chatId: string): MacroEnv |
       persona,
       chat,
       messages: [],
+      deferPresetHistory: true,
       generationType: "normal",
       userId,
       commit: false,
@@ -4259,9 +4518,39 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
   })();
 }
 
+/** Finalization shares the rebuild lane so an in-flight edit cannot discard it.
+ * A preceding rebuild may already include the finished row; reuse that chunk. */
+async function finalizeStagedMessageChunks(userId: string, chatId: string, messageId: string): Promise<void> {
+  await enqueueChatPipelineTask({
+    chatId,
+    kind: "chunk_finalize",
+    run: async () => {
+      const message = getMessage(userId, messageId);
+      if (!message || message.extra?.hidden === true || !message.content) return;
+      if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
+      const findChunk = () => (getDb().query(
+        `SELECT * FROM chat_chunks WHERE chat_id = ?
+         AND (message_range_start IS NULL OR message_range_start <= ?)
+         AND (message_range_end IS NULL OR message_range_end >= ?)`,
+      ).all(chatId, message.index_in_chat, message.index_in_chat) as any[])
+        .map(rowToChatChunk).find((candidate) => candidate.message_ids.includes(messageId));
+      // Another message may have arrived while this task waited. Preserve the
+      // chronological boundaries rather than appending behind a newer chunk.
+      let chunk = findChunk();
+      if (!chunk && (getLastChatChunk(chatId)?.message_range_end ?? -1) > message.index_in_chat) {
+        await _rebuildChatChunksFromBody(userId, chatId, message.index_in_chat);
+        chunk = findChunk();
+      }
+      if (chunk) await scheduleChunkCortex(userId, chatId, chunk.id);
+      else await updateChatChunks(userId, chatId, message);
+    },
+  });
+}
+
 async function updateChatChunks(userId: string, chatId: string, newMessage: Message): Promise<void> {
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  if (!cfg.enabled || !cfg.vectorize_chat_messages) return;
+  // A staged reply has no text yet; updateMessage chunks it when it is finalized.
+  if (!newMessage.is_user && !newMessage.content) return;
+  if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
 
   const chat = getChat(userId, chatId);
   const characterId = chat?.character_id ?? null;
@@ -4280,7 +4569,10 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
   const lastChunk = getLastChatChunk(chatId);
   let chunkId: string;
 
-  if (!lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId))) {
+  const startNewChunk = !lastChunk || (await shouldStartNewChunk(lastChunk, newMessage, userId));
+  // Sanitization and chunk-boundary resolution can outlive a settings change.
+  if (!embeddingsSvc.isChatMemoryVectorizationEnabled(userId)) return;
+  if (startNewChunk) {
     const newChunk = createChatChunk(chatId, [newMessage], [sanitizedContent]);
     chunkId = newChunk.id;
     vectorizationQueue.queueChunkVectorization(userId, chatId, newChunk.id, 5);
@@ -4292,9 +4584,15 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
 
   scheduleChatMemoryRefresh(userId, chatId, 8);
 
+  await scheduleChunkCortex(userId, chatId, chunkId);
+}
+
+async function scheduleChunkCortex(userId: string, chatId: string, chunkId: string): Promise<void> {
   // Memory Cortex: process chunk for entity extraction, salience scoring, etc.
   // Runs async and never blocks the main flow.
   try {
+    const chat = getChat(userId, chatId);
+    const characterId = chat?.character_id ?? null;
     const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
     if (chunk) {
       const cortexConfig = memoryCortex.getCortexConfig(userId);
@@ -4305,11 +4603,11 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       if (chat) {
         const character = chat.character_id ? (await getCharacterAsync(userId, chat.character_id)) : null;
         if (character) {
-          // Normalize sloppy bot-card names to extract the real character name
-          const normalized = memoryCortex.normalizeCharacterName(character.name);
-          characterNames.push(normalized);
-          aliasMaps.push(memoryCortex.extractDescriptionAliases(
-            normalized, character.description, character.personality, character.scenario,
+          const names = memoryCortex.getCortexCharacterNames(character.name);
+          characterNames.push(...names);
+          // A shared description cannot supply aliases for just one member.
+          if (names.length === 1) aliasMaps.push(memoryCortex.extractDescriptionAliases(
+            names[0]!, character.description, character.personality, character.scenario,
           ));
         }
         // Group chat: add all character names + extract aliases
@@ -4317,11 +4615,9 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
           for (const cid of chat.metadata.character_ids as string[]) {
             const c = await getCharacterAsync(userId, cid);
             if (!c) continue;
-            const normalized = memoryCortex.normalizeCharacterName(c.name);
-            if (!characterNames.includes(normalized)) {
-              characterNames.push(normalized);
-              aliasMaps.push(memoryCortex.extractDescriptionAliases(normalized, c.description, c.personality));
-            }
+            const names = memoryCortex.getCortexCharacterNames(c.name);
+            for (const name of names) if (!characterNames.includes(name)) characterNames.push(name);
+            if (names.length === 1) aliasMaps.push(memoryCortex.extractDescriptionAliases(names[0]!, c.description, c.personality));
           }
         }
         // User's persona
@@ -4444,8 +4740,7 @@ async function stampChatMemoryHash(userId: string, chatId: string): Promise<void
 
     const chat = getChat(userId, chatId);
     if (!chat) return;
-    const metadata = { ...chat.metadata, ltcm_config_hash: hash };
-    getDb().query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(metadata), chatId, userId);
+    getDb().query("UPDATE chats SET metadata = json_set(metadata, '$.ltcm_config_hash', ?) WHERE id = ? AND user_id = ?").run(hash, chatId, userId);
   } catch { /* non-fatal */ }
 }
 
@@ -4724,6 +5019,8 @@ async function chunkAndPersistMessages(
   chatMemSettings: embeddingsSvc.ChatMemorySettings,
   salienceByContent: Map<string, SalienceSnapshotRow[]>,
 ): Promise<void> {
+  // A rebuild can run while a reply streams; its staged message is chunked at finalize.
+  messages = messages.filter((m) => m.is_user || m.content);
   if (messages.length === 0) return;
 
   const targetTokens = chatMemSettings.chunkTargetTokens;

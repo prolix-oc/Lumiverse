@@ -8,6 +8,7 @@ import { DEFAULT_CORTEX_CONFIG, type MemoryCortexConfig } from "./config";
 import { generateConsolidationSummary } from "./consolidation";
 import { extractBatchWithSidecar, getExtractionTools } from "./salience-sidecar";
 import { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
+import { CortexActivityTracker, getCortexActivity, withCortexBatch, type CortexRequestPhase } from "./activity";
 
 const userId = "cortex-reasoning-budget-test";
 let connectionId: string;
@@ -80,10 +81,70 @@ function truncatedResponse(body: any): Response {
 }
 
 describe("Cortex thinking responses", () => {
+  test("surfaces thinking and streamed tool arguments before EOF while retaining the full result", async () => {
+    const chatId = crypto.randomUUID();
+    const tracker = new CortexActivityTracker(userId, chatId, "rebuild");
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    let fetched!: () => void;
+    const started = new Promise<void>((resolve) => { fetched = resolve; });
+    const sent = mockProvider(() => { fetched(); return new Response(body); });
+    const send = (value: unknown) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`));
+    const waitForPhase = async (phase: CortexRequestPhase) => {
+      for (let i = 0; i < 100 && getCortexActivity(chatId).runs[0].requests[0]?.phase !== phase; i++) {
+        await Bun.sleep(2);
+      }
+      expect(getCortexActivity(chatId).runs[0].requests[0]?.phase).toBe(phase);
+    };
+    let settled = false;
+    try {
+      const pending = tracker.run(() => withCortexBatch(1, 5, () => adapter(config(4096))({
+        connectionId, requestPurpose: "extraction", messages: [{ role: "user", content: "Analyze the passage." }],
+        parameters: {}, tools: getExtractionTools(),
+      })));
+      pending.then(() => { settled = true; }, () => { settled = true; });
+      await started;
+      expect(sent[0].stream).toBe(true);
+      send({ choices: [{ delta: { reasoning_content: "Private provider reasoning." } }] });
+      await waitForPhase("thinking");
+      send({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call", function: { name: "analyze_passage", arguments: '{"importance":' } }] } }] });
+      await waitForPhase("responding");
+      expect(settled).toBe(false);
+      expect(JSON.stringify(getCortexActivity(chatId))).not.toContain("Private provider reasoning");
+      send({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '5}' } }] }, finish_reason: "tool_calls" }] });
+      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.close();
+      const result = await pending;
+      expect(result.tool_calls).toMatchObject([{ name: "analyze_passage", args: { importance: 5 } }]);
+      expect(getCortexActivity(chatId).runs[0].requests).toEqual([]);
+    } finally { tracker.finish(); }
+  });
+
+  test("aborting streamed partial JSON rejects the result and clears request activity", async () => {
+    const chatId = crypto.randomUUID();
+    const tracker = new CortexActivityTracker(userId, chatId, "ingestion");
+    const abort = new AbortController();
+    let fetched!: () => void;
+    const started = new Promise<void>((resolve) => { fetched = resolve; });
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"title":"partial' } }] })}\n\n`));
+    } });
+    mockProvider(() => { fetched(); return new Response(body); });
+    try {
+      const pending = tracker.run(() => adapter(config(4096))({ connectionId,
+        messages: [{ role: "user", content: "Summarize." }], parameters: {}, signal: abort.signal }));
+      const outcome = pending.then(() => ({ resolved: true }), (error) => ({ resolved: false, error }));
+      await started;
+      abort.abort();
+      expect((await outcome).resolved).toBe(false);
+      expect(getCortexActivity(chatId).runs[0].requests).toEqual([]);
+    } finally { tracker.finish("cancelled"); }
+  });
+
   test("consolidation preserves the configured generation budget and the smaller summary target", async () => {
     const sent = mockProvider((body) => body.max_tokens < 1024
       ? truncatedResponse(body)
-      : Response.json({ choices: [{ message: { content: JSON.stringify({ title: "The Missing Map", summary: "Mara learned that Tovin had sold the map and promised to recover it." }) }, finish_reason: "stop" }] }));
+      : new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ title: "The Missing Map", summary: "Mara learned that Tovin had sold the map and promised to recover it." }) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`));
     const cortexConfig = config(16384);
     const decision = await generateConsolidationSummary(
       [{ content: "Tovin admitted selling the map. Mara promised to recover it." }],
@@ -118,7 +179,7 @@ describe("Cortex thinking responses", () => {
   }
 
   test("a twelve-passage batch uses the configured budget and preserves tool results", async () => {
-    const results = Array.from({ length: 12 }, (_, index) => ({ index, importance: 5, key_facts: [`Mara found map ${index}`], entities_present: [] }));
+    const results = Array.from({ length: 12 }, (_, index) => ({ index, importance: 5, key_facts: [`Mara found map ${index}`], entities_present: [], emotional_tones: [], narrative_flags: [], relationships_shown: [], status_changes: [], color_attributions: [], discovered_aliases: [] }));
     const sent = mockProvider((body) => body.max_tokens < 8192
       ? truncatedResponse(body)
       : new Response(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "Analyzed the passages." } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "batch-call", type: "function", function: { name: "analyze_passage_batch", arguments: JSON.stringify({ results }) } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`));

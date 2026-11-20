@@ -76,6 +76,9 @@ export interface InjectionRecord {
    *  element (no current call site does this — reserved for forward-
    *  compatibility with historical-record rehydration). */
   element: Element | null
+  /** Release the DOM helper's ownership when this message leaves the
+   *  store. Virtualization alone must not dispose the injection. */
+  dispose?: () => void
 }
 
 const records = new Map<string, InjectionRecord[]>()
@@ -103,14 +106,7 @@ export function register(messageId: string, record: InjectionRecord): void {
 }
 
 export function unregisterByInjectionId(injectionId: string): void {
-  for (const [messageId, list] of records) {
-    const filtered = list.filter((r) => r.injectionId !== injectionId)
-    if (filtered.length === 0) {
-      records.delete(messageId)
-    } else if (filtered.length !== list.length) {
-      records.set(messageId, filtered)
-    }
-  }
+  unregisterMatching((record) => record.injectionId === injectionId)
 }
 
 /** Drop a record by its wrapper element. Reads the injection id from the
@@ -124,20 +120,38 @@ export function unregisterByElement(element: Element): void {
 }
 
 export function unregisterByExtension(extensionId: string): void {
+  unregisterMatching((record) => record.extensionId === extensionId)
+}
+
+function disposeRecord(record: InjectionRecord): void {
+  const { element, dispose } = record
+  record.element = null
+  record.dispose = undefined
+  dispose?.()
+  element?.remove()
+}
+
+function unregisterMatching(matches: (record: InjectionRecord) => boolean): void {
   for (const [messageId, list] of records) {
-    const filtered = list.filter((r) => r.extensionId !== extensionId)
+    const removed: InjectionRecord[] = []
+    const filtered: InjectionRecord[] = []
+    for (const record of list) (matches(record) ? removed : filtered).push(record)
+    if (removed.length === 0) continue
     if (filtered.length === 0) {
       records.delete(messageId)
-    } else if (filtered.length !== list.length) {
+    } else {
       records.set(messageId, filtered)
     }
+    for (const record of removed) disposeRecord(record)
   }
 }
 
 /** Drop every record for a given messageId. Used by the store-subscription
  *  GC below when a message is deleted or its chat is switched away from. */
 export function unregisterByMessageId(messageId: string): void {
+  const list = records.get(messageId)
   records.delete(messageId)
+  if (list) for (const record of list) disposeRecord(record)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -184,7 +198,7 @@ function ensureGcSetup(): void {
 
     for (const prev of previous) {
       if (!currentIds.has(prev.id) && records.has(prev.id)) {
-        records.delete(prev.id)
+        unregisterByMessageId(prev.id)
       }
     }
   })
@@ -257,7 +271,7 @@ export function scheduleReplay(messageId: string, root: Element): () => void {
 
   const cancelers = list.map((record) =>
     scheduleSpindleDomTask(() => {
-      if (!root.isConnected) return
+      if (!root.isConnected || !records.get(messageId)?.includes(record)) return
       replayRecord(messageId, root, record)
     })
   )
@@ -343,6 +357,6 @@ function replayRecord(messageId: string, bubbleRoot: Element, record: InjectionR
 
 /** Test/debug helper — drop everything. */
 export function _resetInjectionRegistry(): void {
-  records.clear()
+  for (const messageId of records.keys()) unregisterByMessageId(messageId)
   nextInjectionSequence = 1
 }

@@ -8,6 +8,7 @@
  */
 
 import type { AssemblyContext, PrefetchedData } from "../llm/types";
+import { readGenerationVariableSeed } from "../db/swipe-variable-state";
 import { makeAssistantCharacter } from "../types/character";
 import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import * as chatsSvc from "./chats.service";
@@ -88,6 +89,9 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   const messages = ctx.excludeMessageId
     ? allMessages.filter(m => m.id !== ctx.excludeMessageId)
     : allMessages;
+  const variableTarget = allMessages.find(message => message.id === ctx.excludeMessageId);
+  const variableStateSeed = readGenerationVariableSeed(chat.metadata, variableTarget?.extra, variableTarget?.swipe_id,
+    ctx.generationType === "regenerate" || ctx.generationType === "swipe");
 
   // Yield after loading messages — for large chats (thousands of messages),
   // the SQLite query + JSON.parse per row can block the event loop for
@@ -233,7 +237,9 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
 
   return {
     chat,
-    messages,
+    variableStateSeed,
+    // Assembly owns exclusion and Edit-and-Send clipping; retain the target's attribution in its input snapshot.
+    messages: allMessages,
     character,
     persona,
     connection,

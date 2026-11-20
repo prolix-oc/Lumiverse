@@ -5,6 +5,27 @@ import * as personasSvc from "../services/personas.service";
 
 const app = new Hono();
 
+// All editor snapshots for one context. Missing bindings are normal and do
+// not require five independent 404 responses from the client.
+app.get("/context", (c) => {
+  const userId = c.get("userId");
+  const query = c.req.query();
+  // Preserve the independent endpoints' failure isolation and user scoping.
+  const errors: Record<string, string> = {};
+  const read = <T>(section: string, load: () => T): T | null => {
+    try { return load(); } catch { errors[section] = 'unavailable'; return null; }
+  };
+  return c.json({
+    defaults: query.preset_id ? read('defaults', () => svc.getDefaults(userId, query.preset_id)) : null,
+    chat: query.chat_id ? read('chat', () => svc.getChatBinding(userId, query.chat_id)) : null,
+    persona: query.persona_id ? read('persona', () => svc.getPersonaBinding(userId, query.persona_id)) : null,
+    character: query.character_id && query.is_group !== 'true'
+      ? read('character', () => svc.getCharacterBinding(userId, query.character_id)) : null,
+    connection: query.connection_id ? read('connection', () => svc.getConnectionBinding(userId, query.connection_id)) : null,
+    errors,
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------

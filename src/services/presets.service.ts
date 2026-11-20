@@ -52,6 +52,7 @@ function prunePromptVariableOrphans(
   return { ...(metadata as Record<string, unknown>), promptVariables: cleaned };
 }
 export interface PresetRegistryRow {
+  cache_revision: number;
   id: string;
   name: string;
   provider: string;
@@ -121,7 +122,7 @@ export function listPresetRegistry(
   const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
 
   return paginatedQuery<any, PresetRegistryRow>(
-    `SELECT id, name, provider, updated_at,
+    `SELECT id, name, provider, updated_at, cache_revision,
             COALESCE(json_array_length(prompt_order), 0) as block_count,
             COALESCE(json_extract(metadata, '$.coverUrl'), json_extract(metadata, '$.cover_url')) as cover_url
      FROM presets
@@ -136,6 +137,7 @@ export function listPresetRegistry(
       provider: row.provider,
       updated_at: row.updated_at,
       block_count: row.block_count ?? 0,
+      cache_revision: row.cache_revision ?? 0,
       cover_url: typeof row.cover_url === "string" && row.cover_url.trim() ? row.cover_url : null,
     })
   );
@@ -185,6 +187,21 @@ export function getPreset(userId: string, id: string): Preset | null {
   }
   const row = _stmtPresetById.get(id, userId) as any;
   return row ? rowToPreset(row) : null;
+}
+
+export function presetExists(userId: string, id: string): boolean {
+  return !!getDb().query("SELECT 1 FROM presets WHERE id = ? AND user_id = ?").get(id, userId);
+}
+
+export async function getPresetCapabilitiesAsync(userId: string, id: string) {
+  const row = await readDatabaseRow<{ id: string; cache_revision: number; has_prompt_variables: number }>(`
+    SELECT id, cache_revision, EXISTS (
+      SELECT 1 FROM json_each(CASE WHEN json_valid(prompt_order) THEN prompt_order ELSE '[]' END) block
+      WHERE CASE WHEN block.type = 'object' THEN
+        json_type(block.value, '$.variables') = 'array' AND json_array_length(block.value, '$.variables') > 0
+        ELSE 0 END
+    ) AS has_prompt_variables FROM presets WHERE id = ? AND user_id = ?`, [id, userId]);
+  return row ? { ...row, has_prompt_variables: !!row.has_prompt_variables } : null;
 }
 
 export function countPresets(userId: string): number {
@@ -550,7 +567,7 @@ export async function listPresetRegistryAsync(
   const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
 
   return paginatedQueryAsync<any, PresetRegistryRow>(
-    `SELECT id, name, provider, updated_at,
+    `SELECT id, name, provider, updated_at, cache_revision,
             COALESCE(json_array_length(prompt_order), 0) as block_count,
             COALESCE(json_extract(metadata, '$.coverUrl'), json_extract(metadata, '$.cover_url')) as cover_url
      FROM presets
@@ -565,6 +582,7 @@ export async function listPresetRegistryAsync(
       provider: row.provider,
       updated_at: row.updated_at,
       block_count: row.block_count ?? 0,
+      cache_revision: row.cache_revision ?? 0,
       cover_url: typeof row.cover_url === "string" && row.cover_url.trim() ? row.cover_url : null,
     })
   );

@@ -49,7 +49,7 @@ const STT_PROVIDERS: SttProviderInfo[] = [
   },
 ];
 
-const STT_MODEL_ID_PATTERN = /(?:^|[-_.:/])(transcribe|whisper|stt|speech[-_ ]?to[-_ ]?text)(?:$|[-_.:/])/i;
+const STT_MODEL_ID_PATTERN = /(?:^|[-_.:/])(transcribe|whisper|stt|asr|speech[-_ ]?to[-_ ]?text)(?:$|[-_.:/])/i;
 
 export function sttConnectionSecretKey(id: string): string {
   return `stt_connection_${id}_api_key`;
@@ -471,6 +471,31 @@ export async function clearConnectionApiKey(userId: string, id: string): Promise
     .run(Math.floor(Date.now() / 1000), id, userId);
 }
 
+// One second of 16 kHz mono 16-bit silence. Servers that decode uploads (ffmpeg) or
+// enforce a minimum duration reject anything shorter or headerless.
+function silentTestWav(): ArrayBuffer {
+  const sampleRate = 16000;
+  const dataSize = sampleRate * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const bytes = new Uint8Array(buf);
+  const view = new DataView(buf);
+  const ascii = (offset: number, s: string) => { for (let i = 0; i < s.length; i++) bytes[offset + i] = s.charCodeAt(i); };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, dataSize, true);
+  return buf;
+}
+
 export async function testConnection(userId: string, id: string): Promise<{ success: boolean; message: string; provider: string }> {
   const profile = getConnection(userId, id);
   if (!profile) return { success: false, message: "Connection not found", provider: "" };
@@ -489,7 +514,7 @@ export async function testConnection(userId: string, id: string): Promise<{ succ
     const model = await resolveConnectionModel(provider, profile, apiKey || "", userId);
     const formData = new FormData();
     formData.append("model", model);
-    formData.append("file", new Blob([new Uint8Array(44)], { type: "audio/wav" }), "test.wav");
+    formData.append("file", new Blob([silentTestWav()], { type: "audio/wav" }), "test.wav");
 
     const res = await fetch(`${resolveSttApiUrl(profile, userId)}/audio/transcriptions`, {
       method: "POST",

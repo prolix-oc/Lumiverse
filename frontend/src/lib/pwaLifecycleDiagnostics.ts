@@ -7,6 +7,8 @@
  * The records contain only lifecycle/browser state — never page content, chat
  * IDs, request URLs, or error stacks.
  */
+import { uuidv4 } from '@/lib/uuid'
+
 const STORAGE_KEY = 'lumiverse:pwa-lifecycle:v1'
 const MAX_ENTRIES = 32
 
@@ -33,7 +35,7 @@ function isStandalonePwa(): boolean {
 
 function makeSessionId(): string {
   try {
-    return crypto.randomUUID()
+    return uuidv4()
   } catch {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`
   }

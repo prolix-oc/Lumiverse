@@ -1,15 +1,24 @@
 import fs from 'fs';
 import path from 'path';
+import { extractGpuMemory } from './telemetry-trace.mjs';
 
 const OUT_DIR = process.env.OUT_DIR || './out';
 const fileName = process.argv[2] || 'trace-landing.json';
-const tracePath = path.join(OUT_DIR, fileName);
+const tracePath = path.isAbsolute(fileName) ? fileName : path.join(OUT_DIR, fileName);
 
-const events = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
+const trace = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
+const events = Array.isArray(trace) ? trace : trace.traceEvents;
+if (!Array.isArray(events)) throw new Error('Expected a trace event array or an object with traceEvents');
 console.log('Total events:', events.length.toLocaleString());
+console.log('Durations below are summed inclusive event durations; nested events and parallel threads overlap.');
+const gpu = extractGpuMemory(events);
+if (gpu.records.length) {
+  console.log('GPU allocation checkpoints (browser-wide Chromium accounting, not physical VRAM):');
+  for (const record of gpu.records) console.log(`  dump ${record.dumpGuid}, PID ${record.pid}: ${record.bytes ?? 'unavailable'} bytes`);
+}
 
 function byName(list) {
-  const map = {};
+  const map = Object.create(null);
   for (const e of list) {
     const dur = typeof e.dur === 'number' ? e.dur : 0;
     const n = map[e.name] || { count: 0, dur: 0 };
@@ -21,7 +30,7 @@ function byName(list) {
 }
 
 function byCategory(list) {
-  const map = {};
+  const map = Object.create(null);
   for (const e of list) {
     const dur = typeof e.dur === 'number' ? e.dur : 0;
     for (const cat of (e.cat || '').split(',')) {

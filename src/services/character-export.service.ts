@@ -602,6 +602,7 @@ export async function exportAsCharx(
       name: s.name,
       find_regex: s.find_regex,
       replace_string: s.replace_string,
+      actions: s.actions,
       flags: s.flags,
       placement: s.placement,
       scope: s.scope,

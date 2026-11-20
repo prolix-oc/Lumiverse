@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Save or cancel the connection edit before deleting its folder.",
+    "newFolder": "New Folder",
+    "folder": "Folder",
+    "invalidFolderName": "Choose a unique folder name of 1–64 characters. Uncategorized is reserved.",
+    "deleteFolderMessage": "Delete “{{name}}”? Its connections will move to Uncategorized.",
+    "allFolders": "All folders",
+    "filterFolder": "Filter connections by folder",
+    "search": "Search connections, providers, models, folders…",
+    "noMatches": "No matching connections.",
     "embeddings": "Embedding Models",
     "imageGeneration": "Image Generation",
     "speechToText": "Speech-to-Text",
@@ -835,6 +844,10 @@
   },
   "regexPanel": {
     "title": "Regex Scripts",
+    "searchFolder": "Search scripts in this folder…",
+    "searchFolderAria": "Search scripts in {{folder}}",
+    "folderPagesAria": "Script pages in {{folder}}",
+    "noSearchResults": "No scripts match your search.",
     "bulkSelect": "Bulk select",
     "exitBulkSelect": "Exit bulk selection",
     "selectedCount": "{{selected}} of {{total}} selected",
@@ -923,6 +936,9 @@
     "timedOutDetail": "This script hit the regex timeout and was skipped during execution.",
     "slowDetail": "This script was flagged as slow after taking {{seconds}}s to run.",
     "quarantinedDisplay": "Display regex \"{{name}}\" hung the isolated executor and is being skipped. Clear its quarantine in Regex Scripts to run it again.",
+    "unavailableDisplay": "Display regex \"{{name}}\" was skipped for this render because isolated execution was unavailable.",
+    "skippedDisplayTitle": "Regex Script Skipped",
+    "presetLoadFailed": "Could not load this swipe’s preset regexes. Refresh to retry.",
     "quarantined": "Quarantined",
     "quarantinedDetail": "This script hung the isolated executor and is being skipped. Clear the quarantine to run it again.",
     "clearQuarantine": "Run again",
@@ -1664,6 +1680,10 @@
       "stateExcluded": "Excluded — click to clear"
     },
     "alternateAvatars": {
+      "addFromGallery": "Add from Gallery",
+      "uploadImage": "Upload avatar",
+      "galleryLoadFailed": "Could not load gallery images.",
+      "uploadFailed": "Could not upload the alternate avatar.",
       "title": "Alternate Avatars",
       "helper": "Additional profile pictures for this character, switchable per chat.",
       "selectionHint": "Tap an avatar to use it in this chat.",
@@ -2969,6 +2989,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "Device-specific controls",
+      "enabled": "Use device-specific controls",
+      "hint": "When enabled, the controls below apply only to this browser or app on this device. Theme changes keep your device values. Copy them into the theme before saving or exporting if you want to share them.",
+      "copyToTheme": "Copy device controls into theme",
+      "resetFromTheme": "Reset device controls from theme"
+    },
     "lockControls": "Lock controls",
     "unlockControls": "Unlock controls",
     "lockSliders": "Lock sliders",
@@ -2983,9 +3010,15 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "liquidGlass": {
+      "label": "Liquid glass",
+      "hint": "Refracts and blurs the backdrop behind surfaces. Requires glass effects.",
+      "requiresGlass": "Turn on glass effects first"
+    },
     "renderingMode": {
       "label": "Rendering",
-      "hint": "Efficiency removes blur; Quality enables high-refresh rendering on supported macOS displays after the desktop window restarts.",
+      "hint": "Efficiency uses an opaque window without desktop blur on all platforms. Restart the desktop app after changing window transparency. Quality also enables high-refresh rendering on supported macOS displays.",
+      "restartRequired": "Restart the desktop app to apply the window transparency change.",
       "efficiency": "Efficiency",
       "balanced": "Balanced",
       "quality": "Quality"
@@ -3643,6 +3676,8 @@
         "persona_description": "User Persona",
         "scenario": "Scenario",
         "dialogue_examples": "Example Messages",
+        "system_prompt": "Character System Prompt",
+        "post_history_instructions": "Character Post-History Instructions",
         "main_prompt": "Main Prompt",
         "enhance_definitions": "Enhance Definitions",
         "jailbreak": "Post-History Instructions",
@@ -3951,12 +3986,21 @@
   "decisionConnectionManager": {
     "loading": "Loading Decision connections...",
     "newConnection": "New Decision connection",
-    "empty": "No Decision connections yet. Add OpenRouter or TypeSafe to get started.",
+    "empty": "No Decision connections yet. Add OpenRouter, NanoGPT, or TypeSafe to get started.",
     "deleteTitle": "Delete Decision Connection",
     "deleteMessage": "Delete \"{{name}}\"? This cannot be undone.",
     "deleteConfirm": "Delete"
   },
   "decisionConnectionForm": {
+    "providerSignIn": "Provider sign-in",
+    "signIn": "Sign in with {{provider}}",
+    "signingIn": "Signing in…",
+    "signInHintCreate": "Sign in to create this Decision connection and store its API key.",
+    "signInHintExisting": "Sign in to store a new API key for this Decision connection.",
+    "signInDefaultUrl": "Use the provider's default API URL to sign in. For a custom URL, enter an API key.",
+    "signInSaveFirst": "Save the provider and API URL changes before signing in.",
+    "signInSaved": "Signed in. API key saved.",
+    "signInFailed": "Could not sign in. Please try again.",
     "name": "Name",
     "connectionName": "My Decision connection",
     "provider": "Provider",

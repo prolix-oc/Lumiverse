@@ -36,7 +36,15 @@ const state = {
   isAuthLoading: false,
   checkSession: async () => {},
 }
-mock.module('@/store', () => ({ useStore: (select: (value: typeof state) => unknown) => select(state) }))
+mock.module('@/store', () => ({
+  useStore: Object.assign((select: (value: typeof state) => unknown) => select(state), { getState: () => state }),
+}))
+mock.module('@/hooks/useUiLanguage', () => ({ useUiLanguage: () => {} }))
+mock.module('@/i18n', () => ({
+  changeLoginLanguage: async (code: string, isCurrent: () => boolean) => {
+    if (isCurrent()) await i18n.changeLanguage(code)
+  },
+}))
 mock.module('@/api/sso-providers', () => ({ ssoProvidersApi: { loginOptions: async () => [] } }))
 mock.module('@/lib/ssoPopup', () => ({ startSsoPopup: async () => ({ ok: true }) }))
 
@@ -115,4 +123,22 @@ test('the displayed command invokes the existing owner reset script', async () =
   const pkg = await Bun.file(new URL('../../../../package.json', import.meta.url)).json()
   expect(pkg.scripts['reset-password']).toBe('bun run scripts/reset-password.ts')
   expect(await Bun.file(new URL('../../../../scripts/reset-password.ts', import.meta.url)).exists()).toBe(true)
+})
+
+test('visitors can translate password recovery before signing in', async () => {
+  const testRoot = await renderLogin()
+  try {
+    const select = document.querySelector<HTMLSelectElement>('#lumiverse-login-language')!
+    expect([...select.options].map(option => option.textContent)).toContain('Français')
+    await act(async () => {
+      select.value = 'fr'
+      select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    const details = document.querySelector('details')!
+    expect(details.querySelector('summary')!.textContent).toBe(fr.forgotPassword)
+    expect(details.textContent).toContain(fr.passwordRecovery.otherAccounts)
+    expect(login).not.toHaveBeenCalled()
+  } finally {
+    await act(async () => testRoot.unmount())
+  }
 })

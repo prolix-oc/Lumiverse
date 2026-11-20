@@ -36,7 +36,6 @@ import {
   MouseSensor,
   TouchSensor,
   KeyboardSensor,
-  DragOverlay,
   closestCenter,
   useSensor,
   useSensors,
@@ -48,11 +47,10 @@ import {
   SortableContext,
   arrayMove,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { DndContext, useScaledSortableStyle } from '@/lib/dndUiScale'
-import { getUiScale } from '@/lib/uiScale'
+import { DndContext, useScaledSortable } from '@/lib/dndUiScale'
+import SortableDragOverlay from './SortableDragOverlay'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useEntryWorkspace } from './useEntryWorkspace'
@@ -74,6 +72,7 @@ import { ModalPresentation } from '@/components/shared/ModalPresentation'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { FormField, Select, TextInput, Button } from '@/components/shared/FormComponents'
 import Pagination from '@/components/shared/Pagination'
+import NumericInput from '@/components/shared/NumericInput'
 import EntryOrganizationControls, { EntryFolderList, type EntryOrganizationHandle } from './EntryOrganizationControls'
 import { useStore } from '@/store'
 import type {
@@ -406,8 +405,9 @@ interface EntryRowProps {
   inlineEditor?: boolean
   workspaceMode?: boolean
   workspaceOpen?: boolean
-  mobile?: boolean
   showTokens?: boolean
+  typeMenuOpen: boolean
+  positionMenuOpen: boolean
   entry: WorldBookEntry
   expanded: boolean
   dragEnabled: boolean
@@ -440,8 +440,9 @@ const EntryRowContent = memo(function EntryRowContent({
   inlineEditor = true,
   workspaceMode = false,
   workspaceOpen = false,
-  mobile = false,
   showTokens = true,
+  typeMenuOpen,
+  positionMenuOpen,
   expanded,
   dragEnabled,
   selectMode,
@@ -532,7 +533,6 @@ const EntryRowContent = memo(function EntryRowContent({
                 {(entry.folder || entry.tags?.length > 0) && <small title={[entry.folder, ...(entry.tags ?? [])].filter(Boolean).join(' · ')}> · {[entry.folder, ...(entry.tags ?? [])].filter(Boolean).join(' · ')}</small>}
               </span>
               <div className={styles.entryMeta}>
-                {mobile ? <span className={styles.entryMetaItem}>{labels.entryTypeLabel(entry)} · {labels.positionLabel(entry.position)}</span> : <>
                 <button
                   type="button"
                   className={clsx(
@@ -547,10 +547,11 @@ const EntryRowContent = memo(function EntryRowContent({
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   title={t('changeEntryType')}
-                  aria-label={t('changeEntryTypeFrom', { type: getEntryType(entry) })}
+                  aria-expanded={typeMenuOpen}
+                  aria-label={`${t('changeEntryTypeFrom', { type: getEntryType(entry) })}: ${entry.comment || entry.uid}`}
                 >
                   <span>{labels.entryTypeLabel(entry)}</span>
-                  <ChevronDown size={11} />
+                  <ChevronDown size={11} aria-hidden="true" />
                 </button>
                 <button
                   type="button"
@@ -562,19 +563,28 @@ const EntryRowContent = memo(function EntryRowContent({
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   title={t('changeEntryPosition')}
-                  aria-label={t('changeEntryPositionFrom', { position: labels.positionLabel(entry.position) })}
+                  aria-expanded={positionMenuOpen}
+                  aria-label={`${t('changeEntryPositionFrom', { position: labels.positionLabel(entry.position) })}: ${entry.comment || entry.uid}`}
                 >
                   <span>{entry.position === 7 && entry.wi_marker ? `${labels.positionLabel(entry.position)} · ${markerLabel(entry.wi_marker)}` : labels.positionLabel(entry.position)}</span>
-                  <ChevronDown size={11} />
+                  <ChevronDown size={11} aria-hidden="true" />
                 </button>
-                </>}
                 <span
                   className={clsx(styles.entryMetaItem, styles.orderBadge)}
                   title={`${tEntryFields('order')}: ${entry.order_value.toLocaleString()}`}
                   {...controlWrapProps}
                 >
                   <Hash size={10} aria-hidden="true" />
-                  <span>{entry.order_value.toLocaleString()}</span>
+                  <NumericInput
+                    className={styles.orderInput}
+                    step="1"
+                    value={entry.order_value}
+                    integer
+                    commitOnBlur
+                    aria-label={`${tEntryFields('order')}: ${entry.comment || entry.uid}`}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={(order_value) => onUpdate(entry.id, { order_value })}
+                  />
                 </span>
                 {showTokens && <EntryTokenCell bookId={bookId} entry={entry} selected={selected || expanded} />}
               </div>
@@ -622,6 +632,7 @@ const EntryRowContent = memo(function EntryRowContent({
                 onOpenMenu(entry.id, { x: rect.right, y: rect.bottom + 4 })
               }}
               title={t('moreActions')}
+              aria-label={`${t('moreActions')}: ${entry.comment || entry.uid}`}
             >
               <MoreVertical size={13} />
             </button>
@@ -649,32 +660,22 @@ const EntryRowContent = memo(function EntryRowContent({
 function EntryDragOverlay() {
   const { active } = useDndContext()
   const rowProps = active?.data.current?.entryRowProps as EntryRowProps | undefined
-  const scale = getUiScale()
-  // A transformed drawer is a containing block for fixed descendants. Keep the
-  // overlay in viewport coordinates, then restore the row's own UI scale inside.
-  return createPortal(
-    <DragOverlay dropAnimation={null} zIndex={10010} style={{ zoom: 1 / scale }}>
-      {rowProps && <div data-lorebook-drag-preview aria-hidden="true" inert style={{ zoom: scale }}>
+  return (
+    <SortableDragOverlay>
+      {rowProps && <div data-lorebook-drag-preview>
         <div className={rowProps.workspaceMode ? styles.workspaceList : undefined} style={{ display: 'contents' }}>
           <EntryRowContent {...rowProps} expanded={false} inlineEditor={false} isDragging />
         </div>
       </div>}
-    </DragOverlay>,
-    document.body,
+    </SortableDragOverlay>
   )
 }
 
 function SortableEntryRow(props: EntryRowProps) {
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef, style, isDragging } = useScaledSortable({
     id: props.entry.id,
     data: { entryRowProps: props },
     disabled: !props.dragEnabled,
-  })
-  const { setNodeRef, style } = useScaledSortableStyle({
-    setNodeRef: setSortableRef,
-    transform,
-    transition,
-    isDragging,
   })
 
   return (
@@ -1366,7 +1367,7 @@ export default function WorldBookEntriesSection({
     await loadEntries(selectedBookId, { force: true })
   }, [selectedBookId, loadEntries])
 
-  const persistEntryUpdate = useCallback(async (entryId: string, intent: EntryIntent) => {
+  const persistEntryUpdate = useCallback(async function persistEntryUpdate(entryId: string, intent: EntryIntent) {
     const generation = requestGenerationRef.current
     const expected_revision = entriesRef.current.find((entry) => entry.id === entryId)?.revision
     try {
@@ -2222,8 +2223,9 @@ export default function WorldBookEntriesSection({
                           inlineEditor={!presentation}
                           workspaceMode={presentation === 'workspace'}
                           workspaceOpen={openIds.includes(entry.id)}
-                          mobile={isMobile || presentation === 'workspace'}
                           showTokens={showTokens}
+                          typeMenuOpen={typeMenu?.entryId === entry.id}
+                          positionMenuOpen={positionMenu?.entryId === entry.id}
                           onToggleSelect={() => handleToggleSelect(entry.id)}
                           onUpdate={updateEntry}
                           onDebouncedUpdate={debouncedUpdateEntry}

@@ -15,6 +15,7 @@
  */
 
 import type { RelationType, EmotionalTag } from "./types";
+import { getConversationMessages, resolveConversationParticipants, type CortexParticipant } from "./conversation-context";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -25,6 +26,61 @@ export interface HeuristicRelationship {
   label: string;
   sentiment: number;
   confidence: number;
+  evidence?: string[];
+}
+
+/** Strong first-person signals supply reviewable candidates even if generative
+ * extraction omits the relationship. Never seed a pair from co-presence alone. */
+export function extractParticipantRelationships(
+  content: string,
+  characterNames: string[],
+  aliases: Array<{ alias: string; canonicalName: string }> = [],
+  otherCharacterNames: string[] = [],
+  storedParticipants?: CortexParticipant[],
+): HeuristicRelationship[] {
+  const participants = resolveConversationParticipants(content, characterNames, aliases, storedParticipants);
+  const results = new Map<string, HeuristicRelationship>();
+  const escape = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const signals = [
+    /\bI\s+(?:love|adore|cherish)\s+you\b/i,
+    /\bI(?:['’]m|\s+am)\s+(?:in\s+love\s+with|falling\s+for|attracted\s+to)\s+you\b/i,
+    /\bI\s+(?:have\s+(?:a\s+)?crush\s+on|want\s+to\s+date|want\s+to\s+be\s+with)\s+you\b/i,
+    /\bI\s+(?:kiss|kissed|caress|caressed|cuddle|cuddled|nuzzle|nuzzled)\s+you\b/i,
+    /\byou(?:['’]re|\s+are)\s+my\s+(?:girlfriend|boyfriend|wife|husband|lover|fianc[ée]+|romantic\s+partner)\b/i,
+    /["“][^"”\n]*\bmy\s+(?:love|beloved|sweetheart|darling)\s*[,!.?”"]/i,
+  ];
+  for (const message of getConversationMessages(content)) {
+    const owner = participants.find((participant) => participant.role === message.role
+      && (participant.name.toLowerCase() === message.name.toLowerCase()
+        || aliases.some((alias) => alias.alias.toLowerCase() === message.name.toLowerCase() && alias.canonicalName.toLowerCase() === participant.name.toLowerCase())
+        || storedParticipants?.some((stored) => stored.role === message.role && stored.name.toLowerCase() === participant.name.toLowerCase()
+          && stored.aliases?.some((alias) => alias.toLowerCase() === message.name.toLowerCase()))));
+    const counterparts = participants.filter((participant) => participant.role !== message.role);
+    if (!owner || counterparts.length !== 1) continue;
+    const target = counterparts[0]!;
+    const pairNames = new Set([owner.name, target.name].map((name) => name.toLowerCase()));
+    if (pairNames.size !== 2) continue;
+    const thirdParties = [...characterNames, ...otherCharacterNames, ...participants.map((participant) => participant.name), ...aliases.filter((alias) => !pairNames.has(alias.canonicalName.toLowerCase())).map((alias) => alias.alias)]
+      .filter((name) => !pairNames.has(name.toLowerCase()));
+    for (const paragraph of message.content.split(/\n\s*\n/)) {
+      const signal = signals.map((pattern) => pattern.exec(paragraph)).find(Boolean);
+      if (!signal) continue;
+      // These patterns deliberately decline indirect/negated speech and local
+      // third-party scenes. The generative extractor can resolve richer prose.
+      if (/\b(?:not|never|don['’]t|didn['’]t|can['’]t|wouldn['’]t|couldn['’]t|if|pretend\w*|rehears\w*|quot(?:e|ed|ing)|jok\w*|sarcas\w*|mock\w*)\b/i.test(paragraph)) continue;
+      if (/\b(?:he|she|they)\s+(?:said|asked|whispered|replied|murmured|thought)\b/i.test(paragraph)) continue;
+      const attributedNames = [...paragraph.matchAll(/\b([\p{Lu}][\p{L}’'-]*(?:\s+[\p{Lu}][\p{L}’'-]*){0,2})\s+(?:said|asked|whispered|replied|murmured|thought)\b/gu)]
+        .map((match) => match[1]!);
+      attributedNames.push(...[...paragraph.matchAll(/\b(?:said|asked|whispered|replied|murmured|thought)\s+([\p{Lu}][\p{L}’'-]*(?:\s+[\p{Lu}][\p{L}’'-]*){0,2})/gu)].map((match) => match[1]!));
+      if (attributedNames.some((name) => name !== "I" && name.toLowerCase() !== owner.name.toLowerCase())) continue;
+      if (thirdParties.some((name) => new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name)}(?![\\p{L}\\p{N}_])`, "iu").test(paragraph))) continue;
+      const key = `${owner.name.toLowerCase()}→${target.name.toLowerCase()}:lover`;
+      const prior = results.get(key);
+      results.set(key, { source: owner.name, target: target.name, type: "lover", label: "romantic interest",
+        sentiment: 0.7, confidence: 0.75, evidence: [...(prior?.evidence ?? []), paragraph.slice(Math.max(0, signal.index - 250), signal.index + signal[0].length + 500).trim()].slice(0, 3) });
+    }
+  }
+  return [...results.values()];
 }
 
 // ─── Verb Dictionaries ─────────────────────────────────────────
@@ -34,6 +90,7 @@ interface VerbSignal {
   type: RelationType;
   sentiment: number;
   label: string;
+  reverse?: boolean;
 }
 
 const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
@@ -73,7 +130,7 @@ const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
   { pattern: /\b(glared\s+at|snarled\s+at|snapped\s+at|shouted\s+at|yelled\s+at)\b/i, signal: { type: "rival", sentiment: -0.5, label: "hostility" } },
 
   // Hierarchical
-  { pattern: /\b(commanded|ordered|instructed|directed|assigned|dispatched)\b/i, signal: { type: "serves", sentiment: 0.1, label: "commands" } },
+  { pattern: /\b(commanded|ordered|instructed|directed|assigned|dispatched)\b/i, signal: { type: "serves", sentiment: 0.1, label: "serves", reverse: true } },
   { pattern: /\b(obeyed|served|reported\s+to|answered\s+to|bowed\s+(?:to|before))\b/i, signal: { type: "serves", sentiment: 0.1, label: "serves" } },
 
   // Teaching/mentoring
@@ -86,7 +143,7 @@ const DIRECTED_VERB_PATTERNS: Array<{ pattern: RegExp; signal: VerbSignal }> = [
 // ─── Relational Noun Patterns ──────────────────────────────────
 // "Melina's brother", "her mentor", "his rival"
 
-const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: number }> = [
+const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: number; reverse?: boolean; label?: string }> = [
   // Family
   { pattern: /\b(father|mother|parent|dad|mom|papa|mama)\b/i, type: "parent", sentiment: 0.3 },
   { pattern: /\b(son|daughter|child|kid|offspring)\b/i, type: "child", sentiment: 0.3 },
@@ -97,8 +154,8 @@ const RELATIONAL_NOUNS: Array<{ pattern: RegExp; type: RelationType; sentiment: 
 
   // Professional/hierarchical
   { pattern: /\b(mentor|teacher|master|instructor|sensei|coach)\b/i, type: "mentor", sentiment: 0.3 },
-  { pattern: /\b(student|apprentice|protégée?|pupil|trainee)\b/i, type: "child", sentiment: 0.2 },
-  { pattern: /\b(boss|commander|captain|superior|leader|chief)\b/i, type: "serves", sentiment: 0.1 },
+  { pattern: /\b(student|apprentice|protégée?|pupil|trainee)\b/i, type: "mentor", sentiment: 0.2, reverse: true, label: "mentors" },
+  { pattern: /\b(boss|commander|captain|superior|leader|chief)\b/i, type: "serves", sentiment: 0.1, reverse: true, label: "serves" },
 
   // Social
   { pattern: /\b(friend|companion|comrade|buddy|pal|confidant|ally|partner-in-crime)\b/i, type: "ally", sentiment: 0.5 },
@@ -286,7 +343,7 @@ export function extractRelationshipsHeuristic(
   for (const pair of candidateDirectedPairs) {
     const verbRels = detectVerbMediated(pair.source, pair.target, pair.content);
     for (const rel of verbRels) {
-      const key = `${pair.source}→${pair.target}:${rel.type}`;
+      const key = `${rel.source}→${rel.target}:${rel.type}`;
       if (!seen.has(key)) {
         seen.add(key);
         relationships.push(rel);
@@ -381,8 +438,8 @@ function detectVerbMediated(
     );
     if (directPattern.test(content)) {
       results.push({
-        source,
-        target,
+        source: signal.reverse ? target : source,
+        target: signal.reverse ? source : target,
         type: signal.type,
         label: signal.label,
         sentiment: signal.sentiment,
@@ -398,8 +455,8 @@ function detectVerbMediated(
     );
     if (prepPattern.test(content)) {
       results.push({
-        source,
-        target,
+        source: signal.reverse ? target : source,
+        target: signal.reverse ? source : target,
         type: signal.type,
         label: signal.label,
         sentiment: signal.sentiment,
@@ -425,7 +482,7 @@ function detectRelationalNouns(
   for (const [possessor, other] of pairs) {
     const escPoss = possessor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    for (const { pattern, type, sentiment } of RELATIONAL_NOUNS) {
+    for (const { pattern, type, sentiment, reverse, label } of RELATIONAL_NOUNS) {
       // "Possessor's [relation]" near Other
       const possPattern = new RegExp(
         `${escPoss}[''\u2019]s\\s+${pattern.source}`,
@@ -439,10 +496,10 @@ function detectRelationalNouns(
             const nounMatch = content.match(possPattern);
             const relNoun = nounMatch ? nounMatch[0].split(/[''\u2019]s\s+/)[1] : type;
             results.push({
-              source: other,   // Other IS Possessor's [relation]
-              target: possessor,
+              source: reverse ? possessor : other,
+              target: reverse ? other : possessor,
               type,
-              label: relNoun?.toLowerCase() || type,
+              label: label ?? relNoun?.toLowerCase() ?? type,
               sentiment,
               confidence: 0.7,
             });
@@ -461,10 +518,10 @@ function detectRelationalNouns(
           const searchWindow = content.slice(Math.max(0, matchIdx - 40), matchIdx + 80);
           if (searchWindow.toLowerCase().includes(other.toLowerCase())) {
             results.push({
-              source: other,
-              target: possessor,
+              source: reverse ? possessor : other,
+              target: reverse ? other : possessor,
               type,
-              label: type,
+              label: label ?? type,
               sentiment,
               confidence: 0.65,
             });

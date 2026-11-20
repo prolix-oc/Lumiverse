@@ -335,23 +335,38 @@ async function requireFfmpegBinary(): Promise<string> {
   return ffmpeg;
 }
 
-async function runFfmpeg(ffmpeg: string, args: string[]): Promise<{ ok: boolean; stderr: string }> {
-  const proc = Bun.spawn([ffmpeg, "-hide_banner", "-loglevel", "error", ...args], {
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  const stderr = proc.stderr ? await new Response(proc.stderr).text() : "";
-  const code = await proc.exited;
-  return { ok: code === 0, stderr };
+/** Host execution limits; never supplied by an extension's media request. */
+export interface MediaExecutionOptions {
+  signal?: AbortSignal;
+  maxOutputBytes?: number;
+  threads?: number;
 }
 
-async function probeMediaMetadata(ffmpeg: string, path: string): Promise<MediaMetadata> {
-  const proc = Bun.spawn([ffmpeg, "-hide_banner", "-i", path], {
+async function runMediaProcess(ffmpeg: string, args: string[], signal?: AbortSignal): Promise<{ ok: boolean; stderr: string }> {
+  signal?.throwIfAborted();
+  const proc = Bun.spawn([ffmpeg, ...args], {
     stdout: "ignore",
     stderr: "pipe",
   });
-  const stderr = proc.stderr ? await new Response(proc.stderr).text() : "";
-  await proc.exited;
+  const abort = () => { proc.kill("SIGKILL"); };
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    const stderr = proc.stderr ? await new Response(proc.stderr).text() : "";
+    const code = await proc.exited;
+    signal?.throwIfAborted();
+    return { ok: code === 0, stderr };
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function runFfmpeg(ffmpeg: string, args: string[], options?: MediaExecutionOptions): Promise<{ ok: boolean; stderr: string }> {
+  return runMediaProcess(ffmpeg, ["-hide_banner", "-loglevel", "error", ...args], options?.signal);
+}
+
+async function probeMediaMetadata(ffmpeg: string, path: string, options?: MediaExecutionOptions): Promise<MediaMetadata> {
+  const { stderr } = await runMediaProcess(ffmpeg, ["-hide_banner", "-i", path], options?.signal);
   const { width, height } = parseFfmpegDimensions(stderr);
   return {
     duration_ms: parseFfmpegDurationMs(stderr),
@@ -365,15 +380,20 @@ async function buildResult(
   outputPath: string,
   filename: string,
   mimeType: string,
+  options?: MediaExecutionOptions,
 ): Promise<MediaTransformResultDTO> {
   if (!existsSync(outputPath)) {
     throw new Error("ffmpeg produced no output file");
+  }
+  options?.signal?.throwIfAborted();
+  if (options?.maxOutputBytes !== undefined && Bun.file(outputPath).size > options.maxOutputBytes) {
+    throw new Error("MEDIA_OUTPUT_TOO_LARGE");
   }
   const data = new Uint8Array(await Bun.file(outputPath).arrayBuffer());
   if (data.byteLength === 0) {
     throw new Error("ffmpeg produced an empty output file");
   }
-  const meta = await probeMediaMetadata(ffmpeg, outputPath);
+  const meta = await probeMediaMetadata(ffmpeg, outputPath, options);
   return {
     data,
     filename,
@@ -471,13 +491,13 @@ function buildVideoCodecArgs(
       throw new Error("crf must be a non-negative number");
     }
     args.push("-crf", String(parsed));
-  } else if (codec === "h264") {
+  } else if (!bitrate && codec === "h264") {
     args.push("-crf", "23");
-  } else if (codec === "hevc") {
+  } else if (!bitrate && codec === "hevc") {
     args.push("-crf", "28");
-  } else if (codec === "vp9") {
+  } else if (!bitrate && codec === "vp9") {
     args.push("-crf", "32");
-  } else if (codec === "av1") {
+  } else if (!bitrate && codec === "av1") {
     args.push("-crf", "30");
   }
 
@@ -541,12 +561,13 @@ function wantsFaststart(format: MediaVideoFormatDTO, faststart: boolean | undefi
 
 async function runOperation(
   build: (ffmpeg: string, workdir: string) => Promise<{ outputPath: string; filename: string; mimeType: string }>,
+  options?: MediaExecutionOptions,
 ): Promise<MediaTransformResultDTO> {
   const ffmpeg = await requireFfmpegBinary();
   const workdir = mkdtempSync(join(tmpdir(), "lumiverse-media-op-"));
   try {
     const { outputPath, filename, mimeType } = await build(ffmpeg, workdir);
-    return await buildResult(ffmpeg, outputPath, filename, mimeType);
+    return await buildResult(ffmpeg, outputPath, filename, mimeType, options);
   } finally {
     try {
       rmSync(workdir, { recursive: true, force: true });
@@ -609,6 +630,7 @@ async function transcodeVideoInternal(
     faststart?: boolean;
     filename?: string;
   },
+  options?: MediaExecutionOptions,
 ): Promise<MediaTransformResultDTO> {
   const format = input.output_format ?? inferVideoFormatFromSource(source);
   const formatInfo = VIDEO_FORMAT_INFO[format];
@@ -630,6 +652,7 @@ async function transcodeVideoInternal(
       formatInfo.ext,
     );
     const args = [
+      ...(options?.threads ? ["-threads", String(options.threads), "-filter_threads", String(options.threads)] : []),
       "-i", source.path,
       "-map", "0:v:0",
     ];
@@ -641,9 +664,8 @@ async function transcodeVideoInternal(
     }
 
     const requireEven = requestedVideoCodec === "h264" || requestedVideoCodec === "hevc";
-    const filter = buildScaleFilter(width, height, requireEven);
-    if (filter) args.push("-vf", filter);
-    if (fps) args.push("-r", String(fps));
+    const filters = [buildScaleFilter(width, height, requireEven), fps ? `fps=${fps}` : undefined].filter(Boolean);
+    if (filters.length) args.push("-vf", filters.join(","));
 
     args.push(...buildVideoCodecArgs(requestedVideoCodec, format, {
       video_bitrate_kbps: input.video_bitrate_kbps,
@@ -662,9 +684,12 @@ async function transcodeVideoInternal(
       args.push("-movflags", "+faststart");
     }
 
+    if (options?.threads) args.push("-threads", String(options.threads));
+    // A size-limited FFmpeg output may be truncated; capture callers additionally check duration.
+    if (options?.maxOutputBytes) args.push("-fs", String(options.maxOutputBytes));
     args.push("-y", outputPath);
 
-    const result = await runFfmpeg(ffmpeg, args);
+    const result = await runFfmpeg(ffmpeg, args, options);
     if (!result.ok) {
       throw new Error(`video transcode failed: ${result.stderr.trim().slice(0, 500) || "ffmpeg exited unsuccessfully"}`);
     }
@@ -673,7 +698,7 @@ async function transcodeVideoInternal(
       filename: outputFilename,
       mimeType: formatInfo.mime,
     };
-  });
+  }, options);
 }
 
 export async function convertVideo(
@@ -727,8 +752,9 @@ export async function convertVideo(
 export async function transcodeVideo(
   source: ResolvedMediaSourceDTO,
   input: MediaTranscodeVideoRequestDTO,
+  options?: MediaExecutionOptions,
 ): Promise<MediaTransformResultDTO> {
-  return transcodeVideoInternal(source, input);
+  return transcodeVideoInternal(source, input, options);
 }
 
 export async function removeAudioFromVideo(

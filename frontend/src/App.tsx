@@ -1,4 +1,5 @@
 import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
+import { Spinner } from '@/components/shared/Spinner'
 import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { Outlet } from 'react-router'
 import { listen } from '@tauri-apps/api/event'
@@ -11,13 +12,14 @@ import { installDesktopViewportZoom } from '@/lib/desktopViewportZoom'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
+import { useUiLanguage } from '@/hooks/useUiLanguage'
 import { useIOSPushSync } from '@/hooks/useIOSPushSync'
+import { useIOSLiveActivities } from '@/hooks/useIOSLiveActivities'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ActiveTabGuard from '@/components/auth/ActiveTabGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
-import CharacterEditorPage from '@/components/panels/character-browser/CharacterEditorPage'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
@@ -25,6 +27,7 @@ import WindowFileDropHost from '@/components/shared/WindowFileDropHost'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
+import LiquidGlassFilters from '@/components/shared/LiquidGlassFilters'
 import useIsMobile from '@/hooks/useIsMobile'
 import { resolveChatWallpaper, resolveGlobalWallpaper } from '@/lib/wallpaper'
 import {
@@ -39,7 +42,7 @@ import { useBoundPresetSelection } from '@/hooks/useBoundPresetSelection'
 import { RouterContextExporter } from '@/lib/router-bridge'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
-import { getSafeThemeState } from '@/lib/safeThemeMode'
+import { useSafeThemeState } from '@/lib/safeThemeMode'
 import DesktopFloatingWidgetHost from '@/components/spindle/DesktopFloatingWidgetHost'
 import {
   buildDesktopFloatingWidgetCatalog,
@@ -53,14 +56,21 @@ import styles from './App.module.css'
 import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
 import { installTauriSystemAudioSource } from '@/lib/spindle/system-audio-tauri'
+import { useDesktopKeybindings } from '@/hooks/useDesktopKeybindings'
 import { createDesktopDownloadFeedback, type DesktopDownloadEvent } from '@/lib/desktop-download-feedback'
 import { toast } from '@/lib/toast'
+import { useIOSDuoLayout } from '@/hooks/useIOSDuoLayout'
+import { duoChatStyle } from '@/lib/ios-duo-layout'
+import { useIOSShortcuts } from '@/hooks/useIOSShortcuts'
 
+const CharacterEditorPage = lazy(() => import('@/components/panels/character-browser/CharacterEditorPage'))
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
+
 
 export { acknowledgePendingConnectionsDeepLink }
 
 export default function App() {
+  useIOSShortcuts()
   return (
     <AuthGuard>
       {isDesktopFloatingWidgetWindow()
@@ -74,7 +84,7 @@ function Application() {
   'use memo'
 
   const { t } = useTranslation('common')
-  const safeTheme = getSafeThemeState()
+  const safeTheme = useSafeThemeState()
   useWebSocket()
   useThemeApplicator()
   const desktopPinchZoomEnabled = useStore((s) => s.desktopPinchZoomEnabled)
@@ -82,9 +92,12 @@ function Application() {
   useCharacterTheme()
   useCustomCSSApplicator()
   useAppInit()
+  useUiLanguage()
   useIOSPushSync(useStore(s => s.isAuthenticated ? s.user?.id ?? null : null))
+  useIOSLiveActivities(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
   useDocumentTitle()
   useBadging()
+  useDesktopKeybindings()
   useTTSAutoPlay()
   useAutoSummarization()
   useBoundPresetSelection()
@@ -119,6 +132,9 @@ function Application() {
   }, [t])
 
   const isMobile = useIsMobile()
+  const drawerSide = useStore((s) => s.drawerSettings.side)
+  const duoAlwaysOpen = useStore((s) => s.drawerSettings.duoAlwaysOpen !== false)
+  const duoLayout = useIOSDuoLayout(drawerSide, duoAlwaysOpen)
   const customCSSDockUnavailable = useIsMobile(CUSTOM_CSS_DOCK_BREAKPOINT)
   const customCSSDockOpen = useStore((s) => s.customCSSDockOpen)
   const customCSSDockSize = useStore((s) => s.customCSSDockSize)
@@ -370,13 +386,16 @@ function Application() {
       <LazyMotion features={domAnimation} strict={false}>
         <MotionConfig reducedMotion="user">
           <div
-            className={styles.app}
+            className={duoLayout ? `${styles.app} ${styles.duoApp}` : styles.app}
             data-app-root=""
+            data-duo-layout={duoLayout?.axis}
+            data-duo-drawer-side={duoLayout?.axis === 'horizontal' ? drawerSide : undefined}
             style={{
               '--spindle-dock-left': `${dockInsets.left}px`,
               '--spindle-dock-right': `${dockInsets.right}px`,
               '--spindle-dock-top': `${dockInsets.top}px`,
               '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+              '--duo-window-keyboard-inset-bottom': 'var(--app-keyboard-inset-bottom, 0px)',
             } as React.CSSProperties}
           >
               {safeTheme.active && (
@@ -385,15 +404,20 @@ function Application() {
                 </div>
               )}
               <WallpaperLayer wallpaper={resolveGlobalWallpaper(wallpaper, isMobile)} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <LiquidGlassFilters />
               <ErrorBoundary label="App">
                 {/* Mirrors react-router context out to detached drawer-tab roots */}
                 <RouterContextExporter />
-                <main className={styles.main}>
-                  <Outlet />
+                <main
+                  className={duoLayout ? `${styles.main} ${styles.duoMain}` : styles.main}
+                  data-duo-chat={duoLayout ? '' : undefined}
+                  style={duoLayout ? duoChatStyle(duoLayout) as React.CSSProperties : undefined}
+                >
+                  <Suspense fallback={<Spinner />}><Outlet /></Suspense>
                 </main>
-                <ViewportDrawer />
+                <ViewportDrawer duoLayout={duoLayout} />
                 {!isDesktopFloatingWidgetWindow() && <WindowFileDropHost />}
-                {editingCharacterId && <CharacterEditorPage />}
+                {editingCharacterId && <Suspense fallback={null}><CharacterEditorPage /></Suspense>}
                 <ModalContainer />
                 {customCSSDockOpen && !customCSSDockUnavailable && (
                   <Suspense fallback={null}>

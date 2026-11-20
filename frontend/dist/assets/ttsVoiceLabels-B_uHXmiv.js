@@ -1,0 +1,1 @@
+function e(e){let t=e.gender?.trim(),n=t?{feminine:`Female`,female:`Female`,masculine:`Male`,male:`Male`,neutral:`Neutral`}[t.toLowerCase()]??t:void 0;return n?`${e.name} (${n})`:e.name}function t(e){return[e.description,e.language].filter(Boolean).join(` · `)||void 0}export{t as n,e as t};

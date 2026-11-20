@@ -101,6 +101,19 @@ describe('moveTabTo / clearPendingActiveTabReset', () => {
 })
 
 describe('preset editor placements', () => {
+  test('frontend reload cleanup preserves worker commands until the backend unregisters them', () => {
+    const slice = makeSlice()
+    const entry = { extensionId: 'ext-1', extensionName: 'Capture', commands: [{ id: 'analyze', label: 'Analyze Screen', description: '' }] }
+    slice.state.setExtensionCommands(entry)
+    slice.state.registerPresetEditorTab({ id: 'tab-1', extensionId: 'ext-1', title: 'Capture', root: {} as HTMLElement })
+    slice.state.removeAllByExtension('ext-1')
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorTabs).toEqual([])
+    expect(slice.state.extensionCommands).toEqual([entry])
+    slice.state.setExtensionCommands({ ...entry, commands: [] })
+    expect(slice.state.extensionCommands).toEqual([])
+  })
+
   test('registers, updates, and removes extension preset tabs', () => {
     const slice = makeSlice()
     const root = {} as HTMLElement

@@ -39,6 +39,15 @@
     "assistant": "Assistente"
   },
   "input": {
+    "formatting": {
+      "label": "Formattazione del messaggio",
+      "bold": "Grassetto",
+      "italic": "Corsivo",
+      "underline": "Sottolineato",
+      "quotes": "Virgolette",
+      "singleQuotes": "Virgolette singole",
+      "parentheses": "Parentesi"
+    },
     "placeholder": "Digita un messaggio…",
     "backHome": "Torna alla home",
     "regenerate": "Rigenera",
@@ -252,6 +261,22 @@
     "showFewer": "Mostra meno"
   },
   "chatView": {
+    "cortexFailedBatches": "Gruppi non riusciti: {{count}}",
+    "cortexBatchProgress": "{{current}}/{{total}} gruppi · {{queued}} in coda",
+    "cortexElapsed": "{{seconds}} s trascorsi",
+    "cortexBatchActivity": "Gruppo {{batch}} · {{phase}}",
+    "cortexBatchChunks": "Blocchi: {{count}}",
+    "cortexActiveBatches": "Gruppi di memoria attivi",
+    "cortexActivity": {
+      "queued": "In coda",
+      "waiting": "In attesa del provider",
+      "thinking": "Ragionamento",
+      "responding": "Risposta in corso",
+      "reviewing": "Revisione",
+      "preparing": "Preparazione",
+      "saving": "Salvataggio",
+      "consolidating": "Consolidamento"
+    },
     "togglePortraitPanel": "Attiva/disattiva pannello ritratto",
     "exitSelectionMode": "Esci dalla modalità selezione",
     "selectMessages": "Seleziona messaggi",

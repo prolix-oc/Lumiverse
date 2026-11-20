@@ -14,7 +14,7 @@
 }
 
 :global([data-glass]) .backdrop {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
 }
 
 /* Modal */
@@ -1178,7 +1178,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
-  backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px) var(--lcs-liquid-filter, );
 }
 
 .galleryRemoveBtn {
@@ -1459,6 +1459,7 @@
 
 @media (max-width: 600px) {
   .backdrop {
+    height: calc(var(--app-fullscreen-height, var(--app-shell-height, 100dvh)) / var(--lumiverse-ui-scale, 1));
     padding: 0;
   }
 

@@ -142,6 +142,21 @@ function ModalItemRenderer({ item }: { item: SpindleModalItem }) {
 function SpindleModal() {
   const req = useStore((s) => s.pendingModal)
   const closeModal = useStore((s) => s.closeSpindleModal)
+  const isOpen = Boolean(req)
+  const [, refreshGeometry] = useState(0)
+  useEffect(() => {
+    if (!isOpen) return
+    const refresh = () => refreshGeometry(value => value + 1)
+    const observer = new MutationObserver(refresh)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+    window.addEventListener('resize', refresh)
+    window.visualViewport?.addEventListener('resize', refresh)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', refresh)
+      window.visualViewport?.removeEventListener('resize', refresh)
+    }
+  }, [isOpen])
 
   if (!req) return null
 

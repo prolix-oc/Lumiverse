@@ -9,6 +9,8 @@ import { clearLiveRootsForExtension, registerLiveRoot } from './live-root-regist
 mock.module('@/i18n', () => ({
   default: { t: (key: string) => key, language: 'en' },
   changeUiLanguage: async () => undefined,
+  applyLoginLanguage: async () => undefined,
+  changeLoginLanguage: async () => undefined,
 }))
 mock.module('@/lib/cssModuleRegistry', () => ({
   CSS_MODULE_REGISTRY: [],

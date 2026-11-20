@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, maximum-scale=5.0" />
+    <title>Liquid Glass JS - Apple-Inspired Glass Effects Library</title>
+
+    <!-- SEO Meta Tags -->
+    <meta
+      name="description"
+      content="A WebGL-powered JavaScript library bringing sophisticated Apple Liquid Glass effects to the web with real-time refraction, blur, and masking systems."
+    />
+    <meta
+      name="keywords"
+      content="liquid glass, webgl, javascript, ui library, glass effects, apple design, vision pro, refraction, blur"
+    />
+    <meta name="author" content="Armagan Amcalar" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Mobile Optimization -->
+    <meta name="theme-color" content="#007AFF" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Liquid Glass JS" />
+
+    <!-- Open Graph Meta Tags (Facebook, LinkedIn) -->
+    <meta property="og:title" content="Liquid Glass JS - Apple-Inspired Glass Effects Library" />
+    <meta
+      property="og:description"
+      content="A WebGL-powered JavaScript library bringing sophisticated Apple Liquid Glass effects to the web with real-time refraction, blur, and masking systems."
+    />
+    <meta property="og:image" content="https://dashersw.github.io/liquid-glass-js/demo.gif" />
+    <meta property="og:url" content="https://dashersw.github.io/liquid-glass-js/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Liquid Glass JS" />
+
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Liquid Glass JS - Apple-Inspired Glass Effects Library" />
+    <meta
+      name="twitter:description"
+      content="A WebGL-powered JavaScript library bringing sophisticated Apple Liquid Glass effects to the web with real-time refraction, blur, and masking systems."
+    />
+    <meta name="twitter:image" content="https://dashersw.github.io/liquid-glass-js/demo.gif" />
+    <meta name="twitter:creator" content="@dashersw" />
+
+    <!-- Favicon -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>"
+    />
+
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="glass.css" />
+    <link rel="stylesheet" href="demo.css" />
+    <link rel="stylesheet" href="controls.css" />
+  </head>
+  <body>
+    <div id="demo-layout" class="demo-layout">
+      <div id="hello-row"></div>
+      <div id="controls-row" class="demo-row"></div>
+      <div id="container-row"></div>
+      <div id="standalone-row"></div>
+    </div>
+
+    <!-- Mobile Controls Toggle Button -->
+    <button id="mobile-controls-toggle" class="mobile-controls-toggle" aria-label="Toggle Controls Panel">
+      <span class="toggle-icon">⚙️</span>
+      <span class="toggle-text">Controls</span>
+    </button>
+
+    <!-- Glass Effects Controls Panel -->
+    <div id="glass-controls-container" class="glass-controls">
+      <div id="controls-content" class="controls-content">
+        <h3>🍎 Liquid Glass Controls</h3>
+
+        <div class="control-group">
+          <label>Edge Intensity <span class="control-value" id="edgeValue">0.01</span></label>
+          <input type="range" id="edgeIntensity" min="0" max="0.1" step="0.001" value="0.01" />
+        </div>
+
+        <div class="control-group">
+          <label>Rim Intensity <span class="control-value" id="rimValue">0.05</span></label>
+          <input type="range" id="rimIntensity" min="0" max="0.2" step="0.001" value="0.05" />
+        </div>
+
+        <div class="control-group">
+          <label>Base Intensity <span class="control-value" id="baseValue">0.01</span></label>
+          <input type="range" id="baseIntensity" min="0" max="0.05" step="0.001" value="0.01" />
+        </div>
+
+        <div class="control-group">
+          <label>Edge Distance <span class="control-value" id="edgeDistValue">0.15</span></label>
+          <input type="range" id="edgeDistance" min="0.05" max="0.5" step="0.01" value="0.15" />
+        </div>
+
+        <div class="control-group">
+          <label>Rim Distance <span class="control-value" id="rimDistValue">0.8</span></label>
+          <input type="range" id="rimDistance" min="0.1" max="2.0" step="0.05" value="0.8" />
+        </div>
+
+        <div class="control-group">
+          <label>Base Distance <span class="control-value" id="baseDistValue">0.1</span></label>
+          <input type="range" id="baseDistance" min="0.05" max="0.3" step="0.01" value="0.1" />
+        </div>
+
+        <div class="control-group">
+          <label>Corner Boost <span class="control-value" id="cornerValue">0.02</span></label>
+          <input type="range" id="cornerBoost" min="0" max="0.1" step="0.001" value="0.02" />
+        </div>
+
+        <div class="control-group">
+          <label>Ripple Effect <span class="control-value" id="rippleValue">0.1</span></label>
+          <input type="range" id="rippleEffect" min="0" max="0.5" step="0.01" value="0.1" />
+        </div>
+
+        <div class="control-group">
+          <label>Blur Radius <span class="control-value" id="blurValue">5.0</span></label>
+          <input type="range" id="blurRadius" min="1" max="15" step="0.5" value="5.0" />
+        </div>
+
+        <div class="control-group">
+          <label>Tint Opacity <span class="control-value" id="tintValue">0.2</span></label>
+          <input type="range" id="tintOpacity" min="0" max="1.0" step="0.01" value="0.2" />
+        </div>
+
+        <div class="control-group">
+          <label> <input type="checkbox" id="warpToggle" /> Enable Center Warp </label>
+        </div>
+
+        <div class="control-group">
+          <label> <input type="checkbox" id="hideButtonsToggle" /> Hide All Buttons </label>
+        </div>
+
+        <div class="control-group control-group-button">
+          <button id="randomizeButton" class="randomize-button">🎲 Randomize Glass Effects</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+      <img
+        src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=300&fit=crop"
+        class="hero-image"
+        alt="Mountain landscape"
+      />
+      <h1>Liquid Glass JS Library</h1>
+
+      <p style="text-align: center; margin: 20px 0">
+        <a
+          href="https://github.com/dashersw/liquid-glass-js"
+          target="_blank"
+          style="
+            display: inline-block;
+            padding: 12px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 25px;
+            color: #007aff;
+            text-decoration: none;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+          "
+          onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'"
+          onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'"
+        >
+          🐙 View on GitHub
+        </a>
+      </p>
+
+      <p>
+        <strong>Inspired by Apple's new Liquid Glass design language</strong>, this WebGL-powered library brings Vision
+        Pro-style glass effects to the web with sophisticated refraction, blur, and masking systems.
+      </p>
+
+      <h2>Advanced Glass Effects Architecture</h2>
+      <p>
+        Our library implements real-time glass rendering using WebGL shaders with multi-layer refraction systems. Each
+        glass element samples the background through sophisticated algorithms that simulate physical glass properties
+        including edge distortion, rim effects, and customizable center warping.
+      </p>
+      <img
+        src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Forest path"
+      />
+      <p>
+        The glass effects dynamically sample these background images, creating realistic refraction and blur that adapts
+        to any content beneath the glass surfaces.
+      </p>
+      <img
+        src="https://images.unsplash.com/photo-1439066615861-d1af74d74000?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Lake and mountains"
+      />
+      <p>
+        Notice how the glass buttons above interact with different image content - the WebGL shaders analyze the
+        background in real-time to create convincing glass distortion effects.
+      </p>
+      <img
+        src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Mountain vista"
+      />
+      <p>
+        Each glass element uses sophisticated sampling techniques to blur and refract the content behind it, creating
+        depth and visual hierarchy while maintaining readability.
+      </p>
+
+      <img
+        src="https://images.unsplash.com/photo-1511884642898-4c92249e20b6?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Forest landscape"
+      />
+      <p>
+        The scrolling interaction demonstrates how glass elements maintain their effects during dynamic page movement,
+        continuously updating their background sampling.
+      </p>
+      <img
+        src="https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Nature scene"
+      />
+      <p>
+        Try adjusting the real-time controls to see how different parameters affect the glass rendering - from subtle
+        transparency to dramatic refraction.
+      </p>
+      <img
+        src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=400&fit=crop"
+        class="content-image"
+        alt="Woodland path"
+      />
+      <p>
+        This extensive content ensures the glass effects can be tested across various backgrounds and scroll positions,
+        demonstrating the robustness of the WebGL implementation.
+      </p>
+
+      <div class="gradient-banner">
+        <h2>Beautiful glass effects with real images!</h2>
+      </div>
+
+      <h2>Technical Capabilities & Architecture</h2>
+
+      <h3>🎯 Button & Container Types</h3>
+      <p>The library supports three distinct geometric shapes, each with specialized WebGL shader calculations:</p>
+      <ul>
+        <li><strong>Rounded Rectangles</strong> - Classic iOS-style buttons with customizable corner radius</li>
+        <li><strong>Perfect Circles</strong> - Circular buttons ideal for icons and compact controls</li>
+        <li><strong>Pill/Capsule Shapes</strong> - Pharmaceutical-inspired elongated buttons with semicircular ends</li>
+      </ul>
+
+      <h3>⚙️ Real-Time Control System</h3>
+      <p>Every glass parameter is controllable via the live settings panel (which itself is a glass container):</p>
+      <ul>
+        <li><strong>Edge & Rim Intensity</strong> - Controls glass refraction strength at boundaries</li>
+        <li><strong>Distance Falloffs</strong> - Exponential curves that define effect areas</li>
+        <li><strong>Center Warp Toggle</strong> - Optional content distortion for dramatic effects</li>
+        <li><strong>Corner Enhancement</strong> - Specialized corner light effects</li>
+        <li><strong>Ripple Textures</strong> - Surface imperfection simulation</li>
+        <li><strong>Blur Radius</strong> - Background defocus amount</li>
+        <li><strong>Tint Opacity</strong> - Controls gradient overlay intensity from subtle (0.1) to warm (0.8)</li>
+        <li><strong>Randomize Button</strong> - Generate creative glass effect combinations instantly</li>
+      </ul>
+
+      <h3>🏗️ Flexible Architecture</h3>
+      <p>
+        <strong>Container Class:</strong> Base glass surface with automatic child management, supports standalone page
+        sampling or nested parent-child relationships. Each container can have its own tintOpacity setting.
+      </p>
+      <p>
+        <strong>Button Class:</strong> Extends Container with text overlays, click handlers, and intelligent sizing.
+        Buttons can work independently or as children of containers, with individual tint control.
+      </p>
+      <p>
+        <strong>Nested Glass System:</strong> Child buttons sample their parent container's rendered output for true
+        layered glass effects.
+      </p>
+      <p>
+        <strong>Per-Instance Properties:</strong> Each glass element can have custom tintOpacity, borderRadius, and type
+        settings for precise design control and visual hierarchy.
+      </p>
+
+      <h3>🔬 WebGL Implementation</h3>
+      <p>Built with cutting-edge graphics techniques:</p>
+      <ul>
+        <li><strong>Multi-Layer Refraction</strong> - Separate edge, rim, and base intensity calculations</li>
+        <li><strong>Shape-Aware Normals</strong> - Different algorithms for rounded rectangles, circles, and pills</li>
+        <li><strong>Gaussian Blur Sampling</strong> - 13×13 adaptive blur with circular masking</li>
+        <li><strong>Real-Time Page Capture</strong> - html2canvas integration for background sampling</li>
+        <li><strong>Dynamic Uniform Updates</strong> - Live parameter changes without shader recompilation</li>
+      </ul>
+
+      <h3>🚀 Endless Possibilities</h3>
+      <p>
+        This foundation enables countless UI patterns: navigation bars, modals, cards, notifications, dock systems,
+        control panels, and any interface element where Apple's Liquid Glass aesthetic is desired. The real-time
+        parameter system makes it perfect for design prototyping and creating unique glass signatures for different
+        applications.
+      </p>
+      <p>
+        <strong>Creative Examples:</strong> Use high tintOpacity (0.7+) for prominent control panels, subtle values
+        (0.1-0.3) for elegant overlays, or randomize all parameters for unexpected artistic effects. Each glass element
+        can have its own visual personality while maintaining the cohesive Liquid Glass aesthetic.
+      </p>
+
+      <p>
+        <em
+          >Experience the future of web interfaces with physically-accurate glass rendering that rivals native iOS and
+          macOS applications.</em
+        >
+      </p>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+    <!-- Liquid Glass JS Library -->
+    <script src="container.js"></script>
+    <script src="button.js"></script>
+
+    <!-- Glass Controls System -->
+    <script src="controls.js"></script>
+
+    <!-- Demo Usage -->
+    <script src="demo.js"></script>
+  </body>
+</html>

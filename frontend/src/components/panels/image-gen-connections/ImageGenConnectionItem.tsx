@@ -1,6 +1,8 @@
+import type { ConnectionPlacement } from '@/lib/connectionPlacement'
+import { useConnectionRow } from '@/components/panels/connection-manager/useConnectionRow'
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSortable } from '@dnd-kit/sortable'
 
 import { Trash2, Edit3, Zap, Check, Star, Copy, MoreVertical, RefreshCw, Workflow, GripVertical } from 'lucide-react'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
@@ -10,8 +12,6 @@ import ImageGenConnectionForm from './ImageGenConnectionForm'
 import { ComfyWorkflowEditor } from './ComfyWorkflowEditor'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { Spinner } from '@/components/shared/Spinner'
-import { useScaledSortableStyle } from '@/lib/dndUiScale'
-import { useDragHandleBlur } from '../connection-manager/useDragHandleBlur'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
@@ -45,6 +45,7 @@ function isNanoGptSubscriptionInactive(usage: NanoGptSubscriptionUsage) {
 }
 
 interface Props {
+  placement?: ConnectionPlacement
   profile: ImageGenConnectionProfile
   isActive: boolean
   providers: ImageGenProviderInfo[]
@@ -52,27 +53,20 @@ interface Props {
   onUpdate: (profile: ImageGenConnectionProfile) => void
   onDuplicate: () => void
   onDelete: () => void
-  nanoGptUsage?: NanoGptSubscriptionUsage | null
-  nanoGptUsageLoading?: boolean
-  onRefreshNanoGptUsage?: () => void
+  nanoGptUsage: NanoGptSubscriptionUsage | null
+  nanoGptUsageLoading: boolean
+  onRefreshNanoGptUsage: () => void
 }
 
 export default function ImageGenConnectionItem({
- profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete,
- nanoGptUsage: externalNanoGptUsage, nanoGptUsageLoading: externalNanoGptUsageLoading,
- onRefreshNanoGptUsage,
+  placement = 'list', profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete,
+  nanoGptUsage, nanoGptUsageLoading, onRefreshNanoGptUsage,
 }: Props) {
   const { t: tc } = useTranslation('common')
   const { t } = useTranslation('panels')
-  const [editing, setEditing] = useState(false)
+  const { editing, setEditing, isRecent, ...sortable } = useConnectionRow(profile.id, placement)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
-  const [localNanoGptUsage, setLocalNanoGptUsage] = useState<NanoGptSubscriptionUsage | null>(null)
-  const [localNanoGptUsageLoading, setLocalNanoGptUsageLoading] = useState(false)
-
-  // Effective values: prefer externally-provided data (from parent) when defined
-  const nanoGptUsage = externalNanoGptUsage !== undefined ? externalNanoGptUsage : localNanoGptUsage
-  const nanoGptUsageLoading = externalNanoGptUsageLoading !== undefined ? externalNanoGptUsageLoading : localNanoGptUsageLoading
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false)
   const [workflowConfig, setWorkflowConfig] = useState<ComfyUIWorkflowConfig | null>(null)
@@ -93,26 +87,6 @@ export default function ImageGenConnectionItem({
     const timer = setTimeout(() => setTestResult(null), 5000)
     return () => clearTimeout(timer)
   }, [testResult])
-
-  useEffect(() => {
-    if (externalNanoGptUsage !== undefined) return
-    if (!showNanoGptUsage) { setLocalNanoGptUsage(null); return }
-    setLocalNanoGptUsageLoading(true)
-    imageGenConnectionsApi.nanogptUsage(profile.id)
-      .then(setLocalNanoGptUsage)
-      .catch(() => setLocalNanoGptUsage(null))
-      .finally(() => setLocalNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id, externalNanoGptUsage])
-
-  const refreshNanoGptUsage = useCallback(() => {
-    if (onRefreshNanoGptUsage) { onRefreshNanoGptUsage(); return }
-    if (!showNanoGptUsage) return
-    setLocalNanoGptUsageLoading(true)
-    imageGenConnectionsApi.nanogptUsage(profile.id)
-      .then(setLocalNanoGptUsage)
-      .catch(() => setLocalNanoGptUsage(null))
-      .finally(() => setLocalNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id, onRefreshNanoGptUsage])
 
   const handleTest = useCallback(async () => {
     setTesting(true)
@@ -162,23 +136,21 @@ export default function ImageGenConnectionItem({
     return response.config
   }, [profile.id, refreshComfyProfile])
 
-  const handleSaveEdit = useCallback(async (input: CreateImageGenConnectionInput) => {
+  const handleSaveEdit = useCallback(async (input: CreateImageGenConnectionInput, folderId = '') => {
     try {
       const updated = await imageGenConnectionsApi.update(profile.id, input)
+      saveConnectionFolder('imageGen', profile.id, folderId)
       onUpdate(updated)
       setEditing(false)
     } catch (err) {
       console.error('[ImageGenConnectionItem] Failed to update:', err)
     }
-  }, [profile.id, onUpdate])
+  }, [profile.id, onUpdate, setEditing])
 
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
-  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
-  const handleRef = useDragHandleBlur(isDragging)
+  const { attributes, listeners, setNodeRef, style, isDragging, handleRef } = sortable
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)}>
+    <div ref={setNodeRef} style={style} data-dragging={isDragging || undefined} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)}>
       {editing ? (
         <ImageGenConnectionForm
           providers={providers}
@@ -189,7 +161,7 @@ export default function ImageGenConnectionItem({
       ) : (
         <>
           <div className={styles.itemRow}>
-            <button
+            {!isRecent && <button
               ref={handleRef}
               type="button"
               className={styles.dragHandle}
@@ -199,8 +171,8 @@ export default function ImageGenConnectionItem({
               {...listeners}
             >
               <GripVertical size={16} />
-            </button>
-            <button type="button" className={styles.itemBtn} onClick={onSelect}>
+            </button>}
+            <button type="button" className={styles.itemBtn} onMouseDown={event => listeners?.onMouseDown?.(event)} onTouchStart={event => listeners?.onTouchStart?.(event)} onClick={onSelect}>
               <ProviderIcon kind="imageGen" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
               <div className={styles.itemInfo}>
                 <span className={styles.itemName}>
@@ -267,7 +239,7 @@ export default function ImageGenConnectionItem({
                     <span className={styles.creditValue}>{nanoGptSubscriptionInactive ? t('connectionItem.inactive') : formatTimeUntil(win.resetAt, t('connectionItem.unknown'))}</span>
                   </div>
                   {idx === 0 && (
-                    <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                    <button type="button" className={styles.creditsRefresh} onClick={onRefreshNanoGptUsage} disabled={nanoGptUsageLoading}>
                       {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
                     </button>
                   )}
@@ -279,7 +251,7 @@ export default function ImageGenConnectionItem({
                     <span className={styles.creditLabel}>{t('connectionItem.status')}</span>
                     <span className={styles.creditValue}>{t('connectionItem.inactive')}</span>
                   </div>
-                  <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                  <button type="button" className={styles.creditsRefresh} onClick={onRefreshNanoGptUsage} disabled={nanoGptUsageLoading}>
                     {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
                   </button>
                 </div>

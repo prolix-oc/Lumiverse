@@ -20,6 +20,8 @@
     "desktop-widget-catalog",
     "desktop-notification-registration",
     "desktop-system-audio-session",
+    "desktop-capture-setup",
+    "desktop-keybindings-frontend",
     "notification:allow-is-permission-granted",
     "core:event:allow-listen",
     "core:event:allow-unlisten",

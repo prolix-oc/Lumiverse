@@ -1,3 +1,19 @@
+.policyHint {
+  margin: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  overflow-wrap: anywhere;
+}
+
+.error {
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--lumiverse-error-010);
+  color: var(--lumiverse-error);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  overflow-wrap: anywhere;
+}
+
 .kvList {
   display: flex;
   flex-direction: column;

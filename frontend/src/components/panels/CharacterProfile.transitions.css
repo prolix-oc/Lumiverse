@@ -1,0 +1,18 @@
+/* Only the profile body is captured; tabs and the rest of the app stay live. */
+::view-transition-group(.lumiverse-profile-view) {
+  animation-duration: 160ms;
+  animation-timing-function: ease-out;
+}
+
+::view-transition-old(.lumiverse-profile-view),
+::view-transition-new(.lumiverse-profile-view) {
+  animation-duration: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(.lumiverse-profile-view),
+  ::view-transition-old(.lumiverse-profile-view),
+  ::view-transition-new(.lumiverse-profile-view) {
+    animation: none;
+  }
+}

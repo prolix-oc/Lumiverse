@@ -1,3 +1,4 @@
+import { imageInputMechanism } from "../../../../src/image-gen/image-input"
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Image as ImageIcon, Trash2, Download, Upload } from 'lucide-react'
@@ -367,7 +368,7 @@ export default function ImageGenPanel() {
 
   // Providers that accept image input: NovelAI/NanoGPT (style references) plus
   // the img2img providers, which reuse the same reference-image config surface.
-  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini' || providerName === 'openrouter' || providerName === 'openai' || providerName === 'sdapi'
+  const supportsImg2ImgSource = imageInputMechanism(providerName, activeConnection?.model) !== null
   const supportsRefs = (providerName === 'novelai' && !isNovelAIV5) || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {

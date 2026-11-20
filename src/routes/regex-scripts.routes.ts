@@ -6,6 +6,8 @@ import { matchPromptActivation, MAX_ACTIVATION_CONTENT_LENGTH } from "../utils/r
 import { resolveActivationFindPattern } from "../utils/regex-activation-inputs";
 import { loadActivationInputSnapshot, prepareActivationPatterns } from "../services/regex-activation-inputs.service";
 import type { RegexMacroMode, RegexPlacement, RegexScope, RegexScript, RegexTarget } from "../types/regex-script";
+import { getMessagePresetContext } from "../services/message-preset-context.service";
+import { getPreset } from "../services/presets.service";
 
 const app = new Hono();
 
@@ -129,7 +131,10 @@ app.get("/active", (c) => {
   if (!target) return c.json({ error: "target query param is required" }, 400);
   const characterId = c.req.query("character_id");
   const chatId = c.req.query("chat_id");
-  return c.json(svc.getActiveScripts(userId, { characterId: characterId || undefined, chatId: chatId || undefined, target }));
+  const presetId = c.req.query("preset_id");
+  if (presetId && !getPreset(userId, presetId)) return c.json({ error: "Preset not found" }, 404);
+  const options = { characterId: characterId || undefined, chatId: chatId || undefined, target };
+  return c.json(presetId ? svc.getActiveScriptsForPreset(userId, { ...options, presetId }) : svc.getActiveScripts(userId, options));
 });
 
 // POST /preset-activation — activate preset-bound regex state for a preset
@@ -184,6 +189,9 @@ app.post("/apply", async (c) => {
     ? (context.role as "user" | "assistant" | "system")
     : undefined;
 
+  const presetContext = context.use_message_preset === true && typeof context.chat_id === "string" && typeof context.message_id === "string"
+    ? getMessagePresetContext(userId, context.chat_id, context.message_id, context.swipe_index as number | undefined) : null;
+  if (context.use_message_preset === true && !presetContext) return c.json({ error: "Message preset context is no longer available" }, 404);
   const applied = await applyDisplayRegex({
     content,
     scripts: scripts.filter((script) => !script.disabled),
@@ -198,6 +206,9 @@ app.post("/apply", async (c) => {
       ...(ctxRole ? { role: ctxRole } : {}),
     },
     userId,
+    // Native display has already run the body stage, including when no preset is stored.
+    preprocessed: body.preprocessed === true || !!presetContext,
+    ...(presetContext ? { presetContext } : {}),
     resolvedFindPatterns: normalizeResolvedMap(body.resolved_find_patterns),
     resolvedReplacements: normalizeResolvedMap(body.resolved_replacements),
     dynamicMacros,

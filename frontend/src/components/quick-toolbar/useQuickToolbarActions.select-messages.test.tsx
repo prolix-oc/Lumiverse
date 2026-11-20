@@ -58,7 +58,7 @@ const useStore = ((selector: (value: typeof state) => unknown) => selector(state
 useStore.getState = () => state as unknown as ReturnType<typeof useStore.getState>
 
 mock.module('@/store', () => ({ useStore }))
-mock.module('@/router', () => ({ router: { navigate: () => undefined } }))
+mock.module('@/lib/app-navigation', () => ({ navigateApp: () => undefined }))
 mock.module('@/lib/commands', () => ({ COMMANDS: [] }))
 mock.module('@/lib/drawer-tab-registry', () => ({
   DRAWER_TABS: [],

@@ -3,6 +3,8 @@
 //! Hiding a Tauri WebviewWindow hides its HWND, but does not explicitly hide the
 //! WebView2 controller. IsVisible=false stops rendering without suspending page
 //! scripts, streaming, or the tray's background work.
+//! Inactive views also use WebView2's low memory target, which permits cache
+//! reclamation while preserving those scripts and network connections.
 
 #[derive(Clone, Copy)]
 struct DisplayVisibility {
@@ -47,8 +49,12 @@ mod native {
         rc::Rc,
         sync::atomic::{AtomicBool, Ordering},
     };
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
     use windows::{
-        core::Result,
+        core::{Interface, Result},
         Win32::{
             Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM},
             System::{
@@ -208,6 +214,12 @@ mod native {
                 return;
             }
 
+            // Query once: older WebView2 runtimes still get visibility handling.
+            let memory_target = controller
+                .CoreWebView2()
+                .ok()
+                .and_then(|core| core.cast::<ICoreWebView2_19>().ok());
+
             let state = Rc::new(WindowVisibility {
                 display: Cell::new(DisplayVisibility {
                     on: SESSION_DISPLAY_ON.load(Ordering::Relaxed),
@@ -215,7 +227,22 @@ mod native {
                 applied: Cell::new(None),
                 destroyed: Cell::new(false),
                 notification: Cell::new(None),
-                set_visible: Box::new(move |visible| controller.SetIsVisible(visible)),
+                set_visible: Box::new(move |visible| {
+                    controller.SetIsVisible(visible)?;
+                    if let Some(core) = &memory_target {
+                        let level = if visible {
+                            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                        } else {
+                            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                        };
+                        // Failure to trim must never interfere with showing the
+                        // window. Do not suspend: generations/audio may be live.
+                        if let Err(error) = core.SetMemoryUsageTargetLevel(level) {
+                            eprintln!("[webview-visibility] could not set memory target: {error}");
+                        }
+                    }
+                    Ok(())
+                }),
             });
             let pointer = Rc::into_raw(state.clone());
             if !SetWindowSubclass(window, Some(window_proc), id, pointer as usize).as_bool() {

@@ -152,15 +152,16 @@ describe("startGeneration edit-and-send", () => {
     track(spyOn(chatsSvc, "deleteMessage").mockImplementation(() => true));
     track(spyOn(chatsSvc, "deleteSwipe").mockImplementation(() => assistant));
     track(spyOn(chatsSvc, "patchMessageExtra").mockImplementation(() => assistant));
+    track(spyOn(chatsSvc, "prepareNativeSwipeVariables").mockReturnValue(undefined));
 
-    addSwipe = track(spyOn(chatsSvc, "addSwipe").mockImplementation((_userId, messageId) => {
+    addSwipe = track(spyOn(chatsSvc, "addSwipe").mockImplementation((_userId, messageId, _content, options) => {
       expect(messageId).toBe(ASSISTANT_ID);
       assistant = {
         ...assistant,
         swipes: [...assistant.swipes, ""],
         swipe_dates: [...assistant.swipe_dates, 2],
-        swipe_id: assistant.swipes.length,
-        content: "",
+        swipe_id: options?.select === false ? assistant.swipe_id : assistant.swipes.length,
+        content: options?.select === false ? assistant.content : "",
       };
       return assistant;
     }));
@@ -174,6 +175,34 @@ describe("startGeneration edit-and-send", () => {
     pool.clearAllPoolEntries();
     stopGenerationSweep();
     for (const spy of spies.splice(0)) spy.mockRestore();
+  });
+
+  test("background start stages a distinct target without selecting it or clearing visible metrics", async () => {
+    assistant.extra = { tokenCount: 12, reasoning: "saved reasoning" };
+    const started = await startGeneration({ userId: USER, chat_id: CHAT, generation_type: "swipe", message_id: ASSISTANT_ID, background_swipe: true });
+    expect(assistant).toMatchObject({ swipe_id: 0, content: "reply", swipes: ["reply", ""], extra: { tokenCount: 12, reasoning: "saved reasoning" } });
+    expect(chatsSvc.patchMessageExtra).not.toHaveBeenCalled();
+    expect(pool.getPoolEntry(started.generationId)).toMatchObject({ targetMessageId: ASSISTANT_ID, targetSwipeId: 1, backgroundSwipe: true });
+    expect(eventBus.emit).toHaveBeenCalledWith(EventType.GENERATION_STARTED, expect.objectContaining({ targetSwipeId: 1, backgroundSwipe: true }), USER);
+  });
+
+  test("background requests reject non-swipe generation before any staging", async () => {
+    await expect(startGeneration({ userId: USER, chat_id: CHAT, generation_type: "normal", background_swipe: true })).rejects.toThrow("background_swipe requires");
+    expect(addSwipe).not.toHaveBeenCalled();
+  });
+
+  test("background target must belong to the requested chat", async () => {
+    assistant = { ...assistant, chat_id: "other-chat" };
+    await expect(startGeneration({ userId: USER, chat_id: CHAT, generation_type: "swipe", message_id: ASSISTANT_ID, background_swipe: true })).rejects.toThrow("Invalid background swipe target");
+    expect(addSwipe).not.toHaveBeenCalled();
+  });
+
+  test("background start cannot abort an existing generation", async () => {
+    const started = await startGeneration({ userId: USER, chat_id: CHAT, generation_type: "swipe", message_id: ASSISTANT_ID, background_swipe: true });
+    const active = getActiveGeneration(started.generationId)!;
+    await expect(startGeneration({ userId: USER, chat_id: CHAT, generation_type: "swipe", message_id: ASSISTANT_ID, background_swipe: true })).rejects.toThrow("already running");
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(addSwipe).toHaveBeenCalledTimes(1);
   });
 
   test("passes the branched swipe target exactly once", async () => {

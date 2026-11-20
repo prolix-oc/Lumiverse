@@ -1,0 +1,226 @@
+/* Mobile Controls Toggle Button */
+.mobile-controls-toggle {
+  display: none; /* Hidden by default */
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 10002;
+
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 25px;
+
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #007aff;
+  font-family: system-ui, -apple-system, sans-serif;
+
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-controls-toggle:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.2);
+}
+
+.mobile-controls-toggle:active {
+  transform: translateY(0);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+.mobile-controls-toggle .toggle-icon {
+  font-size: 16px;
+  transition: transform 0.3s ease;
+}
+
+.mobile-controls-toggle.active .toggle-icon {
+  transform: rotate(45deg);
+}
+
+.mobile-controls-toggle .toggle-text {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Show toggle button only on mobile and adjust controls */
+@media (max-width: 768px) {
+  .mobile-controls-toggle {
+    display: flex !important;
+  }
+
+  /* Hide controls by default on mobile */
+  .glass-controls {
+    display: none;
+    top: 60px;
+    right: 10px;
+    bottom: 60px;
+    left: 10px;
+    width: auto;
+  }
+
+  /* Show controls when toggled */
+  .glass-controls.mobile-visible {
+    display: block;
+  }
+
+  /* Adjust controls content width on mobile */
+  .glass-controls .glass-container {
+    width: 100%;
+  }
+
+  .controls-content {
+    width: 100%;
+  }
+}
+
+/* Glass Controls Panel Styles */
+.glass-controls {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  bottom: 20px;
+  width: 300px;
+  z-index: 10000;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: #333;
+}
+
+.glass-controls .glass-container {
+  width: 300px;
+  height: 100%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  position: relative;
+}
+
+.glass-controls h3 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #222;
+  text-align: center;
+}
+
+.control-group {
+  margin-bottom: 16px;
+}
+
+.control-group label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: #444;
+}
+
+.control-group input[type='range'] {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.control-group input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #007aff;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.control-group input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #007aff;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.control-value {
+  display: inline-block;
+  float: right;
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.control-group input[type='checkbox'] {
+  margin-right: 8px;
+  transform: scale(1.2);
+}
+
+/* Custom scrollbar styling for glass controls */
+.glass-controls ::-webkit-scrollbar {
+  width: 8px;
+}
+
+.glass-controls ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.glass-controls ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.glass-controls ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Controls Content Layout */
+.controls-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 20px;
+  z-index: 1;
+  pointer-events: auto;
+  width: 300px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+/* Control Group Button Styling */
+.control-group-button {
+  margin-top: 24px;
+  text-align: center;
+}
+
+.randomize-button {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  color: #222;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.randomize-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

@@ -219,6 +219,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "Speichere oder verwirf die Verbindungsbearbeitung, bevor du den Ordner löschst.",
+    "newFolder": "Neuer Ordner",
+    "folder": "Ordner",
+    "invalidFolderName": "Wähle einen eindeutigen Ordnernamen mit 1–64 Zeichen. Nicht kategorisiert ist reserviert.",
+    "deleteFolderMessage": "„{{name}}“ löschen? Die Verbindungen werden nach Nicht kategorisiert verschoben.",
+    "allFolders": "Alle Ordner",
+    "filterFolder": "Verbindungen nach Ordner filtern",
+    "search": "Verbindungen, Anbieter, Modelle, Ordner suchen…",
+    "noMatches": "Keine passenden Verbindungen.",
     "embeddings": "Embedding-Modelle",
     "imageGeneration": "Bildgenerierung",
     "speechToText": "Speech-to-Text",
@@ -874,6 +883,10 @@
     "scopeThisChat": "Dieser Chat",
     "scopePreset": "Preset",
     "noScripts": "Noch keine Regex-Skripte.",
+    "searchFolder": "Skripte in diesem Ordner suchen…",
+    "searchFolderAria": "Skripte in {{folder}} suchen",
+    "folderPagesAria": "Skriptseiten in {{folder}}",
+    "noSearchResults": "Keine Skripte entsprechen der Suche.",
     "clickPlus": "Klicke auf +, um eines zu erstellen.",
     "uncategorized": "nicht kategorisiert",
     "deleteFolderConfirm": "Alle {{count}} Regex-Skripte in „{{folder}}“ löschen? Dies kann nicht rückgängig gemacht werden.",
@@ -923,6 +936,8 @@
     "timedOutDetail": "Dieses Skript hat das Regex-Zeitlimit erreicht und wurde bei der Ausführung übersprungen.",
     "slowDetail": "Dieses Skript wurde als langsam markiert, nachdem es {{seconds}} s zur Ausführung benötigte.",
     "quarantinedDisplay": "Anzeige-Regex „{{name}}“ hat den isolierten Executor blockiert und wird übersprungen. Hebe die Quarantäne in den Regex-Skripten auf, um es erneut auszuführen.",
+    "unavailableDisplay": "Die Anzeige-Regex „{{name}}“ wurde für diese Darstellung übersprungen, da die isolierte Ausführung nicht verfügbar war.",
+    "skippedDisplayTitle": "Regex-Skript übersprungen",
     "quarantined": "In Quarantäne",
     "quarantinedDetail": "Dieses Skript hat den isolierten Executor blockiert und wird übersprungen. Hebe die Quarantäne auf, um es erneut auszuführen.",
     "clearQuarantine": "Erneut ausführen",
@@ -956,7 +971,8 @@
     "targetWi": "WI",
     "targetCot": "CoT",
     "targetMemory": "Gedächtnis",
-    "allOptions": "Alle Optionen..."
+    "allOptions": "Alle Optionen...",
+    "presetLoadFailed": "Die Preset-Regexe dieses Swipes konnten nicht geladen werden. Lade die Seite neu, um es erneut zu versuchen."
   },
   "personaEditor": {
     "characterCount": "{{count}} Zeichen",
@@ -1664,6 +1680,10 @@
       "stateExcluded": "Ausgeschlossen \u2014 klicken zum Zurücksetzen"
     },
     "alternateAvatars": {
+      "addFromGallery": "Aus Galerie hinzufügen",
+      "uploadImage": "Avatar hochladen",
+      "galleryLoadFailed": "Galeriebilder konnten nicht geladen werden.",
+      "uploadFailed": "Der alternative Avatar konnte nicht hochgeladen werden.",
       "title": "Alternative Avatare",
       "helper": "Zusätzliche Profilbilder für diesen Charakter, pro Chat umschaltbar.",
       "selectionHint": "Tippe auf einen Avatar, um ihn in diesem Chat zu verwenden.",
@@ -2969,6 +2989,13 @@
     }
   },
   "themePanel": {
+    "deviceControls": {
+      "title": "Gerätespezifische Steuerelemente",
+      "enabled": "Gerätespezifische Steuerelemente verwenden",
+      "hint": "Wenn aktiviert, gelten die folgenden Einstellungen nur für diesen Browser oder diese App auf diesem Gerät. Deine Gerätewerte bleiben bei Theme-Wechseln erhalten. Kopiere sie vor dem Speichern oder Exportieren in das Theme, wenn du sie teilen möchtest.",
+      "copyToTheme": "Geräteeinstellungen in Theme kopieren",
+      "resetFromTheme": "Geräteeinstellungen aus Theme zurücksetzen"
+    },
     "lockControls": "Regler sperren",
     "unlockControls": "Regler entsperren",
     "lockSliders": "Schieberegler sperren",
@@ -2983,9 +3010,15 @@
     "fontScale": "Schriftgröße",
     "uiScale": "UI-Skalierung",
     "glassEffects": "Glaseffekte",
+    "liquidGlass": {
+      "label": "Flüssigglas",
+      "hint": "Bricht und verwischt den Hintergrund hinter Oberflächen. Erfordert Glaseffekte.",
+      "requiresGlass": "Zuerst Glaseffekte aktivieren"
+    },
     "renderingMode": {
       "label": "Darstellung",
       "hint": "Effizienz entfernt Unschärfe; Qualität aktiviert Rendering mit hoher Bildwiederholrate auf unterstützten macOS-Displays, nachdem das Desktop-Fenster neu gestartet wurde.",
+      "restartRequired": "Starte die Desktop-App neu, um die Änderung der Fenstertransparenz anzuwenden.",
       "efficiency": "Effizienz",
       "balanced": "Ausgewogen",
       "quality": "Qualität"
@@ -3643,6 +3676,8 @@
         "persona_description": "Nutzer-Persona",
         "scenario": "Szenario",
         "dialogue_examples": "Beispielnachrichten",
+        "system_prompt": "Systemprompt der Charakterkarte",
+        "post_history_instructions": "Anweisungen der Charakterkarte nach dem Verlauf",
         "main_prompt": "Haupt-Prompt",
         "enhance_definitions": "Definitionen verbessern",
         "jailbreak": "Anweisungen nach dem Verlauf",
@@ -3951,7 +3986,7 @@
   "decisionConnectionManager": {
     "loading": "Decision-Verbindungen werden geladen...",
     "newConnection": "Neue Decision-Verbindung",
-    "empty": "Noch keine Decision-Verbindungen. Füge OpenRouter oder TypeSafe hinzu, um zu starten.",
+    "empty": "Noch keine Decision-Verbindungen. Füge OpenRouter, NanoGPT oder TypeSafe hinzu, um zu starten.",
     "deleteTitle": "Decision-Verbindung löschen",
     "deleteMessage": "„{{name}}“ löschen? Dies kann nicht rückgängig gemacht werden.",
     "deleteConfirm": "Löschen"
@@ -3978,7 +4013,16 @@
     "checking": "Beispiel-Decision wird ausgeführt\u2026",
     "removeKey": "Gespeicherten API-Schlüssel entfernen",
     "saveFailed": "Decision-Verbindung konnte nicht gespeichert werden",
-    "unsupportedModel": "Dieses Modell ist für Decision-Verbindungen nicht verfügbar."
+    "unsupportedModel": "Dieses Modell ist für Decision-Verbindungen nicht verfügbar.",
+    "providerSignIn": "Anbieteranmeldung",
+    "signIn": "Bei {{provider}} anmelden",
+    "signingIn": "Anmeldung läuft…",
+    "signInHintCreate": "Melde dich an, um diese Decision-Verbindung zu erstellen und ihren API-Schlüssel zu speichern.",
+    "signInHintExisting": "Melde dich an, um einen neuen API-Schlüssel für diese Decision-Verbindung zu speichern.",
+    "signInDefaultUrl": "Verwende zur Anmeldung die Standard-API-URL des Anbieters. Gib für eine benutzerdefinierte URL einen API-Schlüssel ein.",
+    "signInSaveFirst": "Speichere die Änderungen am Anbieter und an der API-URL, bevor du dich anmeldest.",
+    "signInSaved": "Angemeldet. API-Schlüssel gespeichert.",
+    "signInFailed": "Anmeldung fehlgeschlagen. Bitte versuche es erneut."
   },
   "multiplayerPanel": {
     "freeformWindowClosed": "Fenster geschlossen",

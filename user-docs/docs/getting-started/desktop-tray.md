@@ -137,6 +137,11 @@ are disabled while a remote instance is selected.
 - **Browser** opens, closes or reloads the integrated browser, opens the system
   browser, changes the connection and manages desktop authorization.
 - **Serving Stats** reports the port, PID, uptime, branch and version when allowed.
+- **Serving Stats → Allow Remote Access** lets other devices connect directly
+  to the built-in server. Changing it restarts a running server; a stopped
+  server stays stopped. The choice persists without repeating setup or changing
+  your account, storage or data. It is available after built-in setup and is
+  disabled for checkout and remote connections or a launch-time host override.
 - **Check for Updates / Apply Update** updates an existing checkout through Git.
 - **Desktop Updates** installs a signed update of the entire bundled app after
   you choose **Update and restart**.
@@ -149,6 +154,17 @@ to find it. Uninstalling the app does not transfer or automatically erase this
 data. Disable **Launch at Login**, quit, and remove the app using your platform's
 normal uninstall process. Bun and Rust installed for checkout/source work are
 shared tools and can be kept for other projects.
+
+With remote access enabled, open `http://<this-computer-LAN-IP>:7860` from
+another device on the same network, substituting your server's port. Allow
+incoming connections through the host firewall if prompted. Detected LAN IPs
+are already trusted; for a custom address, add its exact origin under
+**Settings → Operator → Trusted Hostnames** and restart. The Operator panel's
+**Remote Mode** changes origin restrictions and is separate from this listener
+setting. HTTPS is required when connecting another Lumiverse Desktop client
+and for installing a mobile PWA; see [Connect to a remote instance](#connect-to-a-remote-instance).
+Turning this toggle off limits direct connections to this computer; a separately
+configured reverse proxy or Tailscale Serve can still forward to its local port.
 
 ## Linux graphics and browser troubleshooting
 
@@ -180,3 +196,34 @@ Official AppImages include their GStreamer audio plugins. Installing host
 plugins does not repair an older incomplete bundle; download a current build.
 Distro-native packages and raw binaries need their own matching GTK/WebKitGTK
 and GStreamer base/good runtime packages.
+
+## Share screenshots and clips with extensions
+
+On macOS and Windows, enable **Let Extensions Capture the Screen** in the root
+tray menu beside system audio. You can also select **Set Up Screen Capture** in
+an extension's permissions to enable the same toggle. Desktop asks you to
+authorize the selected Lumiverse instance if needed. The toggle stays on across
+restarts until you turn it off.
+The extension also needs its screen capture or screen recording permission.
+
+When the extension requests a screenshot or clip, choose a display or window in
+native source selection. Selecting it starts capture immediately, with no Capture & Send
+window or extra Send button. Desktop remembers that source for future requests from this
+extension to the same destination until capture is turned off. Images and video have
+separate approval. On macOS, remembering a source requires screen recording
+permission; audio-only permission does not include your screen. macOS asks for
+missing permission directly.
+
+A remembered macOS display can restore after restarting Desktop. macOS window
+choices and Windows capture items need a fresh choice after Desktop restarts;
+closing the source can also require a fresh choice. Desktop never substitutes a
+different source automatically.
+
+Uncheck **Let Extensions Capture the Screen** to stop capture and forget saved
+sources and approvals. Canceling a capture keeps the toggle and saved permissions
+on. On macOS, use **Cancel This Capture** in the capture indicator to discard just
+the current request. When you turn capture off, it stays off after restarting
+Desktop. Enable it again when you want to share; the next request asks for a new source choice.
+
+Screen capture on Linux is not available yet. Capture does not include system
+audio or microphone audio, and no background recording buffer is maintained.

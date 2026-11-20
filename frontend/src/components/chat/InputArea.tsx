@@ -4,8 +4,9 @@ import { useNavigate } from 'react-router'
 import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
-import { sendRoomAction } from '@/ws/relayClient'
+import { sendConfirmedRoomMessage } from '@/ws/confirmedRoomMessage'
 import { wsClient } from '@/ws/client'
+import { readAccountEpoch } from '@/lib/shared-read'
 import { EventType } from '@/types/ws-events'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
@@ -13,7 +14,6 @@ import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profi
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { memoryCortexApi } from '@/api/memory-cortex'
-import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
@@ -28,7 +28,6 @@ import {
 } from '@/lib/impersonationPreset'
 import { unmarshalPreset } from '@/lib/loom/service'
 import {
-  inspectPromptVariablesAvailability,
   type PromptVariablesAvailability,
 } from '@/lib/loom/prompt-variable-availability'
 import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
@@ -40,12 +39,14 @@ import {
   setPersistedChatPersonaId,
 } from '@/lib/chatPersonaSelection'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
+import { useComposerDraft } from '@/hooks/useComposerDraft'
 import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import ReasoningBlock from './ReasoningBlock'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
-import ProviderIcon from '@/components/shared/ProviderIcon'
+import ConnectionQuickPicker from '@/components/shared/ConnectionQuickPicker'
 import { databankApi } from '@/api/databank'
 import { resolveMacros } from '@/api/macros'
 import type { AutocompleteResult } from '@/api/databank'
@@ -55,6 +56,7 @@ import InputBarExtensionActions from './InputBarExtensionActions'
 import { getMobileQueueHoldPreviewState, shouldQueueMobileHold } from './mobileQueueHold'
 import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueHint'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
+import { playHaptic } from '@/lib/haptics'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { orderGroupResponseIds, readGroupResponseOrder } from '@/lib/groupResponseOrder'
 import {
@@ -75,6 +77,8 @@ import {
   type RegexActionActivation,
 } from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
+import { parseSTTTranscript } from '@/lib/sttCommands'
+import { holdHostCapture } from '@/lib/sttHostCapture'
 import { isWhistleAvailable } from '@/lib/whistle/config'
 import { whistleClient } from '@/lib/whistle/client'
 import { composeChatSafeZones } from '@/lib/chatSurfaceLayout'
@@ -91,7 +95,9 @@ import { registerChatDockerActionOwners } from './chatDockerActionCatalog'
 import { acknowledgeConnectionProfileSelection } from '@/lib/uiProductivityDefaults'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { readProductivityFeature } from '@/lib/spindle/productivity-feature-toggles'
+import { selectRecentPersonaIds } from '@/lib/personaBrowser'
 import { hasEnabledFrontendExtension } from '@/lib/spindle/frontend-extension-availability'
+import { useComposerBridge } from '@/lib/spindle/use-composer-bridge'
 import { useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
 import InputAreaCustomizeModal, {
   fromComposerExtraId,
@@ -101,10 +107,12 @@ import InputAreaCustomizeModal, {
   type ComposerActionId,
 } from './InputAreaCustomizeModal'
 import { ComposerActionBarLive } from './InputAreaComposerBar'
+import ComposerFormattingBar from './ComposerFormattingBar'
+import { formatComposerSelection, type ComposerFormat } from '@/lib/composerFormatting'
 import { isCoreOwnedComposerActionId, isExtensionComposerActionId } from './composerActionOwnership'
 import { isGuideActive, isGuideAutoEnabled } from '@/lib/guided-generations'
 import {
-  chatHasDisplayableExpressions,
+  hasDisplayableExpressions,
   getChatExpressionCharacterIds,
 } from '@/lib/chatExpressionAvailability'
 
@@ -149,127 +157,6 @@ const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => 
   return 0.12 + centerBias * 0.22
 })
 
-type STTCommandState = {
-  thoughtDepth: number
-}
-
-const STT_COMMAND_ALIASES: Record<string, string[]> = {
-  'quote': ['quote start', 'quote end', 'open quote', 'close quote'],
-  'single quote': ['single quote', 'apostrophe'],
-  'em dash': ['em dash'],
-  'asterisk': ['asterisk'],
-  'thought start': ['thought start', 'begin thought'],
-  'thought end': ['thought end', 'end thought'],
-}
-
-function normalizeSTTCommandWord(word: string): string {
-  if (word === 'quotes') return 'quote'
-  if (word === 'starts') return 'start'
-  if (word === 'ends') return 'end'
-  if (word === 'thoughts') return 'thought'
-  if (word === 'begins') return 'begin'
-  if (word === 'dashes') return 'dash'
-  if (word === 'apostrophes') return 'apostrophe'
-  if (word === 'asterisks') return 'asterisk'
-  return word
-}
-
-function sttCommandEditDistance(a: string, b: string): number {
-  if (a === b) return 0
-  if (Math.abs(a.length - b.length) > 1) return 2
-
-  let edits = 0
-  let i = 0
-  let j = 0
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i += 1
-      j += 1
-      continue
-    }
-    edits += 1
-    if (edits > 1) return edits
-    if (a.length > b.length) i += 1
-    else if (b.length > a.length) j += 1
-    else {
-      i += 1
-      j += 1
-    }
-  }
-
-  return edits + (i < a.length || j < b.length ? 1 : 0)
-}
-
-function normalizeSTTCommandCandidate(candidate: string): string | null {
-  const normalized = candidate
-    .toLowerCase()
-    .replace(/[^a-z\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!normalized) return null
-
-  const candidateWords = normalized.split(' ').map(normalizeSTTCommandWord)
-  for (const [canonical, aliases] of Object.entries(STT_COMMAND_ALIASES)) {
-    for (const alias of aliases) {
-      const aliasWords = alias.split(' ')
-      if (candidateWords.length !== aliasWords.length) continue
-      const isSimilar = candidateWords.every((word, index) => {
-        const aliasWord = aliasWords[index]
-        return word === aliasWord || (word.length >= 4 && aliasWord.length >= 4 && sttCommandEditDistance(word, aliasWord) <= 1)
-      })
-      if (isSimilar) return canonical
-    }
-  }
-
-  return null
-}
-
-function normalizeSTTTranscript(raw: string, state: STTCommandState): string {
-  if (!raw.trim()) return ''
-
-  const commandPattern = /\b(?:quotes?\s+(?:starts?|ends?)|open\s+quotes?|close\s+quotes?|single\s+quotes?|apostrophes?|thoughts?\s+(?:starts?|ends?)|begins?\s+thoughts?|ends?\s+thoughts?|asterisks?|em\s+dashes?)\b(?:\s*[,.;:!?]+)?/gi
-
-  return raw
-    .replace(commandPattern, (match) => {
-      const command = normalizeSTTCommandCandidate(match)
-      if (!command) return match
-
-      if (command === 'quote') return '"'
-      if (command === 'single quote') return "'"
-      if (command === 'em dash') return '—'
-      if (command === 'asterisk') return '*'
-      if (command === 'thought start') {
-        const marker = state.thoughtDepth >= 1 ? '**' : '*'
-        state.thoughtDepth += 1
-        return marker
-      }
-      if (command === 'thought end') {
-        const marker = state.thoughtDepth > 1 ? '**' : '*'
-        state.thoughtDepth = Math.max(0, state.thoughtDepth - 1)
-        return marker
-      }
-
-      return match
-    })
-    .replace(/(^|[\s([{"'])(\*{1,2})\s*[.,;:!?]+\s*/g, '$1$2')
-    .replace(/(\*{1,2})\s+[.,;:!?]+(?=\s|$)/g, '$1')
-    .replace(/([.!?])\s+([.!?])(?=\s|$|\*)/g, '$1')
-    .replace(/([.!?])(\*{1,2})\.(?=\s|$)/g, '$1$2')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .replace(/\s+([”’])/g, '$1')
-    .replace(/([“‘])\s+/g, '$1')
-    .replace(/\s*—\s*/g, ' — ')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-function stripSTTSendCommand(raw: string): { text: string; shouldSend: boolean } {
-  const match = raw.match(/^(.*?)(?:[\s,.;:!?-]*)send\s+message\s*$/i)
-  if (!match) return { text: raw.trim(), shouldSend: false }
-  return { text: (match[1] || '').trim(), shouldSend: true }
-}
-
 // Slugify a character name into a stable @mention token. Matches the
 // databank `#` convention (lowercase, hyphen-separated, diacritics stripped).
 function slugifyName(name: string): string {
@@ -296,7 +183,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const { t: te } = useTranslation('errors')
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
   const navigate = useNavigate()
-  const [text, setText] = useState('')
+  const saveDraftInput = useStore((s) => s.saveDraftInput)
+  const showComposerFormattingBar = useStore((s) => s.showComposerFormattingBar === true)
+  const { draft, text, setText, attachments: pendingAttachments, setAttachments: setPendingAttachments, acknowledgeDraft } = useComposerDraft(chatId, saveDraftInput)
+  const [isSavingMessage, setIsSavingMessage] = useState(false)
   const [pendingRegexVisibleCount, setPendingRegexVisibleCount] = useState(0)
   const [lastImpersonateInput, setLastImpersonateInput] = useState<string>('')
   const [dryRunning, setDryRunning] = useState(false)
@@ -327,18 +217,16 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     image_id: string | null
     metadata?: Record<string, any>
   }>>([])
-  const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [impersonationModeOverride, setImpersonationModeOverride] = useState<ImpersonationPreference | null>(null)
   const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
   const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
   const [promptVariablesBinding, setPromptVariablesBinding] = useState<PromptVariableProfileTarget | null>(null)
   const promptVariablesBindingRef = useRef<PromptVariableProfileTarget | null>(null)
-  promptVariablesBindingRef.current = promptVariablesBinding
+  useLayoutEffect(() => { promptVariablesBindingRef.current = promptVariablesBinding }, [promptVariablesBinding])
   const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [promptVariablesAvailability, setPromptVariablesAvailability] = useState<PromptVariablesAvailability | null>(null)
   const [memoryCortexInFlight, setMemoryCortexInFlight] = useState(false)
-  const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const dragCounterRef = useRef(0)
@@ -363,7 +251,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
-  const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
+  const [pendingSTTAction, setPendingSTTAction] = useState<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const regexActionHandlingRef = useRef(false)
   const generationNonceRef = useRef(0)
@@ -392,7 +280,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const enterToSendSettings = useStore((s) => s.inputBarEnterToSend)
   const enterToSend = isMobile ? enterToSendSettings.mobile : enterToSendSettings.desktop
-  const saveDraftInput = useStore((s) => s.saveDraftInput)
   const defaultImpersonationMode = useStore((s) => s.defaultImpersonationMode)
   const impersonationMode = impersonationModeOverride ?? defaultImpersonationMode
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -413,7 +300,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const guidedGenerations = useStore((s) => s.guidedGenerations)
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
-  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
+  const personasLoaded = useStore((s) => s.personasLoaded)
+  const recentPersonaIds = useStore(selectRecentPersonaIds)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const messages = useStore((s) => s.messages)
@@ -437,6 +325,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
   const characters = useStore((s) => s.characters)
+  const loadedCharacterIds = useStore((s) => s.activeChatLoadedCharacterIds)
   const setMentionQueue = useStore((s) => s.setMentionQueue)
   const expressionDisplay = useStore((s) => s.expressionDisplay)
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
@@ -444,6 +333,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const setImpersonateDraftContent = useStore((s) => s.setImpersonateDraftContent)
   const streamingContent = useStore((s) => s.streamingContent)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const streamingReasoning = useStore((s) => s.streamingReasoning)
+  const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
+  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const localGenerationInChat = isStreaming && activeChatId === chatId
   const isGeneratingInChat = !!liveChatGenerationId || localGenerationInChat
   const generationIdForChat = liveChatGenerationId || (localGenerationInChat ? activeGenerationId : null)
@@ -469,38 +361,33 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   ])
 
   // Track whether the solo character or any group member has expressions configured.
-  const [hasExpressions, setHasExpressions] = useState(false)
   const expressionCharacterIds = useMemo(
     () => getChatExpressionCharacterIds(activeCharacterId, isGroupChat, groupCharacterIds),
     [activeCharacterId, groupCharacterIds, isGroupChat],
   )
-  useEffect(() => {
-    let cancelled = false
-
-    const refresh = async () => {
-      const available = await chatHasDisplayableExpressions(expressionCharacterIds, expressionsApi.get)
-      if (!cancelled) setHasExpressions(available)
-    }
-
-    setHasExpressions(false)
-    void refresh()
-
-    const unsubscribe = wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string }) => {
-      if (expressionCharacterIds.includes(payload.id)) void refresh()
-    })
-
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [expressionCharacterIds])
+  const hasExpressions = useMemo(() => expressionCharacterIds.some((id) =>
+    hasDisplayableExpressions(characters.find((character) => character.id === id)?.extensions?.expressions)),
+  [expressionCharacterIds, characters])
 
   // Track alternate fields for the active character or group members.
   type AltFieldVariant = { id: string; label: string; content: string }
-  const [altFieldsData, setAltFieldsData] = useState<Record<string, AltFieldVariant[]>>({})
-  const [groupAltFieldsData, setGroupAltFieldsData] = useState<Record<string, Record<string, AltFieldVariant[]>>>({})
-  const [altFieldsLoaded, setAltFieldsLoaded] = useState(false)
-  const [groupAltFieldsLoadedIds, setGroupAltFieldsLoadedIds] = useState<string[]>([])
+  const { altFieldsData, groupAltFieldsData, altFieldsLoaded, groupAltFieldsLoadedIds } = useMemo(() => {
+    const single = !isGroupChat ? characters.find((character) => character.id === activeCharacterId) : undefined
+    const fields = single?.extensions?.alternate_fields
+    const group: Record<string, Record<string, AltFieldVariant[]>> = {}
+    for (const id of isGroupChat ? groupCharacterIds : []) {
+      const variants = characters.find((character) => character.id === id)?.extensions?.alternate_fields
+      if (variants && typeof variants === 'object') group[id] = variants as Record<string, AltFieldVariant[]>
+    }
+    return {
+      altFieldsData: fields && typeof fields === 'object' ? fields as Record<string, AltFieldVariant[]> : {},
+      groupAltFieldsData: group,
+      // Cached cards can populate controls immediately, but must not prune
+      // valid selections before the fresh opening snapshot arrives.
+      altFieldsLoaded: !!single && !!loadedCharacterIds?.includes(single.id),
+      groupAltFieldsLoadedIds: isGroupChat ? groupCharacterIds.filter((id) => loadedCharacterIds?.includes(id)) : [],
+    }
+  }, [activeCharacterId, characters, groupCharacterIds, isGroupChat, loadedCharacterIds])
   const [altFieldSelections, setAltFieldSelections] = useState<Record<string, string>>({})
   const [groupAltFieldSelections, setGroupAltFieldSelections] = useState<Record<string, Record<string, string>>>({})
   const [groupScenarioMode, setGroupScenarioMode] = useState<'individual' | 'member' | 'custom'>('individual')
@@ -520,64 +407,26 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const activeAltSelectionCount = isGroupChat
     ? Object.values(groupAltFieldSelections).reduce((total, selections) => total + Object.keys(selections || {}).length, 0)
     : Object.keys(altFieldSelections).length
-  const groupCharacterKey = useMemo(() => groupCharacterIds.join('\0'), [groupCharacterIds])
-  const groupAltFieldsKey = useMemo(() => {
-    if (!isGroupChat) return ''
-    return groupCharacterIds.map((id) => {
-      const altFields = characters.find((c) => c.id === id)?.extensions?.alternate_fields
-      return `${id}:${altFields ? JSON.stringify(altFields) : ''}`
-    }).join('\0')
-  }, [characters, groupCharacterIds, isGroupChat])
-
   useEffect(() => {
-    if (isGroupChat) {
-      setAltFieldsData({})
-      setAltFieldsLoaded(false)
-      if (groupCharacterIds.length === 0) { setGroupAltFieldsData({}); setGroupAltFieldsLoadedIds([]); return }
-      let cancelled = false
-      const characterSnapshot = useStore.getState().characters
-      Promise.all(groupCharacterIds.map(async (id) => {
-        const cached = characterSnapshot.find((c) => c.id === id)
-        if (cached?.extensions?.alternate_fields) {
-          return { id, loaded: true, altFields: cached.extensions.alternate_fields as Record<string, AltFieldVariant[]> }
-        }
-        if (cached) {
-          return { id, loaded: true, altFields: undefined }
-        }
-        const fetched = await charactersApi.get(id).catch(() => null)
-        if (fetched) useStore.getState().updateCharacter(fetched.id, fetched)
-        return {
-          id,
-          loaded: !!fetched,
-          altFields: fetched?.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined,
-        }
-      }))
-        .then((items) => {
-          if (cancelled) return
-          const next: Record<string, Record<string, AltFieldVariant[]>> = {}
-          for (const item of items) {
-            if (item.altFields && typeof item.altFields === 'object') next[item.id] = item.altFields
-          }
-          setGroupAltFieldsData(next)
-          setGroupAltFieldsLoadedIds(items.filter((item) => item.loaded).map((item) => item.id))
-        })
-        .catch(() => { if (!cancelled) { setGroupAltFieldsData({}); setGroupAltFieldsLoadedIds([]) } })
-      return () => { cancelled = true }
-    }
-
-    setGroupAltFieldsData({})
-    setGroupAltFieldsLoadedIds([])
-    setAltFieldsLoaded(false)
-    if (!activeCharacterId) { setAltFieldsData({}); return }
-    charactersApi.get(activeCharacterId)
-      .then((c) => {
-        useStore.getState().updateCharacter(c.id, c)
-        const af = c.extensions?.alternate_fields as Record<string, AltFieldVariant[]> | undefined
-        setAltFieldsData(af && typeof af === 'object' ? af : {})
-        setAltFieldsLoaded(true)
-      })
-      .catch(() => { setAltFieldsData({}); setAltFieldsLoaded(false) })
-  }, [activeCharacterId, isGroupChat, groupCharacterIds, groupCharacterKey, groupAltFieldsKey])
+    // New group members can be added after the open response. Fetch only a
+    // missing record once the opening loader has finished its own fallbacks.
+    if (!chatId || loadedCharacterIds == null || isRoomPeer) return
+    const ids = isGroupChat ? groupCharacterIds : activeCharacterId ? [activeCharacterId] : []
+    const missing = ids.filter((id) => !characters.some((character) => character.id === id))
+    if (!missing.length) return
+    const abort = new AbortController()
+    let cancelled = false
+    Promise.all(missing.map((id) => charactersApi.get(id, { signal: abort.signal }).catch(() => null))).then((results) => {
+      const state = useStore.getState()
+      if (cancelled || state.activeChatId !== chatId) return
+      const found = results.filter(Boolean) as typeof characters
+      for (const character of found) state.updateCharacter(character.id, character)
+      if (found.length) state.setActiveChatLoadedCharacterIds([
+        ...(state.activeChatLoadedCharacterIds ?? []), ...found.map((character) => character.id),
+      ])
+    })
+    return () => { cancelled = true; abort.abort() }
+  }, [chatId, activeCharacterId, groupCharacterIds, isGroupChat, isRoomPeer, characters, loadedCharacterIds])
 
   const pruneAltSelections = useCallback((
     selections: Record<string, string>,
@@ -663,26 +512,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [activeChatMetadata, chatId])
 
   useEffect(() => {
-    if (!chatId) {
-      setImpersonationPresetId(null)
-      setImpersonationModeOverride(null)
-      return
-    }
-    let cancelled = false
-    chatsApi.get(chatId, { messages: false })
-      .then((chat) => {
-        if (cancelled) return
-        const value = chat.metadata?.impersonation_preset_id
-        setImpersonationPresetId(typeof value === 'string' && value ? value : null)
-        setImpersonationModeOverride(resolveImpersonationModeOverride(chat.metadata?.impersonation_mode))
-      })
-      .catch(() => {
-        if (cancelled) return
-        setImpersonationPresetId(null)
-        setImpersonationModeOverride(null)
-      })
-    return () => { cancelled = true }
-  }, [chatId])
+    const value = activeChatMetadata?.impersonation_preset_id
+    setImpersonationPresetId(chatId && typeof value === 'string' && value ? value : null)
+  }, [activeChatMetadata?.impersonation_preset_id, chatId])
 
   const handleAltFieldSelect = useCallback(async (field: string, variantId: string | null) => {
     const character = characters.find((entry) => entry.id === activeCharacterId)
@@ -740,23 +572,13 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const hasAddons = personaAddons.length > 0 || attachedGlobalAddons.length > 0
 
   useEffect(() => {
-    if (!chatId) { setChatAddonStatesByPersona({}); return }
-    chatsApi.get(chatId, { messages: false })
-      .then((chat) => {
-        const states = chat.metadata?.persona_addon_states
-        setChatAddonStatesByPersona(states && typeof states === 'object' ? states : {})
-      })
-      .catch(() => setChatAddonStatesByPersona({}))
-  }, [chatId])
-
-  // Keep quick-toggle state coherent when another tab (or a websocket chat
-  // update) changes the active chat's add-ons and avatar version.
-  useEffect(() => {
     const states = activeChatMetadata?.persona_addon_states
-    if (states && typeof states === 'object') setChatAddonStatesByPersona(states)
-  }, [activeChatMetadata?.persona_addon_states])
+    setChatAddonStatesByPersona(chatId && states && typeof states === 'object' ? states : {})
+  }, [chatId, activeChatMetadata?.persona_addon_states])
 
   const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) : null
+  const characterName = activeCharacter?.name ?? ''
+
   const resolvedPersonaBinding = useMemo(() => resolveAutoPersonaBinding({
     characterId: activeCharacterId,
     characterTags: activeCharacter?.tags ?? [],
@@ -887,50 +709,29 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     ? effectivePersonaAddonStates
     : undefined
 
+  const addonPersona = useMemo(() => personas.find((persona) => persona.id === activePersonaId), [activePersonaId, personas])
   useEffect(() => {
-    if (!activePersonaId) { setPersonaAddons([]); setAttachedGlobalAddons([]); return }
-    personasApi.get(activePersonaId)
-      .then(async (p) => {
-        const raw = p.metadata?.addons
-        setPersonaAddons(Array.isArray(raw) ? raw : [])
-        // Resolve attached global addons
-        const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
-        if (refs.length > 0) {
-          try {
-            const globalRes = await globalAddonsApi.list({ limit: 200, offset: 0 })
-            const refMap = new Map(refs.map(r => [r.id, r]))
-            const resolved = globalRes.data
-              .filter(g => refMap.has(g.id))
-              .map(g => ({ ...g, ...refMap.get(g.id)! }))
-            setAttachedGlobalAddons(resolved)
-          } catch {
-            setAttachedGlobalAddons([])
-          }
-        } else {
-          setAttachedGlobalAddons([])
-        }
-      })
-      .catch(() => { setPersonaAddons([]); setAttachedGlobalAddons([]) })
-  }, [activePersonaId])
-
-  // Listen for persona changes via store to keep addons in sync
-  const storePersonas = useStore((s) => s.personas)
-  useEffect(() => {
+    let cancelled = false
+    setPersonaAddons([])
+    setAttachedGlobalAddons([])
     if (!activePersonaId) return
-    const p = storePersonas.find((x) => x.id === activePersonaId)
-    if (p) {
-      const raw = p.metadata?.addons
+    if (!addonPersona && !personasLoaded) return
+    const request = addonPersona ? Promise.resolve(addonPersona) : personasApi.get(activePersonaId)
+    request.then(async (persona) => {
+      if (cancelled) return
+      const raw = persona.metadata?.addons
       setPersonaAddons(Array.isArray(raw) ? raw : [])
-      // Update global addon enabled state from store
-      const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
-      setAttachedGlobalAddons(prev => {
-        const refMap = new Map(refs.map(r => [r.id, r]))
-        return prev
-          .filter(g => refMap.has(g.id))
-          .map(g => ({ ...g, ...refMap.get(g.id)! }))
-      })
-    }
-  }, [storePersonas, activePersonaId])
+      const refs: AttachedGlobalAddon[] = Array.isArray(persona.metadata?.attached_global_addons)
+        ? persona.metadata.attached_global_addons : []
+      if (!refs.length) return
+      const globalRes = await globalAddonsApi.list({ limit: 200, offset: 0 })
+      if (cancelled) return
+      const refMap = new Map(refs.map((ref) => [ref.id, ref]))
+      setAttachedGlobalAddons(globalRes.data.filter((addon) => refMap.has(addon.id))
+        .map((addon) => ({ ...addon, ...refMap.get(addon.id)! })))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [activePersonaId, addonPersona, personasLoaded])
 
   // Mirror the server-returned metadata into the shared chat state. The
   // dedicated toggle endpoint records both boolean state and recency/version,
@@ -1008,7 +809,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   // iPhone-specific: match input bar bottom corners to device screen curvature
   const screenCornerRadius = useDeviceFrameRadius()
   const [inputFocused, setInputFocused] = useState(false)
-  const composerTouchFocus = useMemo(createComposerTouchFocusHandlers, [])
+  const composerTouchFocus = useMemo(() => createComposerTouchFocusHandlers(), [])
   const [sttStatus, setSttStatus] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle')
   const [sttLoadingProgress, setSttLoadingProgress] = useState<number | null>(null)
   const sttSessionConfigRef = useRef<{ provider: string; language: string; connectionId: string | null } | null>(null)
@@ -1017,9 +818,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const sttDraftBaseRef = useRef('')
   const sttInterimTextRef = useRef('')
   const sttFinalSegmentsRef = useRef<string[]>([])
-  const sttNormalizedFinalSegmentsRef = useRef<string[]>([])
-  const sttCommandStateRef = useRef<STTCommandState>({ thoughtDepth: 0 })
-  const sttShouldSendRef = useRef(false)
 
   const isSTTSupported = useMemo(() => {
     if (voiceSettings.sttProvider === 'webspeech') return isWebSpeechAvailable()
@@ -1034,6 +832,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [voiceSettings.sttProvider, isSTTSupported])
   const isListeningToSTT = sttStatus === 'starting' || sttStatus === 'listening' || sttStatus === 'processing'
   const showSTTIndicator = isListeningToSTT
+  useEffect(() => isListeningToSTT ? holdHostCapture() : undefined, [isListeningToSTT])
   const sttIndicatorLabel = useMemo(() => {
     if (sttStatus === 'starting' && voiceSettings.sttProvider === 'whistle' && sttLoadingProgress !== null) {
       return t('input.sttWhistleLoading', { percent: Math.round(sttLoadingProgress * 100) })
@@ -1070,9 +869,47 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     syncTextareaMirrorScroll()
   }, [syncTextareaMirrorScroll])
 
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    // Folding and pane resizing can rewrap a draft without changing its text.
+    // Watch width only so our own height writes do not cause a resize loop.
+    let width = -1
+    let frame = 0
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      // Rewrapping can also change the scrollbar gutter. Write height outside
+      // observer delivery so WebKit can finish the current resize cycle.
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => resizeTextarea(ta))
+    })
+    observer.observe(ta)
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [resizeTextarea])
+
   const queueTextareaSelection = useCallback((start: number, end = start, direction: 'forward' | 'backward' | 'none' = 'none') => {
     pendingSelectionRef.current = { start, end, direction }
   }, [])
+
+  const handleComposerFormat = useCallback((format: ComposerFormat) => {
+    const ta = textareaRef.current
+    if (!ta || isComposingRef.current) return
+    const next = formatComposerSelection(ta.value, ta.selectionStart, ta.selectionEnd, format)
+    queueTextareaSelection(next.start, next.end, ta.selectionDirection)
+    // Focus during the tap so mobile browsers keep/open the keyboard. Use a
+    // native edit where supported so formatting participates in Undo/Redo.
+    ta.focus({ preventScroll: true })
+    try {
+      ta.ownerDocument.execCommand('insertText', false, next.replacement)
+    } catch { /* WebViews without native edit support use the controlled draft. */ }
+    setText(next.text)
+    setHashQuery(null)
+    setAtQuery(null)
+  }, [queueTextareaSelection, setText])
 
   const applySTTTranscript = useCallback((transcript: string, moveCaret = false) => {
     const base = sttDraftBaseRef.current
@@ -1083,7 +920,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     setText(nextText)
     if (moveCaret) queueTextareaSelection(nextText.length)
-  }, [queueTextareaSelection])
+  }, [queueTextareaSelection, setText])
 
 
   useLayoutEffect(() => {
@@ -1105,7 +942,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setText(streamingContent)
       requestAnimationFrame(() => resizeTextarea(textareaRef.current))
     }
-  }, [streamingContent, streamingGenerationType, resizeTextarea])
+  }, [streamingContent, streamingGenerationType, resizeTextarea, setText])
 
   // When an impersonate draft completes, ensure final content is in the textarea
   useEffect(() => {
@@ -1114,7 +951,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setImpersonateDraftContent(null)
       requestAnimationFrame(() => resizeTextarea(textareaRef.current))
     }
-  }, [impersonateDraftContent, setImpersonateDraftContent, resizeTextarea])
+  }, [impersonateDraftContent, setImpersonateDraftContent, resizeTextarea, setText])
 
   useEffect(() => () => {
     sttEngineRef.current?.destroy()
@@ -1122,49 +959,16 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   }, [])
 
   // ── Draft input persistence ──────────────────────────────────────────
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const DRAFT_KEY_PREFIX = 'lumiverse:chatDraft:'
-
-  // Restore draft on mount or chat switch
+  // Text and attachments are restored by useComposerDraft before paint.
   useEffect(() => {
     setLastImpersonateInput('')
     setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
     const queuedDraft = consumeRegexActionDraft(chatId)
     if (queuedDraft) {
-      let saved = ''
-      if (saveDraftInput) {
-        try { saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId) || '' } catch {}
-      }
-      setText(applyRegexActionDraft(saved, queuedDraft))
+      setText((saved) => applyRegexActionDraft(saved, queuedDraft))
       requestAnimationFrame(() => resizeTextarea(textareaRef.current))
-      return
     }
-    if (!saveDraftInput) return
-    try {
-      const saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId)
-      if (saved) {
-        setText(saved)
-      }
-    } catch {}
-  }, [chatId, saveDraftInput, resizeTextarea])
-
-  // Debounced save on text change
-  useEffect(() => {
-    if (!saveDraftInput) return
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
-    draftTimerRef.current = setTimeout(() => {
-      try {
-        if (text) {
-          localStorage.setItem(DRAFT_KEY_PREFIX + chatId, text)
-        } else {
-          localStorage.removeItem(DRAFT_KEY_PREFIX + chatId)
-        }
-      } catch {}
-    }, 500)
-    return () => {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
-    }
-  }, [text, chatId, saveDraftInput])
+  }, [chatId, setText, resizeTextarea])
 
   const pinnedConnectionId = typeof activeChatMetadata?.connection_profile_id === 'string'
     && profiles.some((profile) => profile.id === activeChatMetadata.connection_profile_id)
@@ -1180,7 +984,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
   const manuallyActiveGuideCount = guidedGenerations.filter((guide) => guide.enabled).length
   const activeQuickReplySets = quickReplySets.filter((s) => s.enabled)
   const activeLoomPresetRegistryUpdatedAt = activeLoomPresetId
-    ? loomRegistry[activeLoomPresetId]?.updatedAt ?? null
+    ? loomRegistry[activeLoomPresetId]?.cacheRevision ?? loomRegistry[activeLoomPresetId]?.updatedAt ?? null
     : null
   const promptVariablesAvailable = !!activeLoomPresetId
     && promptVariablesAvailability?.presetId === activeLoomPresetId
@@ -1194,24 +998,18 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     let cancelled = false
     const presetId = activeLoomPresetId
     const registryUpdatedAt = activeLoomPresetRegistryUpdatedAt
+    const epoch = readAccountEpoch()
     const isCurrent = () => {
       const state = useStore.getState()
       return !cancelled
+        && readAccountEpoch() === epoch
         && state.activeLoomPresetId === presetId
-        && (state.loomRegistry[presetId]?.updatedAt ?? null) === registryUpdatedAt
+        && (state.loomRegistry[presetId]?.cacheRevision ?? state.loomRegistry[presetId]?.updatedAt ?? null) === registryUpdatedAt
     }
 
-    void inspectPromptVariablesAvailability({
-      presetId,
-      registryUpdatedAt,
-      loadBlocks: async () => {
-        const preset = await presetsApi.get(presetId)
-        return unmarshalPreset(preset).blocks
-      },
-      isCurrent,
-    }).then((availability) => {
-      if (!availability) return
-      setPromptVariablesAvailability(availability)
+    void presetsApi.capabilities(presetId).then((capabilities) => {
+      if (!isCurrent()) return
+      setPromptVariablesAvailability({ presetId, registryUpdatedAt, hasDefinitions: capabilities.has_prompt_variables })
     }).catch((err) => {
       if (!isCurrent()) return
       console.warn('[InputArea] Failed to inspect prompt variable availability:', err)
@@ -1232,8 +1030,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     setPromptVariablesLoading(true)
     const presetId = activeLoomPresetId
     try {
-      const resolvedProfile = await presetProfilesApi.resolve(chatId, presetId, activeProfileId, activePersonaId)
-      const preset = await presetsApi.get(presetId)
+      const [resolvedProfile, preset] = await Promise.all([
+        presetProfilesApi.resolve(chatId, presetId, activeProfileId, activePersonaId),
+        presetsApi.get(presetId),
+      ])
       if (useStore.getState().activeLoomPresetId !== presetId) {
         return
       }
@@ -1500,6 +1300,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const root = document.documentElement
     const loreMount = el.querySelector<HTMLElement>('[data-spindle-mount="chat_composer_above"]')
     const popoverSlot = el.querySelector<HTMLElement>('[data-composer-popover]')
+    const formattingBar = el.querySelector<HTMLElement>('[data-composer-formatting]')
 
     const measureLoreHeight = () => {
       if (!loreMount) return 0
@@ -1514,7 +1315,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const update = () => {
       const loreHeight = measureLoreHeight()
       const h = measureComposerHeight(el, popoverSlot)
-      const composerHeight = Math.max(0, h - loreHeight) + 8
+      const formattingHeight = formattingBar ? renderedPxToLayoutPx(formattingBar.getBoundingClientRect().height) + 8 : 0
+      const composerHeight = Math.max(0, h - loreHeight) + formattingHeight + 8
       // Use the animated position, so list padding and composer move together.
       // Zero is valid for edge-to-edge PWA composers.
       const measuredBottom = parseFloat(getComputedStyle(el).bottom)
@@ -1530,6 +1332,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
     const ro = new ResizeObserver(update)
     ro.observe(el)
+    if (formattingBar) ro.observe(formattingBar)
     if (loreMount) ro.observe(loreMount)
     const stopObservingMotion = observeComposerMotion(el, update)
     update()
@@ -1563,7 +1366,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       parent.style.removeProperty('--lcs-composer-safe-zone')
       parent.style.removeProperty('--lcs-input-safe-zone')
     }
-  }, [hideForMobileEdit])
+  }, [hideForMobileEdit, showComposerFormattingBar, showSTTIndicator])
 
   // Document-level Escape to stop generation
   useEffect(() => {
@@ -1615,10 +1418,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     }).catch(() => {})
   }, [openPopover, personas])
 
-  useEffect(() => {
-    if (!activeCharacterId) return
-    charactersApi.get(activeCharacterId).then((c) => setCharacterName(c.name)).catch(() => {})
-  }, [activeCharacterId])
 
   const DOCUMENT_EXTENSIONS = useMemo(() => new Set([
     '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.xml',
@@ -1690,11 +1489,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, isDocumentFile, chatId, characterName, t])
+  }, [AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, isDocumentFile, chatId, characterName, t, setPendingAttachments])
 
   const removeAttachment = useCallback((imageId: string) => {
     setPendingAttachments((prev) => prev.filter((a) => a.image_id !== imageId))
-  }, [])
+  }, [setPendingAttachments])
 
   // Paste-to-attach: pull any files (e.g. screenshots) out of the clipboard and
   // route them through the same pipeline as the file picker. Plain-text pastes
@@ -1839,6 +1638,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           script_id: selection.scriptId,
           action_id: selection.id,
           instance_id: selection.instanceId,
+          action_signature: selection.actionSignature,
         }] : []
       )))
       for (const message of result.messages) updateMessage(message.id, { extra: message.extra })
@@ -1878,23 +1678,35 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const pendingSelections = getPendingRegexSelections(chatId)
     const roomContent = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
     if (!roomContent) return 'blocked'
+    if (!mp.mpMyParticipantId) {
+      toast.error(t('toast.roomMessageUnconfirmed'))
+      return 'blocked'
+    }
     if (!await finalizeRegexSelections(pendingSelections, triggerAction)) return 'blocked'
-    const consumedSelections = consumeRegexSelections(chatId)
+    setIsSavingMessage(true)
+    try {
+      await sendConfirmedRoomMessage({
+        chatId,
+        participantId: mp.mpMyParticipantId,
+        content: roomContent,
+        associativeRegexAppend: serializeHiddenRegexSelections(pendingSelections),
+      })
+    } catch {
+      toast.error(t('toast.roomMessageUnconfirmed'))
+      return 'blocked'
+    } finally {
+      setIsSavingMessage(false)
+    }
+    consumeRegexSelections(chatId)
     setPendingRegexVisibleCount(0)
-    sendRoomAction({
-      type: 'room_message',
-      content: roomContent,
-      associative_regex_append: serializeHiddenRegexSelections(consumedSelections),
-    })
     if (contentOverride === undefined) {
-      setText('')
-      if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+      acknowledgeDraft({ ...draft, attachments: [] })
     }
     requestAnimationFrame(() => {
       if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus({ preventScroll: true }) }
     })
     return 'sent'
-  }, [text, chatId, saveDraftInput, resizeTextarea, finalizeRegexSelections])
+  }, [text, chatId, draft, acknowledgeDraft, resizeTextarea, finalizeRegexSelections, t])
 
   const handleQueueMessage = useCallback(async () => {
     if (sendingRef.current || isGeneratingInChat) return
@@ -1920,11 +1732,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       return
     }
 
-    setText('')
-    setPendingAttachments([])
-    if (saveDraftInput) {
-      try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
-    }
+    setIsSavingMessage(true)
 
     let consumedRegexSelections: PendingRegexSelection[] = []
     const regexSelectionsFinalized = pendingSelections.some((selection) => selection.multi_select)
@@ -1953,7 +1761,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         content: content || '(attached)',
         extra: Object.keys(extra).length > 0 ? extra : undefined,
       })
-      addMessage(msg)
+      acknowledgeDraft(draft)
+      if (useStore.getState().activeChatId === chatId) addMessage(msg)
       toast.info(t('toast.messageQueued'), { duration: 1500 })
     } catch (err: any) {
       restoreRegexSelections(
@@ -1964,11 +1773,12 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       )
       setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
       console.error('[InputArea] Failed to queue message:', err)
-      toast.error(err?.body?.error || err?.message || t('toast.failedQueueMessage'))
+      toast.error(err?.body?.error || err?.message || t('toast.failedQueueMessage'), { title: t('toast.messageDraftKept') })
     } finally {
       sendingRef.current = false
+      setIsSavingMessage(false)
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t])
+  }, [text, chatId, draft, acknowledgeDraft, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t])
 
   const handleSend = useCallback(async (
     contentOverride?: string,
@@ -1998,13 +1808,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     }
 
     const nonce = ++generationNonceRef.current
-    if (contentOverride === undefined) {
-      setText('')
-      setPendingAttachments([])
-    }
-    if (contentOverride === undefined && saveDraftInput) {
-      try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
-    }
+    setIsSavingMessage(willCreateMessage)
     setStreamingError(null)
 
     // Reset textarea height
@@ -2108,12 +1912,15 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           extra: Object.keys(extra).length > 0 ? extra : undefined,
         })
         regexAppendsCommitted = true
-        // Optimistically add to store so it appears immediately
-        addMessage(msg)
+        if (contentOverride === undefined) acknowledgeDraft(draft)
+        setIsSavingMessage(false)
+        // Only clear the submitted draft after the message is durable. A
+        // generation failure after this point leaves it in chat history.
+        if (useStore.getState().activeChatId === chatId) addMessage(msg)
         // Show streaming state immediately so stop button appears during assembly
-        beginStreaming()
+        if (useStore.getState().activeChatId === chatId) beginStreaming()
         const res = await generateApi.start(genOpts)
-        if (generationNonceRef.current !== nonce) return
+        if (generationNonceRef.current !== nonce || useStore.getState().activeChatId !== chatId) return
         startStreaming(res.generationId)
         consumeOneshotGuides()
       } else if (hasQueuedMessages) {
@@ -2142,15 +1949,22 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         )
         setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
       }
-      if (generationNonceRef.current !== nonce) return
+      if (generationNonceRef.current !== nonce || useStore.getState().activeChatId !== chatId) return
       console.error('[InputArea] Failed to send:', err)
       const msg = err?.body?.error || err?.message || te('failedToStartGeneration')
+      if (willCreateMessage && !regexAppendsCommitted) {
+        toast.error(msg, { title: t('toast.messageDraftKept') })
+        return
+      }
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.generationFailed') })
     } finally {
       sendingRef.current = false
+      setIsSavingMessage(false)
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
+  }, [text, chatId, draft, acknowledgeDraft, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t, te])
+
+  useComposerBridge({ chatId, text, setText, textareaRef, handleSend, isGeneratingInChat, sendingRef })
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
@@ -2219,6 +2033,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             script_id: action.scriptId,
             action_id: action.id,
             instance_id: action.instanceId,
+            action_signature: action.actionSignature,
           })
           updateMessage(claimed.message.id, { extra: claimed.message.extra })
           const draft = claimed.effects?.find((effect) => effect.type === 'draft')
@@ -2265,6 +2080,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
             script_id: action.scriptId,
             action_id: action.id,
             instance_id: action.instanceId,
+            action_signature: action.actionSignature,
           })
           updateMessage(claimed.message.id, { extra: claimed.message.extra })
           queueRegexSelection(action)
@@ -2287,46 +2103,42 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     }
     window.addEventListener(REGEX_ACTION_EVENT, handleRegexAction)
     return () => window.removeEventListener(REGEX_ACTION_EVENT, handleRegexAction)
-  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, navigate, resizeTextarea, t, updateMessage])
+  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, navigate, resizeTextarea, t, updateMessage, setText])
 
   const finalizeSTTTranscript = useCallback(() => {
-    const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
-    const shouldSend = sttShouldSendRef.current
+    const { text: transcript, shouldSend } = parseSTTTranscript(sttFinalSegmentsRef.current.join(' '))
 
     sttInterimTextRef.current = ''
     sttFinalSegmentsRef.current = []
-    sttNormalizedFinalSegmentsRef.current = []
-    sttCommandStateRef.current = { thoughtDepth: 0 }
-    sttShouldSendRef.current = false
 
     setSttStatus('idle')
     stopSTTSession('destroy')
 
-    if (!transcript) {
-      pendingSTTActionRef.current = null
+    if (!transcript && (!shouldSend || !sttDraftBaseRef.current.trim())) {
+      setPendingSTTAction(null)
       applySTTTranscript('', true)
       return
     }
 
-    pendingSTTActionRef.current = shouldSend ? 'send' : 'queue'
+    setPendingSTTAction(shouldSend ? 'send' : 'queue')
     applySTTTranscript(transcript, true)
   }, [applySTTTranscript, stopSTTSession])
 
   useEffect(() => {
-    const pendingAction = pendingSTTActionRef.current
+    const pendingAction = pendingSTTAction
     if (!pendingAction) return
     if (!text.trim()) {
-      pendingSTTActionRef.current = null
+      setPendingSTTAction(null)
       return
     }
 
-    pendingSTTActionRef.current = null
+    setPendingSTTAction(null)
     if (pendingAction === 'send') {
       void handleSend()
       return
     }
     void handleQueueMessage()
-  }, [text, handleQueueMessage, handleSend])
+  }, [text, handleQueueMessage, handleSend, pendingSTTAction])
 
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isGeneratingInChat) return
@@ -2457,12 +2269,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     const inputDraft = text
     const impersonateInput = inputDraft.trim()
     beginStreaming(undefined, 'impersonate_draft')
-    // Stash the input so the user can restore it after the run, and clear the box.
+    // Keep the source draft until generated text replaces it. A failed start
+    // must not discard the user's input, including across a refresh.
     if (impersonateInput) {
       setLastImpersonateInput(impersonateInput)
-      setText('')
-      try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
-      requestAnimationFrame(() => resizeTextarea(textareaRef.current))
     }
     try {
       const presetSelection = resolveImpersonationPresetSelection(
@@ -2494,7 +2304,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
+  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleStop = useCallback(async () => {
     if (!isGeneratingInChat) return
@@ -2756,7 +2566,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     } finally {
       setResolvingMacros(false)
     }
-  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te])
+  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te, setText])
 
   const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, hashStartIndex)
@@ -2766,7 +2576,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     setText(newText)
     setHashQuery(null)
     setOpenPopover(null)
-  }, [text, hashStartIndex, hashQuery, queueTextareaSelection])
+  }, [text, hashStartIndex, hashQuery, queueTextareaSelection, setText])
 
   const handleAtSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, atStartIndex)
@@ -2776,7 +2586,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     setText(newText)
     setAtQuery(null)
     setOpenPopover(null)
-  }, [text, atStartIndex, atQuery, queueTextareaSelection])
+  }, [text, atStartIndex, atQuery, queueTextareaSelection, setText])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2867,9 +2677,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       touchQueueArmTimerRef.current = 0
       const nextState = syncMobileQueueHoldVisualState(holdStartedAt, holdStartedAt + MOBILE_QUEUE_HOLD_MS)
       if (nextState !== 'armed') return
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate(12)
-      }
+      playHaptic('selection')
     }, MOBILE_QUEUE_HOLD_MS)
   }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState, syncMobileQueueHoldVisualState])
 
@@ -2995,7 +2803,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     if (isComposingRef.current) return
 
     runAutocompleteDetection(ta)
-  }, [runAutocompleteDetection])
+  }, [runAutocompleteDetection, setText])
 
   const handleSTTToggle = useCallback(async () => {
     if (isListeningToSTT) {
@@ -3032,9 +2840,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       sttDraftBaseRef.current = text.trimEnd()
       sttInterimTextRef.current = ''
       sttFinalSegmentsRef.current = []
-      sttNormalizedFinalSegmentsRef.current = []
-      sttCommandStateRef.current = { thoughtDepth: 0 }
-      sttShouldSendRef.current = false
 
       const engine = createSTTEngine({
         provider: voiceSettings.sttProvider,
@@ -3064,19 +2869,14 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       engine.onResult((result) => {
         if (sttEngineRef.current !== engine) return
         if (result.isFinal) {
-          const { text: commandStrippedText, shouldSend } = stripSTTSendCommand(result.text)
-          if (shouldSend) sttShouldSendRef.current = true
-
-          const normalizedSegment = normalizeSTTTranscript(commandStrippedText, sttCommandStateRef.current)
           sttFinalSegmentsRef.current = [...sttFinalSegmentsRef.current, result.text.trim()].filter(Boolean)
-          sttNormalizedFinalSegmentsRef.current = [...sttNormalizedFinalSegmentsRef.current, normalizedSegment].filter(Boolean)
           sttInterimTextRef.current = ''
         } else {
-          const { text: commandStrippedText } = stripSTTSendCommand(result.text)
-          sttInterimTextRef.current = normalizeSTTTranscript(commandStrippedText, { ...sttCommandStateRef.current })
+          sttInterimTextRef.current = result.text
         }
 
-        const transcript = [...sttNormalizedFinalSegmentsRef.current, sttInterimTextRef.current].filter(Boolean).join(' ')
+        const raw = [...sttFinalSegmentsRef.current, sttInterimTextRef.current].filter(Boolean).join(' ')
+        const { text: transcript } = parseSTTTranscript(raw)
         applySTTTranscript(transcript, result.isFinal)
         setSttStatus(engine.isListening() ? 'listening' : 'idle')
       })
@@ -3094,9 +2894,6 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         stopSTTSession('destroy')
         sttInterimTextRef.current = ''
         sttFinalSegmentsRef.current = []
-        sttNormalizedFinalSegmentsRef.current = []
-        sttCommandStateRef.current = { thoughtDepth: 0 }
-        sttShouldSendRef.current = false
         setSttAudioFrame(null)
         setSttStatus('idle')
         toast.error(msg, { title: t('toast.sttFailed') })
@@ -3156,7 +2953,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     // without firing a trailing `input` event.
     if (ta.value !== text) setText(ta.value)
     runAutocompleteDetection(ta)
-  }, [runAutocompleteDetection, text])
+  }, [runAutocompleteDetection, text, setText])
 
   // Background-only mirror content. The textarea renders the real visible text
   // so caret geometry, drag-selection, and IME behavior stay native, while the
@@ -3278,6 +3075,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       data-component="InputArea"
       ref={containerRef}
       className={styles.container}
+      data-liquid-glass-surface=""
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -3285,9 +3083,9 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       style={(() => {
         const s: CSSProperties = {}
         if (screenCornerRadius) {
-          s.borderRadius = inputFocused
-            ? 'var(--lcs-radius, 14px)'
-            : `var(--lcs-radius, 14px) var(--lcs-radius, 14px) ${screenCornerRadius}px ${screenCornerRadius}px`
+          const topRadius = 'var(--lcs-radius, 14px)'
+          const bottomRadius = inputFocused ? topRadius : `${screenCornerRadius}px`
+          s.borderRadius = `var(--composer-left-edge-radius, ${topRadius}) var(--composer-right-edge-radius, ${topRadius}) var(--composer-right-edge-radius, ${bottomRadius}) var(--composer-left-edge-radius, ${bottomRadius})`
         }
         if (hideForMobileEdit) s.display = 'none'
         return Object.keys(s).length ? s : undefined
@@ -3767,29 +3565,11 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
 
           {renderPopover === 'connections' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
-              {profiles.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={clsx(styles.popRowBtn, activeProfileId === p.id && styles.popRowBtnActive)}
-                  onClick={() => {
-                    void acknowledgeConnectionProfileSelection({
-                      profileId: p.id,
-                      setActiveProfile,
-                      closePopover: () => setOpenPopover(null),
-                    })
-                  }}
-                >
-                  <span className={styles.personaMain}>
-                    <ProviderIcon kind="llm" provider={p.provider} size={22} />
-                    <span className={styles.personaNameGroup}>
-                      <span>{p.name}</span>
-                      <span className={styles.popMeta}>{p.provider}{p.model ? ` / ${p.model}` : ''}</span>
-                    </span>
-                  </span>
-                </button>
-              ))}
+              <ConnectionQuickPicker onSelect={profileId => {
+                void acknowledgeConnectionProfileSelection({
+                  profileId, setActiveProfile, closePopover: () => setOpenPopover(null),
+                })
+              }} />
               <button type="button" className={styles.popLink} onClick={() => {
                 setOpenPopover(null)
                 useStore.getState().openDrawer('connections')
@@ -4362,8 +4142,8 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         <div className={styles.attachmentStrip}>
           {pendingAttachments.map((att) => (
             <div key={att.image_id} className={styles.attachmentPreview}>
-              {att.type === 'image' && att.previewUrl ? (
-                <img src={att.previewUrl} alt={att.original_filename} className={styles.attachmentThumb} />
+              {att.type === 'image' ? (
+                <img src={att.previewUrl || imagesApi.smallUrl(att.image_id)} alt={att.original_filename} className={styles.attachmentThumb} />
               ) : (
                 <span className={styles.attachmentLabel}>{att.original_filename}</span>
               )}
@@ -4393,6 +4173,19 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         style={{ display: 'none' }}
         onChange={(e) => handleAttachFiles(e.target.files)}
       />
+
+      {isGeneratingInChat && streamingGenerationType === 'impersonate_draft' && streamingReasoning && (
+        <ReasoningBlock
+          reasoning={streamingReasoning}
+          reasoningDuration={streamingReasoningDuration ?? undefined}
+          reasoningStartedAt={streamingReasoningStartedAt}
+          isStreaming
+        />
+      )}
+
+      {showComposerFormattingBar && !showSTTIndicator && (
+        <ComposerFormattingBar onFormat={handleComposerFormat} />
+      )}
 
       {showSTTIndicator ? (
         <button
@@ -4541,13 +4334,14 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
                 onPointerDown={handleSendPointerDown}
                 onPointerUp={handleSendPointerUp}
                 onPointerCancel={handleSendPointerCancel}
-                disabled={isGeneratingInChat}
+                disabled={isGeneratingInChat || isSavingMessage}
                 style={sendButtonStyle}
                 title={sendButtonTitle}
                 aria-label={sendButtonAriaLabel}
+                aria-busy={isSavingMessage || undefined}
               >
                 <span className={styles.sendBtnIcon}>
-                  {mobileQueueHoldState === 'queueing' ? (
+                  {isSavingMessage || mobileQueueHoldState === 'queueing' ? (
                     <LoaderCircle size={16} className={styles.sendBtnSpinner} />
                   ) : mobileQueueHoldState === 'holding' || mobileQueueHoldState === 'armed' ? (
                     <IconPlaylistAdd size={18} />

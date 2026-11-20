@@ -30,7 +30,8 @@ export class WhistleRuntime {
     return new WhistleRuntime(module)
   }
 
-  transcribe(pcm: Float32Array, language?: string): WhistleTranscript {
+  /** Keywords bias recognition toward names and terms; the engine takes them newline-separated. */
+  transcribe(pcm: Float32Array, language?: string, keywords?: readonly string[]): WhistleTranscript {
     if (!pcm.length) return { text: '', language: '', words: [] }
     if (pcm.length > WHISTLE_SAMPLE_RATE * 30) throw new Error('Whistle audio windows must be at most 30 seconds.')
     if (language && !whistleLanguage(language)) throw new Error('This language is not supported by Whistle.')
@@ -46,14 +47,17 @@ export class WhistleRuntime {
       const input = allocate(pcm.byteLength)
       const capacity = 1 << 18
       const output = allocate(capacity)
-      let languagePointer = 0
-      if (language) {
-        const bytes = new TextEncoder().encode(whistleLanguage(language) + '\0')
-        languagePointer = allocate(bytes.length)
-        module.HEAPU8.set(bytes, languagePointer)
+      const string = (value: string | undefined) => {
+        if (!value) return 0
+        const bytes = new TextEncoder().encode(value + '\0')
+        const pointer = allocate(bytes.length)
+        module.HEAPU8.set(bytes, pointer)
+        return pointer
       }
+      const languagePointer = string(language && whistleLanguage(language))
+      const keywordsPointer = string(keywords?.join('\n'))
       new Float32Array(module.HEAPU8.buffer, input, pcm.length).set(pcm)
-      const code = module._needle_transcribe(input, pcm.length, languagePointer, 0, 1, output, capacity)
+      const code = module._needle_transcribe(input, pcm.length, languagePointer, keywordsPointer, 1, output, capacity)
       if (code < 0) throw new Error(module.UTF8ToString(module._needle_last_error()) || 'Whistle transcription failed.')
       const result = JSON.parse(module.UTF8ToString(output)) as WhistleTranscript
       if (typeof result.text !== 'string' || typeof result.language !== 'string') throw new Error('Whistle returned an invalid transcript.')

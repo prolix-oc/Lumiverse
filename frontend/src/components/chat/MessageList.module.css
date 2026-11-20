@@ -77,8 +77,14 @@
   overflow: hidden;
 }
 
-.virtualRow :global([data-display-pending]) {
+/* Hide the whole cold row, including headers/actions. Opacity also contains
+   authored visibility:visible descendants in HTML islands. Keep the reserved
+   height while async display work and its first measurement catch up. */
+.virtualRow[data-message-row-measuring],
+.virtualRow:has(:global([data-display-pending])) {
   visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .virtualRow:not([data-item-type='messageFooter']):not([data-item-type='bottom']) {

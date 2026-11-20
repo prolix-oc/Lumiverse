@@ -24,6 +24,14 @@ import { isMessageListScrollRangeClamp, shouldPinMessageListTail, type MessageLi
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT, isCollapsibleToggleElement } from './collapsibleLayout'
 import { getLongMessageCollapseHeight, isLongMessageCollapseEligible, longMessageExpansionKey } from '@/lib/longMessageCollapse'
 import {
+  createMessageRowRevealQueue,
+  MESSAGE_ROW_MEASURING_ATTRIBUTE,
+  readMessageRowHeight,
+  revealMeasuredMessageRow,
+} from './messageRowMeasurement'
+import {
+  dispatchMessageContentLayout,
+  isMessageDisplayReadyLayout,
   MESSAGE_CONTENT_LAYOUT_EVENT,
   shouldPreserveScrollAnchorForLayout,
 } from '@/lib/message-content-layout'
@@ -59,11 +67,6 @@ const INITIAL_LOAD_DOM_WATCH_MS = 6500
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
 const MOBILE_RANGE_WARM_MS = 1200
-// How long after the first rows render before the mounted range widens from
-// the cold-start window to the full warm range. Long enough for the initial
-// frame to paint on slow devices, short enough that early scrolling still
-// finds rows mounted.
-const INITIAL_RANGE_WARM_DELAY_MS = 300
 // A zero pending count is only a point-in-time observation: resolving
 // preprocessing can enqueue regex work, and tag delivery can enqueue a widget
 // mount in the following React commit. Require a short quiet window after the
@@ -181,9 +184,8 @@ function collapseClosedDetailsForEstimate(value: string) {
 }
 
 // Heuristic chrome/line-height contributions per Lumia OOC display mode. These
-// only need to be roughly right; ResizeObserver corrects to the true height on
-// mount and the result is cached in measuredRowHeightsRef. Wrong here just
-// causes a one-frame scroll jump when an OOC-heavy row first mounts.
+// only need to be roughly right; ResizeObserver replaces the estimate with
+// the true height before revealing a completed row.
 const OOC_MODE_ESTIMATE: Record<OOCStyleType, {
   groupChrome: number
   entryChrome: number
@@ -220,7 +222,9 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
 }
 
 export default function MessageList({ messages, chatId, isStreaming, findTarget = null, findQuery = '' }: MessageListProps) {
-  'use memo'
+  'use no memo'
+  // TanStack Virtual exposes a mutable instance. Compiler memoization can
+  // freeze its rendered range, so retain the explicit memoization below.
 
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -243,15 +247,15 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const lastScrollHeightRef = useRef(0)
   const lastScrollTopRef = useRef(0)
   const lastObservedScrollRef = useRef<MessageListScrollPosition | null>(null)
-  const measuredRowHeightsRef = useRef<Map<string, number>>(new Map())
-  // Tracks the most recently measured row height per message.id, irrespective
-  // of which swipe variant produced it. When a new variant has no measureKey
-  // entry yet (first paint after a swipe), this is a far better initial
-  // estimate than the content heuristic — especially for HTML-heavy bodies
-  // where the heuristic can be hundreds of pixels off and the resulting
-  // height delta would trigger scroll oscillation.
-  const lastMeasuredByMessageIdRef = useRef<Map<string, number>>(new Map())
-  const averageMeasuredHeightRef = useRef<number | null>(null)
+  // TanStack owns measured sizes. Keep each provisional estimate stable too:
+  // rebuilding a range must not silently change other unmeasured rows when
+  // the DOM width becomes available after the first render.
+  const estimatedRowHeightsRef = useRef<Map<string, number>>(new Map())
+  const estimatedChatRef = useRef(chatId)
+  if (estimatedChatRef.current !== chatId) {
+    estimatedChatRef.current = chatId
+    estimatedRowHeightsRef.current.clear()
+  }
   const isPrependingRef = useRef(false)
   const suppressNextPinUpdateRef = useRef(false)
   const rangeWarmTimerRef = useRef<number | null>(null)
@@ -264,11 +268,10 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   )
   const [mobileRangeWarm, setMobileRangeWarm] = useState(true)
   // Initial mount staging: the first paint of a freshly opened chat mounts
-  // only the viewport plus a tight overscan. The wide warm range (which can
-  // mount the entire loaded page on touch devices) flips on shortly after, so
-  // the per-message render pipeline doesn't block the first visible frame.
+  // only the viewport plus a tight overscan. Prepare the wider warm range as
+  // a transition while ChatView still hides the chat, before its reveal gate
+  // waits for the mounted display pipeline to settle.
   const [initialRangeWarm, setInitialRangeWarm] = useState(false)
-  const initialWarmTimerRef = useRef<number | null>(null)
   // Fade the message list in once TanStack has populated virtual rows on
   // chat load. Reset on every chat switch so the next chat can fade in too.
   const hasFadedInRef = useRef(false)
@@ -283,6 +286,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const recentCollapsibleToggleUntilRef = useRef(0)
   const recentCollapsibleToggleTimerRef = useRef<number | null>(null)
   const programmaticReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
+  const coldDisplayAnchorIndexRef = useRef<number | null>(null)
   const previousSwipeIdByMessageIdRef = useRef<Map<string, number>>(new Map())
   const swipeVariantReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
   const findHighlightTimerRef = useRef<number | null>(null)
@@ -305,11 +309,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const beginForcedScroll = useCallback(() => {
     forcedScrollEnabledRef.current = true
   }, [])
-
-  const interruptForcedScroll = useCallback(() => {
-    forcedScrollEnabledRef.current = false
-    cancelForcedScroll()
-  }, [cancelForcedScroll])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -386,9 +385,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     topLoadArmedRef.current = true
     lastScrollTopRef.current = 0
     lastObservedScrollRef.current = null
-    measuredRowHeightsRef.current = new Map()
-    lastMeasuredByMessageIdRef.current = new Map()
-    averageMeasuredHeightRef.current = null
     initialBottomPinnedChatRef.current = null
     initialScrollStartedAtRef.current = 0
     initialScrollSettleUntilRef.current = 0
@@ -533,6 +529,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
   const displayMode = useStore((s) => s.chatDisplayMode)
   const longMessageCollapseEnabled = useStore((s) => s.longMessageCollapseEnabled)
+  const longMessageCollapseUserMessages = useStore((s) => s.longMessageCollapseUserMessages)
   const longMessageCollapsePreset = useStore((s) => s.longMessageCollapsePreset)
   const longMessageCollapseCustomHeight = useStore((s) => s.longMessageCollapseCustomHeight)
   const longMessageCollapseDepth = useStore((s) => s.longMessageCollapseDepth)
@@ -576,6 +573,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       const depth = visibleMessages.length - 1 - index
       const longMessageEligible = isLongMessageCollapseEligible({
         enabled: longMessageCollapseEnabled,
+        includeUserMessages: longMessageCollapseUserMessages,
         isUser: message.is_user,
         depth,
         collapseDepth: longMessageCollapseDepth,
@@ -630,7 +628,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     items.push({ type: 'bottom', key: 'bottom' })
 
     return items
-  }, [chatId, displayMode, expandedLongMessageKeySet, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, longMessageCollapseDepth, longMessageCollapseEnabled, longMessageCollapseHeight, longMessageCollapsePreset, lumiaOOCStyle, streamingError, visibleMessages])
+  }, [chatId, displayMode, expandedLongMessageKeySet, isCoarsePointer, isGroupChat, isNudgeLoopActive, loadingOlder, longMessageCollapseDepth, longMessageCollapseEnabled, longMessageCollapseUserMessages, longMessageCollapseHeight, longMessageCollapsePreset, lumiaOOCStyle, streamingError, visibleMessages])
 
   // ResizeObserver reports a swipe replacement after commit. Remember that
   // semantic change across the short async measurement window so the resize
@@ -654,40 +652,21 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   }, [visibleMessages])
 
   useEffect(() => {
-    measuredRowHeightsRef.current = new Map()
-    lastMeasuredByMessageIdRef.current = new Map()
-    averageMeasuredHeightRef.current = null
-  }, [displayMode, isCoarsePointer, longMessageCollapseEnabled, longMessageCollapseHeight, longMessageCollapsePreset, longMessageCollapseDepth, lumiaOOCStyle])
-
-  useEffect(() => {
     setInitialRangeWarm(false)
-    if (initialWarmTimerRef.current != null) {
-      window.clearTimeout(initialWarmTimerRef.current)
-      initialWarmTimerRef.current = null
-    }
   }, [chatId])
 
-  // Widen to the warm range once the first rows have painted. The flip mounts
-  // the remaining offscreen rows in one go, so run it as a transition to keep
-  // scrolling responsive while React renders them. The chat_id check matters
-  // on chat switch: the previous chat's rows linger in the store until the new
-  // tail arrives, and they must not start the warm timer early.
+  // The reveal already waits for this range and its display work. A fixed
+  // warm-up timer would keep a ready chat invisible before its entrance can
+  // even start. Queue the wider range after the first commit instead, using
+  // a transition so React can yield while preparing the offscreen rows.
+  // Old rows from the previous chat must not warm the new chat's range.
   const hasRows = visibleMessages.length > 0 && visibleMessages[0]?.chat_id === chatId
   useEffect(() => {
     if (!hasRows || initialRangeWarm) return
-    initialWarmTimerRef.current = window.setTimeout(() => {
-      initialWarmTimerRef.current = null
-      startTransition(() => {
-        setInitialRangeWarm(true)
-        warmMobileRange()
-      })
-    }, INITIAL_RANGE_WARM_DELAY_MS)
-    return () => {
-      if (initialWarmTimerRef.current != null) {
-        window.clearTimeout(initialWarmTimerRef.current)
-        initialWarmTimerRef.current = null
-      }
-    }
+    startTransition(() => {
+      setInitialRangeWarm(true)
+      warmMobileRange()
+    })
   }, [hasRows, initialRangeWarm, warmMobileRange])
 
   useEffect(() => {
@@ -734,9 +713,6 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     return () => {
       if (rangeWarmTimerRef.current != null) {
         window.clearTimeout(rangeWarmTimerRef.current)
-      }
-      if (initialWarmTimerRef.current != null) {
-        window.clearTimeout(initialWarmTimerRef.current)
       }
       if (initialScrollRafRef.current != null) {
         cancelAnimationFrame(initialScrollRafRef.current)
@@ -837,15 +813,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   }, [cancelInitialScrollToEnd, markUserUnpinned, suppressKeyboardRepin])
 
   const estimateMessageSize = useCallback((message: Message, measureKey: string, depth: number) => {
-    const measured = measuredRowHeightsRef.current.get(measureKey)
-    if (measured) return measured
-
-    // No entry for this exact variant yet — fall back to the row's prior
-    // measured height before the heuristic. Bridges the gap between a
-    // swipe / edit changing the measureKey and the ResizeObserver firing
-    // with the new content's true size.
-    const lastForMessage = lastMeasuredByMessageIdRef.current.get(message.id)
-    if (lastForMessage) return lastForMessage
+    const cached = estimatedRowHeightsRef.current.get(measureKey)
+    if (cached !== undefined) return cached
 
     const el = scrollRef.current
     const width = Math.max(240, el?.clientWidth ?? 720)
@@ -901,10 +870,9 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       htmlFloor,
       extensionTagFloor,
     )
-    const average = averageMeasuredHeightRef.current
-    const blendedEstimate = average ? (contentEstimate * 0.7 + average * 0.3) : contentEstimate
     const isCollapsedLongMessage = isLongMessageCollapseEligible({
       enabled: longMessageCollapseEnabled,
+      includeUserMessages: longMessageCollapseUserMessages,
       isUser: message.is_user,
       depth,
       collapseDepth: longMessageCollapseDepth,
@@ -912,13 +880,13 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       messageId: message.id,
     }) && !expandedLongMessageKeySet.has(longMessageExpansionKey(chatId, message.id))
     const collapseAwareEstimate = isCollapsedLongMessage
-      ? Math.min(blendedEstimate, base + longMessageCollapseHeight + 36 + mediaHeight + audioHeight)
-      : blendedEstimate
+      ? Math.min(contentEstimate, base + longMessageCollapseHeight + 36 + mediaHeight + audioHeight)
+      : contentEstimate
 
-    // Blend content heuristics with the measured chat average so unknown rows
-    // near the loaded tail don't all start from the same poor fixed estimate.
-    return clampEstimate(collapseAwareEstimate)
-  }, [chatId, expandedLongMessageKeySet, isBubble, longMessageCollapseEnabled, longMessageCollapseDepth, longMessageCollapseHeight, lumiaOOCStyle])
+    const estimate = clampEstimate(collapseAwareEstimate)
+    estimatedRowHeightsRef.current.set(measureKey, estimate)
+    return estimate
+  }, [chatId, expandedLongMessageKeySet, isBubble, longMessageCollapseEnabled, longMessageCollapseUserMessages, longMessageCollapseDepth, longMessageCollapseHeight, lumiaOOCStyle])
 
   const rangeExtractor = useCallback((range: Range) => {
     const indexes = new Set(defaultRangeExtractor(range))
@@ -982,6 +950,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
         isFocusedEditableRow,
         isUserToggledCollapsibleRow,
         isProgrammaticContentReflow,
+        isAboveVisibleAnchor: coldDisplayAnchorIndexRef.current !== null && item.index < coldDisplayAnchorIndexRef.current,
       })
     },
     [streamingTargetMessageId, virtualListItems]
@@ -1028,6 +997,21 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     })
   }, [chatId, hasRows, markPinned, recordScrollPosition, virtualListItems.length])
 
+  const syncNativeScrollOffset = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
+    // Native scrolling reaches the DOM before its scroll event. Measure from
+    // that live position so a relative height correction (and any clamp retry)
+    // cannot overwrite the reader's latest scroll step with an older offset.
+    // iOS deliberately holds corrections through touch momentum; its virtual
+    // offset may differ from the DOM and must stay under TanStack's control.
+    if (isCoarsePointer || /iP(hone|od|ad)/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 0)
+      || !userUnpinnedRef.current || forcedScrollAnimationRef.current) return
+    const el = scrollRef.current
+    if (el && el.scrollTop >= 0 && el.scrollTop <= el.scrollHeight - el.clientHeight) {
+      instance.scrollOffset = el.scrollTop
+    }
+  }, [isCoarsePointer])
+
   const rowVirtualizer = useVirtualizer({
     count: virtualListItems.length,
     getScrollElement: () => scrollRef.current,
@@ -1067,10 +1051,33 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     scrollPaddingEnd: inputSafeZone,
     scrollToFn: scrollToVirtualOffset,
     directDomUpdates: true,
+    measureElement: (element, entry, instance) => {
+      const row = element as HTMLElement
+      if (row.querySelector('[data-display-pending]')) {
+        // A hidden placeholder's CSS reservation may still reflect the last
+        // React render. Direct DOM positioning can advance the size cache
+        // without rendering again, so never measure that reservation back
+        // into the model as though it were completed message content.
+        const item = instance.measurementsCache[Number(row.dataset.virtualIndex)]
+        if (item) return instance.itemSizeCache.get(item.key) ?? item.size
+      }
+      const height = readMessageRowHeight(row, entry)
+      revealMeasuredMessageRow(row)
+      return height
+    },
     onChange: (instance, sync) => {
       if (!sync) scheduleInitialScrollToEnd(instance)
     },
   })
+
+  const interruptForcedScroll = useCallback(() => {
+    forcedScrollEnabledRef.current = false
+    cancelForcedScroll()
+    // Stop TanStack's measurement reconciliation as well as our animation,
+    // so a later row resize cannot resume a navigation the user interrupted.
+    rowVirtualizer.cancelScroll()
+  }, [cancelForcedScroll, rowVirtualizer])
+
   // The core virtualizer exposes this as a mutable instance hook even though
   // the React wrapper's options type does not currently declare it.
   useLayoutEffect(() => {
@@ -1183,6 +1190,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       const targetDepth = visibleMessages.length - 1 - targetItem.messageIndex
       const targetLongMessageEligible = isLongMessageCollapseEligible({
         enabled: longMessageCollapseEnabled,
+        includeUserMessages: longMessageCollapseUserMessages,
         isUser: targetItem.message.is_user,
         depth: targetDepth,
         collapseDepth: longMessageCollapseDepth,
@@ -1225,6 +1233,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     findTarget,
     longMessageCollapseDepth,
     longMessageCollapseEnabled,
+    longMessageCollapseUserMessages,
     markUserUnpinned,
     rowVirtualizer,
     suppressKeyboardRepin,
@@ -1297,7 +1306,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const virtualItems = rowVirtualizer.getVirtualItems()
 
   // Trigger the chat-load fade-in once the virtualizer has real rows AND the
-  // display pipeline has settled. The delayed warm-range commit is part of
+  // display pipeline has settled. The warm-range commit is part of
   // that pipeline: it mounts the neighboring rows whose regex/interceptor
   // work otherwise used to begin just after the cold range had revealed.
   // Require one quiet interval and re-check after the final two layout frames
@@ -1819,6 +1828,32 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     let layoutTimer = 0
     let settleTimer = 0
     let pendingRow: HTMLElement | null = null
+    const revealQueue = createMessageRowRevealQueue((row, height) => {
+      // This batch runs after commit, when TanStack has written any pending
+      // prepend anchor. Rebasing in a child ref would erase that anchor.
+      syncNativeScrollOffset(rowVirtualizer)
+      rowVirtualizer.resizeItem(Number(row.dataset.virtualIndex), height)
+    }, {
+      beforeResize() {
+        coldDisplayAnchorIndexRef.current = null
+        if (isPinnedRef.current) return
+        const viewport = el.getBoundingClientRect()
+        for (const row of el.querySelectorAll<HTMLElement>('[data-item-type="message"]')) {
+          if (row.hasAttribute(MESSAGE_ROW_MEASURING_ATTRIBUTE) || row.querySelector('[data-display-pending]')) continue
+          const rect = row.getBoundingClientRect()
+          if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) continue
+          coldDisplayAnchorIndexRef.current = Number(row.dataset.virtualIndex)
+          break
+        }
+      },
+      afterResize() { coldDisplayAnchorIndexRef.current = null },
+    })
+    // Effect replay or a streaming-state change can replace a queued batch.
+    // Adopt its still-mounted rows so an equal-height completion cannot stay
+    // hidden waiting for a ResizeObserver notification that will never fire.
+    for (const row of el.querySelectorAll<HTMLElement>(`[${MESSAGE_ROW_MEASURING_ATTRIBUTE}]`)) {
+      revealQueue.schedule(row)
+    }
 
     const handleMessageContentLayout = (event: Event) => {
       const target = event.target
@@ -1840,6 +1875,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
           )
         }
       }
+
+      if (pendingRow && isMessageDisplayReadyLayout(event)) revealQueue.schedule(pendingRow)
 
       // Debounce the burst of layout events fired during streaming/content
       // changes so we don't re-measure the same row multiple times per frame.
@@ -1867,11 +1904,12 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
 
     el.addEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleMessageContentLayout)
     return () => {
+      revealQueue.dispose()
       el.removeEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleMessageContentLayout)
       if (layoutTimer) window.clearTimeout(layoutTimer)
       if (settleTimer) window.clearTimeout(settleTimer)
     }
-  }, [extendInitialBottomPin, isStreaming, measureMountedRows, recoverTailVoid, rowVirtualizer])
+  }, [extendInitialBottomPin, isStreaming, measureMountedRows, recoverTailVoid, rowVirtualizer, syncNativeScrollOffset])
 
   return (
     <div
@@ -2000,7 +2038,16 @@ const VirtualRow = memo(function VirtualRow({ virtualIndex, estimatedHeight, ite
     // MESSAGE_CONTENT_LAYOUT_EVENT dispatched by MessageContent for ongoing
     // size changes. The MutationObserver that was here fired on every token
     // during streaming and caused a measurement storm.
+    // A deferred ResizeObserver notification must not expose a new row's
+    // header at its estimated position before the body has been measured.
+    el.setAttribute(MESSAGE_ROW_MEASURING_ATTRIBUTE, '')
     measure()
+    if (el.hasAttribute(MESSAGE_ROW_MEASURING_ATTRIBUTE) && !el.querySelector('[data-display-pending]')) {
+      // Cache hits can mount while TanStack skips synchronous scroll-time
+      // measurements. Complete those in the same pre-paint batch as async
+      // display results, rather than leaving a blank row for an extra frame.
+      dispatchMessageContentLayout(el, { displayReady: true })
+    }
 
     el.addEventListener('load', scheduleMeasure, true)
     el.addEventListener('error', scheduleMeasure, true)

@@ -202,6 +202,7 @@ export default function SsoProviderSettings() {
     setBusy(`link:${provider.slug}`)
     try {
       const result = await startSsoPopup({ providerId: provider.slug, flow: 'link', returnTo: '/' })
+      if (!result) return
       if (!result.ok) throw new Error(result.error || 'SSO linking failed')
       setSuccess(`${provider.name} linked to your account.`)
       await load()

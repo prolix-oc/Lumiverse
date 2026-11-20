@@ -197,7 +197,7 @@ export function bunRuntimeCmd(
 // glibc-runner/grun currently word-splits argv containing spaces on Termux.
 // Keep eval probes whitespace-free so fallback runtimes receive one intact -e arg.
 const BACKEND_DEPENDENCY_PROBE =
-  "await(import('better-auth'));await(import('@better-auth/oauth-provider'))";
+  "await(import('./src/sharp-preflight.ts')).then(m=>m.configureSharpNativeOverride());await(import('sharp')).then(m=>m.default({create:{width:1,height:1,channels:4,background:'#000000'}}).png().toBuffer());await(import('better-auth'));await(import('@better-auth/oauth-provider'))";
 
 export function backendDependencyProbeCmd(
   env: Record<string, string | undefined> = process.env,
@@ -804,9 +804,10 @@ export function restoreDependencyInstall(
 }
 
 // Keep these aligned with frontend/package.json overrides and optionalDependencies.
-// Rolldown 1.2.4 includes the Android ARMv8.0 SIGILL fix.
+// Rolldown >=1.2.4 includes the Android ARMv8.0 SIGILL fix.
 const TERMUX_FRONTEND_NATIVE_DEPS = [
-  "@rolldown/binding-android-arm64@1.2.4",
+  "@oxc-transform-react/binding-android-arm64@0.154.0",
+  "@rolldown/binding-android-arm64@1.2.15",
   "lightningcss-android-arm64@1.33.0",
 ];
 
@@ -876,7 +877,8 @@ async function verifyBackendDependencies(dir: string): Promise<void> {
   try {
     await runCommandOrThrow(backendDependencyProbeCmd(), {
       cwd: dir,
-      timeoutMs: 60_000,
+      // A first native Android run may download the verified Sharp/libvips engine.
+      timeoutMs: 360_000,
       label: "backend dependency validation",
     });
   } catch (error) {
@@ -1020,6 +1022,11 @@ async function ensureChangedDependencies(
   if (installBackend) {
     reportProgress?.("Installing backend dependencies...");
     await ensureBackendDependencies();
+  } else if (isTermuxRuntime()) {
+    // Source-only updates also need to repair trees installed before the
+    // Android Sharp preflight existed, even when package.json is unchanged.
+    reportProgress?.("Validating Android backend native dependencies...");
+    await verifyBackendDependencies(PROJECT_ROOT);
   }
   if (installFrontend) {
     reportProgress?.("Installing frontend dependencies...");
@@ -1044,6 +1051,11 @@ export const FRONTEND_BUILD_STEPS = [
     label: "frontend CSS variable extraction",
     progress: "Extracting frontend CSS variables...",
     command: ["bun", "run", "scripts/extract-css-vars.ts"],
+  },
+  {
+    label: "frontend theme reference generation",
+    progress: "Generating frontend theme references...",
+    command: ["bun", "run", "scripts/generate-theme-reference.ts"],
   },
   {
     label: "frontend Vite bundling",

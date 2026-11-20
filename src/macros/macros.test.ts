@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect, beforeAll, spyOn } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
 import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
@@ -762,6 +762,97 @@ describe("Time macros", () => {
 });
 
 describe("Random macros", () => {
+  for (const name of ["random", "pick"]) {
+    test(`${name} chooses each comma-separated item and trims surrounding whitespace`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        for (const [value, expected] of [[0, "thing1"], [0.5, "thing2"], [0.999, "thing3"]] as const) {
+          rng.mockReturnValue(value);
+          expect(await ev(`{{${name}:: thing1, thing2, thing3 }}`)).toBe(expected);
+          expect(await ev(`{{${name}: thing1, thing2, thing3 }}`)).toBe(expected);
+        }
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} preserves escaped commas, multiword items, and internal newlines`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        rng.mockReturnValue(0);
+        expect(await ev(`{{${name}::hello\\, world, another choice}}`)).toBe("hello, world");
+        expect(await ev(`{{${name}::hello\\, world}}`)).toBe("hello, world");
+        rng.mockReturnValue(0.999);
+        expect(await ev(`{{${name}::hello\\, world, another choice\non two lines}}`)).toBe("another choice\non two lines");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} keeps commas literal when choices use ::`, async () => {
+      const rng = spyOn(Math, "random");
+      try {
+        rng.mockReturnValue(0);
+        expect(await ev(`{{${name}::hello, world::goodbye, world}}`)).toBe("hello, world");
+        rng.mockReturnValue(0.999);
+        expect(await ev(`{{${name}::hello, world::goodbye, world}}`)).toBe("goodbye, world");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} resolves nested macros before splitting a comma-separated list`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        const env = makeEnv({ localVars: { choices: "one, two, three" } });
+        expect(await ev(`{{${name}::{{getvar::choices}}}}`, env)).toBe("two");
+        expect(await ev(`{{${name}::{{user}}, {{char}}, someone else}}`, env)).toBe("Bob");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} preserves empty comma-separated choices`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        expect(await ev(`{{${name}::one, , three}}`)).toBe("");
+        expect(await ev(`{{${name}::,}}`)).toBe("");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} treats comma-separated numbers as choices`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.5);
+      try {
+        expect(await ev(`{{${name}::1, 100}}`)).toBe("100");
+      } finally {
+        rng.mockRestore();
+      }
+    });
+
+    test(`${name} returns object text intact when internal commas are escaped`, async () => {
+      const rng = spyOn(Math, "random").mockReturnValue(0.999);
+      try {
+        expect(await ev(`{{${name}::{"name":"one"\\,"rank":1}, {"name":"two"\\,"rank":2} }}`)).toBe('{"name":"two","rank":2}');
+      } finally {
+        rng.mockRestore();
+      }
+    });
+  }
+
+  test("random numeric range still includes both endpoints", async () => {
+    const rng = spyOn(Math, "random");
+    try {
+      rng.mockReturnValue(0);
+      expect(await ev("{{random::1::100}}")).toBe("1");
+      rng.mockReturnValue(0.999);
+      expect(await ev("{{random::1::100}}")).toBe("100");
+    } finally {
+      rng.mockRestore();
+    }
+  });
+
   test("random integer range", async () => {
     const result = parseInt(await ev("{{random::1::10}}"), 10);
     expect(result).toBeGreaterThanOrEqual(1);
@@ -1972,6 +2063,64 @@ describe("Lumia and council macros", () => {
 describe("Edge cases", () => {
   test("unknown macro passes through", async () => {
     expect(await ev("{{unknownMacro}}")).toBe("{{unknownMacro}}");
+  });
+
+  test("unknown macro passes through with its original spelling", async () => {
+    for (const source of [
+      "{{plugin.memory}}",
+      "{{unknownMacro .localVar}}",
+      "{{:else}}",
+      "{{unknownMacro:single}}",
+      "{{ unknownMacro }}",
+      "{{unknownMacro::a::{{.nested}}}}",
+    ]) {
+      expect(await ev(`before ${source} after`)).toBe(`before ${source} after`);
+    }
+  });
+
+  test("unknown macro arguments stay literal without running nested side effects", async () => {
+    const env = makeEnv({ localVars: { untouched: "original" } });
+    for (const source of [
+      "{{unknown::{{// note}}}}",
+      "{{unknown::{{if::1}}yes{{else}}no{{/if}}}}",
+      "{{unknown::{{setvar::untouched::changed}}}}",
+      "{{unknown::{{#escape}}{{user}}{{/escape}}}}",
+    ]) {
+      const result = await evaluate(`${source}|{{user}}`, env, registry);
+      expect(result.text).toBe(`${source}|Alice`);
+      expect(await ev(result.text, env)).toBe(result.text);
+      expect(await ev(`{{if::1}}${source}{{/if}}`, env)).toBe(source);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.touchedVars.size).toBe(0);
+      expect(result.cacheable).toBe(true);
+    }
+    expect(env.variables.local.get("untouched")).toBe("original");
+  });
+
+  test("unknown spelling is visible to comparisons and malformed closed input stays literal", async () => {
+    expect(await ev("{{eq::{{ unknown }}::{{unknown}}}}")).toBe("");
+    const source = "{{foo} tail {{user}}";
+    expect(await ev(source)).toBe(source);
+  });
+
+  test("unknown macro still consumes escaped braces", async () => {
+    expect(await ev("{{unknown::\\{a\\}}}")).toBe("{{unknown::{a}}}");
+    // The lexer does not read this one as an escape, and later text must survive.
+    expect(await ev("{{foo}\\}} tail {{user}}")).toBe("{{foo}} tail Alice");
+  });
+
+  test("unterminated unknown macro is still closed", async () => {
+    expect(await ev("before {{foo")).toBe("before {{foo}}");
+    expect(await ev("{{foo::{{bar}}")).toBe("{{foo::{{bar}}}}");
+  });
+
+  test("an unresolved macro in a condition is falsy even when unclosed", async () => {
+    for (const value of ["{{foo", "{{foo}", "oops {{ foo", "{{foo}}"]) {
+      const env = makeEnv();
+      env.variables.local.set("x", value);
+      expect(await ev("{{if::{{getvar::x}}}}T{{else}}F{{/if}}", env)).toBe("F");
+      expect(await ev("{{unless::{{getvar::x}}}}T{{else}}F{{/unless}}", env)).toBe("T");
+    }
   });
 
   test("escaped braces", async () => {

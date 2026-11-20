@@ -117,6 +117,7 @@ export default function ConfirmationModal({
 
   return (
     <ModalShell
+      mobilePresentation="dialog"
       isOpen={isOpen}
       onClose={onCancel}
       maxWidth={420}

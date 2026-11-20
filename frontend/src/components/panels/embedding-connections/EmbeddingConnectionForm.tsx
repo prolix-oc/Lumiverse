@@ -1,4 +1,6 @@
+import ConnectionFolderField, { useConnectionFolderDraft } from '@/components/panels/connection-manager/ConnectionFolderField'
 import { useEffect, useMemo, useState } from 'react'
+import { uuidv4 } from '@/lib/uuid'
 import { Button, FormField, Select, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
@@ -12,7 +14,7 @@ export interface EmbeddingConnectionDraft extends EmbeddingConnectionProfile {
 interface Props {
   providers: EmbeddingDriverOption[]
   profile?: EmbeddingConnectionProfile
-  onSave: (profile: EmbeddingConnectionDraft) => void
+  onSave: (profile: EmbeddingConnectionDraft, folderId?: string) => void
   onCancel: () => void
 }
 
@@ -45,6 +47,7 @@ function displayName(id: string): string {
 }
 
 export default function EmbeddingConnectionForm({ providers, profile, onSave, onCancel }: Props) {
+  const folder = useConnectionFolderDraft('embedding', profile?.id)
   const initialProvider = profile?.provider || providers[0]?.id || 'openai-compatible'
   const [name, setName] = useState(profile?.name || displayName(initialProvider))
   const [provider, setProvider] = useState(initialProvider)
@@ -97,7 +100,7 @@ export default function EmbeddingConnectionForm({ providers, profile, onSave, on
   const submit = () => {
     if (!name.trim() || !model.trim()) return
     onSave({
-      id: profile?.id || crypto.randomUUID(),
+      id: profile?.id || uuidv4(),
       name: name.trim(),
       provider,
       api_url: apiUrl.trim() || DEFAULTS[provider]?.api_url || '',
@@ -109,7 +112,7 @@ export default function EmbeddingConnectionForm({ providers, profile, onSave, on
         vertex_project: vertexProject.trim() || undefined,
       } : {}),
       ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-    })
+    }, folder.value)
   }
 
   return (
@@ -117,6 +120,7 @@ export default function EmbeddingConnectionForm({ providers, profile, onSave, on
       <FormField label="Connection name" required>
         <TextInput value={name} onChange={setName} autoFocus placeholder="My embedding connection" />
       </FormField>
+      <ConnectionFolderField kind="embedding" {...folder} />
       <FormField label="Provider" required>
         <Select value={provider} onChange={changeProvider} options={providerOptions} />
       </FormField>

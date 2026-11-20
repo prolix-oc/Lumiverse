@@ -29,3 +29,27 @@ export interface TtsVoice {
   description?: string;
   previewUrl?: string;
 }
+
+export interface TtsLibraryVoice extends TtsVoice {
+  accent?: string;
+  age?: string;
+  useCase?: string;
+  rate?: number;
+  noticePeriod?: number;
+  liveModeration?: boolean;
+}
+
+export interface TtsVoiceLibraryOptions {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  language?: string;
+  gender?: "male" | "female" | "neutral";
+  sort?: "trending" | "created_date" | "cloned_by_count" | "usage_character_count_1y";
+}
+
+export interface TtsVoiceLibraryResult {
+  voices: TtsLibraryVoice[];
+  has_more: boolean;
+  total_count?: number;
+}

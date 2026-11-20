@@ -7,6 +7,7 @@ import { transcribeWhistleAudio } from '../whistle/transcribe'
 import { createFrontendSTTAPI, type FrontendSTTDependencies } from './stt-api'
 import type { SpindleSTTOptions, SpindleSTTProviderOption } from 'lumiverse-spindle-types'
 import { hasIOSNativeBridge } from '../ios-native'
+import { isHostCapturing, subscribeHostCapture } from '../sttHostCapture'
 
 export function createNativeSTTAPI(deps: Pick<FrontendSTTDependencies, 'assertActive' | 'requirePermission' | 'onTeardown'>) {
   const getConfig = (): STTConfig => {
@@ -53,17 +54,17 @@ export function createNativeSTTAPI(deps: Pick<FrontendSTTDependencies, 'assertAc
     finally { unsubscribe(); signal.removeEventListener('abort', unsubscribe) }
   }
   return createFrontendSTTAPI({
-    ...deps, getConfig, listProviders, prepare,
+    ...deps, getConfig, listProviders, prepare, isHostCapturing, subscribeHostCapture,
     createEngine(config) { validate(config, true); return createSTTEngine(config) },
-    async transcribe(audio, config, signal, onStatus) {
+    async transcribe(audio, config, signal, onStatus, { keywords, words }) {
       validate(config, false)
       if (config.provider === 'webspeech') throw new Error('STT_AUDIO_UNSUPPORTED: Web Speech requires microphone capture')
       await prepare(config, signal, onStatus)
       if (signal.aborted) throw new DOMException('Transcription cancelled', 'AbortError')
       onStatus?.({ phase: 'processing' })
       if (config.provider === 'whistle') {
-        const result = await transcribeWhistleAudio(audio, whistleLanguage(config.language), whistleClient, signal)
-        return { ...result, provider: 'whistle' }
+        const { words: wordList, ...result } = await transcribeWhistleAudio(audio, whistleLanguage(config.language), whistleClient, signal, keywords)
+        return { ...result, provider: 'whistle', ...(words ? { words: wordList } : {}) }
       }
       if (!(audio instanceof Blob)) throw new Error('STT_AUDIO_UNSUPPORTED: STT connections require an audio Blob')
       const extension = {
@@ -72,6 +73,7 @@ export function createNativeSTTAPI(deps: Pick<FrontendSTTDependencies, 'assertAc
       }[audio.type.split(';')[0]] ?? 'webm'
       const fileName = typeof File !== 'undefined' && audio instanceof File && audio.name
         ? audio.name : `recording.${extension}`
+      // STT connections ignore keywords and return no word list.
       const result = await sttApi.transcribe(audio, { language: config.language, connectionId: config.connectionId!, fileName, signal })
       return { ...result, provider: 'connection' }
     },

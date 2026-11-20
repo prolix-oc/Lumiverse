@@ -1,4 +1,6 @@
 import { connect as connectTcp } from "node:net";
+import { randomUUID } from "node:crypto";
+import type { DescribeCollectionResponse, IndexDescription } from "@zilliz/milvus2-sdk-node";
 import type { MilvusConnectionConfig, MilvusHybridSearchConfig, VectorStoreTuningProfile } from "../../vector-store-config.service";
 import {
   adaptiveStorageBatch,
@@ -24,6 +26,7 @@ import type {
 
 const COLLECTION_PREFIX = "lumiverse_";
 const VARCHAR_MAX = 65_535;
+const CONTENT_CLIPPED_SUFFIX = "\n[content clipped]";
 const DEFAULT_TCP_CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 3;
@@ -33,6 +36,8 @@ const SCALAR_INDEX_FIELDS = ["user_id", "source_type", "source_id", "owner_id", 
 const SPARSE_FIELD = "sparse";
 const DEFAULT_UPSERT_BATCH_SIZE = 128;
 const BULK_UPSERT_BATCH_SIZE = 256;
+// Numeric Strong is 0, which SDK 3.0.6's search builder treats as unset.
+export const MILVUS_READ_CONSISTENCY = "Strong";
 
 type MilvusSdk = typeof import("@zilliz/milvus2-sdk-node");
 type MilvusClientLike = any;
@@ -47,8 +52,13 @@ export class MilvusStore implements VectorStore {
   private readonly hybridSearchConfig: MilvusHybridSearchConfig | undefined;
   private sdk: MilvusSdk | null = null;
   private client: MilvusClientLike | null = null;
+  private initializing: Promise<void> | null = null;
   private loaded = new Set<string>();
   private hybridFallbackCollections = new Set<string>();
+  private prepared = new Map<string, number>();
+  private preparing = new Map<string, Promise<void>>();
+  private textCollections = new Set<string>();
+  private routes = new Map<CollectionName, string>();
 
   constructor(
     config: MilvusConnectionConfig | undefined,
@@ -63,10 +73,25 @@ export class MilvusStore implements VectorStore {
     this.password = password;
     this.tuningProfile = tuningProfile || "balanced";
     this.hybridSearchConfig = hybridSearchConfig;
+    this.capabilities = { ...this.capabilities, requiresExplicitFlush: config.flushPolicy !== "manual" };
   }
 
   async init(): Promise<void> {
+    if (this.initializing) return this.initializing;
     if (this.client) return;
+    const pending = this.connect();
+    this.initializing = pending;
+    try {
+      await pending;
+    } catch (err) {
+      await this.close();
+      throw err;
+    } finally {
+      this.initializing = null;
+    }
+  }
+
+  private async connect(): Promise<void> {
     try {
       this.sdk = await import("@zilliz/milvus2-sdk-node");
     } catch (err) {
@@ -87,6 +112,8 @@ export class MilvusStore implements VectorStore {
       database: cfg.database,
       logLevel: "error",
       timeout: milvusRequestTimeoutMs(cfg),
+      // SDK 3.0.5+ starts telemetry heartbeats by default. Keep this opt-in.
+      telemetry: { enabled: false },
     });
     try {
       await this.client.connectPromise;
@@ -95,29 +122,72 @@ export class MilvusStore implements VectorStore {
     }
 
     const version = await this.client.getVersion().then((res: any) => res?.version || res?.data || null).catch(() => null);
-    this.capabilities = milvusCapabilities(version);
+    this.capabilities = { ...milvusCapabilities(version), requiresExplicitFlush: cfg.flushPolicy !== "manual" };
     const health = await this.client.checkHealth().catch((err: any) => {
       throw new Error(`Milvus health check failed for ${cfg.address}: ${describeMilvusError(err)}`);
     });
     if (health?.isHealthy === false) throw new Error("Milvus health check reported unhealthy.");
+    // Maintenance switches these aliases while writers are stopped. Resolve
+    // physical names once per connection; restart after cutover/rollback.
+    for (const collection of ["embeddings", "embeddings_world_books"] as const) {
+      this.routes.set(collection, await resolveMilvusCollection(this.client, collection));
+    }
   }
 
   async ensureCollection(collection: CollectionName, dimension: number): Promise<void> {
+    await this.getClient();
+    const name = this.collectionName(collection);
+    const preparedDimension = this.prepared.get(name);
+    if (preparedDimension !== undefined) {
+      if (preparedDimension === dimension) return;
+      if (!this.textCollections.has(name)) this.assertDimension(name, preparedDimension, dimension);
+      this.prepared.delete(name);
+    }
+    const pending = this.preparing.get(name);
+    if (pending) {
+      await pending;
+      return this.ensureCollection(collection, dimension);
+    }
+    const setup = this.prepareCollection(collection, dimension);
+    this.preparing.set(name, setup);
+    try {
+      await setup;
+    } finally {
+      if (this.preparing.get(name) === setup) this.preparing.delete(name);
+    }
+  }
+
+  private assertDimension(name: string, existing: number, expected: number): void {
+    if (existing !== expected) {
+      throw new Error(`Milvus collection ${name} has dimension ${existing}, expected ${expected}. Reindex with a matching embedding model or reset the vector store.`);
+    }
+  }
+
+  private async prepareCollection(collection: CollectionName, dimension: number): Promise<void> {
     const client = await this.getClient();
     const name = this.collectionName(collection);
     const has = await this.hasCollection(name);
     if (has) {
-      const existing = await this.getStoredDimension(collection);
-      if (existing != null && existing !== dimension) {
-        throw new Error(`Milvus collection ${name} has dimension ${existing}, expected ${dimension}. Reindex with a matching embedding model or reset the vector store.`);
+      const description = await assertOk(client.describeCollection({ collection_name: name, cache: false }));
+      const existing = storedDimension(description);
+      if (existing == null) throw new Error(`Milvus collection ${name} has no valid vector dimension.`);
+      const content = description.schema?.fields?.find((field: any) => field.name === "content");
+      if (content && ["Text", "25"].includes(String(content.data_type))) this.textCollections.add(name);
+      else this.textCollections.delete(name);
+      if (existing !== dimension && this.textCollections.has(name) && await countMilvusRows(client, name) === 0) {
+        await this.replaceEmptyTextCollection(collection, dimension);
+        return;
       }
-      await this.ensureScalarIndexes(name);
-      await this.ensureSparseIndexIfPresent(name);
+      this.assertDimension(name, existing, dimension);
+      const scalarsReady = await this.ensureScalarIndexes(name);
+      const sparseReady = await this.ensureSparseIndexIfPresent(name);
       await this.loadCollection(name);
+      if (scalarsReady && sparseReady) this.prepared.set(name, dimension);
       return;
     }
 
     const { DataType, FunctionType, MetricType } = this.sdk!;
+    const textContent = this.textCollections.has(name);
     const tuning = milvusTuning(this.tuningProfile);
     const fields: any[] = [
       { name: "id", data_type: DataType.VarChar, is_primary_key: true, autoID: false, max_length: 512 },
@@ -126,7 +196,7 @@ export class MilvusStore implements VectorStore {
       { name: "source_id", data_type: DataType.VarChar, max_length: 256 },
       { name: "owner_id", data_type: DataType.VarChar, max_length: 256 },
       { name: "chunk_index", data_type: DataType.Int64 },
-      { name: "content", data_type: DataType.VarChar, max_length: VARCHAR_MAX },
+      { name: "content", data_type: textContent ? DataType.Text : DataType.VarChar, ...(textContent ? {} : { max_length: VARCHAR_MAX }) },
       { name: "metadata_json", data_type: DataType.VarChar, max_length: VARCHAR_MAX },
       { name: "updated_at", data_type: DataType.Int64 },
       { name: "vector", data_type: DataType.FloatVector, dim: dimension },
@@ -146,6 +216,7 @@ export class MilvusStore implements VectorStore {
       fields.push({ name: SPARSE_FIELD, data_type: DataType.SparseFloatVector });
       indexParams.push({
         field_name: SPARSE_FIELD,
+        index_name: `idx_${SPARSE_FIELD}`,
         index_type: "SPARSE_INVERTED_INDEX",
         metric_type: MetricType.BM25,
       });
@@ -169,7 +240,7 @@ export class MilvusStore implements VectorStore {
     try {
       await assertOk(client.createCollection(createRequest));
     } catch (err) {
-      if (!this.capabilities.nativeLexical) throw err;
+      if (!this.capabilities.nativeLexical || textContent) throw err;
       console.warn(`[vector-store] Milvus BM25 collection creation failed for ${name}; falling back to dense-only schema:`, describeMilvusError(err));
       this.capabilities = { ...this.capabilities, nativeLexical: false };
       await assertOk(client.createCollection({
@@ -179,39 +250,64 @@ export class MilvusStore implements VectorStore {
         functions: undefined,
       }));
     }
-    await this.ensureScalarIndexes(name);
+    const scalarsReady = await this.ensureScalarIndexes(name);
     await this.loadCollection(name);
+    if (scalarsReady) this.prepared.set(name, dimension);
+  }
+
+  private async replaceEmptyTextCollection(collection: CollectionName, dimension: number): Promise<void> {
+    // Reset keeps the empty Text schema/alias durable. A different embedding
+    // dimension then gets a new collection before atomically changing routing.
+    const client = await this.getClient();
+    const name = `lumiverse_reset_${randomUUID().replaceAll("-", "")}_${collection}`;
+    this.routes.set(collection, name);
+    this.textCollections.add(name);
+    try {
+      await this.prepareCollection(collection, dimension);
+      const alias = milvusActiveAlias(collection);
+      const exists = await this.hasCollection(alias);
+      await assertOk(client[exists ? "alterAlias" : "createAlias"]({ collection_name: name, alias }));
+    } catch (error) {
+      // The alias RPC may have succeeded before a transport failure. Reconnect
+      // on the next operation instead of guessing which target is now active.
+      await this.close();
+      throw error;
+    }
   }
 
   async getStoredDimension(collection: CollectionName): Promise<number | null> {
     const client = await this.getClient();
     const name = this.collectionName(collection);
     if (!(await this.hasCollection(name))) return null;
-    const desc = await client.describeCollection({ collection_name: name });
-    const field = desc?.schema?.fields?.find((f: any) => f.name === "vector");
-    const dim = field?.dim ?? field?.type_params?.find?.((p: any) => p.key === "dim")?.value;
-    const parsed = Number(dim);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    const desc = await assertOk(client.describeCollection({ collection_name: name, cache: false }));
+    return storedDimension(desc);
   }
 
   async upsert(collection: CollectionName, rows: VectorRow[]): Promise<void> {
     if (rows.length === 0) return;
+    // Validate the entire operation before writing any batch. JSON must never
+    // be truncated into an invalid document to fit the legacy VARCHAR schema.
+    for (const row of rows) assertMetadataFits(row.metadata_json);
+    const dimension = rows[0].vector.length;
+    if (dimension === 0 || rows.some((row) => row.vector.length !== dimension || row.vector.some((value) => !Number.isFinite(value)))) {
+      throw new Error("Milvus upsert requires finite vectors with one nonzero dimension for the entire batch.");
+    }
     const client = await this.getClient();
-    const name = this.collectionName(collection);
     await this.ensureCollection(collection, rows[0].vector.length);
+    const name = this.collectionName(collection);
     const initialBatchSize = this.tuningProfile === "bulk_reindex" ? BULK_UPSERT_BATCH_SIZE : DEFAULT_UPSERT_BATCH_SIZE;
     await adaptiveStorageBatch(
       rows,
       initialBatchSize,
       async (batch) => {
-        await assertOk(client.upsert({ collection_name: name, data: batch.map(rowToMilvusData) }));
+        await assertOk(client.upsert({ collection_name: name, data: batch.map((row) => rowToMilvusData(row, this.textCollections.has(name))) }));
       },
       {
         label: `Milvus upsert ${name}`,
         isRetryable: isRetryableStorageError,
       },
     );
-    if (this.tuningProfile !== "bulk_reindex") {
+    if (this.tuningProfile !== "bulk_reindex" && this.config?.flushPolicy !== "manual") {
       await this.flush(name);
       await this.loadCollection(name, true);
     }
@@ -223,19 +319,8 @@ export class MilvusStore implements VectorStore {
     if (!(await this.hasCollection(name))) return [];
     await this.loadCollection(name);
     const rows: any[] = [];
-    let offset = 0;
-    while (rows.length < limit) {
-      const res = await client.query({
-        collection_name: name,
-        filter: translateFilter(filter),
-        output_fields: [...OUTPUT_FIELDS, "vector"],
-        limit: Math.min(1024, limit - rows.length),
-        offset,
-      });
-      const batch = Array.isArray(res?.data) ? res.data : [];
+    for await (const batch of scanMilvusRows(client, name, { filter: translateFilter(filter), limit })) {
       rows.push(...batch);
-      if (batch.length === 0) break;
-      offset += batch.length;
     }
     return rows.map(milvusRowToVectorRow).filter((row): row is VectorRow => row != null);
   }
@@ -245,7 +330,7 @@ export class MilvusStore implements VectorStore {
     const name = this.collectionName(collection);
     if (!(await this.hasCollection(name))) return;
     await assertOk(client.delete({ collection_name: name, filter: translateFilter(filter) }));
-    await this.flush(name);
+    if (this.config?.flushPolicy !== "manual") await this.flush(name);
   }
 
   async deleteByIds(collection: CollectionName, ids: string[]): Promise<void> {
@@ -256,7 +341,7 @@ export class MilvusStore implements VectorStore {
     for (let i = 0; i < ids.length; i += 512) {
       await assertOk(client.delete({ collection_name: name, ids: ids.slice(i, i + 512) }));
     }
-    await this.flush(name);
+    if (this.config?.flushPolicy !== "manual") await this.flush(name);
   }
 
   async vectorSearch(opts: SearchOptions): Promise<VectorHit[]> {
@@ -267,6 +352,7 @@ export class MilvusStore implements VectorStore {
     await this.loadCollection(name);
     const res = await client.search({
       collection_name: name,
+      consistency_level: MILVUS_READ_CONSISTENCY,
       data: opts.vector,
       anns_field: "vector",
       filter: translateFilter(opts.filter),
@@ -274,7 +360,7 @@ export class MilvusStore implements VectorStore {
       metric_type: "COSINE",
       params: milvusTuning(this.tuningProfile).searchParams,
       output_fields: opts.withVector ? [...OUTPUT_FIELDS, "vector"] : OUTPUT_FIELDS,
-    });
+    }).then(assertMilvusResponse);
     if (opts.signal?.aborted) return [];
     const results = Array.isArray(res?.results) ? res.results : [];
     return results.map((row: any) => milvusSearchRowToHit(row, opts.withVector)).filter((hit: VectorHit | null): hit is VectorHit => hit != null);
@@ -289,6 +375,7 @@ export class MilvusStore implements VectorStore {
     try {
       const res = await client.search({
         collection_name: name,
+        consistency_level: MILVUS_READ_CONSISTENCY,
         data: opts.queryText.trim(),
         anns_field: SPARSE_FIELD,
         filter: translateFilter(opts.filter),
@@ -296,7 +383,7 @@ export class MilvusStore implements VectorStore {
         metric_type: "BM25",
         params: {},
         output_fields: opts.withVector ? [...OUTPUT_FIELDS, "vector"] : OUTPUT_FIELDS,
-      });
+      }).then(assertMilvusResponse);
       if (opts.signal?.aborted) return [];
       const results = Array.isArray(res?.results) ? res.results : [];
       return results.map((row: any) => milvusSearchRowToHit(row, opts.withVector, true)).filter((hit: VectorHit | null): hit is VectorHit => hit != null);
@@ -320,6 +407,7 @@ export class MilvusStore implements VectorStore {
     try {
       const res = await client.hybridSearch({
         collection_name: name,
+        consistency_level: MILVUS_READ_CONSISTENCY,
         data: [
           {
             data: opts.vector,
@@ -344,7 +432,7 @@ export class MilvusStore implements VectorStore {
         // back so the provider contract can still expose real cosine
         // similarity instead of mislabeling that rank-derived score.
         output_fields: [...OUTPUT_FIELDS, "vector"],
-      });
+      }).then(assertMilvusResponse);
       if (opts.signal?.aborted) return [];
       const results = Array.isArray(res?.results) ? res.results : [];
       let hits: VectorHit[] = results
@@ -418,11 +506,12 @@ export class MilvusStore implements VectorStore {
     const client = await this.getClient();
     const name = this.collectionName(collection);
     if (!(await this.hasCollection(name))) return 0;
-    const res = await client.count({ collection_name: name, filter: filter ? translateFilter(filter) : undefined });
-    return Number(res?.data ?? 0);
+    await this.loadCollection(name);
+    return countMilvusRows(client, name, filter ? translateFilter(filter) : "");
   }
 
   async optimize(_collections?: CollectionName[]): Promise<void> {
+    await this.getClient();
     for (const collection of _collections ?? ["embeddings", "embeddings_world_books"] as CollectionName[]) {
       const name = this.collectionName(collection);
       if (await this.hasCollection(name)) {
@@ -436,21 +525,40 @@ export class MilvusStore implements VectorStore {
     const client = await this.getClient();
     const name = this.collectionName(collection);
     if (!(await this.hasCollection(name))) return emptyHealth();
-    const [rowCount, dimension, indexes] = await Promise.all([
+    const [rowCount, description, indexResponse, statistics] = await Promise.all([
       this.countRows(collection).catch(() => 0),
-      this.getStoredDimension(collection).catch(() => null),
-      client.listIndexes({ collection_name: name }).then((res: any) => res?.index_descriptions || res?.index_names || []).catch(() => []),
+      assertOk(client.describeCollection({ collection_name: name, cache: false })).catch(() => null),
+      assertOk(client.describeIndex({ collection_name: name })).catch(() => null),
+      assertOk(client.getCollectionStatistics({ collection_name: name })).catch(() => null),
     ]);
+    const indexes: IndexDescription[] = Array.isArray(indexResponse?.index_descriptions) ? indexResponse.index_descriptions : [];
+    const readyForField = (field: string) => indexes.some((index) => index.field_name === field && indexReady(index));
+    const hasSparse = description?.schema?.fields?.some((field: { name: string }) => field.name === SPARSE_FIELD) === true;
+    const functions = description?.schema?.functions ?? description?.functions ?? [];
+    const hasBm25 = functions.some((fn: { type: unknown; input_field_names?: string[]; output_field_names?: string[] }) =>
+      (fn.type === "BM25" || fn.type === 1)
+      && fn.input_field_names?.includes("content")
+      && fn.output_field_names?.includes(SPARSE_FIELD));
+    const vectorIndexReady = readyForField("vector");
+    const ftsIndexReady = this.capabilities.nativeLexical && hasSparse && hasBm25
+      && readyForField(SPARSE_FIELD) && reportedBackfillComplete(statistics?.data);
+    const searchIndexes = indexes.filter((index) => index.field_name === "vector" || index.field_name === SPARSE_FIELD);
     return {
       exists: true,
       rowCount,
-      vectorIndexReady: true,
-      scalarIndexReady: true,
-      ftsIndexReady: await this.hasSparseField(name).catch(() => false),
-      unindexedRowEstimate: 0,
+      vectorIndexReady,
+      scalarIndexReady: SCALAR_INDEX_FIELDS.every(readyForField),
+      ftsIndexReady,
+      unindexedRowEstimate: Math.max(
+        !vectorIndexReady || (hasSparse && !ftsIndexReady) ? rowCount : 0,
+        ...searchIndexes.map(indexPendingRows),
+      ),
       lastIndexRebuildAt: 0,
-      indexes: Array.isArray(indexes) ? indexes.map((idx: any) => ({ name: String(idx.index_name || idx.name || idx), type: idx.index_type })) : [],
-      dimension,
+      indexes: indexes.map((index) => {
+        const type = index.params?.find((param) => param.key === "index_type")?.value;
+        return { name: index.index_name, type: type == null ? undefined : String(type) };
+      }),
+      dimension: storedDimension(description),
     };
   }
 
@@ -460,8 +568,21 @@ export class MilvusStore implements VectorStore {
     for (const collection of ["embeddings", "embeddings_world_books"] as CollectionName[]) {
       const name = this.collectionName(collection);
       if (await this.hasCollection(name)) {
-        await assertOk(client.dropCollection({ collection_name: name }));
+        const description = await assertOk(client.describeCollection({ collection_name: name, cache: false }));
+        const text = description.schema?.fields?.some((field: any) => field.name === "content" && ["Text", "25"].includes(String(field.data_type)));
+        if (text) {
+          // Keep the active route and schema intact throughout reset, including
+          // failures/restarts. Dropping it could reveal the retained old store.
+          await assertOk(client.delete({ collection_name: name, filter: 'id >= ""' }));
+          await this.flush(name);
+        } else {
+          await assertOk(client.dropCollection({ collection_name: name }));
+        }
         this.loaded.delete(name);
+        this.prepared.delete(name);
+        if (text) this.textCollections.add(name);
+        else this.textCollections.delete(name);
+        this.hybridFallbackCollections.delete(name);
         deleted = true;
       }
     }
@@ -473,10 +594,14 @@ export class MilvusStore implements VectorStore {
     this.client = null;
     this.loaded.clear();
     this.hybridFallbackCollections.clear();
+    this.prepared.clear();
+    this.preparing.clear();
+    this.textCollections.clear();
+    this.routes.clear();
   }
 
   private collectionName(collection: CollectionName): string {
-    return `${COLLECTION_PREFIX}${collection}`;
+    return this.routes.get(collection) ?? `${COLLECTION_PREFIX}${collection}`;
   }
 
   private async getClient(): Promise<MilvusClientLike> {
@@ -486,7 +611,7 @@ export class MilvusStore implements VectorStore {
 
   private async hasCollection(name: string): Promise<boolean> {
     const client = await this.getClient();
-    const res = await client.hasCollection({ collection_name: name });
+    const res = await assertOk(client.hasCollection({ collection_name: name }));
     return !!res?.value;
   }
 
@@ -500,9 +625,9 @@ export class MilvusStore implements VectorStore {
   private async flush(name: string): Promise<void> {
     const client = await this.getClient();
     if (typeof client.flushSync === "function") {
-      await client.flushSync({ collection_names: [name] }).catch(() => client.flushSync({ collection_name: name }));
+      await assertOk(client.flushSync({ collection_names: [name] }));
     } else {
-      await client.flush({ collection_names: [name] }).catch(() => client.flush({ collection_name: name }));
+      await assertOk(client.flush({ collection_names: [name] }));
     }
   }
 
@@ -521,35 +646,117 @@ export class MilvusStore implements VectorStore {
     return fuseHits(vectorHits, lexicalHits);
   }
 
-  private async ensureScalarIndexes(name: string): Promise<void> {
+  private async ensureScalarIndexes(name: string): Promise<boolean> {
     const client = await this.getClient();
+    let success = true;
     for (const field of SCALAR_INDEX_FIELDS) {
       await assertOk(client.createIndex({
         collection_name: name,
         field_name: field,
         index_name: `idx_${field}`,
         index_type: "INVERTED",
-      })).catch(() => {});
+      })).catch(() => { success = false; });
     }
+    return success;
   }
 
   private async hasSparseField(name: string): Promise<boolean> {
     const client = await this.getClient();
-    const desc = await client.describeCollection({ collection_name: name, cache: true });
+    const desc = await assertOk(client.describeCollection({ collection_name: name, cache: true }));
     return !!desc?.schema?.fields?.some((field: any) => field.name === SPARSE_FIELD);
   }
 
-  private async ensureSparseIndexIfPresent(name: string): Promise<void> {
-    if (!this.capabilities.nativeLexical || !(await this.hasSparseField(name).catch(() => false))) return;
+  private async ensureSparseIndexIfPresent(name: string): Promise<boolean> {
+    if (!this.capabilities.nativeLexical) return true;
+    // A failed schema probe must remain retryable rather than being cached as
+    // a collection without a sparse index.
+    try { if (!(await this.hasSparseField(name))) return true; } catch { return false; }
     const client = await this.getClient();
-    await assertOk(client.createIndex({
+    try {
+      const existing = await assertOk(client.describeIndex({ collection_name: name }));
+      const sparseIndex = existing.index_descriptions?.find((index: any) => index.field_name === SPARSE_FIELD);
+      if (sparseIndex) {
+        // Earlier schemas used a server-assigned index name. Do not repeatedly
+        // try to create a second index on that field under idx_sparse.
+        const metric = sparseIndex.params?.find((param: any) => param.key === "metric_type")?.value;
+        return metric === "BM25" && !sparseIndex.index_state_fail_reason && !["Failed", "4"].includes(String(sparseIndex.state));
+      }
+    } catch { return false; }
+    return assertOk(client.createIndex({
       collection_name: name,
       field_name: SPARSE_FIELD,
       index_name: `idx_${SPARSE_FIELD}`,
       index_type: "SPARSE_INVERTED_INDEX",
       metric_type: "BM25",
-    })).catch(() => {});
+    })).then(() => true, () => false);
   }
+}
+
+export function milvusActiveAlias(collection: CollectionName): string {
+  return `lumiverse_active_${collection}`;
+}
+
+export async function resolveMilvusCollection(client: MilvusClientLike, collection: CollectionName): Promise<string> {
+  const alias = milvusActiveAlias(collection);
+  const has = await assertOk(client.hasCollection({ collection_name: alias }));
+  if (!has.value) return `${COLLECTION_PREFIX}${collection}`;
+  const route = await assertOk(client.describeAlias({ collection_name: alias, alias }));
+  if (typeof route.collection !== "string" || !/^lumiverse_[a-zA-Z0-9_]+$/.test(route.collection)) {
+    throw new Error(`Milvus routing alias ${alias} has an invalid target.`);
+  }
+  return route.collection;
+}
+
+/** Keyset scan: no growing offset or 16,384-row result-window limit. */
+export async function* scanMilvusRows(
+  client: MilvusClientLike,
+  name: string,
+  options: { filter?: string; limit?: number; afterId?: string; batchSize?: number } = {},
+): AsyncGenerator<VectorRow[]> {
+  let afterId = options.afterId;
+  let remaining = options.limit ?? Number.MAX_SAFE_INTEGER;
+  if (!Number.isSafeInteger(remaining) || remaining < 0) throw new Error("Invalid Milvus scan limit.");
+  const batchSize = Math.max(1, Math.min(1024, options.batchSize ?? 512));
+  while (remaining > 0) {
+    const clauses = [options.filter, afterId === undefined ? undefined : `id > ${literal(afterId)}`].filter(Boolean);
+    const res = await assertOk(client.query({
+      collection_name: name,
+      consistency_level: MILVUS_READ_CONSISTENCY,
+      filter: clauses.map((clause) => `(${clause})`).join(" and "),
+      output_fields: [...OUTPUT_FIELDS, "vector"],
+      limit: Math.min(batchSize, remaining),
+      params: { iterator: true },
+    }));
+    const raw = res?.data;
+    if (!Array.isArray(raw)) throw new Error("Milvus scan returned no row data.");
+    if (raw.length === 0) return;
+    const batch: VectorRow[] = [];
+    for (const item of raw) {
+      const row = milvusRowToVectorRow(item);
+      if (!row || row.vector.some((value) => !Number.isFinite(value))) throw new Error("Milvus scan returned an invalid vector row.");
+      if (afterId !== undefined && Buffer.compare(Buffer.from(row.id), Buffer.from(afterId)) <= 0) {
+        throw new Error("Milvus scan did not advance in primary-key order.");
+      }
+      afterId = row.id;
+      batch.push(row);
+    }
+    if (batch.length > remaining) throw new Error("Milvus scan exceeded its requested limit.");
+    remaining -= batch.length;
+    yield batch;
+  }
+}
+
+export async function countMilvusRows(client: MilvusClientLike, name: string, filter = ""): Promise<number> {
+  // SDK count() drops consistency options. A direct aggregate query preserves them.
+  const res = await assertOk(client.query({
+    collection_name: name,
+    consistency_level: MILVUS_READ_CONSISTENCY,
+    filter,
+    output_fields: ["count(*)"],
+  }));
+  const count = nonNegativeCount(res?.data?.[0]?.["count(*)"]);
+  if (count == null) throw new Error("Milvus count returned an invalid result.");
+  return count;
 }
 
 function translateFilter(filter: VectorFilter): string {
@@ -565,12 +772,12 @@ function translateFilter(filter: VectorFilter): string {
   }
 }
 
-function literal(value: string | number): string {
+export function literal(value: string | number): string {
   if (typeof value === "number") return String(value);
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function rowToMilvusData(row: VectorRow): Record<string, unknown> {
+function rowToMilvusData(row: VectorRow, text = false): Record<string, unknown> {
   return {
     id: row.id,
     user_id: row.user_id,
@@ -578,8 +785,8 @@ function rowToMilvusData(row: VectorRow): Record<string, unknown> {
     source_id: row.source_id,
     owner_id: row.owner_id,
     chunk_index: row.chunk_index,
-    content: clipVarchar(row.content),
-    metadata_json: clipVarchar(row.metadata_json),
+    content: text ? row.content : clipVarchar(row.content),
+    metadata_json: row.metadata_json,
     updated_at: row.updated_at,
     vector: row.vector,
   };
@@ -645,8 +852,60 @@ function parseVector(raw: unknown): number[] {
 }
 
 function clipVarchar(value: string): string {
-  if (value.length <= VARCHAR_MAX) return value;
-  return `${value.slice(0, VARCHAR_MAX - 22)}\n[content clipped]`;
+  if (Buffer.byteLength(value, "utf8") <= VARCHAR_MAX) return value;
+  const bytes = Buffer.from(value, "utf8");
+  let end = VARCHAR_MAX - Buffer.byteLength(CONTENT_CLIPPED_SUFFIX, "utf8");
+  // If the cut lands inside a code point, omit that whole code point.
+  while ((bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8") + CONTENT_CLIPPED_SUFFIX;
+}
+
+function assertMetadataFits(value: string): void {
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes > VARCHAR_MAX) {
+    throw new Error(`Milvus metadata_json exceeds the ${VARCHAR_MAX}-byte VARCHAR limit (${bytes} UTF-8 bytes). Reduce the metadata before retrying; JSON cannot be safely clipped.`);
+  }
+}
+
+function storedDimension(description: DescribeCollectionResponse | null): number | null {
+  const field = description?.schema?.fields?.find((field) => field.name === "vector");
+  const parsed = Number(field?.dim ?? field?.type_params?.find((param) => param.key === "dim")?.value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeCount(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function indexPendingRows(index: IndexDescription): number {
+  const total = nonNegativeCount(index.total_rows);
+  const indexed = nonNegativeCount(index.indexed_rows);
+  return Math.max(
+    nonNegativeCount(index.pending_index_rows) ?? 0,
+    total != null && indexed != null ? total - indexed : 0,
+  );
+}
+
+function indexReady(index: IndexDescription): boolean {
+  // gRPC normally returns enum names; accept numeric enum representations too.
+  return ["Finished", "3"].includes(String(index.state))
+    && !index.index_state_fail_reason
+    && indexPendingRows(index) === 0;
+}
+
+function reportedBackfillComplete(data: Record<string, unknown> | undefined): boolean {
+  if (!data) return false;
+  const consistent = data.schema_version_consistent_segments;
+  const total = data.schema_version_total_segments;
+  // Older servers/original schemas may not report backfill counters. A future
+  // migration must positively verify completion before enabling its new field;
+  // general index health alone is not a migration completion signal.
+  if (consistent === undefined && total === undefined) return true;
+  const parsedConsistent = nonNegativeCount(consistent);
+  const parsedTotal = nonNegativeCount(total);
+  return parsedTotal != null && parsedConsistent != null && parsedConsistent === parsedTotal;
 }
 
 function milvusTuning(profile: VectorStoreTuningProfile): {
@@ -762,7 +1021,12 @@ async function assertOk(promise: Promise<any>): Promise<any> {
   const res = await promise.catch((err) => {
     throw new Error(`Milvus request failed: ${describeMilvusError(err)}`);
   });
-  const status = res?.status ?? res;
+  return assertMilvusResponse(res);
+}
+
+export function assertMilvusResponse<T>(res: T): T {
+  const result = res as any;
+  const status = result?.status ?? result?.alter_status ?? result;
   const code = status?.error_code ?? status?.code;
   const reason = status?.reason ?? status?.message;
   if (typeof code !== "undefined" && code !== 0 && code !== "Success" && code !== "success") {

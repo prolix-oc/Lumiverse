@@ -63,7 +63,7 @@ export interface WhistleTranscript {
 
 export type WhistleRequest =
   | { type: 'prepare'; id: number }
-  | { type: 'transcribe'; id: number; pcm: Float32Array; language?: string }
+  | { type: 'transcribe'; id: number; pcm: Float32Array; language?: string; keywords?: readonly string[] }
 
 export type WhistleResponse =
   | { type: 'progress'; progress: number }

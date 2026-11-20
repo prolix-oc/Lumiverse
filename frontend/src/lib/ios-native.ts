@@ -24,13 +24,18 @@ export interface IOSNotificationStatus {
   bundleId: string
   environment: 'development' | 'production'
   reason: string | null
+  relayAvailable?: boolean
 }
 export interface IOSPushRegistration {
   deviceId: string
   deviceToken: string
   bundleId: string
   environment: 'development' | 'production'
+  delivery?: 'relay' | 'direct'
+  relayCredential?: string
+  encryption?: { key: string; keyId: string }
 }
 
 export const getIOSNotificationStatus = () => iosNativeRequest<IOSNotificationStatus>('notifications.status')
-export const registerIOSPush = () => iosNativeRequest<IOSPushRegistration>('notifications.register')
+export const registerIOSPush = (delivery: 'relay' | 'direct' = 'direct', relayUrl?: string) =>
+  iosNativeRequest<IOSPushRegistration>('notifications.register', { delivery, ...(relayUrl ? { relayUrl } : {}) })

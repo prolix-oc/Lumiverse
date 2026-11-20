@@ -41,7 +41,8 @@
     "noVoices": "Keine Stimmen verfügbar \u2013 Standard der Verbindung verwenden",
     "connectionDefault": "Standard der Verbindung",
     "connectionAria": "{{label}}-Verbindung",
-    "voiceAria": "{{label}}-Stimme"
+    "voiceAria": "{{label}}-Stimme",
+    "voiceLibrary": "Stimmbibliothek"
   },
   "folderDropdown": {
     "noFolder": "Kein Ordner",
@@ -85,6 +86,7 @@
     "confirm": "Bestätigen"
   },
   "searchableSelect": {
+    "recentlyUsed": "Kürzlich verwendet",
     "selectedCount": "{{count}} ausgewählt",
     "placeholder": "Auswählen\u2026",
     "searchPlaceholder": "Suchen\u2026",
@@ -150,5 +152,38 @@
     "noMatching": "Keine passenden Modelle",
     "loading": "Modelle werden geladen...",
     "emptyDefault": "Keine Modelle gefunden. Gib eines manuell ein."
+  },
+  "voiceLibrary": {
+    "title": "ElevenLabs-Stimmbibliothek",
+    "hint": "Entdecke Community-Stimmen und verwende sie direkt. Für die API-Nutzung von Bibliotheksstimmen ist ein kostenpflichtiger ElevenLabs-Tarif erforderlich.",
+    "search": "Stimmen nach Name oder Beschreibung suchen…",
+    "clearSearch": "Stimmsuche löschen",
+    "language": "Sprache",
+    "searchLanguages": "Sprachen suchen…",
+    "allLanguages": "Alle Sprachen",
+    "gender": "Geschlecht",
+    "allGenders": "Alle Geschlechter",
+    "female": "Weiblich",
+    "male": "Männlich",
+    "neutral": "Neutral",
+    "sort": "Sortieren nach",
+    "trending": "Im Trend",
+    "latest": "Neueste",
+    "mostUsers": "Meiste Nutzer",
+    "mostUsed": "Am häufigsten verwendet",
+    "loading": "Stimmen werden geladen…",
+    "empty": "Keine Stimmen entsprechen deiner Suche. Versuche eine andere Suche oder entferne die Filter.",
+    "loadFailed": "Die Stimmbibliothek konnte nicht geladen werden.",
+    "retry": "Erneut versuchen",
+    "selected": "Ausgewählt",
+    "creditMultiplier": "{{rate}}× Credits",
+    "liveModeration": "Live-Moderation",
+    "noticePeriod_one": "{{count}} Tag Vorankündigung",
+    "noticePeriod_other": "{{count}} Tage Vorankündigung",
+    "preview": "Vorschau",
+    "previewAria": "{{name}} vorhören",
+    "useVoice": "Stimme verwenden",
+    "useVoiceAria": "{{name}} verwenden",
+    "close": "Schließen"
   }
 }

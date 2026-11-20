@@ -64,6 +64,15 @@
     "assistant": "Assistant"
   },
   "input": {
+    "formatting": {
+      "label": "Message formatting",
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline",
+      "quotes": "Quotation marks",
+      "singleQuotes": "Single quotation marks",
+      "parentheses": "Parentheses"
+    },
     "placeholder": "Type a message…",
     "backHome": "Back to home",
     "regenerate": "Regenerate",
@@ -210,6 +219,8 @@
     "failedUploadAttachment": "Failed to upload attachment",
     "messageQueued": "Message queued",
     "failedQueueMessage": "Failed to queue message",
+    "roomMessageUnconfirmed": "The room did not confirm your message. Your draft has been kept; check the chat before retrying.",
+    "messageDraftKept": "Message could not be confirmed — your draft has been kept",
     "regexActionSelected": "Choice selected",
     "regexActionQueued": "This choice will be appended invisibly to your next message.",
     "regexActionDraftQueued": "Queued to input — edit and send when ready.",
@@ -309,6 +320,22 @@
     "showFewer": "Show fewer"
   },
   "chatView": {
+    "cortexFailedBatches": "Failed batches: {{count}}",
+    "cortexBatchProgress": "{{current}}/{{total}} batches · {{queued}} queued",
+    "cortexElapsed": "{{seconds}}s elapsed",
+    "cortexBatchActivity": "Batch {{batch}} · {{phase}}",
+    "cortexBatchChunks": "Chunks: {{count}}",
+    "cortexActiveBatches": "Active memory batches",
+    "cortexActivity": {
+      "queued": "Queued",
+      "waiting": "Waiting for provider",
+      "thinking": "Thinking",
+      "responding": "Responding",
+      "reviewing": "Reviewing",
+      "preparing": "Preparing",
+      "saving": "Saving",
+      "consolidating": "Consolidating"
+    },
     "togglePortraitPanel": "Toggle portrait panel",
     "exitSelectionMode": "Exit selection mode",
     "selectMessages": "Select messages",

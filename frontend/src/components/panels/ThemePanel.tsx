@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Bookmark, Download, Upload, Code2, Lock, Unlock } from 'lucide-react'
 import { useStore } from '@/store'
 import { useThemePackActions } from '@/hooks/useThemePackActions'
+import { applyThemePreset } from '@/lib/themeSelection'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors, RenderingMode } from '@/types/theme'
@@ -14,6 +15,11 @@ import ExtensionThemes from './theme-panel/ExtensionThemes'
 import AccentPicker from './theme-panel/AccentPicker'
 import BaseColorPicker from './theme-panel/BaseColorPicker'
 import DepthControls from './theme-panel/DepthControls'
+import { Toggle } from '@/components/shared/Toggle'
+import {
+  activeDeviceThemeControls, useDeviceThemeControls, setDeviceThemeControlsEnabled,
+  updateDeviceThemeControls, resetDeviceThemeControls, resolveDeviceTheme, type ThemeControls,
+} from '@/lib/deviceThemeControls'
 import styles from './ThemePanel.module.css'
 
 export default function ThemePanel() {
@@ -29,6 +35,10 @@ export default function ThemePanel() {
   // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
   // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
   const current = normalizeTheme(theme) ?? DEFAULT_THEME
+  const deviceControls = useDeviceThemeControls(activeDeviceThemeControls)
+  const deviceEnabled = useDeviceThemeControls((s) => s.enabled)
+  const deviceUserId = useDeviceThemeControls((s) => s.userId)
+  const appearance = resolveDeviceTheme(current, deviceControls)
   const isTauriDesktop = hasTauriDesktopBridge()
 
   // Always read the latest theme from the store to avoid stale closures
@@ -52,30 +62,17 @@ export default function ThemePanel() {
     [getLatest, setTheme]
   )
 
+  const updateControls = useCallback((patch: Partial<ThemeControls>) => {
+    if (activeDeviceThemeControls(useDeviceThemeControls.getState())) {
+      updateDeviceThemeControls(patch, getLatest())
+    } else {
+      update(patch)
+    }
+  }, [getLatest, update])
+
   const handleModeChange = useCallback(
     (mode: ThemeMode) => update({ mode }),
     [update]
-  )
-
-  const clearAllExtensionThemeOverrides = useStore((s) => s.clearAllExtensionThemeOverrides)
-
-  const handlePresetSelect = useCallback(
-    (preset: ThemeConfig) => {
-      // Preserve wrapper-owned appearance when applying legacy presets. A
-      // theme that explicitly includes desktopBackground still takes control.
-      // Without this fallback, every older preset clears the field and turns
-      // the Tauri blur off simply because it predates the desktop setting.
-      const latest = getLatest()
-      // Clear extension theme overrides so the preset takes full control
-      clearAllExtensionThemeOverrides()
-      setTheme({
-        ...preset,
-        mode: latest.mode,
-        desktopBackground: preset.desktopBackground ?? latest.desktopBackground,
-        renderingMode: preset.renderingMode ?? latest.renderingMode,
-      })
-    },
-    [setTheme, getLatest, clearAllExtensionThemeOverrides]
   )
 
   const handleAccentChange = useCallback(
@@ -84,23 +81,36 @@ export default function ThemePanel() {
   )
 
   const handleRadiusChange = useCallback(
-    (radiusScale: number) => update({ radiusScale }),
-    [update]
+    (radiusScale: number) => updateControls({ radiusScale }),
+    [updateControls]
   )
 
+  // Local glass controls must not change the authored theme on other devices.
+  // When editing the theme itself, clear both layers in a single settings write.
   const handleGlassToggle = useCallback(
-    (enableGlass: boolean) => update({ enableGlass }),
+    (enableGlass: boolean) => {
+      if (activeDeviceThemeControls(useDeviceThemeControls.getState())) {
+        updateControls({ enableGlass })
+      } else {
+        update({ enableGlass, ...(!enableGlass ? { liquidGlass: false } : {}) })
+      }
+    },
+    [update, updateControls]
+  )
+
+  const handleLiquidGlassToggle = useCallback(
+    (liquidGlass: boolean) => update({ liquidGlass }),
     [update]
   )
 
   const handleFontScaleChange = useCallback(
-    (fontScale: number) => update({ fontScale }),
-    [update]
+    (fontScale: number) => updateControls({ fontScale }),
+    [updateControls]
   )
 
   const handleUiScaleChange = useCallback(
-    (uiScale: number) => update({ uiScale }),
-    [update]
+    (uiScale: number) => updateControls({ uiScale }),
+    [updateControls]
   )
 
   const handleDesktopBackgroundChange = useCallback(
@@ -142,7 +152,7 @@ export default function ThemePanel() {
       aria-pressed={slidersLocked}
       onClick={() => setSlidersLocked((locked) => !locked)}
     >
-      {slidersLocked ? <Lock size={16} /> : <Unlock size={16} />}
+      {slidersLocked ? <Lock size={16} aria-hidden="true" /> : <Unlock size={16} aria-hidden="true" />}
       {t(slidersLocked ? 'themePanel.unlockControls' : 'themePanel.lockControls')}
     </button>
   )
@@ -156,7 +166,7 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.presets')}</h4>
-        <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={handlePresetSelect} />
+        <PresetGrid activeId={hasExtensionOverrides ? '' : current.id} onSelect={applyThemePreset} />
       </section>
 
       <SavedThemes />
@@ -188,15 +198,39 @@ export default function ThemePanel() {
 
       <section className={styles.section}>
         <h4 className={styles.sectionLabel}>{t('themePanel.controls')}</h4>
+        <details className={styles.deviceControls}>
+          <summary>{t('themePanel.deviceControls.title')}</summary>
+          <div className={styles.deviceControlsBody}>
+            <Toggle.Checkbox
+              checked={deviceEnabled}
+              disabled={!deviceUserId}
+              onChange={(enabled) => setDeviceThemeControlsEnabled(enabled, getLatest())}
+              label={t('themePanel.deviceControls.enabled')}
+            />
+            <p className={styles.deviceHint}>{t('themePanel.deviceControls.hint')}</p>
+            <div className={styles.themeActions}>
+              <button type="button" className={styles.actionBtn} disabled={!deviceControls}
+                onClick={() => { if (deviceControls) update(deviceControls) }}>
+                {t('themePanel.deviceControls.copyToTheme')}
+              </button>
+              <button type="button" className={styles.actionBtn} disabled={!deviceControls}
+                onClick={() => resetDeviceThemeControls(getLatest())}>
+                {t('themePanel.deviceControls.resetFromTheme')}
+              </button>
+            </div>
+          </div>
+        </details>
         {lockButton}
         <DepthControls
           slidersLocked={slidersLocked}
-          radiusScale={current.radiusScale}
-          enableGlass={current.enableGlass}
-          fontScale={current.fontScale}
-          uiScale={current.uiScale ?? 1}
+          radiusScale={appearance.radiusScale}
+          enableGlass={appearance.enableGlass}
+          liquidGlass={Boolean(appearance.liquidGlass)}
+          fontScale={appearance.fontScale}
+          uiScale={appearance.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
+          onLiquidGlassToggle={handleLiquidGlassToggle}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
           showDesktopBackgroundControls={isTauriDesktop}

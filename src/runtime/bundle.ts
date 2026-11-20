@@ -23,7 +23,8 @@ export interface BundledServerSettings {
 }
 
 export interface BundleOptions {
-  command: "serve" | "check" | "reset-password" | "data-dir" | "help" | "version";
+  command: "serve" | "check" | "reset-password" | "data-dir" | "network-access" | "help" | "version";
+  networkAccess?: "on" | "off" | "status";
   dataDir?: string;
   cacheDir?: string;
   configDir?: string;
@@ -46,6 +47,12 @@ export function parseBundleOptions(args: string[]): BundleOptions {
     if (commands.has(arg)) {
       if (options.command !== "serve") throw new Error("Choose one command at a time.");
       options.command = commands.get(arg)!;
+    } else if (arg === "--network-access") {
+      if (options.command !== "serve") throw new Error("Choose one command at a time.");
+      const value = args[++i];
+      if (value !== "on" && value !== "off" && value !== "status") throw new Error("--network-access requires on, off, or status.");
+      options.command = "network-access";
+      options.networkAccess = value;
     } else if (arg === "--no-open") {
       options.open = false;
     } else if (arg === "--desktop") {

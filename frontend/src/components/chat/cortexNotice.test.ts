@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { CortexIngestionStatus } from '@/api/memory-cortex'
+import type { CortexIngestionStatus, CortexActivityRun, CortexActivitySnapshot } from '@/api/memory-cortex'
 import en from '../../i18n/locales/en/chat.json'
 import {
   CORTEX_ERROR_NOTICE_VISIBLE_MS,
@@ -7,6 +7,7 @@ import {
   cortexErrorNoticeRemainingMs,
   hideDismissedCortexError,
   normalizeRebuildStatus,
+  mergeCortexActivity,
 } from './cortexNotice'
 
 const t = (key: string, options?: Record<string, unknown>): string => {
@@ -36,6 +37,72 @@ function ingestion(overrides: Partial<CortexIngestionStatus> = {}): CortexIngest
 }
 
 describe('Cortex chat notices', () => {
+  const activity = (overrides: Partial<CortexActivityRun> = {}): CortexActivitySnapshot => ({
+    chatId: 'chat-1', revision: 1, runs: [{ id: 'run-1', chatId: 'chat-1', kind: 'rebuild', status: 'processing',
+      phase: 'starting', requestedAt: 1_000, updatedAt: 1_000, completedChunks: 0, totalChunks: 0,
+      completedBatches: 0, failedBatches: 0, totalBatches: 0, activeBatches: [], requests: [], ...overrides }],
+  })
+
+  test('shows the user request immediately, before server progress or provider dispatch', () => {
+    const notice = buildCortexNotice(null, null, t, null, 1_000, 3_000)
+    expect(notice?.detail).toBe('Queued')
+    expect(notice?.elapsed).toBe('2s elapsed')
+    expect(notice?.percent).toBeUndefined()
+  })
+
+  test('shows simultaneous batch states, queued work and processed chunks independently', () => {
+    const snapshot = activity({ totalChunks: 17, completedChunks: 5, totalBatches: 4, completedBatches: 1,
+      activeBatches: [{ batch: 2, chunks: 5, phase: 'sidecar' }, { batch: 3, chunks: 5, phase: 'sidecar' }],
+      requests: [
+        { id: 'r2', batch: 2, chunks: 5, purpose: 'analysis', phase: 'thinking', model: 'model-a', queuedAt: 1_000, updatedAt: 2_000 },
+        { id: 'r3', batch: 3, chunks: 5, purpose: 'analysis', phase: 'responding', model: 'model-b', queuedAt: 1_000, updatedAt: 2_000 },
+      ],
+    })
+    const notice = buildCortexNotice(null, { status: 'processing', phase: 'ingesting' }, t, snapshot, null, 11_000)!
+    expect(notice.detail).toBe('1/4 batches · 1 queued · 5/17 chunks · 1 Thinking · 1 Responding')
+    expect(notice.elapsed).toBe('10s elapsed')
+    expect(notice.percent).toBe(29)
+    expect(notice.batches?.map((batch) => batch.label)).toEqual(['Batch 2 · Thinking', 'Batch 3 · Responding'])
+    expect(notice.batches?.[0].detail).toBe('Chunks: 5 · model-a')
+  })
+
+  test('labels Decision review honestly and keeps a batch active after its response until persistence finishes', () => {
+    const snapshot = activity({ totalChunks: 5, totalBatches: 1,
+      activeBatches: [{ batch: 1, chunks: 5, phase: 'persisting' }],
+      requests: [{ id: 'review', batch: 1, chunks: 5, purpose: 'candidate review', phase: 'waiting', queuedAt: 1_000, updatedAt: 2_000 }],
+    })
+    expect(buildCortexNotice(null, null, t, snapshot)?.detail).toContain('1 Reviewing')
+    snapshot.runs[0].requests = []
+    const saving = buildCortexNotice(null, null, t, snapshot)!
+    expect(saving.detail).toContain('Saving')
+    expect(saving.percent).toBe(0)
+    expect(saving.batches?.[0].label).toBe('Batch 1 · Saving')
+  })
+
+  test('preserves the initiating click time after the server acknowledges a queued request', () => {
+    const snapshot = activity({ requestedAt: 3_000 })
+    expect(buildCortexNotice(null, null, t, snapshot, null, 10_000, 1_000)?.elapsed).toBe('9s elapsed')
+    snapshot.runs[0].clientRequestedAt = 1_000
+    expect(buildCortexNotice(null, null, t, snapshot, null, 10_000)?.elapsed).toBe('9s elapsed')
+  })
+
+  test('does not mislabel a failed batch as queued while another batch continues', () => {
+    const snapshot = activity({ totalBatches: 2, failedBatches: 1,
+      activeBatches: [{ batch: 2, chunks: 5, phase: 'preparing' }],
+    })
+    const notice = buildCortexNotice(null, null, t, snapshot)!
+    expect(notice.detail).toContain('0/2 batches · 0 queued · Failed batches: 1')
+    expect(notice.batches?.[0].label).toBe('Batch 2 · Preparing')
+  })
+
+  test('ignores stale reads and socket messages after completion', () => {
+    const stale = activity()
+    const complete = { ...activity({ status: 'complete' }), revision: 2 }
+    expect(mergeCortexActivity(complete, stale)).toBe(complete)
+    expect(buildCortexNotice(null, null, t, mergeCortexActivity(complete, stale))).toBeNull()
+    expect(mergeCortexActivity(stale, complete)).toBe(complete)
+  })
+
   test('labels passive Cortex rebuilds as Cortex, not LTCM embedding work', () => {
     const notice = buildCortexNotice(null, {
       chatId: 'chat-1',

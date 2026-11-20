@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import clsx from 'clsx'
@@ -29,9 +29,9 @@ import type {
   SpindleSwitchHandle,
   SpindleSelectOption,
   SpindleSelectOptionLeading,
-  SpindleSelectOptions,
+  SpindleSelectOptions as PublishedSelectOptions,
   SpindleSelectHandle,
-  SpindleMultiSelectOptions,
+  SpindleMultiSelectOptions as PublishedMultiSelectOptions,
   SpindleMultiSelectHandle,
   SpindleModelComboboxOptions,
   SpindleModelComboboxHandle,
@@ -108,12 +108,14 @@ import {
 import { scheduleMicrotask } from '@/lib/schedule-microtask'
 import { RouterContextBridge } from '@/lib/router-bridge'
 import { canMovePresetEditorPromptVariables, movePresetEditorPromptVariable } from './preset-editor-helper'
+import DesktopKeybindingsSettings from '@/components/settings/DesktopKeybindingsSettings'
+import { hasEnabledCommandExtensionId } from './frontend-extension-availability'
 
 // Spindle bridge components expose imperative handles by mutating the bridge
 // object passed from the extension runtime. This is an intentional escape hatch
 // from React's pure-render model, so the React Compiler cannot safely optimize
 // these components.
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/immutability */
 
 // ── Tracking & lifecycle ──────────────────────────────────────────────────
 
@@ -1197,10 +1199,21 @@ function SwitchBridge({ initial, bridge }: { initial: SpindleSwitchOptions; brid
   )
 }
 
+// Additive 0.6.71 contract; remove these aliases after the published SDK upgrade.
+interface SelectPaginationOptions {
+  forceSearch?: boolean; remoteSearch?: boolean; onSearchChange?: (value: string) => void;
+  loading?: boolean; hasMore?: boolean; onLoadMore?: () => void; loadMoreOnScroll?: boolean;
+  loadingMessage?: string; loadMoreLabel?: string;
+}
+type SpindleSelectOptions = PublishedSelectOptions & SelectPaginationOptions
+type SpindleMultiSelectOptions = PublishedMultiSelectOptions & SelectPaginationOptions
+
 function SelectBridge({ initial, bridge }: { initial: SpindleSelectOptions; bridge: BridgeAPI<SpindleSelectOptions, string> }) {
   const [props, setProps] = useState(initial)
   const [value, setValue] = useState<string>(initial.value ?? '')
   const commitValue = useBridgeBinding(bridge, props, setProps, value, setValue, 'value')
+  const searchChanged = useCallback((query: string) => notifyComponentOnChange('Select search', props.onSearchChange, query), [props.onSearchChange])
+  const loadMore = useCallback(() => notifyComponentOnChange('Select load more', props.onLoadMore, undefined), [props.onLoadMore])
   return (
     <SearchableSelect
       value={value}
@@ -1212,6 +1225,15 @@ function SelectBridge({ initial, bridge }: { initial: SpindleSelectOptions; brid
       placeholder={props.placeholder}
       searchPlaceholder={props.searchPlaceholder}
       searchThreshold={props.searchThreshold}
+      forceSearch={props.forceSearch}
+      remoteSearch={props.remoteSearch}
+      onSearchChange={props.onSearchChange ? searchChanged : undefined}
+      loading={props.loading}
+      hasMore={props.hasMore}
+      onLoadMore={props.onLoadMore ? loadMore : undefined}
+      loadMoreOnScroll={props.loadMoreOnScroll}
+      loadingMessage={props.loadingMessage}
+      loadMoreLabel={props.loadMoreLabel}
       emptyMessage={props.emptyMessage}
       noResultsMessage={props.noResultsMessage}
       triggerLabel={props.triggerLabel}
@@ -1235,6 +1257,8 @@ function MultiSelectBridge({ initial, bridge }: { initial: SpindleMultiSelectOpt
   const [props, setProps] = useState(initial)
   const [value, setValue] = useState<string[]>(() => cloneBridgeValue(initial.value ?? []))
   const commitValue = useBridgeBinding(bridge, props, setProps, value, setValue, 'value')
+  const searchChanged = useCallback((query: string) => notifyComponentOnChange('Select search', props.onSearchChange, query), [props.onSearchChange])
+  const loadMore = useCallback(() => notifyComponentOnChange('Select load more', props.onLoadMore, undefined), [props.onLoadMore])
   return (
     <SearchableSelect
       multi
@@ -1247,6 +1271,15 @@ function MultiSelectBridge({ initial, bridge }: { initial: SpindleMultiSelectOpt
       placeholder={props.placeholder}
       searchPlaceholder={props.searchPlaceholder}
       searchThreshold={props.searchThreshold}
+      forceSearch={props.forceSearch}
+      remoteSearch={props.remoteSearch}
+      onSearchChange={props.onSearchChange ? searchChanged : undefined}
+      loading={props.loading}
+      hasMore={props.hasMore}
+      onLoadMore={props.onLoadMore ? loadMore : undefined}
+      loadMoreOnScroll={props.loadMoreOnScroll}
+      loadingMessage={props.loadingMessage}
+      loadMoreLabel={props.loadMoreLabel}
       emptyMessage={props.emptyMessage}
       noResultsMessage={props.noResultsMessage}
       triggerLabel={props.triggerLabel}
@@ -1719,7 +1752,10 @@ export interface SpindleHostSurfaceComponentsHelper {
   listHostSurfaces(): readonly SpindleHostSurfaceInfo[]
 }
 
-export type SpindleComponentsHelperWithHostSurfaces = SpindleComponentsHelper & SpindleHostSurfaceComponentsHelper
+export interface SpindleKeybindingEditorHandle { readonly componentId: string; readonly element: HTMLElement; destroy(): void }
+export type SpindleComponentsHelperWithHostSurfaces = SpindleComponentsHelper & SpindleHostSurfaceComponentsHelper & {
+  mountKeybindingEditor(target: SpindleComponentTarget, options: { commandId: string }): SpindleKeybindingEditorHandle
+}
 
 // ── Public factory ────────────────────────────────────────────────────────
 
@@ -1832,6 +1868,18 @@ export function createComponentsHelper(
       <TextInputBridge initial={options ?? {}} bridge={b} />
     ))
     return buildHandle(extensionId, id, el, result, componentPermissionForTarget(extensionId, el, generation)) as SpindleTextInputHandle
+  }
+  function mountKeybindingEditor(target: SpindleComponentTarget, editorOptions: { commandId: string }): SpindleKeybindingEditorHandle {
+    const state = useStore.getState()
+    if (!hasEnabledCommandExtensionId(state.extensions, extensionId)
+      || !state.extensionCommands.some(entry => entry.extensionId === extensionId && entry.commands.some(command => command.id === editorOptions?.commandId))) {
+      throw new Error('KEYBINDING_COMMAND_UNAVAILABLE: register an enabled command owned by this extension first')
+    }
+    const el = resolveTarget(extensionId, target, generation)
+    const id = nextId(extensionId, 'keybinding-editor')
+    const result = mountBridge<Record<string, never>, void>(el, () => <DesktopKeybindingsSettings extensionCommand={{ extensionId, commandId: editorOptions.commandId }} />)
+    const handle = buildHandle(extensionId, id, el, result, componentPermissionForTarget(extensionId, el, generation))
+    return { componentId: handle.componentId, element: handle.element, destroy: handle.destroy }
   }
   function mountTextArea(target: SpindleComponentTarget, options?: SpindleTextAreaOptions): SpindleTextAreaHandle {
     const el = resolveTarget(extensionId, target, generation)
@@ -2002,6 +2050,7 @@ export function createComponentsHelper(
 
   return {
     mountTextInput: mountText,
+    mountKeybindingEditor,
     mountTextArea,
     mountNumericInput,
     mountNumberStepper,
@@ -2024,4 +2073,4 @@ export function createComponentsHelper(
   }
 }
 
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/immutability */

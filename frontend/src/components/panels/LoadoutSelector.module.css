@@ -69,7 +69,7 @@
 
 :global([data-glass]) .dropdown {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
   box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 
@@ -206,7 +206,7 @@
 
 :global([data-glass]) .menu {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
-  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px)) var(--lcs-liquid-filter, );
   box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 

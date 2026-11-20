@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
@@ -85,7 +86,7 @@ function LoomRow({ session, onOpen, onDelete }: {
 }) {
   const { t } = useTranslation('weaver')
   const buildTypes = useStore((st) => st.weaverBuildTypes)
-  const characters = useStore((st) => st.characters)
+  const characters = useCharacterCatalog()
   const d = sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))
 
   return (
@@ -120,7 +121,7 @@ function ShelfCard({ session, onOpen, onDelete }: {
 }) {
   const { t } = useTranslation('weaver')
   const buildTypes = useStore((st) => st.weaverBuildTypes)
-  const characters = useStore((st) => st.characters)
+  const characters = useCharacterCatalog()
   const d = sessionDisplay(session, buildTypes, characters, t('sessions.untitled'))
   const character = session.character_id ? characters.find((c) => c.id === session.character_id) : undefined
   const avatarUrl = character ? getCharacterAvatarUrlById(character.id, character.image_id) : null

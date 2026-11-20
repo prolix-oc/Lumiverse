@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createFrontendExtensionContext } from './frontend-context'
 import type { FrontendDomainAPI } from './frontend-domain-api'
-import type { SpindleSTTAPI } from 'lumiverse-spindle-types'
+import type { SpindleSTTAPI, SpindleTTSAPI } from 'lumiverse-spindle-types'
 
 describe('frontend context composition', () => {
   test('preserves host members while composing the H2/H10 roots', () => {
@@ -21,6 +21,7 @@ describe('frontend context composition', () => {
         stop: async () => transcript, cancel() {} }),
       transcribe: async () => transcript,
     }
+    const tts: SpindleTTSAPI = { speak: async () => {}, stop() {}, isSpeaking: () => false, subscribe: () => () => {} }
     const context = createFrontendExtensionContext({
       base: {
         marker: 'host',
@@ -30,6 +31,7 @@ describe('frontend context composition', () => {
       state,
       domain,
       stt,
+      tts,
       onTeardown: () => () => {},
     })
 
@@ -41,5 +43,6 @@ describe('frontend context composition', () => {
     expect(context.worldBooks).toBe(domain.worldBooks)
     expect(context.tokens).toBe(domain.tokens)
     expect(context.stt).toBe(stt)
+    expect(context.tts).toBe(tts)
   })
 })

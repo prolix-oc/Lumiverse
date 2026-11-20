@@ -18,6 +18,7 @@ Lumiverse supports extensions through **Spindle**, an isolated extension runtime
 - Access the LLM generation pipeline (raw, batch, streaming, dry-run, observe)
 - Register embedding, text-to-speech, speech-to-text, and sidecar providers that appear in Lumiverse's native settings
 - Use the host speech-to-text API, including bundled on-device Whistle, with the `media` permission
+- Speak text or chat messages through your TTS connections with the `media` permission
 - Register **council tools** that show up in the Lumia Council
 - Register **command palette** entries scoped to global, chat, character, or landing contexts
 - Open **modal dialogs** (confirm, text input, custom) using Lumiverse's shared component library
@@ -111,7 +112,7 @@ These can read sensitive data, modify pipeline behavior, or reach outside the sa
 | `push_notification` | Send push notifications to the user |
 | `image_gen` | Drive the image-generation pipeline |
 | `images` | Read and write the user's stored images |
-| `media` | Use media conversion and host speech-to-text; recording also requires microphone permission |
+| `media` | Use media conversion, host speech-to-text and text-to-speech; recording also requires microphone permission |
 | `web_search` | Read the user's configured web-search provider |
 | `characters` | Read and write character cards |
 | `chats` | Read and write chats and chat metadata |

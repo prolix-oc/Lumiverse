@@ -10,6 +10,22 @@ const patterns = capability.remote.urls.map((url: string) => new URLPattern(url)
 const allows = (url: string) => patterns.some((pattern: URLPattern) => pattern.test(url));
 
 describe("frontend titlebar remote origins", () => {
+  test("screen capture setup is limited to the primary frontend, without native controls", async () => {
+    expect(capability.windows).toEqual(["frontend"]);
+    expect(capability.permissions).toContain("desktop-capture-setup");
+    expect(capability.permissions).not.toContain("desktop-capture-controls");
+    expect(capability.permissions).toContain("desktop-keybindings-frontend");
+    expect(capability.permissions).not.toContain("desktop-keybindings-settings");
+    expect(capability.permissions.some((permission: string) => permission.startsWith("global-shortcut:"))).toBe(false);
+    const permissions = await Bun.file(new URL("../src-tauri/permissions/desktop-capture.toml", import.meta.url)).text();
+    const setup = Bun.TOML.parse(permissions).permission.find((entry: { identifier: string }) => entry.identifier === "desktop-capture-setup");
+    expect(setup.commands.allow).toEqual(["desktop_capture_request_setup"]);
+    const keybindingPermissions = Bun.TOML.parse(await Bun.file(new URL("../src-tauri/permissions/keybindings.toml", import.meta.url)).text()).permission;
+    const frontendBindings = keybindingPermissions.find((entry: { identifier: string }) => entry.identifier === "desktop-keybindings-frontend");
+    expect(frontendBindings.commands.allow).toContain("desktop_keybindings_frontend_save");
+    expect(frontendBindings.commands.allow).toContain("desktop_keybindings_global_permission");
+    expect(frontendBindings.commands.allow).not.toContain("desktop_keybindings_save");
+  });
   test.each([
     "https://lumiverse.example:8444/",
     "https://lumiverse.example:8444/chat/123?view=chat",

@@ -8,6 +8,56 @@ import {
 
 // ─── Types ─────────────────────────────────────────────────────
 
+export const CORTEX_REQUEST_EVENT = "lumiverse:cortex-request";
+export interface CortexActivityRequest {
+  id: string; batch: number | null; chunks: number; purpose: string; model?: string;
+  phase: "queued" | "waiting" | "thinking" | "responding";
+  queuedAt: number; sentAt?: number; firstContentAt?: number; updatedAt: number;
+}
+export interface CortexActivityRun {
+  id: string; chatId: string; kind: "rebuild" | "warmup" | "ingestion";
+  status: "processing" | "complete" | "error" | "cancelled"; phase: string;
+  requestedAt: number; startedAt?: number; updatedAt: number;
+  clientRequestedAt?: number; clientRequestId?: string;
+  completedChunks: number; totalChunks: number; completedBatches: number; failedBatches: number; totalBatches: number;
+  activeBatches: Array<{ batch: number; chunks: number; phase: string }>;
+  requests: CortexActivityRequest[];
+}
+export interface CortexActivitySnapshot { chatId: string; revision: number; runs: CortexActivityRun[] }
+
+async function announceCortexRequest<T>(chatId: string,
+  send: (timing: { requestId: string; initiatedAt: number }) => Promise<T>,
+  accepted: (result: T) => { status: string; activity?: CortexActivitySnapshot },
+): Promise<T> {
+  const id = crypto.randomUUID();
+  const requestedAt = Date.now();
+  const notify = (status: string, activity?: CortexActivitySnapshot) => {
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CORTEX_REQUEST_EVENT, {
+      detail: { chatId, id, requestedAt, status, activity },
+    }));
+  };
+  notify("requested");
+  try {
+    const result = await send({ requestId: id, initiatedAt: requestedAt });
+    const state = accepted(result);
+    notify(state.status, state.activity);
+    return result;
+  } catch (error) { notify("error"); throw error; }
+}
+
+function requestCortexRebuild(chatId: string) {
+  return announceCortexRequest(chatId,
+    (timing) => post<{ status: string; chatId: string; activity?: CortexActivitySnapshot }>(`${BASE}/chats/${chatId}/rebuild`, timing),
+    (result) => result);
+}
+
+function requestCortexWarmup(chatId: string, options?: { force?: boolean }): Promise<CortexWarmupResponse> {
+  if (!options?.force) return post<CortexWarmupResponse>(`${BASE}/chats/${chatId}/warm`, {});
+  return announceCortexRequest(chatId,
+    (timing) => post<CortexWarmupResponse>(`${BASE}/chats/${chatId}/warm`, { force: true, ...timing }),
+    (result) => ({ status: result.cortex.status, activity: result.activity }));
+}
+
 export interface CortexModelEndpoint {
   connectionProfileId: string | null;
   model: string | null;
@@ -45,6 +95,8 @@ export interface CortexConfig {
   };
   formatterMode: "shadow" | "attributed" | "clinical" | "minimal";
   useChatMemoryFormatting: boolean;
+  replaceConsolidatedMessagesInContext: boolean;
+  replaceArcSummariesInContext: boolean;
   contextTokenBudget: number;
   retrievalTimeoutMs: number;
   sidecarTimeoutMs: number;
@@ -52,6 +104,15 @@ export interface CortexConfig {
     fallback: "heuristic" | "skip";
     arbitratesHeuristics: boolean;
     gradesExistingRecords: boolean;
+  };
+  arbitration?: {
+    backend: "decision";
+    connectionProfileId: string | null;
+    model: string | null;
+    timeoutMs: number;
+    maxInputTokens?: number;
+    requestsPerMinute: number;
+    minConfidence: number;
   };
   consolidation: {
     enabled: boolean;
@@ -317,6 +378,7 @@ export interface CortexSidecarEndpointHealth {
 }
 
 export interface CortexWarmupResponse {
+  activity?: CortexActivitySnapshot;
   status: "started" | "complete" | "skipped";
   reason: string;
   chatId: string;
@@ -380,6 +442,15 @@ export interface CortexHealthReport {
       fallbacks?: CortexSidecarEndpointHealth[];
     };
     connectivity: CortexProbeStatus;
+  };
+  arbitration?: {
+    enabled: boolean;
+    backend: "decision";
+    ready: boolean;
+    connectionProfileId: string | null;
+    model: string | null;
+    minConfidence: number;
+    timeoutMs: number;
   };
   chat: {
     id: string;
@@ -699,14 +770,18 @@ export const memoryCortexApi = {
     put<CortexChatSettings>(`${BASE}/chats/${chatId}/settings`, { enabled }),
 
   // Rebuild
-  rebuild: (chatId: string) =>
-    post<{ status: string; chatId: string }>(`${BASE}/chats/${chatId}/rebuild`),
+  rebuild: requestCortexRebuild,
+  getActivity: (chatId: string) => get<CortexActivitySnapshot>(`${BASE}/chats/${chatId}/activity`),
+  getChatStatus: (chatId: string) => get<{
+    activity: CortexActivitySnapshot | null;
+    ingestion: CortexIngestionStatus | null;
+    rebuild: { status: string; current?: number; total?: number; percent?: number; result?: any; error?: string } | null;
+  }>(`${BASE}/chats/${chatId}/status`),
   getRebuildStatus: (chatId: string) =>
     get<{ status: string; current?: number; total?: number; percent?: number; result?: any; error?: string }>(`${BASE}/chats/${chatId}/rebuild-status`),
   getIngestionStatus: (chatId: string) =>
     get<CortexIngestionStatus>(`${BASE}/chats/${chatId}/ingestion-status`),
-  warm: (chatId: string, options?: { force?: boolean }) =>
-    post<CortexWarmupResponse>(`${BASE}/chats/${chatId}/warm`, options?.force ? { force: true } : {}),
+  warm: requestCortexWarmup,
 
   // Vaults
   createVault: (chatId: string, name: string, description?: string) =>

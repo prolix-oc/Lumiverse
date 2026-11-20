@@ -452,6 +452,37 @@ describe("multiplayer turn engine", () => {
     expect(mp.buildHydrationPayload(room, "self").generation).toBeNull();
   });
 
+  for (const status of ["assembling", "streaming"] as const) {
+    test(`hydration preserves the background swipe selection mode while ${status}`, () => {
+      const { room, chatId } = makeRoom("round_robin");
+      const message = chatsSvc.createMessage(chatId, {
+        is_user: false, name: "Bot", content: "Keep reading",
+      }, HOST);
+      chatsSvc.addSwipe(HOST, message.id, "", { select: false });
+      poolSvc.createPoolEntry({
+        generationId: crypto.randomUUID(),
+        userId: HOST,
+        chatId,
+        generationType: "swipe",
+        characterName: "Bot",
+        model: "m",
+        targetMessageId: message.id,
+        targetSwipeId: 1,
+        backgroundSwipe: true,
+      });
+      const entry = poolSvc.getPoolForChat(HOST, chatId)!;
+      poolSvc.setPoolStatus(entry.generationId, status);
+
+      const hydration = mp.buildHydrationPayload(room, "self");
+      expect(hydration.generation).toMatchObject({
+        targetMessageId: message.id, targetSwipeId: 1, backgroundSwipe: true,
+      });
+      expect(hydration.messages.find((current) => current.id === message.id)).toMatchObject({
+        swipe_id: 0, content: "Keep reading", swipes: ["Keep reading", ""],
+      });
+    });
+  }
+
   test("character (bot) avatar is relayed via hydration, sanitized", () => {
     const { room } = makeRoom("round_robin");
     // None set → null.

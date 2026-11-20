@@ -1,6 +1,6 @@
 import type { TtsProvider } from "../provider";
 import type { TtsProviderCapabilities } from "../param-schema";
-import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "../types";
+import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice, TtsVoiceLibraryOptions, TtsVoiceLibraryResult } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 export class ElevenLabsTtsProvider implements TtsProvider {
@@ -72,6 +72,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
     },
     apiKeyRequired: true,
     voiceListStyle: "dynamic",
+    supportsVoiceLibrary: true,
     modelListStyle: "static",
     staticModels: [
       { id: "eleven_v4", label: "Eleven v4" },
@@ -210,7 +211,51 @@ export class ElevenLabsTtsProvider implements TtsProvider {
       name: v.name,
       language: v.labels?.language,
       gender: v.labels?.gender,
+      description: v.description,
       previewUrl: v.preview_url,
     }));
+  }
+
+  async listVoiceLibrary(apiKey: string, apiUrl: string, options: TtsVoiceLibraryOptions): Promise<TtsVoiceLibraryResult> {
+    const query = new URLSearchParams({
+      page: String(options.page ?? 0),
+      page_size: String(options.page_size ?? 20),
+      sort: options.sort ?? "trending",
+    });
+    for (const key of ["search", "language", "gender"] as const) {
+      const value = options[key]?.trim();
+      if (value) query.set(key, value);
+    }
+    const data = await fetchProviderJson<{
+      voices: Array<{
+        voice_id: string; name: string; language?: string; gender?: string;
+        description?: string; descriptive?: string; preview_url?: string;
+        accent?: string; age?: string; use_case?: string; rate?: number;
+        notice_period?: number; live_moderation_enabled?: boolean;
+      }>;
+      has_more: boolean;
+      total_count?: number;
+    }>(this.displayName, "voice library", `${this.baseUrl(apiUrl)}/v1/shared-voices?${query}`, {
+      headers: this.headers(apiKey),
+      signal: AbortSignal.timeout(20_000),
+    });
+    return {
+      voices: (data.voices || []).map((voice) => ({
+        id: voice.voice_id,
+        name: voice.name,
+        language: voice.language ?? undefined,
+        gender: voice.gender ?? undefined,
+        description: voice.description || voice.descriptive || undefined,
+        previewUrl: voice.preview_url ?? undefined,
+        accent: voice.accent ?? undefined,
+        age: voice.age ?? undefined,
+        useCase: voice.use_case ?? undefined,
+        rate: voice.rate ?? undefined,
+        noticePeriod: voice.notice_period ?? undefined,
+        liveModeration: voice.live_moderation_enabled,
+      })),
+      has_more: data.has_more === true,
+      total_count: data.total_count,
+    };
   }
 }

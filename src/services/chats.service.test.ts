@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import type { ExtensionInfo, HostToWorker, SpindleManifest } from "lumiverse-spindle-types";
+import { WorkerHost } from "../spindle/worker-host";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -9,12 +12,14 @@ import { EventType, type EventMessage } from "../ws/events";
 import {
   addGroupMember,
   addSwipe,
+  updateSwipe,
   deleteSwipe,
   setSwipeScopedExtra,
   applyChatAppearance,
   branchChat,
   convertSoloChatToGroup,
   createChat,
+  compareAndSetChatMetadata,
   deleteChat,
   deleteChats,
   deleteMessage,
@@ -39,10 +44,18 @@ import {
 } from "./chats.service";
 import { makePromptActivationSource, promptActivationSource } from "./prompt-activation.service";
 
-function initChatsTestDb(): void {
+function initChatsTestDb(path = ":memory:"): void {
   closeDatabase();
-  initDatabase(":memory:");
+  initDatabase(path);
   const db = getDb();
+
+  db.run(`CREATE TABLE settings (
+    user_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, key)
+  )`);
 
   db.run(`CREATE TABLE characters (
     id TEXT PRIMARY KEY,
@@ -219,6 +232,19 @@ afterEach(() => {
   closeDatabase();
 });
 
+test("conditional metadata guards accept the same normalized message returned to extensions", () => {
+  for (const contexts of [[{ preset_id: "p" }], [{ preset_id: "p" }, null, { preset_id: "extra" }]]) {
+    const id = `chat-${contexts.length}`;
+    seedChat(id, "c1", "Chat", "{}", 1);
+    seedMessage(id, id, "A", { spindle_metadata: { preset_contexts: contexts } });
+    getDb().query("UPDATE messages SET swipes = ? WHERE id = ?").run(JSON.stringify(["A", "B"]), id);
+    const message = getMessages("u1", id)[0]!;
+    expect(compareAndSetChatMetadata("u1", id, { expected_metadata: {}, metadata: { saved: true }, expected_last_message_id: id,
+      expected_message: { id, swipe_id: message.swipe_id, swipes: message.swipes, metadata: message.extra.spindle_metadata as Record<string, unknown> },
+    })?.metadata).toEqual({ saved: true });
+  }
+});
+
 describe("previous same-role content", () => {
   test("finds the nearest earlier message with the same role", () => {
     seedCharacter("char", "Character");
@@ -295,6 +321,75 @@ describe("chat greeting selection", () => {
 });
 
 describe("chat lifecycle events", () => {
+  test.each([undefined, "Named fork"])("forks reserve the write transaction before reading with name %s", async (name) => {
+    const directory = mkdtempSync(join(tmpdir(), "chat-fork-contention-"));
+    const path = join(directory, "database.sqlite");
+    initChatsTestDb(path);
+    seedCharacter("c1", "Alpha");
+    seedChat("source", "c1", "Source", "{}", 100);
+    seedMessage("reply", "source", "Reply", {}, { index: 0 });
+    const writer = new Database(path);
+    writer.exec("PRAGMA busy_timeout = 0");
+    const statement = getDb().query("SELECT * FROM chats WHERE id = ? AND user_id = ?");
+    const read = statement.get.bind(statement);
+    let attempted = false;
+    let blocked = false;
+    const backgroundWrite = () => writer
+      .query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "concurrent", "true");
+    const hook = spyOn(statement, "get").mockImplementation((...values) => {
+      const result = read(...values);
+      if (!attempted) {
+        attempted = true;
+        try {
+          backgroundWrite();
+        } catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "SQLITE_BUSY") throw error;
+          blocked = true;
+        }
+      }
+      return result;
+    });
+    try {
+      const fork = branchChat("u1", "source", "reply", name);
+      expect(attempted).toBe(true);
+      expect(fork).not.toBeNull();
+      expect(blocked).toBe(true);
+      expect(getMessages("u1", fork!.id).map(message => message.content)).toEqual(["Reply"]);
+      backgroundWrite();
+      expect(writer.query("SELECT value FROM settings WHERE key = 'concurrent'").get()).toEqual({ value: "true" });
+      await Bun.sleep(0);
+    } finally {
+      hook.mockRestore();
+      writer.close();
+      closeDatabase();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects inaccessible chats and mismatched fork messages without rows or events", async () => {
+    seedChat("source", "c1", "Source", "{}", 100);
+    seedChat("other", "c1", "Other", "{}", 100);
+    seedMessage("reply", "source", "Reply", {}, { index: 0 });
+    seedMessage("other-reply", "other", "Other reply", {}, { index: 0 });
+    const events: EventMessage[] = [];
+    const unsubscribe = eventBus.on(EventType.CHAT_FORKED, (event) => events.push(event));
+
+    try {
+      expect(branchChat("u2", "source", "reply")).toBeNull();
+      expect(branchChat("u1", "source", "other-reply")).toBeNull();
+      expect(branchChat("u1", "missing", "reply")).toBeNull();
+      expect(branchChat("u1", "source", "missing")).toBeNull();
+      expect(getDb().inTransaction).toBe(false);
+      expect(getDb().query("SELECT COUNT(*) as count FROM chats").get()).toEqual({ count: 2 });
+      expect(getDb().query("SELECT COUNT(*) as count FROM messages").get()).toEqual({ count: 2 });
+      await Bun.sleep(0);
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("emits CHAT_CREATED after solo creation and group conversion", async () => {
     const events: EventMessage[] = [];
     const unsubscribe = eventBus.on(EventType.CHAT_CREATED, (event) => events.push(event));
@@ -381,6 +476,80 @@ describe("chat message search", () => {
 });
 
 describe("recent chats", () => {
+  test('later pages reuse summaries, and local writes and reset replace the model', () => {
+    seedChat('a', 'c1', 'A', '{}', 200);
+    seedChat('b', 'c2', 'B', '{}', 100);
+    listRecentChatsGrouped('u1', { limit: 1, offset: 0 });
+    const query = spyOn(getDb(), 'query');
+    try {
+      const next = listRecentChatsGrouped('u1', { limit: 1, offset: 1 });
+      expect(next.data[0]?.latest_chat_id).toBe('b');
+      expect(query.mock.calls.some(([sql]) => /FROM chats c/.test(sql))).toBe(false);
+    } finally { query.mockRestore(); }
+    getDb().run("UPDATE chats SET name = 'Changed', updated_at = 300 WHERE id = 'b'");
+    expect(listRecentChatsGrouped('u1', { limit: 1, offset: 0 }).data[0]?.latest_chat_name).toBe('Changed');
+    initChatsTestDb();
+    expect(listRecentChatsGrouped('u1', { limit: 1, offset: 0 }).total).toBe(0);
+  });
+
+  test('a second SQLite connection invalidates the warm summary and sorting caches', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'recent-summary-'));
+    const path = join(directory, 'test.sqlite');
+    let writer: Database | undefined;
+    try {
+      initChatsTestDb(path);
+      seedCharacter('c1', 'Before');
+      seedChat('external', 'c1', 'Before', '{}', 1);
+      expect(listRecentChatsGrouped('u1', { limit: 10, offset: 0 }).data[0]?.latest_chat_name).toBe('Before');
+      writer = new Database(path);
+      writer.run("UPDATE chats SET name = 'After worker write', metadata = ? WHERE id = 'external'", [JSON.stringify({ multiplayer: true })]);
+      const updated = listRecentChatsGrouped('u1', { limit: 10, offset: 0 });
+      expect(updated.data[0]?.latest_chat_name).toBe('After worker write');
+      expect(updated.data[0]?.multiplayer).toBe(true);
+    } finally { writer?.close(); closeDatabase(); rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["flat", listRecentChats],
+    ["grouped", listRecentChatsGrouped],
+  ] as const)("%s recent chats apply saved home visibility before totals and pagination", (_kind, list) => {
+    seedCharacter("c3", "Gamma");
+    seedChat("hidden-character", "c1", "Hidden", "{}", 400);
+    seedChat("hidden-chat", "c2", "Hidden chat", JSON.stringify({ hidden_from_recent: true }), 350);
+    seedChat("group", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 300);
+    seedChat("visible", "c2", "Visible", "{}", 200);
+    seedChat("older", "c3", "Older", "{}", 100);
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "landingHiddenCharacterIds", JSON.stringify(["c1"]));
+    // Another account's exclusions cannot affect this user's page.
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u2", "landingHiddenCharacterIds", JSON.stringify(["c2", "c3"]));
+
+    const first = list("u1", { limit: 1, offset: 0 });
+    expect(first.total).toBe(3);
+    expect(first.data[0]?.character_id).toBe("c1"); // Group remains visible.
+    const second = list("u1", { limit: 1, offset: 1 });
+    expect(second.total).toBe(3);
+    expect(second.data[0]?.character_id).toBe("c2");
+    expect(list("u1", { limit: 1, offset: 2 }).data[0]?.character_id).toBe("c3");
+  });
+
+  test("grouped client exclusions add to saved visibility and cannot unhide a saved character", () => {
+    seedCharacter("c3", "Gamma");
+    seedChat("hidden", "c1", "Hidden", "{}", 300);
+    seedChat("additional", "c2", "Additional", "{}", 200);
+    seedChat("visible", "c3", "Visible", "{}", 100);
+    getDb().query("INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)")
+      .run("u1", "landingHiddenCharacterIds", JSON.stringify(["c1"]));
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }, { hiddenCharacterIds: [] })
+      .data.map(row => row.character_id)).toEqual(["c2", "c3"]);
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }, { hiddenCharacterIds: ["c2"] })
+      .data.map(row => row.character_id)).toEqual(["c3"]);
+    getDb().query("UPDATE settings SET value = '[]' WHERE user_id = 'u1'").run();
+    expect(listRecentChatsGrouped("u1", { limit: 10, offset: 0 }).data.map(row => row.character_id))
+      .toEqual(["c1", "c2", "c3"]);
+  });
+
   test("loads recent chats with malformed metadata", () => {
     seedChat("bad", "c1", "Bad metadata", "not json", 200);
     seedChat("good", "c2", "Good metadata", "{}", 100);
@@ -594,6 +763,27 @@ describe("recent chats", () => {
     expect(messages[0].extra.promptActivation).toBeUndefined();
   });
 
+  test("background swipe staging and completion preserve the selected content and metadata", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "still reading", { reasoning: "original reasoning", tokenCount: 12 });
+    const staged = addSwipe("u1", "msg-1", "", { select: false })!;
+    expect(staged).toMatchObject({ swipe_id: 0, content: "still reading", swipes: ["still reading", ""], extra: { reasoning: "original reasoning", tokenCount: 12 } });
+    const completed = updateSwipe("u1", "msg-1", 1, "new response")!;
+    expect(completed).toMatchObject({ swipe_id: 0, content: "still reading", swipes: ["still reading", "new response"] });
+    setSwipeScopedExtra("u1", "msg-1", 1, { reasoning: "new reasoning", tokenCount: 24 });
+    expect(getMessage("u1", "msg-1")!.extra.reasoning).toBe("original reasoning");
+    expect(cycleSwipe("u1", "msg-1", "right")).toMatchObject({ swipe_id: 1, content: "new response", extra: { reasoning: "new reasoning", tokenCount: 24 } });
+  });
+
+  test("cancelling an unselected blank swipe keeps the reader's selection", () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "original", {});
+    addSwipe("u1", "msg-1", "second", { select: false });
+    addSwipe("u1", "msg-1", "", { select: false });
+    cycleSwipe("u1", "msg-1", "right");
+    expect(deleteSwipe("u1", "msg-1", 2, { restoreSwipeId: 0 })).toMatchObject({ swipe_id: 1, content: "second" });
+  });
+
   test("keeps reasoning scoped to the swipe it belongs to", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {
@@ -626,6 +816,121 @@ describe("recent chats", () => {
     expect(restoredSecondSwipe.swipe_id).toBe(1);
     expect(restoredSecondSwipe.extra.reasoning).toBe("second swipe reasoning");
     expect(restoredSecondSwipe.extra.reasoningDuration).toBe(456);
+  });
+
+  test("Spindle reasoning snapshots survive storage, navigation, and forks without changing generation metadata", async () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoning: "old first reasoning", reasoningDuration: 10, tokenCount: 11,
+      usage: { total_tokens: 11 }, generationMetrics: { model: "first" },
+      generationOutcome: { status: "completed" }, reasoningCarrier: { type: "reasoning_content", content: "native" },
+      spindle_metadata: { custom: "retained" },
+    });
+    addSwipe("u1", "msg-1", "second swipe");
+    setSwipeScopedExtra("u1", "msg-1", 1, {
+      reasoning: "old second reasoning", reasoningDuration: 20, tokenCount: 22,
+      usage: { total_tokens: 22 }, generationMetrics: { model: "second" },
+    });
+    const before = getMessage("u1", "msg-1")!;
+    const host = new WorkerHost("reasoning-test", {
+      identifier: "reasoning-test", name: "Reasoning test",
+    } as SpindleManifest, {
+      id: "reasoning-test", identifier: "reasoning-test", name: "Reasoning test", version: "0.0.0", author: "",
+      description: "", github: "", homepage: "", permissions: [], granted_permissions: [], enabled: true,
+      installed_at: 0, updated_at: 0, has_frontend: false, has_backend: false, status: "stopped",
+      metadata: { install_scope: "user", installed_by_user_id: "u1" },
+    } satisfies ExtensionInfo);
+    const internal = host as any;
+    internal.hasPermission = (permission: string) => permission === "chat_mutation";
+    const send = (patch: unknown) => new Promise<Extract<HostToWorker, { type: "response" }>>(resolve => {
+      internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
+      internal.handleMessage({ type: "chat_update_message", requestId: "request", chatId: "chat-1", messageId: "msg-1", patch });
+    });
+
+    expect(await send({ swipe_reasoning: [{ text: "first reasoning", duration: 0 }, { text: "second reasoning", duration: 25 }] }))
+      .toEqual({ type: "response", requestId: "request", result: true });
+    const saved = getMessage("u1", "msg-1")!;
+    expect(saved).toMatchObject({ swipe_id: 1, content: "second swipe", extra: {
+      reasoning: "second reasoning", reasoningDuration: 25,
+      reasoningBySwipe: ["first reasoning", "second reasoning"], reasoningDurationBySwipe: [0, 25],
+    } });
+    for (const key of ["tokenCountBySwipe", "usageBySwipe", "generationMetricsBySwipe", "generationOutcomeBySwipe", "reasoningCarrierBySwipe", "spindle_metadata"]) {
+      expect(saved.extra[key]).toEqual(before.extra[key]);
+    }
+    const fork = branchChat("u1", "chat-1", "msg-1")!;
+    const forkedMessage = getMessages("u1", fork.id)[0]!;
+    expect(cycleSwipe("u1", forkedMessage.id, "left")!.extra).toMatchObject({ reasoning: "first reasoning", reasoningDuration: 0, tokenCount: 11 });
+    expect(cycleSwipe("u1", "msg-1", "left")!.extra).toMatchObject({ reasoning: "first reasoning", reasoningDuration: 0, tokenCount: 11 });
+
+    expect((await send({ swipe_reasoning: [null, { text: "replacement" }] })).result).toBe(true);
+    const cleared = getMessage("u1", "msg-1")!;
+    expect(cleared.extra.reasoning).toBeUndefined();
+    expect(cleared.extra.reasoningDuration).toBeUndefined();
+    expect(cycleSwipe("u1", "msg-1", "right")!.extra).toMatchObject({ reasoning: "replacement", tokenCount: 22 });
+    expect(getMessage("u1", "msg-1")!.extra.reasoningDuration).toBeUndefined();
+    expect((await send({ reasoning: { duration: 0 } })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra.reasoningDuration).toBe(0);
+    expect((await send({ swipe_reasoning: [null], content: "must not save" })).error).toContain("swipe_reasoning");
+    expect(getMessage("u1", "msg-1")!.content).toBe("second swipe");
+    expect(cycleSwipe("u1", forkedMessage.id, "right")!.extra).toMatchObject({ reasoning: "second reasoning", reasoningDuration: 25 });
+  });
+
+  test("Spindle metadata patches preserve stored fields and per-swipe data when navigating", async () => {
+    seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
+    seedMessage("msg-1", "chat-1", "first swipe", {
+      reasoning: "first reasoning", reasoningDuration: 10, tokenCount: 11,
+      usage: { total_tokens: 11 }, generationMetrics: { model: "first" },
+      generationOutcome: { status: "completed" },
+      reasoningCarrier: { type: "reasoning_content", content: "first native" },
+      promptActivation: makePromptActivationSource("first swipe", "preset", true, "first activation"),
+      spindle_metadata: { custom: "retained", nested: { old: true } },
+      attachments: [{ id: "attachment" }],
+    });
+    addSwipe("u1", "msg-1", "second swipe");
+    setSwipeScopedExtra("u1", "msg-1", 1, {
+      reasoning: "second reasoning", reasoningDuration: 20, tokenCount: 22,
+      usage: { total_tokens: 22 }, generationMetrics: { model: "second" },
+      generationOutcome: { status: "stopped" },
+      reasoningCarrier: { type: "reasoning_content", content: "second native" },
+      promptActivation: makePromptActivationSource("second swipe", "preset", true, "second activation"),
+    });
+    const before = getMessage("u1", "msg-1")!;
+    const host = new WorkerHost("metadata-test", {
+      identifier: "metadata-test", name: "Metadata test",
+    } as SpindleManifest, {
+      id: "metadata-test", identifier: "metadata-test", name: "Metadata test", version: "0.0.0", author: "",
+      description: "", github: "", homepage: "", permissions: [], granted_permissions: [], enabled: true,
+      installed_at: 0, updated_at: 0, has_frontend: false, has_backend: false, status: "stopped",
+      metadata: { install_scope: "user", installed_by_user_id: "u1" },
+    } satisfies ExtensionInfo);
+    const internal = host as any;
+    internal.hasPermission = (permission: string) => permission === "chat_mutation";
+    const send = (patch: unknown) => new Promise<Extract<HostToWorker, { type: "response" }>>(resolve => {
+      internal.runtime = { mode: "worker", pid: null, postMessage: resolve, terminate() {} };
+      internal.handleMessage({ type: "chat_update_message", requestId: "request", chatId: "chat-1", messageId: "msg-1", patch });
+    });
+
+    expect((await send({ metadata_patch: { other: "latest" } })).result).toBe(true);
+    expect((await send({ metadata_patch: { run: null, nested: { replacement: true } }, swipe_id: 0, skipChunkRebuild: true })).result).toBe(true);
+    const saved = getMessage("u1", "msg-1")!;
+    expect(saved).toMatchObject({ swipe_id: 0, content: "first swipe", extra: {
+      spindle_metadata: { custom: "retained", other: "latest", run: null, nested: { replacement: true } },
+      reasoning: "first reasoning", reasoningDuration: 10, tokenCount: 11,
+      attachments: [{ id: "attachment" }],
+    } });
+    expect(saved.extra.spindle_metadata).toEqual({ custom: "retained", other: "latest", run: null, nested: { replacement: true } });
+    for (const key of ["reasoningBySwipe", "reasoningDurationBySwipe", "tokenCountBySwipe", "usageBySwipe",
+      "generationMetricsBySwipe", "generationOutcomeBySwipe", "reasoningCarrierBySwipe", "promptActivationBySwipe"]) {
+      expect(saved.extra[key]).toEqual(before.extra[key]);
+    }
+    const fork = branchChat("u1", "chat-1", "msg-1")!;
+    expect(getMessages("u1", fork.id)[0]!.extra.spindle_metadata).toEqual(saved.extra.spindle_metadata);
+    expect(cycleSwipe("u1", "msg-1", "right")!.extra).toMatchObject({ reasoning: "second reasoning", tokenCount: 22 });
+
+    expect((await send({ metadata_patch: { progress: 1 }, swipe_id: 0, reasoning: { text: "explicit", duration: 0 }, skipChunkRebuild: true })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra).toMatchObject({ reasoning: "explicit", reasoningDuration: 0, tokenCount: 11 });
+    expect((await send({ metadata: { replacement: true } })).result).toBe(true);
+    expect(getMessage("u1", "msg-1")!.extra.spindle_metadata).toEqual({ replacement: true });
   });
 
   test("clears active swipe reasoning with explicit null without clearing other swipes", () => {

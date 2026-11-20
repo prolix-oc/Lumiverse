@@ -1,0 +1,102 @@
+.bar {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  width: max-content;
+  max-width: calc(100% - 20px);
+  padding: 3px 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  border: 1px solid var(--lumiverse-border-hover);
+  border-radius: 999px;
+  background: var(--lumiverse-bg-elevated);
+  box-shadow: 0 4px 12px var(--lumiverse-fill-heavy);
+}
+
+:global([data-glass]) .bar {
+  background: color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%);
+  border-color: var(--lcs-glass-border);
+  backdrop-filter: blur(var(--lcs-glass-blur)) var(--lcs-liquid-filter, );
+}
+
+.bar::-webkit-scrollbar {
+  display: none;
+}
+
+.button {
+  /* Preserve rendered tap sizes when the entire UI is zoomed down. Font
+     scaling can grow controls independently without shrinking their icons. */
+  --format-target: 32px;
+  --format-size: max(var(--format-target), calc(var(--format-target) / var(--lumiverse-ui-scale, 1)), 2em);
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  min-width: var(--format-size);
+  min-height: var(--format-size);
+  padding: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-family: inherit;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bold {
+  font-weight: 800;
+}
+
+.italic,
+.quotes,
+.singleQuotes {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+}
+
+.underline {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.parentheses {
+  min-width: calc(2 * var(--format-size) + 2px);
+  padding: 0;
+}
+
+.parentheses > span {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  width: 100%;
+}
+
+@media (hover: hover) {
+  .button:hover {
+    background: var(--lumiverse-fill);
+    color: var(--lumiverse-text);
+  }
+}
+
+.button:active {
+  background: var(--lumiverse-primary-020);
+  color: var(--lumiverse-text);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
+}
+
+@media (any-pointer: coarse) {
+  .button {
+    --format-target: 44px;
+  }
+}

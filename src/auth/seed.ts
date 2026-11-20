@@ -71,8 +71,8 @@ function seedOwnerDirectly(db: ReturnType<typeof getDb>, username: string, passw
     );
 
     db.run(
-      `INSERT INTO "account" (id, accountId, providerId, issuer, userId, password, createdAt, updatedAt)
-       VALUES (?, ?, 'credential', 'local:credential', ?, ?, ?, ?)`,
+      `INSERT INTO "account" (id, accountId, providerId, userId, password, createdAt, updatedAt)
+       VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
       [accountId, userId, userId, passwordHash, now, now]
     );
   })();

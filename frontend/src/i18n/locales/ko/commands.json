@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "응답 다시 생성",
-      "description": "마지막 AI 응답을 삭제하고 새로 생성합니다"
+      "description": "마지막 AI 응답의 새 스와이프를 생성합니다"
     },
     "action-continue": {
       "label": "이어서 생성",
       "description": "AI가 마지막 응답을 이어서 생성하도록 요청합니다"
+    },
+    "action-stop-generation": {
+      "label": "생성 중지",
+      "description": "이 채팅에서 생성 중인 응답을 중지합니다"
+    },
+    "action-swipe-left": {
+      "label": "이전 스와이프",
+      "description": "마지막 AI 응답의 이전 스와이프를 표시합니다"
+    },
+    "action-swipe-right": {
+      "label": "다음 스와이프",
+      "description": "마지막 AI 응답의 다음 스와이프를 표시하거나, 마지막 스와이프 뒤에서는 새로 생성합니다"
     },
     "action-new-chat": {
       "label": "새 채팅",

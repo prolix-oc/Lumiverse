@@ -8,11 +8,23 @@
   "items": {
     "action-regenerate": {
       "label": "重新生成回覆",
-      "description": "刪除上一條 AI 回覆並生成新的"
+      "description": "為上一條 AI 回覆生成新的變體"
     },
     "action-continue": {
       "label": "繼續生成",
       "description": "讓 AI 繼續上一條回覆"
+    },
+    "action-stop-generation": {
+      "label": "停止生成",
+      "description": "停止此聊天中正在生成的回覆"
+    },
+    "action-swipe-left": {
+      "label": "上一個變體",
+      "description": "顯示上一條 AI 回覆的上一個變體"
+    },
+    "action-swipe-right": {
+      "label": "下一個變體",
+      "description": "顯示上一條 AI 回覆的下一個變體，在最後一個變體之後則生成新的變體"
     },
     "action-new-chat": {
       "label": "新聊天",

@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
 import { embeddingCache, computeCacheKey } from "./embedding-cache";
+import * as vectorStores from "./vector-store";
+import type { VectorStore } from "./vector-store/types";
+import { stubVectorStore } from "./test-fixtures/vector-store";
 import {
   EMBEDDING_ERROR_CODES,
   EMBEDDING_SETTINGS_KEY,
@@ -11,11 +15,14 @@ import {
   embedInBatches,
   embedQuery,
   embedTexts,
+  embedTextsWithConnection,
   embeddingProfileSecretKey,
   getEmbeddingConfig,
   isUsableProfileId,
   previewEmbeddingModels,
   selectFallbackChain,
+  testEmbeddingConfig,
+  testEmbeddingConnection,
   updateEmbeddingConfig,
 } from "./embeddings.service";
 
@@ -28,6 +35,10 @@ const UNKNOWN_ID = "44444444-4444-4444-8444-444444444444";
 const settings = new Map<string, unknown>();
 const secrets = new Map<string, string>();
 const spies: Array<{ mockRestore(): void }> = [];
+const deleteVectors = mock<VectorStore["deleteByFilter"]>(async () => {});
+const baselineSql = await Bun.file(new URL("../db/baseline.sql", import.meta.url)).text();
+let secretReadSpy: ReturnType<typeof spyOn<typeof secretsSvc, "getSecret">>;
+let secretStatusSpy: ReturnType<typeof spyOn<typeof secretsSvc, "getSecretForStatus">>;
 
 function sk(userId: string, key: string): string {
   return `${userId}::${key}`;
@@ -84,10 +95,15 @@ function enabledProfiles(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  closeDatabase();
+  initDatabase(":memory:");
+  getDb().run(baselineSql);
   settings.clear();
   secrets.clear();
   embeddingCache.clear();
+  deleteVectors.mockClear();
   spies.push(
+    spyOn(vectorStores, "getActiveVectorStore").mockResolvedValue(stubVectorStore({ deleteByFilter: deleteVectors })),
     spyOn(settingsSvc, "getSetting").mockImplementation((userId: string, key: string) => {
       const value = settings.get(sk(userId, key));
       return value === undefined ? null : { key, value, updated_at: 0 };
@@ -96,10 +112,10 @@ beforeEach(() => {
       settings.set(sk(userId, key), value);
       return { key, value, updated_at: 0 };
     }),
-    spyOn(secretsSvc, "getSecret").mockImplementation(async (userId: string, key: string) => {
+    secretReadSpy = spyOn(secretsSvc, "getSecret").mockImplementation(async (userId: string, key: string) => {
       return secrets.get(sk(userId, key)) ?? null;
     }),
-    spyOn(secretsSvc, "getSecretForStatus").mockImplementation(async (userId: string, key: string) => {
+    secretStatusSpy = spyOn(secretsSvc, "getSecretForStatus").mockImplementation(async (userId: string, key: string) => {
       return secrets.get(sk(userId, key)) ?? null;
     }),
     spyOn(settingsSvc, "getSettingAsync").mockImplementation(async (...args) => settingsSvc.getSetting(...args)),
@@ -116,9 +132,127 @@ beforeEach(() => {
 afterEach(() => {
   while (spies.length > 0) spies.pop()?.mockRestore();
   embeddingCache.clear();
+  closeDatabase();
 });
 
 describe("embedding connection profiles", () => {
+  function configureNim(model: string): void {
+    putCfg(enabledProfiles({
+      provider: "nvidia-nim",
+      model,
+      send_dimensions: true,
+      connectionProfiles: [{
+        id: PRIMARY_ID,
+        provider: "nvidia-nim",
+        model,
+        api_url: "https://integrate.api.nvidia.com/v1/embeddings",
+        dimensions: 2,
+        enabled: true,
+      }],
+      fallbackProfileIds: [],
+    }));
+    secrets.set(sk(USER, embeddingProfileSecretKey(PRIMARY_ID)), "nim-key");
+  }
+
+  test.each([
+    "nvidia/nemotron-3-embed-1b",
+    "nvidia/nemotron-3.5-embed-1b",
+    "nvidia/llama-nemotron-embed-1b-v2",
+    "nvidia/llama-nemotron-embed-vl-1b-v2",
+    "private-retriever",
+  ])("NIM connection tests send passage input_type for %s", async (model) => {
+    configureNim(model);
+    const bodies: Array<Record<string, unknown>> = [];
+    spies.push(spyOn(globalThis, "fetch").mockImplementation(asFetchStub(async (input, init) => {
+      expect(String(input)).toBe("https://integrate.api.nvidia.com/v1/embeddings");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer nim-key");
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      // Match the hosted NIM error instead of letting a missing input_type
+      // succeed against a permissive OpenAI-compatible mock.
+      if (!body.input_type) {
+        return Response.json({ error: { message: "'input_type' parameter is required for asymmetric models" } }, { status: 400 });
+      }
+      return Response.json(openaiBody());
+    })));
+
+    expect(await testEmbeddingConnection(USER, PRIMARY_ID, "hello")).toEqual({ dimension: 2, provider: "nvidia-nim" });
+    expect((await testEmbeddingConfig(USER, "hello")).dimension).toBe(2);
+    expect(bodies).toEqual(Array.from({ length: 2 }, () => ({
+      model,
+      input: ["hello"],
+      input_type: "passage",
+      encoding_format: "float",
+    })));
+  });
+
+  test("NIM indexing and retrieval preserve passage/query roles through caches and connection-scoped embedding", async () => {
+    configureNim("nvidia/nemotron-3.5-embed-1b");
+    const inputTypes: string[] = [];
+    spies.push(spyOn(globalThis, "fetch").mockImplementation(asFetchStub(async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      inputTypes.push(body.input_type);
+      expect(body.dimensions).toBe(2);
+      return Response.json({ data: body.input.map(() => ({
+        embedding: body.input_type === "query" ? [0.75, 0.25] : [0.25, 0.75],
+      })) });
+    })));
+
+    const persisted: number[][] = [];
+    await embedInBatches(USER, ["shared text", "other text"], 2, (text) => text,
+      async (_items, _texts, vectors) => { persisted.push(...vectors); },
+      (_items, err) => { throw err; });
+    expect(persisted).toEqual([[0.25, 0.75], [0.25, 0.75]]);
+    expect(await embedQuery(USER, "shared text")).toEqual([0.75, 0.25]);
+    expect(await embedQuery(USER, "shared text")).toEqual([0.75, 0.25]);
+    expect(await cachedEmbedTexts(USER, ["shared text"])).toEqual([[0.25, 0.75]]);
+    expect((await embedTextsWithConnection(USER, ["shared text"])).embeddings).toEqual([[0.25, 0.75]]);
+    expect((await embedTextsWithConnection(USER, ["shared text"], { inputType: "query" })).embeddings).toEqual([[0.75, 0.25]]);
+    expect(inputTypes).toEqual(["passage", "query", "passage", "query"]);
+  });
+
+  test("batch embeddings recover from disk while preserving connection-scoped caches", async () => {
+    initDatabase(":memory:");
+    try {
+      configureNim("nvidia/nemotron-3.5-embed-1b");
+      const requests: string[][] = [];
+      spies.push(spyOn(globalThis, "fetch").mockImplementation(asFetchStub(async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requests.push(body.input);
+        return Response.json({ data: body.input.map((text: string) => ({ embedding: [text.length, 0.5] })) });
+      })));
+
+      expect(await cachedEmbedTexts(USER, ["alpha", "beta"])).toEqual([[5, 0.5], [4, 0.5]]);
+      embeddingCache.clearMemory();
+      expect(await cachedEmbedTexts(USER, ["beta", "gamma"])).toEqual([[4, 0.5], [5, 0.5]]);
+      expect((await embedTextsWithConnection(USER, ["alpha", "beta"])).embeddings).toEqual([[5, 0.5], [4, 0.5]]);
+      embeddingCache.clearMemory();
+      expect((await embedTextsWithConnection(USER, ["beta", "gamma"])).embeddings).toEqual([[4, 0.5], [5, 0.5]]);
+      expect(requests).toEqual([["alpha", "beta"], ["gamma"], ["alpha", "beta"], ["gamma"]]);
+    } finally {
+      embeddingCache.clear();
+      closeDatabase();
+    }
+  });
+
+  test("OpenAI-compatible connections do not receive NIM input_type based on the model name", async () => {
+    putCfg(enabledProfiles({
+      connectionProfiles: [{ ...enabledProfiles().connectionProfiles[0], model: "nvidia/nemotron-3.5-embed-1b" }],
+      fallbackProfileIds: [],
+    }));
+    secrets.set(sk(USER, embeddingProfileSecretKey(PRIMARY_ID)), "test-key");
+    const bodies: Array<Record<string, unknown>> = [];
+    spies.push(spyOn(globalThis, "fetch").mockImplementation(asFetchStub(async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json(openaiBody());
+    })));
+
+    await embedTexts(USER, ["hello"]);
+    await embedTexts(USER, ["hello"], { inputType: "query" });
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) expect(body).not.toHaveProperty("input_type");
+  });
+
   for (const status of [429, 503, 413]) {
     test(`query embedding fails once on HTTP ${status} without shortening and resending`, async () => {
       putCfg(enabledProfiles({ fallbackProfileIds: [] }));
@@ -215,6 +349,10 @@ describe("embedding connection profiles", () => {
     expect(secrets.get(sk(USER, embeddingProfileSecretKey(PRIMARY_ID)))).toBe("bananabread-user-key");
     expect(requestUrl).toBe("http://localhost:8008/v1/embeddings");
     expect(authorization).toBe("Bearer bananabread-user-key");
+    expect(deleteVectors.mock.calls).toEqual([
+      ["embeddings", { op: "eq", field: "user_id", value: USER }],
+      ["embeddings_world_books", { op: "eq", field: "user_id", value: USER }],
+    ]);
   });
 
   test("copies a selected OpenAI-compatible LLM connection key into its dedicated embedding profile", async () => {
@@ -601,13 +739,11 @@ describe("embedding connection profiles", () => {
 
     const secretReads: string[] = [];
     const statusReads: string[] = [];
-    spies[2]?.mockRestore();
-    spies[3]?.mockRestore();
-    spies[2] = spyOn(secretsSvc, "getSecret").mockImplementation(async (userId: string, key: string) => {
+    secretReadSpy.mockImplementation(async (userId: string, key: string) => {
       secretReads.push(key);
       return secrets.get(sk(userId, key)) ?? null;
     });
-    spies[3] = spyOn(secretsSvc, "getSecretForStatus").mockImplementation(async (userId: string, key: string) => {
+    secretStatusSpy.mockImplementation(async (userId: string, key: string) => {
       statusReads.push(key);
       return secrets.get(sk(userId, key)) ?? null;
     });

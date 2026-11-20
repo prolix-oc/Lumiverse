@@ -1,4 +1,5 @@
 import type { LlmProvider } from "../provider";
+import { omitDisabledPenalties } from "../generation-parameters";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import {
@@ -440,6 +441,7 @@ export class AnthropicProvider implements LlmProvider {
                                 (u.cache_creation_input_tokens || 0);
           } else if (data.type === "content_block_start") {
             if (data.content_block?.type === "tool_use") {
+              request.onResponseActivity?.();
               pendingToolCalls.push({
                 id: data.content_block.id,
                 name: data.content_block.name,
@@ -500,6 +502,7 @@ export class AnthropicProvider implements LlmProvider {
               data.delta?.type === "input_json_delta" &&
               currentToolIdx >= 0
             ) {
+              request.onResponseActivity?.();
               pendingToolCalls[currentToolIdx].inputJson +=
                 data.delta.partial_json;
             }
@@ -849,7 +852,7 @@ export class AnthropicProvider implements LlmProvider {
   ]);
 
   protected buildBody(request: GenerationRequest, stream: boolean): any {
-    const params = request.parameters || {};
+    const params = omitDisabledPenalties(request.parameters);
     const omitSampling = this.omitsSamplingParams(request.model);
     const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{

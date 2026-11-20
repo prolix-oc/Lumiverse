@@ -59,6 +59,8 @@ export const MARKER_NAMES: Record<string, string> = {
   persona_description: 'User Persona',
   scenario: 'Scenario',
   dialogue_examples: 'Example Messages',
+  system_prompt: 'Character System Prompt',
+  post_history_instructions: 'Character Post-History Instructions',
   main_prompt: 'Main Prompt',
   enhance_definitions: 'Enhance Definitions',
   jailbreak: 'Post-History Instructions',
@@ -75,6 +77,8 @@ export const STRUCTURAL_MARKERS = new Set([
   'persona_description',
   'scenario',
   'dialogue_examples',
+  'system_prompt',
+  'post_history_instructions',
 ])
 
 export const CONTENT_BEARING_MARKERS = new Set([
@@ -247,7 +251,7 @@ export const PROMPT_TEMPLATES: PromptTemplateItem[] = [
   { name: 'Chat Memories', content: '{{memories}}', role: 'system', description: 'Retrieved memory chunks with header' },
   { name: 'Chat Memories (Raw)', content: '{{memoriesRaw}}', role: 'system', description: 'Memory chunks without header wrapper' },
   { section: 'Memory Cortex' },
-  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with facts and relationships' },
+  { name: 'Entity Snapshots', content: '{{entities}}', role: 'system', description: 'Active entities with descriptions and facts' },
   { name: 'Relationships', content: '{{relationships}}', role: 'system', description: 'Active relationship edges between entities' },
   { name: 'Story Arc', content: '{{arc}}', role: 'system', description: 'Current narrative arc summary' },
   { name: 'Top Salience Memory', content: '{{memorySalience}}', role: 'system', description: 'Highest-importance memory from retrieval' },
@@ -274,6 +278,8 @@ export const ADDABLE_MARKERS: AddableMarkerItem[] = [
   'persona_description',
   'scenario',
   'dialogue_examples',
+  'system_prompt',
+  'post_history_instructions',
   { section: 'Prompts' },
   'main_prompt',
   'enhance_definitions',

@@ -119,13 +119,13 @@ let hookSurface: HookSurface
 let activeModel: string | null = null
 const mountedRoots = new Set<Root>()
 
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/globals */
 function HookHarness({ options }: { options: HookOptions }) {
   activeModel = useActiveTokenizerModel()
   hookSurface = useTokenCounts(options) as HookSurface
   return null
 }
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/globals */
 
 async function flush(): Promise<void> {
   await Promise.resolve()

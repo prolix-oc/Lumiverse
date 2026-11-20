@@ -13,6 +13,8 @@ export function isLargeUploadBodyLimitExemptPath(path: string, method?: string):
   return (
     (normalizedMethod === "POST" && path === "/api/v1/presets") ||
     (normalizedMethod === "PUT" && PRESET_UPDATE_PATH_RE.test(path)) ||
+    // OAuth + active capture lease + broker limits bound these base64 uploads.
+    (normalizedMethod === "POST" && /^\/api\/desktop\/v1\/capture\/devices\/[^/]+\/responses$/.test(path)) ||
     path.startsWith("/api/v1/migrate/") ||
     path === "/api/v1/characters/import-bulk" ||
     path === "/api/v1/characters/import" ||

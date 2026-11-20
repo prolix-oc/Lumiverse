@@ -1,7 +1,7 @@
 import { collectRequestCredentials, redactRequestValue } from "./redact-request";
 import { finalizeProviderResponse } from "../llm/finalize-response";
 
-export function redactResponseBody(body: string, credentials: readonly string[]): {
+export function redactResponseBody(body: string, credentials: readonly string[], sanitize: (value: unknown) => unknown = (value) => value): {
   text: string; format: "json" | "text"; redacted: boolean; terminal: boolean; failed: boolean; partial?: boolean;
 } {
   const failed = (data: any): boolean => !!data && typeof data === "object"
@@ -10,7 +10,7 @@ export function redactResponseBody(body: string, credentials: readonly string[])
   let parsed = false;
   try { json = JSON.parse(body); parsed = true; } catch { /* SSE or plain text. */ }
   if (parsed) {
-    const safe = redactRequestValue(json, credentials);
+    const safe = redactRequestValue(sanitize(json), credentials);
     return { text: JSON.stringify(safe, null, 2), format: "json", redacted: JSON.stringify(safe) !== JSON.stringify(json), terminal: true, failed: failed(json) };
   }
   if (/^data:/m.test(body)) {
@@ -34,13 +34,13 @@ export function redactResponseBody(body: string, credentials: readonly string[])
     const final = finalizeProviderResponse(values);
     // Collect secrets from all events, including discarded metadata, then
     // redact the assembled body to catch credentials split across deltas.
-    const safe = redactRequestValue(final.body, collectRequestCredentials(values, credentials));
+    const safe = redactRequestValue(sanitize(final.body), collectRequestCredentials(values, credentials));
     return {
       text: JSON.stringify(safe, null, 2), format: "json", redacted: JSON.stringify(safe) !== JSON.stringify(final.body),
       terminal: final.terminal, failed: final.failed, partial: !final.terminal,
     };
   }
   if (/^\s*[\[{]/.test(body)) throw new Error("Incomplete response JSON");
-  const text = redactRequestValue(body, credentials) as string;
+  const text = redactRequestValue(sanitize(body), credentials) as string;
   return { text, format: "text", redacted: text !== body, terminal: false, failed: false };
 }

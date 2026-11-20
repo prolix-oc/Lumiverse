@@ -54,7 +54,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'World-book entries could not be loaded.'
 }
 
-function WorldBookEntryTableSurface({
+export function WorldBookEntryTableSurface({
   props,
   context,
 }: {
@@ -116,7 +116,7 @@ function WorldBookEntryTableSurface({
   )
 }
 
-function WorldBookEntryEditorSurface({ props }: { props: Record<string, unknown> }): ReactElement {
+export function WorldBookEntryEditorSurface({ props }: { props: Record<string, unknown> }): ReactElement {
   const bookId = stringProp(props, 'bookId')
   const entryId = stringProp(props, 'entryId')
   const density = props.density === 'compact' ? 'compact' : 'default'
@@ -222,9 +222,12 @@ function WorldBookEntryEditorSurface({ props }: { props: Record<string, unknown>
   )
 }
 
-registerHostSurfaceRenderer('world_book_entry_table', (props, context) => (
-  <WorldBookEntryTableSurface props={props} context={context} />
-))
-registerHostSurfaceRenderer('world_book_entry_editor', props => (
-  <WorldBookEntryEditorSurface props={props} />
-))
+const unregisterRenderers = [
+  registerHostSurfaceRenderer('world_book_entry_table', (props, context) => (
+    <WorldBookEntryTableSurface props={props} context={context} />
+  )),
+  registerHostSurfaceRenderer('world_book_entry_editor', props => (
+    <WorldBookEntryEditorSurface props={props} />
+  )),
+]
+if (import.meta.hot) import.meta.hot.dispose(() => unregisterRenderers.forEach(unregister => unregister()))

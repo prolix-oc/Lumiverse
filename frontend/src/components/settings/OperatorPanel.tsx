@@ -223,6 +223,7 @@ interface VectorStoreDraft {
   milvusTransport: 'grpc' | 'http'
   milvusConnectTimeoutMs: number
   milvusRequestTimeoutMs: number
+  milvusFlushPolicy: 'per_write' | 'manual'
   milvusHybridCandidateMultiplier: number
   milvusHybridCandidateCap: number
 }
@@ -240,6 +241,7 @@ function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorSt
     milvusTransport: config?.milvus?.transport ?? 'grpc',
     milvusConnectTimeoutMs: config?.milvus?.connectTimeoutMs ?? 5000,
     milvusRequestTimeoutMs: config?.milvus?.requestTimeoutMs ?? 60000,
+    milvusFlushPolicy: config?.milvus?.flushPolicy ?? 'per_write',
     milvusHybridCandidateMultiplier: config?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER,
     milvusHybridCandidateCap: config?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP,
   }
@@ -271,6 +273,7 @@ function vectorDraftToPayload(
       transport: draft.milvusTransport,
       connectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(draft.milvusConnectTimeoutMs))),
       requestTimeoutMs: Math.max(0, Math.min(300000, Math.round(draft.milvusRequestTimeoutMs))),
+      flushPolicy: draft.milvusFlushPolicy,
     }
     payload.milvusHybridSearch = {
       candidateMultiplier: Math.max(1, Math.min(10, Math.round(draft.milvusHybridCandidateMultiplier))),
@@ -541,8 +544,12 @@ export default function OperatorPanel() {
   const vectorConfigManagedByEnv = vectorConfig?.managedByEnv === true
   const vectorMilvusCandidateMultiplier = vectorConfig?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER
   const vectorMilvusCandidateCap = vectorConfig?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP
+  const vectorMilvusFlushPolicyChanged = vectorConfig?.provider === 'milvus'
+    && vectorDraft.provider === 'milvus'
+    && vectorDraft.milvusFlushPolicy !== (vectorConfig.milvus?.flushPolicy ?? 'per_write')
   const vectorRuntimeTuningChanged = !!vectorConfig && (
     vectorDraft.tuningProfile !== (vectorConfig.tuningProfile ?? 'balanced')
+    || vectorMilvusFlushPolicyChanged
     || (
       vectorDraft.provider === 'milvus'
       && (
@@ -855,6 +862,7 @@ export default function OperatorPanel() {
     try {
       const result = await embeddingsApi.updateVectorStoreConfig({
         tuningProfile: vectorDraft.tuningProfile,
+        ...(vectorMilvusFlushPolicyChanged ? { milvusFlushPolicy: vectorDraft.milvusFlushPolicy } : {}),
         ...(vectorDraft.provider === 'milvus'
           ? {
               milvusHybridSearch: {
@@ -865,8 +873,19 @@ export default function OperatorPanel() {
           : {}),
       })
       setVectorConfig(result)
-      vectorDraftDirty.current = false
-      setVectorDraft(vectorDraftFromConfig(result))
+      const savedDraft = vectorDraftFromConfig(result)
+      const nextDraft = {
+        ...vectorDraft,
+        tuningProfile: savedDraft.tuningProfile,
+        milvusHybridCandidateMultiplier: savedDraft.milvusHybridCandidateMultiplier,
+        milvusHybridCandidateCap: savedDraft.milvusHybridCandidateCap,
+        ...(result.provider === 'milvus' && vectorDraft.provider === 'milvus'
+          ? { milvusFlushPolicy: savedDraft.milvusFlushPolicy }
+          : {}),
+      }
+      vectorDraftDirty.current = JSON.stringify(nextDraft) !== JSON.stringify(savedDraft)
+        || !!qdrantApiKeyDraft || !!milvusPasswordDraft
+      setVectorDraft(nextDraft)
       await refreshVectorHealth()
       addToast({ type: 'success', message: 'Vector store runtime tuning saved.' })
     } catch (err) {
@@ -877,11 +896,11 @@ export default function OperatorPanel() {
     }
   }, [
     addToast,
+    milvusPasswordDraft,
+    qdrantApiKeyDraft,
     refreshVectorHealth,
-    vectorDraft.milvusHybridCandidateCap,
-    vectorDraft.milvusHybridCandidateMultiplier,
-    vectorDraft.provider,
-    vectorDraft.tuningProfile,
+    vectorDraft,
+    vectorMilvusFlushPolicyChanged,
   ])
 
   const handleVectorOptimize = useCallback(async () => {
@@ -3145,6 +3164,19 @@ export default function OperatorPanel() {
                         }))}
                       />
                       <span className={styles.fieldHint}>Applied to Milvus gRPC requests, including Memory Cortex searches. Use 0 to disable the SDK deadline.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Flush Policy</span>
+                      <select
+                        className={styles.fieldInput}
+                        value={vectorDraft.milvusFlushPolicy}
+                        disabled={!!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusFlushPolicy: e.target.value as 'per_write' | 'manual' }))}
+                      >
+                        <option value="per_write">Flush after each write</option>
+                        <option value="manual">Flush during maintenance</option>
+                      </select>
+                      <span className={styles.fieldHint}>Maintenance flushing reduces ingestion overhead. Validate immediate search visibility on your server before enabling it.</span>
                     </label>
                     <label className={styles.fieldGroup}>
                       <span className={styles.fieldLabel}>Hybrid Candidate Multiplier</span>

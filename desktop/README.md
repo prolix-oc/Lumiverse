@@ -4,6 +4,9 @@ An experimental Tauri-powered Lumiverse desktop app for macOS, Windows, and
 Linux. It opens Lumiverse in an integrated native WebView and keeps a tray
 icon available for server controls, status, and updates.
 
+All macOS builds require macOS 13 or later. Screen capture requires macOS 14 or
+later, and system audio analysis requires macOS 14.2 or later.
+
 Signed bundled updates restore the session after the app restarts. A local
 server that was running (or starting) starts again,
 even if **Auto-start Server** is disabled. A stopped server stays stopped for
@@ -60,6 +63,10 @@ server processes it owns.
   spectrum of what the computer is playing, never the audio itself. The item
   and the tray tooltip show when an extension is listening; unchecking it ends
   every session. See [System audio](../developer-docs/docs/frontend-api/system-audio.md#native-adapters).
+- **Let Extensions Capture the Screen** — off by default (macOS 14+ and Windows).
+  Stays enabled for the selected instance until unchecked. Source selection is
+  remembered for each permitted extension, capture kind and destination.
+  Unchecking it stops capture and forgets saved sources and approvals.
 - **Open Lumiverse Data Folder** — open the active local server's data directory
   in Finder, Explorer, or the system file manager. Available only in local mode,
   including when the server is stopped; follows custom paths and debug profiles.
@@ -88,48 +95,88 @@ All signed-in accounts can see the instance identity and their own role. Serving
 status remains restricted to Lumiverse administrators and owners. Local server,
 checkout, and update controls are disabled while a remote instance is selected.
 
+## Key bindings
+
+Use **Settings → Key Bindings** in the integrated frontend to bind native desktop
+actions, application commands, or registered Spindle commands. Bindings default
+to focused mode.
+Global configuration requires one native owner opt-in per instance/account;
+individual bindings then choose global mode without repeated prompts. Disabling
+globals converts current-account and shared native actions to focused bindings.
+Native settings persist the configuration and report duplicate or OS-conflicting shortcuts. Extensions
+receive command invocations with `context.trigger`, never arbitrary key events.
+An extension can embed `ctx.components.mountKeybindingEditor(target, { commandId })`
+inside its own registered panel or settings; that editor changes only its selected
+registered command. It uses the same native global opt-in and persists the same bindings.
+Application commands require the primary integrated browser to remain open and
+signed in; the Show / Hide binding keeps its page alive in the background.
+Global bindings use native registration on macOS, Windows and Linux X11. Wayland
+sessions currently support app-focused bindings only.
+
 ## Extension screen capture
 
-The capture device named **Lumiverse Desktop** represents this client, not a
-restriction to its own window. On macOS, requests open the system picker directly,
-initially in **Entire Display** mode, with both displays and windows allowed.
-The capture menu-bar icon also offers **Choose a Window…** and **Choose a Display…**.
-For Window, bring the other application's window into view and select it using the
-macOS overlay. Any explicitly opened capture controls and
-Lumiverse windows are excluded from window selection. Full-display capture can
-include visible Lumiverse windows and other sensitive content: use **Review Before
-Sending** when local inspection is needed. There is no always-on screen buffer.
+The native installation keeps a stable capture-device identity for each instance
+and account across reconnects; secret transport leases still rotate. Spindle
+workers can query destination-scoped native approval and source readiness with
+`spindle.desktop.capture.getApprovalStatus()` without opening UI or starting capture.
+
+The capture device named **Lumiverse Desktop** represents this client. Set it up
+from the extension permissions area's **Set Up Screen Capture** button, or use
+the top-level **Let Extensions Capture the Screen** tray toggle beside system audio. Desktop authorization
+uses native OAuth and does not reuse browser cookies. The selected instance's
+transport is remembered and reconnects with existing credentials after restart
+or failure; interrupted captures are canceled and never retried automatically.
+The native capture session handles reconnection directly, including after a
+server restart or frontend reload. It registers a fresh lease and republishes
+monitor metadata without waiting for the tray menu or restarting Desktop.
+Reconnection stays bound to the original instance and account, preserves saved
+capture approvals, and stops when capture is disabled or the instance changes.
+
+Selecting a named Windows display in an extension starts capture using the tray
+opt-in and current extension permissions, without another approval dialog or
+Windows capture border. Coordinates use physical pixels on mixed-DPI desktops.
+Disconnecting or moving the selected display stops capture without substituting
+another display. The widget shows capture and generation progress.
+
+For native picker sources, first use opens source selection directly. Selecting a source starts capture and remembers it for later
+requests from this extension, account, capture kind and destination until capture
+is turned off. There is no separate Remember choice. macOS display choices survive restart by UUID;
+window choices require fresh selection after Desktop or the owning app restarts.
+Windows picker captures retain the exact OS-selected item while Desktop and the source remain
+alive; after restart it asks for a source again. Missing sources are never
+replaced automatically. Remembered source identities and approval stay native.
+
+Canceling a capture discards only that request and keeps saved permissions.
+The macOS menu-bar indicator includes **Cancel This Capture**; Windows picker
+captures retain their OS capture border. Turn **Let Extensions Capture the Screen** off in the
+tray to stop capture and forget saved approvals. Turning it on again requires a
+new source choice for picker captures; enabling it never starts a capture by itself. There is no
+capture/review window, extra Send step, or always-on screen buffer.
 
 The macOS development executable embeds `src-tauri/Info.plist` to retain the
 packaged application's bundle identifier. Restart `bun run tauri dev` after
 changes to this metadata.
 
 On macOS 14+ or Windows 10 1903+/Windows 11, choose
-**Browser → Enable Extension Screen Capture…**. This signs
+**Let Extensions Capture the Screen** in the root tray menu. This signs
 the native client into the selected local or remote instance if necessary; it
 does not reuse browser cookies. An extension still needs explicitly granted
 `screen_capture`/`screen_recording` and `generation` permissions.
 
-Every request opens the OS source picker directly. On macOS there is no Lumiverse
-recording popup: a temporary camera/recording menu-bar item provides the request
-identity, destination, countdown and **Stop & Discard**, alongside macOS's sharing
-controls. **Capture Details & Permissions…** opens recovery controls only on an
-explicit owner action; optional review likewise opens a preview only when requested.
-Windows uses its system picker for either an application window or display, with
-a compact native identity/destination and stop HUD. Full Windows consent details
-live under **Details…**. Recording does not foreground the main app window. Selecting
-a source authorizes this one image or bounded clip and its release to the displayed
-instance/model. After capture and validation, the extension receives an opaque
-asset for processing automatically; no second Send click is needed. Every request
-still requires native source selection; no approval or target is remembered.
-**Review Before Sending** optionally pauses release for a compact local preview
-and **Share This Capture**, for this request only. **Stop & Discard** or closing
-an explicitly opened capture window before release uploads nothing. Capture stays disabled
-at launch, and must be re-enabled after transport failure. Instance changes and
-desktop OAuth sign-out stop it.
+The extension receives an opaque asset after capture and validation, with no
+second Send click required. Revoking/regranting capture or generation permission,
+changing the connection, reinstalling the extension, or changing accounts requires
+fresh native approval. Source selection is required when no matching remembered
+approval/source is available. Instance changes and desktop OAuth sign-out cancel
+current capture.
 
 Images stay in native memory. Both adapters record video-only H.264 MP4, at most
-1080p/30fps and 30 seconds; oversized output is discarded before sharing.
+1080p/30fps with an 8 Mbps bitrate target and up to 120 seconds; oversized output
+is discarded before sharing.
+The requested duration is a cutoff. Extensions may finish a matching recording
+early through `spindle.desktop.capture.finish()` and send the shorter clip through
+the original request. Desk Companion maps a second invocation of its existing
+share action to this control. Cancel still discards the recording.
 
 - **macOS:** ScreenCaptureKit plus hardware-required VideoToolbox/AVAssetWriter
   encoding. An owner-only temporary MP4 is removed after preview/share/discard.
@@ -151,25 +198,14 @@ security boundaries, and on-device acceptance checks.
 
 ### macOS permission recovery
 
-The system sharing picker remains the default; it authorizes the selected source
-without requiring app-wide Screen Recording access. If it only offers Lumiverse's
-window, use the capture menu-bar icon → **Capture Details & Permissions… → Grant
-Screen Recording Access…**. This
-is a local owner action, never an extension or frontend permission request.
-If needed, **Open Screen Recording Settings…** opens **System Settings → Privacy &
-Security → Screen & System Audio Recording**. Enable the requesting app, restart
-the desktop client if macOS asks, and start a new request; capture never resumes
-automatically. Despite the privacy pane's name, system audio and microphone capture
-remain disabled.
-
-With app-wide access granted, **Choose From Permissioned Source List…** offers
-entire displays and other applications' visible windows in a native dropdown.
-Nothing is selected automatically: choose a target and press **Capture Selected
-Source** to authorize that one capture and send. **Review Before Sending** is
-optional, not a mandatory release step. The permission is
-checked before capture, during the request, and before sharing; revocation discards
-the capture. Source names and IDs never reach the extension. **Use macOS Picker
-Instead** returns to scoped OS selection without using app-wide access.
+**Allow Screen Recording…** is directly available in native setup. It reuses
+existing app-wide permission, requests missing permission only on a native owner
+action, and links directly to macOS privacy settings when recovery is needed.
+Audio-only Core Audio permission does not grant screen access. Remembering uses
+an explicitly selected native display/window list and requires screen permission.
+The same setup flow chooses and remembers the source. Screen permission remains subject to OS reauthorization;
+restart Desktop if macOS requests it. No interrupted capture resumes afterward.
+System audio and microphone capture remain disabled for image/video requests.
 
 Tauri development runs a plain executable, not a `.app` bundle. Embedding the
 bundle identifier does not guarantee that macOS will list this executable as
@@ -211,7 +247,7 @@ bun run tauri dev
 ```
 
 Enable capture in the tray, grant the test extension `screen_capture`,
-`screen_recording`, and `generation`, then request an image and 1–30-second clips
+`screen_recording`, and `generation`, then request an image and 1–120-second clips
 against a model that supports the selected media type. Confirm picker selection,
 native preview/playback, explicit Share versus Discard, and cancellation on lock,
 permission revocation, and instance/transport changes. A Windows N edition may
@@ -347,9 +383,34 @@ x64 host, an administrator must first register an ARM64 QEMU interpreter with
 `binfmt_misc`. Docker's documented setup is
 `docker run --privileged --rm tonistiigi/binfmt --install arm64`; this changes
 the host's interpreter registration and may need repeating after a reboot.
-The builder checks target execution before installing toolchains, but never
-changes host interpreter registrations itself. Emulated compilation can be
-substantially slower than a native ARM machine.
+The interpreter must be static so it can execute inside an ARM64 container.
+Its ELF matching rule must also accept the `AI\x02` marker in bytes 8–10 of a
+type-2 AppImage header; an ordinary ARM64 ELF execution check alone misses this.
+This is a [known AppImage/binfmt interaction](https://github.com/AppImage/AppImageKit/issues/965).
+The builder checks both cases before installing toolchains and reports a
+registration error early. It never changes host interpreter registrations
+itself. Emulated compilation can be substantially slower than a native ARM
+machine.
+
+On an x64 Linux host, add `--cross` to compile ARM64 using native x64 Rust
+and linker tools:
+
+```bash
+bun run build:linux-appimage root@linux-builder --arch arm64 --cross --jobs 12 \
+  --smoke --remote-output /srv/build-output --no-download
+```
+
+This retains Rust 1.95.0, the release optimization profile, and the Ubuntu 22.04
+baseline. The native compiler uses headers and libraries copied from the exact
+ARM64 runtime container. ARM64 server checks, application tests, and AppImage
+packaging still execute under QEMU. The finished image must pass offline
+cross-user startup and WebKit interaction when `--smoke` is selected. Compilation
+and bundling are separate Tauri commands, so packaging does not compile Rust
+again. Cross-builds use their own `lumiverse-appimage-cross-arm64-*` caches,
+with separate x64 and ARM64 Node dependencies, and return compiler/runtime
+image IDs with the artifacts. `--cross` also works with `--local --arch arm64`.
+The first cross-build fills a new dependency cache. Cargo timing reports are
+retained in its target volume; serial compiler phases can still use one core.
 
 ARM64 uses a separate builder image, build lock, Cargo target tree, Bun cache,
 and packaging-tool cache. The existing x64 caches remain available. The build
@@ -357,7 +418,9 @@ checks Bun and Rust's actual architecture, and verifies the finalized runtime
 manifest before sharing or downloading the result. Both architectures retain
 the Ubuntu 22.04 baseline and require no host desktop session. ARM64 diagnostic
 tests allow 60 seconds per test for emulated subprocesses; x64 retains Bun's
-five-second default. Test assertions and release compiler settings are unchanged.
+five-second default. Rust unit tests under QEMU use two parallel workers, and
+timing-sensitive assertions allow for emulated scheduler delays. The release
+compiler settings are unchanged.
 
 This diagnostic command runs independently of GitHub Actions. Nightly release
 builds use the private runner integration described below.
@@ -386,8 +449,11 @@ This writes `<output-directory>/<build-id>/` and requires Docker access. The
 
 The public nightly workflow sends an immutable build request to the private
 `Lumiverse-Builds` repository. Its self-hosted Linux runner builds x64 and
-emulated ARM64 AppImages in separate Ubuntu 22.04 containers and compiler
-caches, retaining the release tests and offline cross-user smoke checks.
+ARM64 AppImages in separate Ubuntu 22.04 containers and compiler caches,
+retaining the release tests and offline cross-user smoke checks. Sources with
+the cross-builder compile ARM64 using native x64 Rust tools and reserve QEMU
+for ARM64 execution and packaging. Older immutable requests retain the
+emulated compiler path; `arm64_compiler=emulated` also selects it explicitly.
 Only trusted `main` and `staging` workflow requests can reach this builder.
 
 Windows x64 and ARM64 compilation uses the private `lumiverse-windows-vm`

@@ -33,6 +33,7 @@ import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/compo
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import Pagination from '@/components/shared/Pagination'
 import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
 import {
   clearRegexScriptQuarantine,
@@ -57,6 +58,8 @@ const SCOPE_FILTER_LABEL_KEYS: Record<RegexPanelScopeFilterValue, string> = {
  *  is the folder name, or `__uncategorized` for the folder-less group. */
 const FOLDER_DROP_PREFIX = 'regex-folder::'
 const UNCATEGORIZED_KEY = '__uncategorized'
+const REGEX_FOLDER_PAGE_SIZE = 50
+type FolderView = { query: string; page: number }
 
 /** Insert text at cursor position in a textarea, returning new value */
 function insertAtCursor(el: HTMLTextAreaElement | null, token: string): string {
@@ -184,6 +187,7 @@ export default function RegexPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   // Newly loaded or created folders stay collapsed until explicitly opened.
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+  const [folderViews, setFolderViews] = useState<Record<string, FolderView>>({})
   const [folderMenu, setFolderMenu] = useState<{ folder: string; position: ContextMenuPos } | null>(null)
   const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
@@ -248,14 +252,14 @@ export default function RegexPanel() {
     if (scopeFilter === 'preset' && !presetHasRegexes) setScopeFilter('all')
   }, [scopeFilter, presetHasRegexes])
 
-  const filteredScripts = regexScripts.filter((s) => {
+  const filteredScripts = useMemo(() => regexScripts.filter((s) => {
     if (scopeFilter === 'all') return true
     if (scopeFilter === 'global') return s.scope === 'global'
     if (scopeFilter === 'character') return s.scope === 'character' && s.scope_id === activeCharacterId
     if (scopeFilter === 'chat') return s.scope === 'chat' && s.scope_id === activeChatId
     if (scopeFilter === 'preset') return s.preset_id === activeLoomPresetId
     return true
-  })
+  }), [regexScripts, scopeFilter, activeCharacterId, activeChatId, activeLoomPresetId])
 
   const filteredScriptIds = useMemo(() => filteredScripts.map((s) => s.id), [filteredScripts])
   const selectedCount = filteredScriptIds.reduce((count, id) => count + (selectedIds.has(id) ? 1 : 0), 0)
@@ -264,6 +268,10 @@ export default function RegexPanel() {
   useEffect(() => {
     setSelectedIds(new Set())
   }, [scopeFilter])
+
+  useEffect(() => {
+    setFolderViews({})
+  }, [scopeFilter, activeCharacterId, activeChatId, activeLoomPresetId])
 
   // Drop IDs removed by another tab or a completed bulk delete.
   useEffect(() => {
@@ -306,6 +314,33 @@ export default function RegexPanel() {
     return groups
   }, [filteredScripts, folders, scopeFilter])
 
+  const visibleGroups = useMemo(() => groupedScripts.map((group) => {
+    const folderKey = group.folder || UNCATEGORIZED_KEY
+    const view = folderViews[folderKey]
+    const query = view?.query ?? ''
+    const needle = query.trim().toLocaleLowerCase()
+    const expanded = expandedFolders.has(folderKey)
+    // Search the entire folder before slicing, using literal text so malformed
+    // or expensive regex patterns can be found without executing them.
+    const matches = expanded && needle
+      ? group.scripts.filter((script) => [script.name, script.script_id, script.description, script.find_regex, script.replace_string]
+        .some((value) => value?.toLocaleLowerCase().includes(needle)))
+      : group.scripts
+    const totalPages = Math.max(1, Math.ceil(matches.length / REGEX_FOLDER_PAGE_SIZE))
+    const page = Math.min(view?.page ?? 1, totalPages)
+    return {
+      ...group, query, page, totalPages, matchedCount: matches.length,
+      visibleScripts: expanded ? matches.slice((page - 1) * REGEX_FOLDER_PAGE_SIZE, page * REGEX_FOLDER_PAGE_SIZE) : [],
+    }
+  }), [groupedScripts, folderViews, expandedFolders])
+
+  const updateFolderView = useCallback((folderKey: string, patch: Partial<FolderView>) => {
+    setFolderViews((previous) => ({
+      ...previous,
+      [folderKey]: { query: '', page: 1, ...previous[folderKey], ...patch },
+    }))
+  }, [])
+
   const toggleFolder = useCallback((folder: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev)
@@ -325,21 +360,9 @@ export default function RegexPanel() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  // The ids actually rendered as sortable rows, in visual order. Collapsed
-  // folders contribute no rows, so they're excluded here (they remain valid
-  // drop targets via their header droppable).
-  const renderedScriptIds = useMemo(() => {
-    if (groupedScripts) {
-      const ids: string[] = []
-      for (const group of groupedScripts) {
-        const folderKey = group.folder || UNCATEGORIZED_KEY
-        if (!expandedFolders.has(folderKey)) continue
-        for (const s of group.scripts) ids.push(s.id)
-      }
-      return ids
-    }
-    return filteredScripts.map((s) => s.id)
-  }, [groupedScripts, filteredScripts, expandedFolders])
+  // Only mounted rows participate in sorting. Reorder writes still use the
+  // complete library so scripts on other pages retain their relative order.
+  const renderedScriptIds = useMemo(() => visibleGroups.flatMap((group) => group.visibleScripts.map((s) => s.id)), [visibleGroups])
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
@@ -422,11 +445,15 @@ export default function RegexPanel() {
         ...createScope.input,
       })
       setExpandedFolders((previous) => new Set(previous).add(script.folder || UNCATEGORIZED_KEY))
+      updateFolderView(script.folder || UNCATEGORIZED_KEY, {
+        query: '',
+        page: Math.floor(filteredScripts.filter((s) => (s.folder || '') === (script.folder || '')).length / REGEX_FOLDER_PAGE_SIZE) + 1,
+      })
       setExpandedId(script.id)
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [scopeFilter, activeCharacterId, activeChatId, addRegexScript, t])
+  }, [scopeFilter, activeCharacterId, activeChatId, addRegexScript, filteredScripts, updateFolderView, t])
 
   const handleCreateFolder = useCallback(() => {
     const trimmed = creatingFolderName.trim()
@@ -968,7 +995,7 @@ export default function RegexPanel() {
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={renderedScriptIds} strategy={verticalListSortingStrategy}>
-              {groupedScripts.map((group) => {
+              {visibleGroups.map((group) => {
                 const folderKey = group.folder || UNCATEGORIZED_KEY
                 const isCollapsed = !expandedFolders.has(folderKey)
                 const folderLabel = group.folder || t('shared:uncategorized')
@@ -979,7 +1006,7 @@ export default function RegexPanel() {
                   <div key={folderKey}>
                       <DroppableFolderHeader
                         folderKey={folderKey}
-                        dropDisabled={!isCollapsed && group.scripts.length > 0}
+                        dropDisabled={group.visibleScripts.length > 0}
                         expanded={!isCollapsed}
                         onToggle={() => { if (renamingFolder !== group.folder) toggleFolder(folderKey) }}
                         onOpenMenu={!bulkMode && renamingFolder === null
@@ -1130,8 +1157,30 @@ export default function RegexPanel() {
                           </button>
                         </div>}
                       </DroppableFolderHeader>
-                      {!isCollapsed &&
-                        group.scripts.map((script) => (
+                      {!isCollapsed && (group.scripts.length > REGEX_FOLDER_PAGE_SIZE || group.query) && (
+                        <div className={styles.folderTools}>
+                          <input
+                            type="search"
+                            className={styles.fieldInput}
+                            value={group.query}
+                            onChange={(e) => updateFolderView(folderKey, { query: e.target.value, page: 1 })}
+                            placeholder={t('regexPanel.searchFolder')}
+                            aria-label={t('regexPanel.searchFolderAria', { folder: folderLabel })}
+                          />
+                          {group.matchedCount === 0 && <p className={styles.folderSearchEmpty}>{t('regexPanel.noSearchResults')}</p>}
+                        </div>
+                      )}
+                      {!isCollapsed && group.totalPages > 1 && (
+                        <div role="group" aria-label={t('regexPanel.folderPagesAria', { folder: folderLabel })}>
+                          <Pagination
+                            currentPage={group.page}
+                            totalPages={group.totalPages}
+                            totalItems={group.matchedCount}
+                            onPageChange={(page) => updateFolderView(folderKey, { page })}
+                          />
+                        </div>
+                      )}
+                      {group.visibleScripts.map((script) => (
                           <ScriptRow
                             key={script.id}
                             script={script}

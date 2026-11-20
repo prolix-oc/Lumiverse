@@ -82,11 +82,13 @@ export interface EnvConfig {
     qdrantUrl: string;
     qdrantApiKey: string;
     milvusAddress: string;
+    milvusDatabase: string;
     milvusUsername: string;
     milvusPassword: string;
     milvusSsl: boolean;
     milvusConnectTimeoutMs: number | undefined;
     milvusRequestTimeoutMs: number | undefined;
+    milvusFlushPolicy: "per_write" | "manual" | undefined;
   };
 }
 
@@ -232,11 +234,13 @@ export function loadEnv(): EnvConfig {
     qdrantUrl: (process.env.LUMIVERSE_QDRANT_URL || "").trim(),
     qdrantApiKey: process.env.LUMIVERSE_QDRANT_API_KEY || "",
     milvusAddress: (process.env.LUMIVERSE_MILVUS_ADDRESS || "").trim(),
+    milvusDatabase: (process.env.LUMIVERSE_MILVUS_DATABASE || "").trim(),
     milvusUsername: process.env.LUMIVERSE_MILVUS_USERNAME || "",
     milvusPassword: process.env.LUMIVERSE_MILVUS_PASSWORD || "",
     milvusSsl: process.env.LUMIVERSE_MILVUS_SSL === "true",
     milvusConnectTimeoutMs: parseOptionalPositiveIntEnv("LUMIVERSE_MILVUS_CONNECT_TIMEOUT_MS"),
     milvusRequestTimeoutMs: parseOptionalNonNegativeIntEnv("LUMIVERSE_MILVUS_REQUEST_TIMEOUT_MS"),
+    milvusFlushPolicy: process.env.LUMIVERSE_MILVUS_FLUSH_POLICY === "manual" ? "manual" as const : undefined,
   };
 
   return {

@@ -5,6 +5,7 @@ import { post, get, del } from '@/api/client'
 import { resetUserScopedStoreState } from '../user-scoped-reset'
 import { setSettingsPersistenceScope } from './settings'
 import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
+import { setIOSMediaCacheAccount } from '@/lib/ios-media-cache'
 
 let authMutationGeneration = 0
 let sessionCheckGeneration = 0
@@ -48,6 +49,7 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, getState) => ({
         resetUserScopedStoreState()
         setSettingsPersistenceScope(data.user.id)
         setPresetSaveCoordinatorScope(data.user.id)
+        setIOSMediaCacheAccount(data.user.id)
         set({
           user: data.user as AuthUser,
           session: { token: data.token } as any,
@@ -120,6 +122,7 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, getState) => ({
         }
         setSettingsPersistenceScope(data.user.id)
         setPresetSaveCoordinatorScope(data.user.id)
+        setIOSMediaCacheAccount(data.user.id)
         set({
           user: data.user as AuthUser,
           session: data.session as any,

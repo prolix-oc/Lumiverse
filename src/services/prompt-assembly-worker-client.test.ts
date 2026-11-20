@@ -1,9 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AssemblyContext, AssemblyResult } from "../llm/types";
 import type { AssemblyWorkerRequest, AssemblyWorkerResponse } from "./prompt-assembly-worker-protocol";
+import type { CortexCacheSnapshot } from "./memory-cortex/types";
+import type { CortexWarmJob } from "./cortex-warm-worker";
 
 const listeners: Array<(id: string | null) => void> = [];
 const releasedOwners: string[] = [];
+let snapshot: CortexCacheSnapshot = { chatId: "chat", local: null, linked: null };
+const scheduledWarmJobs: CortexWarmJob[] = [];
+mock.module("./memory-cortex", () => ({ getCortexCacheSnapshot: (chatId: string) => ({ ...snapshot, chatId }) }));
+mock.module("./cortex-prompt-warm.service", () => ({ scheduleCortexPromptWarm: (_user: string, _chat: string, job: CortexWarmJob) => { scheduledWarmJobs.push(job); } }));
 mock.module("./tokenizer-resource-cache", () => ({ releaseTokenizerResourceLocks: async (owner: string) => { releasedOwners.push(owner); } }));
 mock.module("../macros", () => ({ registry: { getAllMacros: () => [] } }));
 mock.module("../spindle/macro-interceptor", () => ({ macroInterceptorChain: { count: 0 } }));
@@ -36,7 +42,11 @@ delete process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER;
 globalThis.Worker = FakeWorker as unknown as typeof Worker;
 const client = await import("./prompt-assembly-worker-client");
 const ctx = (connectionId: string, chatId = "chat"): AssemblyContext => ({ userId: "user", connectionId, chatId, generationType: "normal" } as AssemblyContext);
-beforeEach(() => { FakeWorker.all = []; });
+beforeEach(() => {
+  FakeWorker.all = [];
+  snapshot = { chatId: "chat", local: null, linked: null };
+  scheduledWarmJobs.length = 0;
+});
 afterEach(() => client.releaseIdlePromptAssemblyWorkers());
 afterAll(() => {
   globalThis.Worker = originalWorker;
@@ -47,6 +57,28 @@ afterAll(() => {
 });
 
 describe("assembly tokenizer warmup", () => {
+  test("captures Cortex caches at dispatch and returns warm work to the host", async () => {
+    const a = client.assemblePromptInWorker(ctx("a", "chat-a"));
+    const b = client.assemblePromptInWorker(ctx("b", "chat-b"));
+    const queued = client.assemblePromptInWorker(ctx("a", "chat-a"));
+    snapshot = { chatId: "chat-a", local: null, linked: { result: { vaults: [], interlinks: [] }, queriedAt: 42 } };
+    const [workerA, workerB] = FakeWorker.all;
+    workerA.respond(workerA.requests[0], ["a"]);
+    expect(workerA.requests[1]).toMatchObject({ ctx: { cortexCache: snapshot } });
+    const request = workerA.requests[1];
+    if (request.type !== "assemble") throw new Error("Expected assembly request");
+    const job = { chatId: "chat-a", userId: "user" } as CortexWarmJob;
+    workerA.onmessage?.(new MessageEvent<AssemblyWorkerResponse>("message", { data: {
+      type: "result", requestId: request.requestId, tokenizerRevision: request.tokenizerRevision,
+      tokenizerIds: ["a"], result: { messages: [], breakdown: [], parameters: {}, deferredCortexWarmJob: job },
+    } }));
+    const result = await queued;
+    expect(scheduledWarmJobs).toEqual([job]);
+    expect(result).not.toHaveProperty("deferredCortexWarmJob");
+    workerB.respond(workerB.requests[0], ["b"]);
+    await Promise.all([a, b]);
+  });
+
   test("carries the main process MCP inventory into the assembly worker", async () => {
     const mcpTools = [{ name: "mcp_lookup", description: "Find references", parameters: {} }];
     const generation = client.assemblePromptInWorker({ ...ctx("a"), mcpTools });

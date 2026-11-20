@@ -82,7 +82,12 @@ function pendingImageGeneration(store: AppStore): ImageGenSettings {
 }
 
 function mockSettings(imageGeneration: ImageGenSettings, writes: Write[]) {
-  settingsApi.getAll = async () => [{ key: 'imageGeneration', value: imageGeneration, updated_at: 1 }]
+  // An established account keeps these assertions focused on image writes.
+  // First-load language initialization is covered in settings.ui-language.test.ts.
+  settingsApi.getAll = async () => [
+    { key: 'uiLanguage', value: 'en', updated_at: 1 },
+    { key: 'imageGeneration', value: imageGeneration, updated_at: 1 },
+  ]
   settingsApi.put = async (key, value) => {
     writes.push({ kind: 'put', key, value })
     return { key, value, updated_at: 1 }

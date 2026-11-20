@@ -35,6 +35,9 @@ export interface Message {
   created_at: number;
 }
 
+/** Stored provenance needed to preprocess a supplied display body. */
+export type DisplayMessageSource = Pick<Message, "id" | "chat_id" | "swipe_id" | "extra">;
+
 /** A persisted, currently-visible message that matched a chat find query. */
 export interface ChatMessageSearchMatch {
   id: string;
@@ -62,6 +65,7 @@ export interface CreateMessageInput {
 }
 
 export interface UpdateMessageInput {
+  is_user?: boolean;
   content?: string;
   name?: string;
   extra?: Record<string, any>;
@@ -85,4 +89,8 @@ export interface UpdateMessageInput {
    * for Regens/Swipes". The fingerprint hash in generate.service already
    * invalidates stale cache on read when chat state actually diverges. */
   skipCouncilCacheInvalidation?: boolean;
+  /** Internal-only: this update gives the generation pipeline's empty staged
+   * message its text, so it enters memory chunks and Memory Cortex as a new
+   * message would. */
+  finalizesStaged?: boolean;
 }

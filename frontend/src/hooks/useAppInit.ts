@@ -16,8 +16,12 @@ import { listAllConnections } from '@/api/listAllConnections'
 import { useTokenizerWarmup } from './useTokenizerWarmup'
 import { activeTab } from '@/lib/active-tab'
 import { clearLandingPageSnapshot } from '@/lib/landingPageSnapshot'
-import { publishImportedDataRefresh } from '@/lib/import-data-events'
-import { loadoutsApi } from '@/api/loadouts'
+import { forgetImportJob, watchImportJob } from '@/lib/import-recovery'
+import { reloadImportedData, takeImportReloadReceipt } from '@/lib/import-data-reload'
+import { clearImageCache } from '@/lib/imageDecodeCache'
+import { userDataApi } from '@/api/user-data'
+import { toast } from '@/lib/toast'
+import { t } from 'i18next'
 
 let appInitGeneration = 0
 const importRefreshes = new Map<string, Promise<void>>()
@@ -33,21 +37,20 @@ export function refreshAppDataAfterImport(jobId: string): Promise<void> {
   const isCurrent = () => !activeTab.signal.aborted && appInitGeneration === generation
     && useStore.getState().isAuthenticated && useStore.getState().user?.id === userId
 
-  clearLandingPageSnapshot()
-  useStore.setState({ charactersLoaded: false, packsWithItems: {}, landingRecentChats: null, loomRegistry: {} })
   const refresh = (async () => {
-    // Preserve local edits and then read all restored settings, even if the
-    // initial settings load already completed or a debounce was pending.
+    // Finish local settings edits before the new document reads the database.
     await flushSettingsNow()
     if (!isCurrent()) return
-    await Promise.all([
-      initialize(isCurrent, true),
-      loadoutsApi.list().then((loadouts) => {
-        if (isCurrent()) useStore.setState({ loadouts })
-      }).catch((error) => console.warn('[Import] Could not refresh loadouts:', error)),
-    ])
-    if (isCurrent()) publishImportedDataRefresh()
-  })().catch((error) => {
+    clearLandingPageSnapshot()
+    clearImageCache()
+    // Bootstrap alone leaves mounted editors, paginated lists, registries
+    // and extension-owned caches on their old snapshots. A restore is
+    // infrequent: restart every data view together at the current URL.
+    forgetImportJob(userId, jobId)
+    reloadImportedData(userId, jobId)
+  })().then(() => {
+    if (!isCurrent()) importRefreshes.delete(key)
+  }).catch((error) => {
     importRefreshes.delete(key)
     throw error
   })
@@ -77,6 +80,10 @@ export function useAppInit() {
   const initializedUserId = useRef<string | null>(null)
 
   useEffect(() => {
+    if (isAuthenticated && userId) return watchImportJob(userId, refreshAppDataAfterImport)
+  }, [isAuthenticated, userId])
+
+  useEffect(() => {
     if (!isAuthenticated || !userId) {
       if (initializedUserId.current !== null) {
         resetUserScopedStoreState()
@@ -102,24 +109,37 @@ export function useAppInit() {
       && useStore.getState().user?.id === userId
     )
 
-    void initialize(isCurrent)
+    const reloadedJob = takeImportReloadReceipt(userId)
+    void initialize(isCurrent).then(async () => {
+      if (!reloadedJob || !isCurrent()) return
+      try {
+        const job = await userDataApi.getImportStatus(reloadedJob)
+        if (!isCurrent()) return
+        if (job.status === 'complete') toast.success(t('dataPortability.importComplete', { ns: 'settings' }))
+        else if (job.status === 'failed' || job.status === 'cancelled') {
+          toast.error(job.error || t(job.status === 'cancelled' ? 'dataPortability.importCancelled' : 'dataPortability.importFailed', { ns: 'settings' }))
+        }
+      } catch { /* A restarted backend may no longer retain the old job. */ }
+    })
   }, [isAuthenticated, userId])
 }
 
-async function loadFullSettings(isCurrent: () => boolean, force = false): Promise<void> {
-  for (let attempt = 0; attempt < 2 && ((force && attempt === 0) || !useStore.getState().fullSettingsLoaded); attempt += 1) {
+async function loadFullSettings(isCurrent: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 2 && !useStore.getState().fullSettingsLoaded; attempt += 1) {
     if (!isCurrent()) return
     await useStore.getState().loadSettings().catch(() => {})
   }
 }
 
-async function initialize(isCurrent: () => boolean, afterImport = false): Promise<void> {
+async function initialize(isCurrent: () => boolean): Promise<void> {
   let payload: BootstrapPayload | null = null
   let errors: Record<string, string> = {}
   let landingPreloadHandled = false
   const imageGenProfilesVersion = useStore.getState().imageGenProfilesVersion
 
-  const landingPromise = bootstrapApi.fetchLanding()
+  // Recent-chat grouping is landing data, not a prerequisite for direct chat
+  // navigation or native widget startup.
+  const landingPromise = window.location.pathname === '/' ? bootstrapApi.fetchLanding()
     .then((response) => {
       if (!isCurrent()) return
       const appliedRecentChats = applyLandingBootstrap(response.payload, response.errors ?? {}, {
@@ -129,7 +149,7 @@ async function initialize(isCurrent: () => boolean, afterImport = false): Promis
     })
     .catch((err) => {
       console.warn('[useAppInit] landing bootstrap failed; landing page will fetch its own chats:', err)
-    })
+    }) : Promise.resolve()
 
   try {
     const response = await bootstrapApi.fetch()
@@ -174,9 +194,9 @@ async function initialize(isCurrent: () => boolean, afterImport = false): Promis
     }
   }
   const settingsPromise = payload && !errors['startupSettings']
-    ? loadFullSettings(isCurrent, afterImport)
+    ? loadFullSettings(isCurrent)
     : null
-  if (Object.keys(errors).length > 0) await runFallbacks(errors, isCurrent, afterImport)
+  if (Object.keys(errors).length > 0) await runFallbacks(errors, isCurrent)
   if (!isCurrent()) return
 
   await Promise.all([landingPromise, settingsPromise])
@@ -301,12 +321,11 @@ export function applyBootstrap(
 async function runFallbacks(
   errors: Record<string, string>,
   isCurrent: () => boolean,
-  forceSettings = false,
 ): Promise<void> {
   if (!isCurrent()) return
   const store = useStore.getState()
   const fullSettingsPromise = errors['startupSettings']
-    ? loadFullSettings(isCurrent, forceSettings)
+    ? loadFullSettings(isCurrent)
     : null
 
   if (errors['llm.connections'] || errors['llm.providers']) {

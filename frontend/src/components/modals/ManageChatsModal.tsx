@@ -1,3 +1,4 @@
+import { useCharacterCatalog } from '@/hooks/useCharacterCatalog'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -53,7 +54,7 @@ export default function ManageChatsModal() {
 
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
-  const characters = useStore((s) => s.characters)
+  const characters = useCharacterCatalog()
   const modalProps = useStore((s) => s.modalProps) as {
     characterId: string
     characterName: string
@@ -262,7 +263,7 @@ export default function ManageChatsModal() {
     try {
       const data = await chatsApi.exportChat(chatId)
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      triggerBlobDownload(blob, `${sanitizeDownloadSegment(chatName, 'chat')}_export.json`)
+      await triggerBlobDownload(blob, `${sanitizeDownloadSegment(chatName, 'chat')}_export.json`)
     } catch (err) {
       console.error('[ManageChats] Failed to export chat:', err)
     }
@@ -295,7 +296,7 @@ export default function ManageChatsModal() {
       }
       const archive = Uint8Array.from(zipSync(files, { level: 6 }))
       const contextName = sanitizeDownloadSegment(groupLabel || characterName, 'chats')
-      triggerBlobDownload(new Blob([archive], { type: 'application/zip' }), `${contextName}-chats.zip`)
+      await triggerBlobDownload(new Blob([archive], { type: 'application/zip' }), `${contextName}-chats.zip`)
       if (failedCount > 0) {
         toast.warning(t('bulkExportPartial', { exported: exportedCount, failed: failedCount }))
       } else {

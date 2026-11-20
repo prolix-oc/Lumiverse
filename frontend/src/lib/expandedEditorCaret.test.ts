@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { getExpandedEditorCaretRect, installExpandedEditorCaretReveal, revealExpandedEditorCaret } from './expandedEditorCaret'
+import { getKeyboardViewport, KEYBOARD_VIEWPORT_EVENT } from './keyboardViewport'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true })
 const frames = new Map<number, FrameRequestCallback>()
@@ -50,6 +51,9 @@ dom.window.Range.prototype.getBoundingClientRect = function () {
   return rect(fieldTop() + (caretOffset - mirror.scrollTop) * scale, 20 * scale)
 }
 beforeEach(() => {
+  document.documentElement.removeAttribute('data-tauri-mobile')
+  document.documentElement.removeAttribute('data-ios-pwa')
+  document.documentElement.removeAttribute('style')
   textarea = document.createElement('textarea')
   mirror = document.createElement('pre')
   textarea.value = 'first second last'
@@ -61,6 +65,7 @@ beforeEach(() => {
   caretOffset = 530
   viewport.height = 400
   viewport.offsetTop = 0
+  Object.assign(viewport, { scale: 1 })
   disconnected = false
   textarea.getBoundingClientRect = () => rect(fieldTop(), fieldHeight * scale)
   Object.defineProperty(textarea, 'offsetHeight', { get: () => fieldHeight })
@@ -78,6 +83,51 @@ afterAll(() => {
 })
 
 describe('expanded editor caret visibility', () => {
+  test('uses normalized iOS bounds for caret scrolling despite a stale native pan', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '400px')
+    document.documentElement.style.setProperty('--app-visual-viewport-offset-top', '0px')
+    viewport.offsetTop = 140
+    revealExpandedEditorCaret(textarea, mirror)
+    expect(getExpandedEditorCaretRect(textarea, mirror)!.bottom).toBe(388)
+    expect(textarea.scrollTop).toBe(262)
+  })
+
+  test('waits for committed viewport variables even when the fullscreen field never resizes', () => {
+    document.documentElement.setAttribute('data-ios-pwa', '')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '800px')
+    uninstall = installExpandedEditorCaretReveal(textarea, mirror)
+    textarea.focus()
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+    viewport.dispatchEvent(new dom.window.Event('resize'))
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '400px')
+    window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+    flush()
+    expect(textarea.scrollTop).toBe(262)
+    // Duplicate commits must not undo a reading scroll.
+    textarea.scrollTop = 0
+    window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+    flush()
+    expect(textarea.scrollTop).toBe(0)
+  })
+
+  test('uses actual visual bounds until the initial iOS pixel measurements are available', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '100dvh')
+    expect(getKeyboardViewport()).toEqual({ top: 0, bottom: 400 })
+  })
+
+  test('retains real visual bounds while pinch-zoomed on iOS', () => {
+    document.documentElement.setAttribute('data-tauri-mobile', 'ios')
+    document.documentElement.style.setProperty('--app-visual-viewport-height', '800px')
+    Object.assign(viewport, { scale: 2, offsetTop: 100 })
+    expect(getKeyboardViewport()).toEqual({ top: 100, bottom: 500 })
+    Object.assign(viewport, { scale: 1 })
+  })
+
   test('reveals an occluded caret, not the bottom of the field', () => {
     revealExpandedEditorCaret(textarea, mirror)
     expect(textarea.scrollTop).toBe(262)
@@ -126,6 +176,48 @@ describe('expanded editor caret visibility', () => {
     Object.defineProperty(container, 'offsetHeight', { value: 800 })
     return container
   }
+
+  test('leaves both selection handles and their native scrolling alone', () => {
+    const container = scrollContainer()
+    // iOS does not reliably identify which handle is moving via direction.
+    // The lower end can stay offscreen while the upper handle scrolls upward.
+    for (const direction of ['forward', 'backward', 'none'] as const) {
+      textarea.setSelectionRange(2, 15, direction)
+      textarea.scrollTop = 80
+      container.scrollTop = 100
+      revealExpandedEditorCaret(textarea, mirror, { getScrollContainer: () => container })
+      expect(textarea.scrollTop).toBe(80)
+      expect(container.scrollTop).toBe(100)
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 15])
+    }
+  })
+
+  test('allows repeated upward selection extension through viewport events, then resumes typing reveal', () => {
+    const container = scrollContainer()
+    fieldTop = () => 100 - container.scrollTop
+    uninstall = installExpandedEditorCaretReveal(textarea, mirror, { getScrollContainer: () => container })
+    textarea.focus()
+    flush()
+    for (const start of [10, 6, 2, 0]) {
+      textarea.setSelectionRange(start, 15, 'forward')
+      textarea.scrollTop = start * 4
+      container.scrollTop = 30
+      textarea.dispatchEvent(new dom.window.Event('selectionchange'))
+      textarea.dispatchEvent(new dom.window.Event('select'))
+      document.dispatchEvent(new dom.window.Event('selectionchange'))
+      viewport.height -= 5
+      viewport.dispatchEvent(new dom.window.Event('resize'))
+      window.dispatchEvent(new dom.window.Event(KEYBOARD_VIEWPORT_EVENT))
+      resize()
+      flush()
+      expect(textarea.scrollTop).toBe(start * 4)
+      expect(container.scrollTop).toBe(30)
+    }
+    textarea.setRangeText('!', 0, 15, 'end')
+    textarea.dispatchEvent(new dom.window.Event('input'))
+    flush()
+    expect(getExpandedEditorCaretRect(textarea, mirror)!.bottom).toBe(368)
+  })
 
   test('leaves the list alone when the caret is visible in a partly clipped field', () => {
     const container = scrollContainer()

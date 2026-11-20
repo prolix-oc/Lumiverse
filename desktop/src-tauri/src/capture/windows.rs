@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     io::{self, Write},
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
@@ -40,15 +41,18 @@ use windows::{
     },
     Storage::Streams::{DataReader, InMemoryRandomAccessStream},
     Win32::{
-        Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{E_FAIL, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
+            Gdi::{
+                EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC,
+                HMONITOR, MONITORINFO, MONITORINFOEXW,
+            },
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::*,
             Dxgi::{
                 Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
                 IDXGIDevice,
             },
-            Gdi::*,
         },
         System::{
             LibraryLoader::GetModuleHandleW,
@@ -63,10 +67,7 @@ use windows::{
                 DQTYPE_THREAD_CURRENT, RO_INIT_MULTITHREADED, RO_INIT_SINGLETHREADED,
             },
         },
-        UI::{
-            Input::KeyboardAndMouse::EnableWindow, Shell::IInitializeWithWindow,
-            WindowsAndMessaging::*,
-        },
+        UI::{Shell::IInitializeWithWindow, WindowsAndMessaging::*},
     },
 };
 use windows_future::{
@@ -75,19 +76,19 @@ use windows_future::{
 };
 
 use super::{Capabilities, CaptureRequest, Media};
+mod display;
+use display::{DisplayCapture, DpiAwareness};
 
 const EVENT_MESSAGE: u32 = WM_APP + 71;
-const CHOOSE_BUTTON: usize = 101;
-const DISCARD_BUTTON: usize = 102;
-#[cfg(test)]
-const SHARE_BUTTON: usize = 103;
-const PLAY_BUTTON: usize = 104;
-const RESTART_BUTTON: usize = 105;
-const DETAILS_BUTTON: usize = 106;
 const FRAME_TICKS: i64 = 10_000_000 / 30;
+
+fn recording_end_ticks(seconds: u64, elapsed: i64, last_sample: i64) -> i64 {
+    elapsed.max(last_sample.saturating_add(FRAME_TICKS)).clamp(FRAME_TICKS, seconds as i64 * 10_000_000)
+}
 
 struct Control {
     request_id: String,
+    finish_requested: AtomicBool,
     active: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     window: AtomicUsize,
@@ -152,15 +153,128 @@ fn unsupported() -> Capabilities {
     }
 }
 
+fn monitor_info(monitor: HMONITOR) -> Option<(super::displays::NativeDisplay, windows::Win32::Foundation::RECT)> {
+    unsafe {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(monitor, &mut info as *mut _ as *mut MONITORINFO).as_bool() {
+            return None;
+        }
+        let text = |value: &[u16]| {
+            String::from_utf16_lossy(
+                &value[..value.iter().position(|value| *value == 0).unwrap_or(value.len())],
+            )
+        };
+        let device_name = text(&info.szDevice);
+        let mut device = DISPLAY_DEVICEW {
+            cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
+        // Include the monitor interface identity so a different panel on the same output
+        // cannot inherit this display's saved approval.
+        if !EnumDisplayDevicesW(
+            PCWSTR(info.szDevice.as_ptr()), 0, &mut device, EDD_GET_DEVICE_INTERFACE_NAME,
+        ).as_bool() {
+            return None;
+        }
+        let identity = serde_json::to_string(&(&device_name, text(&device.DeviceID))).unwrap();
+        let rect = info.monitorInfo.rcMonitor;
+        if rect.right > rect.left && rect.bottom > rect.top {
+            return Some((
+                super::displays::NativeDisplay {
+                    identity,
+                    name: format!("Display {}", device_name.trim_start_matches(r"\\.\DISPLAY")),
+                    width: (rect.right - rect.left) as u32,
+                    height: (rect.bottom - rect.top) as u32,
+                    primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+                },
+                rect,
+            ));
+        }
+        None
+    }
+}
+
+// Enumerate monitor metadata without opening a capture session or an OS picker.
+fn display_monitors() -> Vec<(super::displays::NativeDisplay, HMONITOR)> {
+    let Ok(_dpi) = DpiAwareness::enter() else {
+        return Vec::new();
+    };
+    unsafe extern "system" fn visit(
+        monitor: HMONITOR,
+        _: HDC,
+        _: *mut windows::Win32::Foundation::RECT,
+        context: LPARAM,
+    ) -> windows::core::BOOL {
+        let result = &mut *(context.0 as *mut Vec<(super::displays::NativeDisplay, HMONITOR)>);
+        if let Some((display, _)) = monitor_info(monitor) {
+            result.push((display, monitor));
+        }
+        true.into()
+    }
+    let mut result: Vec<(super::displays::NativeDisplay, HMONITOR)> = Vec::new();
+    if !unsafe {
+        EnumDisplayMonitors(None, None, Some(visit), LPARAM(&mut result as *mut _ as isize))
+    }.as_bool() {
+        result.clear();
+    }
+    result.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    result
+}
+
+pub fn displays() -> Vec<super::displays::NativeDisplay> {
+    display_monitors()
+        .into_iter()
+        .map(|(display, _)| display)
+        .collect()
+}
+
+// Keep OS-selected capture items native. Tokens never reach the extension or survive this process.
+struct RememberedItem {
+    item: AgileReference<GraphicsCaptureItem>,
+    closed: Arc<AtomicBool>,
+}
+fn sources() -> &'static Mutex<BTreeMap<String, RememberedItem>> {
+    static SOURCES: OnceLock<Mutex<BTreeMap<String, RememberedItem>>> = OnceLock::new();
+    SOURCES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+pub fn forget_sources() {
+    if let Ok(mut sources) = sources().lock() {
+        sources.clear();
+    }
+}
+
+pub fn source_status(source: &str) -> &'static str {
+    if sources().lock().is_ok_and(|sources| {
+        sources
+            .get(source)
+            .is_some_and(|item| !item.closed.load(Ordering::SeqCst))
+    }) {
+        "ready"
+    } else {
+        "missing"
+    }
+}
+
 pub fn begin(
     request: &CaptureRequest,
-    consent: String,
-    summary: String,
+    _consent: String,
+    _summary: String,
+    approval: super::consent::Context,
     active: Arc<AtomicBool>,
 ) -> oneshot::Receiver<std::result::Result<Media, &'static str>> {
     let (sender, receiver) = oneshot::channel();
+    let saved_source = match approval.source() {
+        Ok(source) => source,
+        Err(error) => {
+            let _ = sender.send(Err(error));
+            return receiver;
+        }
+    };
     let control = Arc::new(Control {
         request_id: request.request_id.clone(),
+        finish_requested: AtomicBool::new(false),
         active,
         alive: Arc::new(AtomicBool::new(true)),
         window: AtomicUsize::new(0),
@@ -179,7 +293,12 @@ pub fn begin(
         .name("lumiverse-windows-capture".into())
         .spawn(move || {
             let result = catch_unwind(AssertUnwindSafe(|| {
-                run(request, consent, summary, thread_control.clone())
+                run(
+                    request,
+                    approval,
+                    saved_source,
+                    thread_control.clone(),
+                )
             }))
             .unwrap_or(Err("failed"));
             let result = if !thread_control.active.load(Ordering::SeqCst) {
@@ -204,6 +323,13 @@ pub fn begin(
         *current().lock().unwrap() = None;
     }
     receiver
+}
+
+pub fn finish(request_id: &str) {
+    if let Some(control) = current().lock().unwrap().as_ref().filter(|control| control.request_id == request_id) {
+        // Finalization preserves active; cancellation always wins over this flag.
+        control.finish_requested.store(true, Ordering::SeqCst);
+    }
 }
 
 pub fn cancel(request_id: &str) {
@@ -523,25 +649,20 @@ enum Phase {
 
 struct Ui {
     request: CaptureRequest,
-    automatic_share: bool,
-    details_visible: bool,
+    approval: super::consent::Context,
+    saved_source: Option<String>,
+    remembering: bool,
+    selected_source: Option<String>,
     control: Arc<Control>,
     events: Events,
     incoming: Receiver<Event>,
     phase: Phase,
     window: HWND,
-    primary: HWND,
-    status: HWND,
-    play: HWND,
-    restart: HWND,
-    details: HWND,
-    details_button: HWND,
-    discard: HWND,
-    source_name: String,
     gpu: Option<Gpu>,
     item: Option<GraphicsCaptureItem>,
     closed_token: Option<i64>,
     pool: Option<Direct3D11CaptureFramePool>,
+    display_capture: Option<DisplayCapture>,
     capture: Option<GraphicsCaptureSession>,
     source: Option<MediaStreamSource>,
     stream: Option<InMemoryRandomAccessStream>,
@@ -558,6 +679,7 @@ struct Ui {
     start: Option<Instant>,
     last_sample: i64,
     final_sample: bool,
+    end_ticks: Option<i64>,
     pixels: Option<Pixels>,
     media: Option<Media>,
     player: Option<MediaPlayer>,
@@ -570,29 +692,29 @@ struct Ui {
 }
 
 impl Ui {
-    fn new(request: CaptureRequest, control: Arc<Control>) -> Self {
+    fn new(
+        request: CaptureRequest,
+        approval: super::consent::Context,
+        saved_source: Option<String>,
+        control: Arc<Control>,
+    ) -> Self {
         let (sender, incoming) = mpsc::sync_channel(8);
         Self {
             request,
-            automatic_share: true,
-            details_visible: false,
+            approval,
+            saved_source,
+            remembering: false,
+            selected_source: None,
             control: control.clone(),
             events: Events { sender, control },
             incoming,
             phase: Phase::Consent,
             window: HWND::default(),
-            primary: HWND::default(),
-            status: HWND::default(),
-            play: HWND::default(),
-            restart: HWND::default(),
-            details: HWND::default(),
-            details_button: HWND::default(),
-            discard: HWND::default(),
-            source_name: String::new(),
             gpu: None,
             item: None,
             closed_token: None,
             pool: None,
+            display_capture: None,
             capture: None,
             source: None,
             stream: None,
@@ -609,6 +731,7 @@ impl Ui {
             start: None,
             last_sample: -1,
             final_sample: false,
+            end_ticks: None,
             pixels: None,
             media: None,
             player: None,
@@ -622,57 +745,6 @@ impl Ui {
             read: None,
             result: None,
         }
-    }
-
-    fn status(&self, value: &str) -> Result<()> {
-        unsafe { SetWindowTextW(self.status, &HSTRING::from(value)) }
-    }
-
-    fn layout(&self) -> Result<()> {
-        let reviewing =
-            matches!(self.phase, Phase::Preview | Phase::Reading) && self.pixels.is_some();
-        let base_height = if reviewing { 480 } else { 210 };
-        let mut bounds = RECT {
-            left: 0,
-            top: 0,
-            right: 500,
-            bottom: base_height + if self.details_visible { 256 } else { 0 },
-        };
-        unsafe {
-            AdjustWindowRectEx(
-                &mut bounds,
-                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                false,
-                WS_EX_TOPMOST,
-            )?;
-            SetWindowPos(
-                self.window,
-                None,
-                0,
-                0,
-                bounds.right - bounds.left,
-                bounds.bottom - bounds.top,
-                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            )?;
-            let buttons = if reviewing { 432 } else { 162 };
-            MoveWindow(self.discard, 16, buttons, 128, 32, true)?;
-            MoveWindow(self.details_button, 152, buttons, 100, 32, true)?;
-            MoveWindow(self.primary, 304, buttons, 180, 32, true)?;
-            MoveWindow(self.details, 16, base_height, 468, 240, true)?;
-            let _ = ShowWindow(
-                self.details,
-                if self.details_visible {
-                    SW_SHOWNA
-                } else {
-                    SW_HIDE
-                },
-            );
-            let video = reviewing && self.request.kind == "video";
-            let _ = ShowWindow(self.play, if video { SW_SHOWNA } else { SW_HIDE });
-            let _ = ShowWindow(self.restart, if video { SW_SHOWNA } else { SW_HIDE });
-            let _ = InvalidateRect(Some(self.window), None, true);
-        }
-        Ok(())
     }
 
     fn still_active(&self) -> bool {
@@ -689,11 +761,8 @@ impl Ui {
             self.finish(Err("cancelled"));
             return Ok(());
         }
+        self.remembering = self.approval.can_remember;
         self.phase = Phase::Picking;
-        unsafe {
-            let _ = EnableWindow(self.primary, false);
-        }
-        self.status("Select an application window or display in Windows. Selection authorizes one capture and send. Stop & Discard cancels; Review Before Sending pauses release.")?;
         let picker = GraphicsCapturePicker::new()?;
         let initializer: IInitializeWithWindow = picker.cast()?;
         unsafe {
@@ -715,16 +784,35 @@ impl Ui {
             },
         ))?;
         self.picker = Some(operation);
-        if self.automatic_share {
-            unsafe {
-                SetWindowTextW(self.primary, w!("Review Before Sending"))?;
-                let _ = EnableWindow(self.primary, true);
-            }
-        }
         Ok(())
     }
 
     fn selected(&mut self, item: GraphicsCaptureItem) -> Result<()> {
+        if !self.still_active() {
+            self.finish(Err("cancelled"));
+            return Ok(());
+        }
+        if self.remembering && self.selected_source.is_none() {
+            let closed = Arc::new(AtomicBool::new(false));
+            let closed_flag = closed.clone();
+            item.Closed(&TypedEventHandler::new(move |_, _| {
+                closed_flag.store(true, Ordering::SeqCst);
+                Ok(())
+            }))?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let mut saved = sources().lock().unwrap();
+            saved.retain(|_, value| !value.closed.load(Ordering::SeqCst));
+            if saved.len() < 128 {
+                saved.insert(
+                    token.clone(),
+                    RememberedItem {
+                        item: AgileReference::new(&item)?,
+                        closed,
+                    },
+                );
+                self.selected_source = Some(token);
+            }
+        }
         let size = item.Size()?;
         if size.Width <= 0
             || size.Height <= 0
@@ -733,11 +821,15 @@ impl Ui {
             self.finish(Err("unsupported"));
             return Ok(());
         }
+        // Choosing the OS item approves the source independently of this capture's outcome.
+        if self.remembering {
+            if let Some(source) = &self.selected_source {
+                self.approval.remember(source.clone());
+            }
+        }
         self.source_width = size.Width as u32;
         self.source_height = size.Height as u32;
         (self.width, self.height) = output_size(self.source_width, self.source_height);
-        self.source_name = item.DisplayName()?.to_string().chars().filter(|character| !character.is_control()
-            && !matches!(character, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).take(80).collect();
         let events = self.events.clone();
         self.closed_token = Some(item.Closed(&TypedEventHandler::new(move |_, _| {
             events.post(Event::Closed)
@@ -766,10 +858,29 @@ impl Ui {
             .ok_or_else(|| Error::from_hresult(E_FAIL))?
             .StartCapture()?;
         self.phase = Phase::Recording;
-        self.status(&format!(
-            "Capturing selected source: {}. Stop & Discard cancels locally.",
-            self.source_name
-        ))?;
+        if self.request.kind == "video" {
+            self.start_video()?;
+        }
+        Ok(())
+    }
+
+    fn selected_display(&mut self) -> Result<()> {
+        if !self.still_active() || !self.approval.can_remember || self.approval.source().is_err() {
+            self.finish(Err("denied"));
+            return Ok(());
+        }
+        let display = self.request.display.as_ref()
+            .ok_or_else(|| Error::from_hresult(E_FAIL))?;
+        let gpu = Gpu::new()?;
+        let capture = DisplayCapture::new(display, self.request.max_pixels, &gpu)?;
+        (self.source_width, self.source_height) = capture.size();
+        (self.width, self.height) = output_size(self.source_width, self.source_height);
+        self.gpu = Some(gpu);
+        self.display_capture = Some(capture);
+        if self.request.kind == "video" {
+            self.start = Some(Instant::now());
+        }
+        self.phase = Phase::Recording;
         if self.request.kind == "video" {
             self.start_video()?;
         }
@@ -819,7 +930,7 @@ impl Ui {
         let output = profile.Video()?;
         output.SetWidth(self.width)?;
         output.SetHeight(self.height)?;
-        output.SetBitrate(4_000_000)?;
+        output.SetBitrate(8_000_000)?;
         output.FrameRate()?.SetNumerator(30)?;
         output.FrameRate()?.SetDenominator(1)?;
         let stream = InMemoryRandomAccessStream::new()?;
@@ -849,27 +960,31 @@ impl Ui {
     }
 
     fn frame(&mut self) -> Result<()> {
-        let Some(pool) = self.pool.as_ref() else {
-            return Ok(());
-        };
-        for _attempt in 0..2 {
-            let frame = match pool.TryGetNextFrame() {
-                Ok(frame) => frame,
-                Err(_) => break,
-            };
-            let size = frame.ContentSize()?;
-            if size.Width != self.source_width as i32 || size.Height != self.source_height as i32 {
-                let _ = frame.Close();
-                self.finish(Err("cancelled"));
-                return Ok(());
+        if let Some(capture) = &self.display_capture {
+            let gpu = self.gpu.as_ref().ok_or_else(|| Error::from_hresult(E_FAIL))?;
+            self.last_surface = Some(capture.frame(gpu)?);
+        } else if let Some(pool) = &self.pool {
+            for _attempt in 0..2 {
+                let frame = match pool.TryGetNextFrame() {
+                    Ok(frame) => frame,
+                    Err(_) => break,
+                };
+                let size = frame.ContentSize()?;
+                if size.Width != self.source_width as i32 || size.Height != self.source_height as i32 {
+                    let _ = frame.Close();
+                    self.finish(Err("cancelled"));
+                    return Ok(());
+                }
+                let surface = self
+                    .gpu
+                    .as_ref()
+                    .ok_or_else(|| Error::from_hresult(E_FAIL))?
+                    .copy(&frame.Surface()?, self.source_width, self.source_height)?;
+                frame.Close()?;
+                self.last_surface = Some(surface);
             }
-            let surface = self
-                .gpu
-                .as_ref()
-                .ok_or_else(|| Error::from_hresult(E_FAIL))?
-                .copy(&frame.Surface()?, self.source_width, self.source_height)?;
-            frame.Close()?;
-            self.last_surface = Some(surface);
+        } else {
+            return Ok(());
         }
         if self.request.kind == "image" && self.last_surface.is_some() {
             self.close_capture();
@@ -893,7 +1008,6 @@ impl Ui {
             };
             self.pixels = Some(pixels);
             self.phase = Phase::Finishing;
-            self.status("Encoding the screenshot in native memory. Nothing has been uploaded.")?;
             let events = self.events.clone();
             let maximum = self.request.max_bytes;
             let active = self.control.active.clone();
@@ -946,7 +1060,7 @@ impl Ui {
             return Ok(());
         }
         let start = self.start.ok_or_else(|| Error::from_hresult(E_FAIL))?;
-        let maximum = self.request.duration_seconds.unwrap_or_default() as i64 * 10_000_000;
+        let maximum = self.end_ticks.unwrap_or(self.request.duration_seconds.unwrap_or_default() as i64 * 10_000_000);
         let elapsed = (start.elapsed().as_nanos() / 100) as i64;
         if elapsed >= maximum {
             self.phase = Phase::Finishing;
@@ -962,7 +1076,6 @@ impl Ui {
                 .take()
                 .ok_or_else(|| Error::from_hresult(E_FAIL))?
                 .respond(None)?;
-            self.status("Finishing MP4 locally. Nothing has been uploaded.")?;
             return Ok(());
         }
         if timestamp <= self.last_sample {
@@ -1011,6 +1124,18 @@ impl Ui {
                 return Ok(());
             }
         }
+        if self.phase == Phase::Recording && self.request.kind == "video"
+            && self.control.finish_requested.load(Ordering::SeqCst) && self.last_surface.is_some()
+            && self.start.is_some_and(|start| start.elapsed().as_nanos() / 100 >= FRAME_TICKS as u128)
+        {
+            let elapsed = (self.start.unwrap().elapsed().as_nanos() / 100) as i64;
+            self.end_ticks = Some(recording_end_ticks(self.request.duration_seconds.unwrap_or_default(), elapsed, self.last_sample));
+            if let Some(source) = &self.source {
+                source.SetDuration(TimeSpan { Duration: self.end_ticks.unwrap() })?;
+            }
+            self.phase = Phase::Finishing;
+            self.close_capture();
+        }
         if self.phase == Phase::Recording
             && self.request.kind == "video"
             && self.start.is_some_and(|start| {
@@ -1020,7 +1145,6 @@ impl Ui {
         {
             self.phase = Phase::Finishing;
             self.close_capture();
-            self.status("Finishing MP4 locally. Nothing has been uploaded.")?;
         }
         if self.phase == Phase::Recording {
             self.frame()?;
@@ -1029,17 +1153,6 @@ impl Ui {
             }
             if self.request.kind == "video" {
                 self.sample()?;
-                if let Some(start) = self.start {
-                    self.status(&format!(
-                        "Recording {} — {:.1} / {} seconds. No audio. Stop & Discard cancels.",
-                        self.source_name,
-                        start
-                            .elapsed()
-                            .as_secs_f64()
-                            .min(self.request.duration_seconds.unwrap_or_default() as f64),
-                        self.request.duration_seconds.unwrap_or_default()
-                    ))?;
-                }
             }
         } else if self.phase == Phase::Finishing && self.request.kind == "video" {
             self.sample()?;
@@ -1057,9 +1170,6 @@ impl Ui {
             self.pixels = Some(pixels);
             if first {
                 self.review()?;
-            }
-            unsafe {
-                let _ = InvalidateRect(Some(self.window), None, false);
             }
         }
         Ok(())
@@ -1189,12 +1299,7 @@ impl Ui {
                     return Ok(());
                 }
                 player.Play()?;
-                unsafe {
-                    let _ = ShowWindow(self.play, SW_SHOW);
-                    let _ = ShowWindow(self.restart, SW_SHOW);
-                }
                 self.phase = Phase::Preview;
-                self.status("Opening the native video preview. Share stays disabled until a frame is visible.")?;
             }
             Event::Read(true) => {
                 let reader = self
@@ -1237,17 +1342,7 @@ impl Ui {
 
     fn review(&mut self) -> Result<()> {
         self.phase = Phase::Preview;
-        if self.automatic_share {
-            return self.share();
-        }
-        self.automatic_share = false;
-        self.layout()?;
-        unsafe {
-            SetWindowTextW(self.primary, w!("Share This Capture"))?;
-            let _ = EnableWindow(self.primary, true);
-            let _ = InvalidateRect(Some(self.window), None, false);
-        }
-        self.status(&format!("Review {} from {}. Share sends only this capture to the destination above; full request in Details.", if self.request.kind == "video" { "the video" } else { "the screenshot" }, self.source_name))
+        self.share()
     }
 
     fn share(&mut self) -> Result<()> {
@@ -1269,9 +1364,6 @@ impl Ui {
             self.finish(Ok(media));
         } else {
             self.phase = Phase::Reading;
-            unsafe {
-                let _ = EnableWindow(self.primary, false);
-            }
             if let Some(player) = &self.player {
                 player.Pause()?;
             }
@@ -1292,12 +1384,12 @@ impl Ui {
             }))?;
             self.reader = Some(reader);
             self.read = Some(operation);
-            self.status("Releasing the explicitly approved capture to the connected instance…")?;
         }
         Ok(())
     }
 
     fn close_capture(&mut self) {
+        self.display_capture = None;
         if let Some(capture) = self.capture.take() {
             let _ = capture.Close();
         }
@@ -1359,48 +1451,6 @@ impl Ui {
         unsafe {
             let _ = DestroyWindow(self.window);
             PostQuitMessage(0);
-        }
-    }
-
-    fn paint(&self) {
-        let mut paint = PAINTSTRUCT::default();
-        let context = unsafe { BeginPaint(self.window, &mut paint) };
-        if let Some(pixels) = self.pixels.as_ref().filter(|_| {
-            !self.automatic_share && matches!(self.phase, Phase::Preview | Phase::Reading)
-        }) {
-            let mut information = BITMAPINFO::default();
-            information.bmiHeader = BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: pixels.width as i32,
-                biHeight: -(pixels.height as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            };
-            let ratio = (468.0 / pixels.width as f64).min(236.0 / pixels.height as f64);
-            let width = (pixels.width as f64 * ratio) as i32;
-            let height = (pixels.height as f64 * ratio) as i32;
-            unsafe {
-                StretchDIBits(
-                    context,
-                    16 + (468 - width) / 2,
-                    160 + (236 - height) / 2,
-                    width,
-                    height,
-                    0,
-                    0,
-                    pixels.width as i32,
-                    pixels.height as i32,
-                    Some(pixels.bytes.as_ptr() as _),
-                    &information,
-                    DIB_RGB_COLORS,
-                    SRCCOPY,
-                );
-            }
-        }
-        unsafe {
-            let _ = EndPaint(self.window, &paint);
         }
     }
 }
@@ -1496,52 +1546,6 @@ unsafe extern "system" fn window_proc(
                     }
                     Ok(true)
                 }
-                WM_COMMAND => {
-                    match wparam.0 & 0xffff {
-                        CHOOSE_BUTTON => {
-                            if state.phase == Phase::Consent {
-                                state.choose()?;
-                            } else if state.phase == Phase::Preview && state.pixels.is_some() {
-                                state.share()?;
-                            } else if state.automatic_share {
-                                state.automatic_share = false;
-                                SetWindowTextW(state.primary, w!("Review at finish"))?;
-                                let _ = EnableWindow(state.primary, false);
-                                state.status("Automatic sharing is paused. Review and Share are required for this capture.")?;
-                            }
-                        }
-                        DETAILS_BUTTON => {
-                            state.details_visible = !state.details_visible;
-                            state.layout()?;
-                        }
-                        DISCARD_BUTTON => state.finish(Err("cancelled")),
-                        PLAY_BUTTON => {
-                            if let Some(player) = &state.player {
-                                if player.PlaybackSession()?.PlaybackState()?
-                                    == windows::Media::Playback::MediaPlaybackState::Playing
-                                {
-                                    player.Pause()?;
-                                } else {
-                                    player.Play()?;
-                                }
-                            }
-                        }
-                        RESTART_BUTTON => {
-                            if let Some(player) = &state.player {
-                                player
-                                    .PlaybackSession()?
-                                    .SetPosition(TimeSpan { Duration: 0 })?;
-                                player.Play()?;
-                            }
-                        }
-                        _ => {}
-                    }
-                    Ok(true)
-                }
-                WM_PAINT => {
-                    state.paint();
-                    Ok(true)
-                }
                 _ => Ok(false),
             }
         }));
@@ -1565,44 +1569,14 @@ unsafe extern "system" fn window_proc(
     DefWindowProcW(window, message, wparam, lparam)
 }
 
-unsafe fn child(
-    window: HWND,
-    class: PCWSTR,
-    label: &str,
-    style: WINDOW_STYLE,
-    bounds: RECT,
-    identifier: usize,
-) -> Result<HWND> {
-    let control = CreateWindowExW(
-        WINDOW_EX_STYLE::default(),
-        class,
-        &HSTRING::from(label),
-        WS_CHILD | WS_VISIBLE | style,
-        bounds.left,
-        bounds.top,
-        bounds.right,
-        bounds.bottom,
-        Some(window),
-        Some(HMENU(identifier as _)),
-        None,
-        None,
-    )?;
-    SendMessageW(
-        control,
-        WM_SETFONT,
-        Some(WPARAM(GetStockObject(DEFAULT_GUI_FONT).0 as usize)),
-        Some(LPARAM(1)),
-    );
-    Ok(control)
-}
-
 fn run(
     request: CaptureRequest,
-    consent: String,
-    summary: String,
+    approval: super::consent::Context,
+    saved_source: Option<String>,
     control: Arc<Control>,
 ) -> std::result::Result<Media, &'static str> {
     let _apartment = Apartment::new(RO_INIT_SINGLETHREADED).map_err(|_| "unsupported")?;
+    let _dpi = DpiAwareness::enter().map_err(|_| "unsupported")?;
     let queue = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
@@ -1612,7 +1586,7 @@ fn run(
     }
     .map_err(|_| "unsupported")?;
     let data = Box::new(WindowData {
-        state: RefCell::new(Ui::new(request, control.clone())),
+        state: RefCell::new(Ui::new(request, approval, saved_source, control.clone())),
         control: control.clone(),
     });
     let result = (|| -> Result<()> {
@@ -1628,41 +1602,24 @@ fn run(
                 lpfnWndProc: Some(window_proc),
                 hInstance: instance.into(),
                 lpszClassName: class_name,
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as _),
                 ..Default::default()
             }) != 0
         });
         if !registered {
             return Err(Error::from_hresult(E_FAIL));
         }
-        let mut bounds = RECT {
-            left: 0,
-            top: 0,
-            right: 500,
-            bottom: 210,
-        };
-        unsafe {
-            AdjustWindowRectEx(
-                &mut bounds,
-                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                false,
-                WS_EX_TOPMOST,
-            )?;
-        }
         let window = unsafe {
+            // GraphicsCapturePicker and session notifications need an owner HWND,
+            // but it has no controls, caption or visible capture window.
             CreateWindowExW(
-                WS_EX_TOPMOST,
+                WINDOW_EX_STYLE::default(),
                 class_name,
-                &HSTRING::from(format!(
-                    "Capture & Send — {}",
-                    summary.lines().next().unwrap_or("Lumiverse")
-                )),
-                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                (GetSystemMetrics(SM_CXSCREEN) - (bounds.right - bounds.left) - 16).max(0),
-                16,
-                bounds.right - bounds.left,
-                bounds.bottom - bounds.top,
+                w!("Lumiverse Capture"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
                 None,
                 None,
                 Some(instance.into()),
@@ -1673,123 +1630,29 @@ fn run(
         control.window.store(window.0 as usize, Ordering::SeqCst);
         unsafe {
             WTSRegisterSessionNotification(window, NOTIFY_FOR_THIS_SESSION)?;
-            if SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE).is_err() {
-                SetWindowDisplayAffinity(window, WDA_MONITOR)?;
-            }
-            state.details = child(
-                window,
-                w!("EDIT"),
-                &consent,
-                WINDOW_STYLE(ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32)
-                    | WS_VSCROLL
-                    | WS_BORDER,
-                RECT {
-                    left: 16,
-                    top: 210,
-                    right: 468,
-                    bottom: 240,
-                },
-                0,
-            )?;
-            child(
-                window,
-                w!("STATIC"),
-                &summary,
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 16,
-                    top: 12,
-                    right: 468,
-                    bottom: 88,
-                },
-                0,
-            )?;
-            state.status = child(
-                window,
-                w!("STATIC"),
-                "Select an application window or display in Windows. No audio is captured.",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 16,
-                    top: 104,
-                    right: 468,
-                    bottom: 48,
-                },
-                0,
-            )?;
-            state.primary = child(
-                window,
-                w!("BUTTON"),
-                "Review at finish",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 304,
-                    top: 162,
-                    right: 180,
-                    bottom: 32,
-                },
-                CHOOSE_BUTTON,
-            )?;
-            state.discard = child(
-                window,
-                w!("BUTTON"),
-                "Stop & Discard",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 16,
-                    top: 162,
-                    right: 128,
-                    bottom: 32,
-                },
-                DISCARD_BUTTON,
-            )?;
-            state.details_button = child(
-                window,
-                w!("BUTTON"),
-                "Details…",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 152,
-                    top: 162,
-                    right: 100,
-                    bottom: 32,
-                },
-                DETAILS_BUTTON,
-            )?;
-            state.play = child(
-                window,
-                w!("BUTTON"),
-                "Play / Pause",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 16,
-                    top: 402,
-                    right: 130,
-                    bottom: 32,
-                },
-                PLAY_BUTTON,
-            )?;
-            state.restart = child(
-                window,
-                w!("BUTTON"),
-                "Replay Clip",
-                WINDOW_STYLE::default(),
-                RECT {
-                    left: 154,
-                    top: 402,
-                    right: 130,
-                    bottom: 32,
-                },
-                RESTART_BUTTON,
-            )?;
-            let _ = ShowWindow(state.play, SW_HIDE);
-            let _ = ShowWindow(state.restart, SW_HIDE);
             if SetTimer(Some(window), 1, 33, None) == 0 {
                 return Err(Error::from_hresult(E_FAIL));
             }
-            state.layout()?;
-            let _ = ShowWindow(window, SW_SHOWNOACTIVATE);
-            state.choose()?;
+            let restored = state.saved_source.as_ref().and_then(|source| {
+                let sources = sources().lock().unwrap();
+                let saved = sources.get(source)?;
+                if saved.closed.load(Ordering::SeqCst) {
+                    return None;
+                }
+                saved.item.resolve().ok()
+            });
+            if state.request.display.is_some() {
+                state.selected_display()?;
+            } else if let Some(item) = restored {
+                state.remembering = true;
+                state.selected_source = state.saved_source.clone();
+                state.selected(item)?;
+            } else {
+                if state.saved_source.is_some() {
+                    state.approval.invalidate();
+                }
+                state.choose()?;
+            }
             drop(state);
             let mut message = MSG::default();
             loop {
@@ -1839,6 +1702,47 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_recording_end_is_short_and_includes_the_last_frame_without_exceeding_cutoff() {
+        assert_eq!(recording_end_ticks(30, 25_000_000, 24_000_000), 25_000_000);
+        assert_eq!(recording_end_ticks(30, 0, -1), FRAME_TICKS);
+        assert_eq!(recording_end_ticks(30, 1_000_000, 1_000_000), 1_000_000 + FRAME_TICKS);
+        assert_eq!(recording_end_ticks(1, 12_000_000, 9_900_000), 10_000_000);
+    }
+
+    #[test]
+    #[ignore = "requires a Windows desktop with connected displays; metadata only"]
+    fn connected_display_discovery() {
+        let displays = displays();
+        assert!(!displays.is_empty());
+        for display in displays {
+            assert!(display.width > 0 && display.height > 0);
+            println!("{} · {} × {} · primary={}", display.name, display.width, display.height, display.primary);
+        }
+    }
+
+    #[test]
+    #[ignore = "reads one local frame from each connected Windows display; no files or uploads"]
+    fn connected_display_frames() {
+        let _apartment = Apartment::new(RO_INIT_MULTITHREADED).unwrap();
+        let gpu = Gpu::new().unwrap();
+        let displays = super::super::displays::snapshot("local-capture-test");
+        assert!(!displays.is_empty());
+        for display in displays {
+            let capture = DisplayCapture::new(&display, super::super::MAX_PIXELS, &gpu).unwrap();
+            assert_eq!(capture.size(), (display.width, display.height));
+            let surface = capture.frame(&gpu).unwrap();
+            let pixels = gpu.pixels(&surface, display.width, display.height).unwrap();
+            assert_eq!(pixels.bytes.len(), (display.width * display.height * 4) as usize);
+            assert!(pixels.bytes.chunks_exact(4).all(|pixel| pixel[3] == 255));
+            println!("{}: captured {} × {} without a capture session or popup", display.name, display.width, display.height);
+            let mut missing = display.clone();
+            missing.identity = "disconnected-monitor".into();
+            assert!(DisplayCapture::new(&missing, super::super::MAX_PIXELS, &gpu).is_err());
+            assert!(DisplayCapture::new(&display, 1, &gpu).is_err());
+        }
+    }
 
     #[test]
     fn output_sizes_are_even_and_bounded() {
@@ -1892,6 +1796,6 @@ mod tests {
             WM_WTSSESSION_CHANGE,
             WPARAM(WTS_SESSION_UNLOCK as usize)
         ));
-        assert!(!cancels_capture(WM_COMMAND, WPARAM(SHARE_BUTTON)));
+        assert!(!cancels_capture(WM_COMMAND, WPARAM(103)));
     }
 }

@@ -1,6 +1,0 @@
-include ':app'
-if (System.getenv('LUMIVERSE_ANDROID_OFFLINE') == '1') {
-    gradle.startParameter.offline = true
-}
-
-apply from: 'tauri.settings.gradle'

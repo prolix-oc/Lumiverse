@@ -4,6 +4,16 @@ import { describe, expect, test } from 'bun:test'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
 
 describe('shouldAdjustMessageListScrollOnResize', () => {
+  test.each([-46, 46])('preserves finished visible text below a cold row resolving inside the viewport (delta %s)', delta => {
+    const input = {
+      delta, itemStart: 1400, itemEnd: 1700, scrollOffset: 1350,
+      scrollDirection: 'backward' as const, hasMeasuredSize: true,
+      isPinned: false, isStreamingTail: false,
+    }
+    expect(shouldAdjustMessageListScrollOnResize(input)).toBe(false)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, isAboveVisibleAnchor: true })).toBe(true)
+  })
+
   test('does not adjust when an unpinned streaming tail grows across the viewport top', () => {
     expect(shouldAdjustMessageListScrollOnResize({
       delta: 48,

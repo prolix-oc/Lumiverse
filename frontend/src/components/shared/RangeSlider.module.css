@@ -28,6 +28,15 @@
   border-radius: 3px;
 }
 
+/* Liquid glass: the track fattens to match the native sliders and the thumb
+   becomes a bead of glass. See the matching rules in theme/global.css — this
+   component renders a div thumb instead of a native one, so it needs its own
+   copy of the material. */
+:global(html[data-liquid-glass]) .track {
+  height: 8px;
+  border-radius: 999px;
+}
+
 .fill {
   position: absolute;
   top: 0;
@@ -54,6 +63,23 @@
   transform: translate(-50%, -50%);
   pointer-events: none;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--lumiverse-primary-020);
+}
+
+/* The glass bead: same material as the native thumb in theme/global.css, sized
+   for this component's tighter rows. */
+:global(html[data-liquid-glass]) .thumb {
+  width: 26px;
+  height: 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--lcs-liquid-thumb-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  -webkit-backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  filter: var(--lcs-liquid-lens, none);
+  box-shadow:
+    inset 1px 1px 0 var(--lcs-liquid-thumb-specular, transparent),
+    inset -1px -1px 0 var(--lcs-liquid-rim, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
 }
 
 .rangeThumb {

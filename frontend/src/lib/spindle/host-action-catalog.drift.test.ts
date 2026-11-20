@@ -51,6 +51,7 @@ mock.module('@/store', () => ({
   }),
 }))
 mock.module('@/ws/client', () => ({ wsClient: { send: () => {} } }))
+mock.module('@/i18n', () => ({ default: { t: (key: string) => key } }))
 
 const { buildHostSurfaceCatalog } = await import('./host-surfaces')
 

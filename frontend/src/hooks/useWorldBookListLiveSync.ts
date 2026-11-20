@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { wsClient, WS_OPEN } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -40,51 +40,38 @@ export function useWorldBookListLiveSync({
   onSelectedBookDeleted,
   refreshBooks,
 }: Options): { markLocalBookEdit: () => void } {
-  // Mirror inputs into refs so the subscription binds once and never goes stale.
-  const selectedRef = useRef(selectedBookId)
-  const setBooksRef = useRef(setBooks)
-  const onDeletedRef = useRef(onSelectedBookDeleted)
-  const refreshRef = useRef(refreshBooks)
-  selectedRef.current = selectedBookId
-  setBooksRef.current = setBooks
-  onDeletedRef.current = onSelectedBookDeleted
-  refreshRef.current = refreshBooks
-
   const lastLocalEditAt = useRef(0)
   const markLocalBookEdit = useCallback(() => {
     lastLocalEditAt.current = Date.now()
   }, [])
 
+  const onChanged = useEffectEvent((p: WorldBookChangedPayload) => {
+    if (!p?.worldBook) return
+    // Don't overwrite metadata the user is actively editing when their save
+    // echoes back. Effect Events read the latest committed selection/setter.
+    if (p.id === selectedBookId && Date.now() - lastLocalEditAt.current < SELF_EDIT_WINDOW_MS) return
+    setBooks((prev) => upsertById(prev, p.worldBook))
+  })
+  const onDeleted = useEffectEvent((p: WorldBookDeletedPayload) => {
+    if (!p?.id) return
+    setBooks((prev) => prev.filter((b) => b.id !== p.id))
+    if (p.id === selectedBookId) onSelectedBookDeleted()
+  })
+  const onRefresh = useEffectEvent(() => { void refreshBooks?.() })
+
   useEffect(() => {
-    const offChanged = wsClient.on(EventType.WORLD_BOOK_CHANGED, (p: WorldBookChangedPayload) => {
-      if (!p?.worldBook) return
-      // Don't overwrite the metadata fields the user is actively editing — their
-      // own debounced save echoes back here, and re-seeding would fight the input.
-      if (p.id === selectedRef.current && Date.now() - lastLocalEditAt.current < SELF_EDIT_WINDOW_MS) return
-      setBooksRef.current((prev) => upsertById(prev, p.worldBook))
-    })
-    const offDeleted = wsClient.on(EventType.WORLD_BOOK_DELETED, (p: WorldBookDeletedPayload) => {
-      if (!p?.id) return
-      setBooksRef.current((prev) => prev.filter((b) => b.id !== p.id))
-      if (p.id === selectedRef.current) onDeletedRef.current()
-    })
-    const offLibraryChanged = wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, () => {
-      void refreshRef.current?.()
-    })
-    const offImport = subscribeImportedDataRefresh(() => { void refreshRef.current?.() })
+    const offChanged = wsClient.on(EventType.WORLD_BOOK_CHANGED, onChanged)
+    const offDeleted = wsClient.on(EventType.WORLD_BOOK_DELETED, onDeleted)
+    const offLibraryChanged = wsClient.on(EventType.WORLD_BOOK_LIBRARY_CHANGED, onRefresh)
+    const offImport = subscribeImportedDataRefresh(onRefresh)
+    const offOpen = wsClient.on(WS_OPEN, onRefresh)
     return () => {
       offChanged()
       offDeleted()
       offLibraryChanged()
       offImport()
+      offOpen()
     }
-  }, [])
-
-  useEffect(() => {
-    if (!refreshRef.current) return
-    return wsClient.on(WS_OPEN, () => {
-      void refreshRef.current?.()
-    })
   }, [])
 
   return { markLocalBookEdit }

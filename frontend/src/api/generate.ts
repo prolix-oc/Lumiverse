@@ -1,4 +1,5 @@
 import { get, post, type RequestOptions } from './client'
+import { shareRead } from '@/lib/shared-read'
 import { flushSettingsNow } from '@/store/slices/settings'
 import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
 
@@ -22,6 +23,7 @@ export interface GenerateRequest {
   continue_from?: string
   force_name?: string
   generation_type?: GenerationType
+  background_swipe?: boolean
   impersonate_mode?: ImpersonateMode
   /** For impersonate: free-form text from the input box, appended to the impersonation prompt. */
   impersonate_input?: string
@@ -288,6 +290,8 @@ export interface GenerationStatusResponse {
   generationType?: string
   targetMessageId?: string
   targetSwipeId?: number
+  renderMode?: "persisted-message"
+  backgroundSwipe?: boolean
   characterName?: string
   characterId?: string
   model?: string
@@ -386,7 +390,7 @@ export const generateApi = {
   },
 
   getActive() {
-    return get<ActiveGenerationEntry[]>('/generate/active')
+    return shareRead('active-generations', () => get<ActiveGenerationEntry[]>('/generate/active'))
   },
 
   acknowledge(chatId: string) {

@@ -3,7 +3,7 @@ import {
   Sliders, MessageSquare, Users, PanelRight,
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
   Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
-  PackageOpen, KeyRound,
+  PackageOpen, KeyRound, Cpu,
   Keyboard,
 } from 'lucide-react'
 import { useStore } from '@/store'
@@ -11,6 +11,8 @@ import { getExtensionSettingsTabRegistrations, joinExtensionSettingsTabs } from 
 import { hasEnabledFrontendExtension, hasEnabledFrontendExtensionId } from '@/lib/spindle/frontend-extension-availability'
 import { translateSettingsField, translateSettingsSectionTitle } from '@/lib/i18n/resolveLabel'
 import type { Command, CommandScope } from '@/lib/commands'
+import { hasTauriDesktopBridge } from '@/lib/desktopWebView'
+import { isDesktopFloatingWidgetWindow } from '@/lib/desktop-floating-widget'
 
 /**
  * A searchable, scroll-to-able section within a settings tab. The `key` is combined
@@ -80,13 +82,19 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     keywords: ['display', 'layout', 'sidebar', 'drawer', 'width', 'panel', 'position', 'modal', 'chat heads', 'long messages', 'read more', 'pinch', 'zoom'],
     sections: [
       { key: 'zoom', titleKey: 'display.zoom.title', titleFallback: 'Zoom', keywords: ['pinch', 'zoom', 'desktop', 'trackpad'] },
-      { key: 'longMessages', titleKey: 'display.longMessages.title', titleFallback: 'Long Messages', keywords: ['long messages', 'assistant messages', 'collapse', 'read more', 'show less', 'message height'] },
+      { key: 'longMessages', titleKey: 'display.longMessages.title', titleFallback: 'Long Messages', keywords: ['long messages', 'assistant messages', 'user messages', 'collapse', 'read more', 'show less', 'message height'] },
       { key: 'modalWidth', titleKey: 'display.modalWidth.title', titleFallback: 'Modal Width', keywords: ['modal width', 'width', 'max width', 'full', 'comfortable', 'compact', 'custom'] },
-      { key: 'drawer', titleKey: 'display.drawer.title', titleFallback: 'Drawer', keywords: ['drawer', 'sidebar', 'side', 'panel width', 'tab position', 'tab size', 'tab labels'] },
+      { key: 'drawer', titleKey: 'display.drawer.title', titleFallback: 'Drawer', keywords: ['drawer', 'sidebar', 'side', 'panel width', 'tab position', 'tab size', 'tab labels', 'iPhone Duo', 'unfolded', 'always show'] },
       { key: 'toast', titleKey: 'display.toast.title', titleFallback: 'Notifications', keywords: ['toast', 'toast position', 'popup position', 'alert position'] },
       { key: 'chatHeads', titleKey: 'display.chatHeads.title', titleFallback: 'Chat Heads', keywords: ['chat heads', 'heads', 'floating avatar', 'completion sound', 'opacity', 'size', 'direction'] },
       { key: 'landing', titleKey: 'display.landing.title', titleFallback: 'Pagination', keywords: ['landing', 'pagination', 'recent chats', 'chats displayed', 'layout', 'page size'] },
     ],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'keyBindings', shortName: 'Key Bindings', tabName: 'Key Bindings',
+    tabDescription: 'Configure desktop, application and Spindle shortcuts', tabIcon: Keyboard,
+    keywords: ['keyboard', 'keybindings', 'hotkeys', 'shortcuts', 'global', 'desktop', 'spindle'],
     component: INLINE_SENTINEL,
   },
   {
@@ -98,9 +106,11 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     keywords: ['chat', 'behavior', 'enter to send', 'bubble', 'minimal', 'immersive', 'streaming', 'message'],
     sections: [
       { key: 'general', titleKey: 'chat.title', titleFallback: 'Chat', keywords: ['message display', 'display mode', 'bubble', 'minimal', 'immersive', 'enter to send', 'streaming', 'markdown'] },
+      { key: 'inlineImages', titleKey: 'chat.inlineImages.title', titleFallback: 'Inline Images', keywords: ['image', 'inline', 'size', 'width', 'height', 'alignment', 'left', 'center', 'right', 'markdown', 'greeting'] },
+      { key: 'greetingImages', titleKey: 'chat.greetingImages.title', titleFallback: 'Greeting Images', keywords: ['greeting', 'starting message', 'first message', 'image', 'artwork', 'top', 'bottom'] },
       { key: 'width', titleKey: 'chat.widthTitle', titleFallback: 'Chat Width', keywords: ['chat width', 'content width', 'message width', 'center chat', 'sidebar', 'reflow'] },
       { key: 'messagesPerPage', titleKey: 'chat.messagesPerPageTitle', titleFallback: 'Messages Per Page', keywords: ['messages per page', 'pagination', 'page size', 'load more'] },
-      { key: 'input', titleKey: 'chat.inputTitle', titleFallback: 'Input', keywords: ['input', 'composer', 'textarea', 'send', 'enter key', 'impersonate', 'impersonation mode', 'default'] },
+      { key: 'input', titleKey: 'chat.inputTitle', titleFallback: 'Input', keywords: ['input', 'composer', 'textarea', 'send', 'enter key', 'formatting', 'formatting bar', 'markdown', 'bold', 'italic', 'underline', 'impersonate', 'impersonation mode', 'default'] },
       { key: 'regen', titleKey: 'chat.regenTitle', titleFallback: 'Regeneration Feedback', keywords: ['regeneration', 'regen', 'feedback', 'swipe regenerate'] },
       { key: 'messageInfo', titleKey: 'chat.messageInfoTitle', titleFallback: 'Message Info', keywords: ['message info', 'timestamp', 'token count', 'metadata'] },
       { key: 'swipe', titleKey: 'chat.swipeTitle', titleFallback: 'Swipe Navigation', keywords: ['swipe', 'swipe navigation', 'alternate responses', 'variations'] },
@@ -159,11 +169,11 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     id: 'webSearch',
     shortName: 'Web Search',
     tabName: 'Web Search',
-    tabDescription: 'Configure SearXNG, Exa, or Tavily web search for council tools',
+    tabDescription: 'Configure SearXNG, Exa, Tavily, or DeepSeek web search for council tools',
     tabIcon: Search,
-    keywords: ['web search', 'searxng', 'exa', 'search', 'browse', 'internet', 'web', 'council tool'],
+    keywords: ['web search', 'searxng', 'exa', 'tavily', 'deepseek', 'search', 'browse', 'internet', 'web', 'council tool'],
     sections: [
-      { key: 'general', titleKey: 'webSearch.title', titleFallback: 'Web Search', keywords: ['web search', 'searxng', 'exa', 'browse', 'internet', 'council tool'] },
+      { key: 'general', titleKey: 'webSearch.title', titleFallback: 'Web Search', keywords: ['web search', 'searxng', 'exa', 'tavily', 'deepseek', 'browse', 'internet', 'council tool'] },
     ],
     component: INLINE_SENTINEL,
   },
@@ -186,6 +196,26 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
     tabDescription: 'Configure memory cortex extraction and salience',
     tabIcon: Brain,
     keywords: ['memory', 'cortex', 'entities', 'relations', 'salience', 'extraction', 'brain', 'recall'],
+    component: INLINE_SENTINEL,
+  },
+  {
+    id: 'inference',
+    shortName: 'Inference',
+    tabName: 'Local Inference Scheduling',
+    tabDescription: 'Serialize local chat, embedding, and image models so they stop competing for VRAM',
+    tabIcon: Cpu,
+    keywords: [
+      'inference', 'scheduler', 'scheduling', 'queue', 'local', 'gpu', 'vram', 'ram',
+      'memory cortex', 'sidecar', 'embeddings', 'image generation', 'contention', 'serialize',
+    ],
+    sections: [
+      {
+        key: 'scheduling',
+        titleKey: 'inferenceScheduler.title',
+        titleFallback: 'Local Inference Scheduling',
+        keywords: ['scheduler', 'queue', 'gpu', 'vram', 'local models', 'sidecar', 'embeddings', 'image generation'],
+      },
+    ],
     component: INLINE_SENTINEL,
   },
   {
@@ -345,6 +375,7 @@ export function getVisibleSettingsTabs(userRole?: string, productivityTabPositio
   const isAdmin = isOwner || userRole === 'admin'
 
   const visibleCoreTabs = SETTINGS_TABS.filter((tab) => {
+    if (tab.id === 'keyBindings' && (!hasTauriDesktopBridge() || isDesktopFloatingWidgetWindow())) return false
     if (!tab.role) return true
     if (tab.role === 'owner') return isOwner
     if (tab.role === 'admin') return isAdmin

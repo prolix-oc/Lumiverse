@@ -1797,7 +1797,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px) var(--lcs-liquid-filter, );
 }
 
 .presetManagerCardSelect {
@@ -1828,7 +1828,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 82%, transparent);
   color: transparent;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px) var(--lcs-liquid-filter, );
   transition: border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
 }
 

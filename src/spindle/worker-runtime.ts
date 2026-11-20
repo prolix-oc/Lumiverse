@@ -1,3 +1,7 @@
+import { createThemeAuthoringRuntime } from './theme-authoring-runtime';
+import { createThemeReferencesRuntime } from './theme-references-runtime';
+import { createOrganizationRuntime } from './connection-organization-runtime';
+import type { OrganizationWorkerMessage, OrganizationHostMessage, BackendOrganizationAPI } from './connection-organization-contract';
 /**
  * Worker runtime — runs inside each extension's Bun worker thread.
  * Receives "init" from the host, dynamically imports the extension,
@@ -7,7 +11,11 @@
 import type {
   SpindleDecisionsAPI,
   DecisionResult,
+  SpindleEmbeddingsAPI,
   SpindleManifest,
+  ChatAppendMessageDTO,
+  ChatAppendMessageOptionsDTO,
+  SpindleCommandContextDTO,
   WorkerToHost,
   HostToWorker,
   LlmMessageDTO,
@@ -53,7 +61,8 @@ import type {
   ImageListOptionsDTO,
   ImageUploadDTO,
   ImageUploadFromDataUrlOptionsDTO,
-  ChatMessageDTO,
+  ChatGetMessagesOptionsDTO,
+  ChatGetMessagesResultDTO,
   ChatChunkDTO,
   ChatLinkAttachDTO,
   ChatLinkDTO,
@@ -95,7 +104,9 @@ import type {
   InterceptorRegistrationOptions,
   QuietTrackedRequestDTO,
   QuietTrackedResultDTO,
+  ResolvedWorldInfoEntryDTO,
   SpindleHostDescriptorV1,
+  ActivePresetDTO,
 } from "lumiverse-spindle-types";
 import type {
   MediaConvertAudioRequestDTO,
@@ -117,7 +128,7 @@ import type { DryRunResultDTO, GetBreakdownWorkerMessage, SavedBreakdownDTO } fr
 import type { ImageReadBinaryMessage } from "./image-binary-contract";
 import type { CharacterGalleryItemDTO, CharacterGalleryWorkerMessage, ConnectionModelDTO, ConnectionModelsWorkerMessage } from "./gallery-models-contract";
 import type { ActivationPatternsMessage, ActivationPatternsOptions, ActivationPatternsResult } from "./activation-patterns-contract";
-import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef } from "./desktop-capture-contract";
+import type { DesktopCaptureWorkerMessage, SpindleDesktopAPI, DesktopCaptureDevice, CapturedMediaRef, DesktopCaptureApprovalStatus } from "./desktop-capture-contract";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
@@ -293,32 +304,22 @@ type MacroInvocationState = {
   commit: boolean;
 };
 
-type ChatAppendGenerationOptions = {
-  connection_id?: string;
-  persona_id?: string;
-  persona_addon_states?: Record<string, boolean>;
-  preset_id?: string;
-  force_preset_id?: boolean;
-  parameters?: Record<string, unknown>;
-  target_character_id?: string;
-  retain_council?: boolean;
-};
-
-type ChatAppendMessageOptions =
-  | boolean
-  | {
-      triggerGeneration?: boolean;
-      generation?: ChatAppendGenerationOptions;
-    };
 
 type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
+  | import("./uuid-contract").UUIDWorkerMessage
+  | import("./live-activities-contract").LiveActivityWorkerMessage
+  | { type: "message_generation_begin"; requestId: string; input: import("./message-generation").BeginMessageGenerationInput }
+  | { type: "message_generation_finish" | "message_generation_abort"; requestId: string; sessionId: string }
+  | OrganizationWorkerMessage
   | ActivationPatternsMessage
   | ImageReadBinaryMessage
   | CharacterGalleryWorkerMessage
   | ConnectionModelsWorkerMessage
   | GetBreakdownWorkerMessage
+  | { type: "chat_set_swipe_variables"; requestId: string; chatId: string; messageId: string; input: import("../db/swipe-variable-state").SetSwipeVariablesInput }
+  | { type: "chats_compare_metadata"; requestId: string; chatId: string; input: import("../types/chat").ConditionalChatMetadataInput; userId?: string }
   | DesktopCaptureWorkerMessage
   | { type: 'context_handler_result'; requestId: string; context: unknown; error?: string }
   | { type: 'frontend_message'; payload: unknown; userId?: string; frontendSessionId?: string }
@@ -341,17 +342,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "register_context_handler"; priority?: number; timeoutMs?: number; required?: boolean }
-  | {
-      type: "chat_append_message";
-      requestId: string;
-      chatId: string;
-      message: {
-        role: "system" | "user" | "assistant";
-        content: string;
-        metadata?: Record<string, unknown>;
-      };
-      options?: ChatAppendMessageOptions;
-    }
+
   | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
   | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy; rpcPermissionScopeId?: string }
   | { type: "rpc_pool_unregister"; endpoint: string }
@@ -378,6 +369,7 @@ type RuntimeWorkerToHost =
   | { type: "user_get_role"; requestId: string; userId?: string }
   | { type: "presets_list"; requestId: string; limit?: number; offset?: number; userId?: string }
   | { type: "presets_get"; requestId: string; presetId: string; userId?: string }
+  | { type: "presets_get_active"; requestId: string; chatId?: string; userId?: string }
   | { type: "presets_create"; requestId: string; input: CreatePresetInput; userId?: string }
   | { type: "presets_update"; requestId: string; presetId: string; input: UpdatePresetInput; userId?: string }
   | { type: "presets_delete"; requestId: string; presetId: string; userId?: string }
@@ -634,9 +626,11 @@ type RuntimeWorkerToHost =
     };
 
 type RuntimeHostToWorker =
+  | OrganizationHostMessage
   | { type: 'context_handler_abort'; requestId: string; reason: string }
   | { type: 'frontend_message'; payload: unknown; userId: string; frontendSessionId?: string }
-  | HostToWorker
+  | Exclude<HostToWorker, { type: 'command_invoked' }>
+  | { type: 'command_invoked'; commandId: string; context: SpindleCommandContextDTO; userId: string; frontendSessionId?: string }
   | {
       type: "rpc_pool_request";
       requestId: string;
@@ -743,7 +737,15 @@ interface RuntimeLumiverseVersionInfo {
   branch: string | null;
 }
 
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeState" | "desktop" | "generate" | "images" | "regex_scripts" | "version" | "liveActivities" | "uuid"> & {
+  readonly uuid: import("./uuid-contract").SpindleUUIDAPI;
+  liveActivities: import("./live-activities-contract").SpindleLiveActivitiesAPI;
+  chat: SpindleAPI["chat"] & {
+    setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean>;
+  };
+  chats: SpindleAPI["chats"] & {
+    compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null>;
+  };
   version: SpindleAPI["version"] & {
     getCommit(): Promise<string | null>;
     getBranch(): Promise<string | null>;
@@ -759,16 +761,20 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
     getGallery(characterId: string, userId?: string): Promise<CharacterGalleryItemDTO[]>;
   };
   connections: SpindleAPI["connections"] & {
+    organization: BackendOrganizationAPI;
     getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]>;
   };
   generate: Omit<SpindleAPI["generate"], "dryRun"> & {
+    beginMessage(input: import("./message-generation").BeginMessageGenerationInput): Promise<{ id: string }>;
+    finishMessage(sessionId: string): Promise<import("./message-generation").MessageGenerationResult>;
+    abortMessage(sessionId: string): Promise<void>;
     dryRun(input: import("lumiverse-spindle-types").DryRunRequestDTO, userId?: string): Promise<DryRunResultDTO>;
     getBreakdown(messageId: string, userId?: string): Promise<SavedBreakdownDTO | null>;
   };
   desktop: SpindleDesktopAPI;
   runtimeState: {
     read(chatId: string, characterId: string, userId?: string): Promise<unknown>;
-    write(chatId: string, command: import('./runtime-state').RuntimeStateCommand, userId?: string, mutationId?: string): Promise<unknown>;
+    write(chatId: string, command: import("lumiverse-spindle-types").RuntimeStateCommandDTO, userId?: string, mutationId?: string): Promise<unknown>;
   };
   frontendCapabilities: {
     declare(capability: "message_tag_interceptor"): () => void;
@@ -911,6 +917,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "world_books" | "runtimeSt
   presets: {
     list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: Preset[]; total: number }>;
     get(presetId: string, userId?: string): Promise<Preset | null>;
+    getActive(chatId?: string, userId?: string): Promise<ActivePresetDTO>;
     create(input: CreatePresetInput, userId?: string): Promise<Preset>;
     update(presetId: string, input: UpdatePresetInput, userId?: string): Promise<Preset>;
     delete(presetId: string, userId?: string): Promise<boolean>;
@@ -1148,7 +1155,7 @@ let oauthCallbackHandler:
   | null = null;
 const frontendMessageHandlers = new Set<(payload: unknown, userId: string, frontendSessionId?: string) => void>();
 const frontendRuntimeCapabilityRefCounts = new Map<"message_tag_interceptor", number>();
-const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
+const commandInvokedHandlers = new Set<(commandId: string, context: any, origin?: { userId: string; frontendSessionId?: string }) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
 const frontendProcessLifecycleHandlers = new Set<(event: FrontendProcessLifecycleEvent) => void>();
@@ -1573,7 +1580,31 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
+function getChatMessages<O extends ChatGetMessagesOptionsDTO | undefined>(
+  chatId: string,
+  options: O,
+): Promise<Array<ChatGetMessagesResultDTO<O>>>;
+function getChatMessages(chatId: string, options?: undefined): Promise<Array<ChatGetMessagesResultDTO<undefined>>>;
+async function getChatMessages(
+  chatId: string,
+  options?: ChatGetMessagesOptionsDTO,
+): Promise<Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>> {
+  const requestId = crypto.randomUUID();
+  const result = await request({ type: "chat_get_messages", requestId, chatId, options });
+  return result as Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>;
+}
+
+const organizationRuntime = createOrganizationRuntime({ request, send: post });
+
 const spindleApi: RuntimeSpindleAPI = {
+  uuid: {
+    async v4(): Promise<string> {
+      return await request({ type: "uuid_generate", requestId: crypto.randomUUID(), version: 4 }) as string;
+    },
+    async v7(): Promise<string> {
+      return await request({ type: "uuid_generate", requestId: crypto.randomUUID(), version: 7 }) as string;
+    },
+  },
   decisions: {
     async listProviders(options) {
       return await request({ type: "decisions_providers", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listProviders"]>>;
@@ -1596,6 +1627,22 @@ const spindleApi: RuntimeSpindleAPI = {
       options?.signal?.addEventListener("abort", cancel, { once: true });
       if (options?.signal?.aborted) cancel();
       try { return await result as DecisionResult<typeof input.questions>; }
+      finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
+    },
+  },
+  embeddings: {
+    async listConnections(options) {
+      return await request({ type: "embeddings_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleEmbeddingsAPI["listConnections"]>>;
+    },
+    async embed(input, options) {
+      assertMutationAllowed("spindle.embeddings.embed()");
+      options?.signal?.throwIfAborted();
+      const requestId = crypto.randomUUID();
+      const cancel = () => post({ type: "embeddings_cancel", requestId });
+      const result = request({ type: "embeddings_embed", requestId, input });
+      options?.signal?.addEventListener("abort", cancel, { once: true });
+      if (options?.signal?.aborted) cancel();
+      try { return await result as Awaited<ReturnType<SpindleEmbeddingsAPI["embed"]>>; }
       finally { options?.signal?.removeEventListener("abort", cancel); pendingResponses.delete(requestId); }
     },
   },
@@ -1638,13 +1685,24 @@ const spindleApi: RuntimeSpindleAPI = {
       async listDevices(options) {
         return await request({ type: "desktop_capture_devices", requestId: crypto.randomUUID(), userId: options?.userId }) as DesktopCaptureDevice[];
       },
+      async getApprovalStatus(input) {
+        return await request({ type: "desktop_capture_approval_status", requestId: crypto.randomUUID(), input }) as DesktopCaptureApprovalStatus;
+      },
       async request(input) {
         assertMutationAllowed("spindle.desktop.capture.request()");
         return await request({ type: "desktop_capture_request", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
       },
+      async optimize(input) {
+        assertMutationAllowed("spindle.desktop.capture.optimize()");
+        return await request({ type: "desktop_capture_optimize", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
+      },
       async release(assetId, options) {
         assertMutationAllowed("spindle.desktop.capture.release()");
         await request({ type: "desktop_capture_release", requestId: crypto.randomUUID(), assetId, userId: options?.userId });
+      },
+      async finish(requestKey, options) {
+        assertMutationAllowed("spindle.desktop.capture.finish()");
+        return await request({ type: "desktop_capture_finish", requestId: crypto.randomUUID(), requestKey, userId: options?.userId }) as boolean;
       },
     },
   },
@@ -1841,6 +1899,18 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     quietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
       return requestBoundGeneration<QuietTrackedResultDTO>("generate_quiet_tracked", input);
+    },
+    async beginMessage(input) {
+      assertMutationAllowed("generate.beginMessage");
+      return await request({ type: "message_generation_begin", requestId: crypto.randomUUID(), input }) as { id: string };
+    },
+    async finishMessage(sessionId) {
+      assertMutationAllowed("generate.finishMessage");
+      return await request({ type: "message_generation_finish", requestId: crypto.randomUUID(), sessionId }) as import("./message-generation").MessageGenerationResult;
+    },
+    async abortMessage(sessionId) {
+      assertMutationAllowed("generate.abortMessage");
+      await request({ type: "message_generation_abort", requestId: crypto.randomUUID(), sessionId });
     },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
@@ -2321,15 +2391,12 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   chat: {
-    async getMessages(chatId: string) {
-      const requestId = crypto.randomUUID();
-      const result = await request({ type: "chat_get_messages", requestId, chatId });
-      return result as Array<ChatMessageDTO & {
-        role: "system" | "user" | "assistant";
-        metadata?: Record<string, unknown>;
-      }>;
+    async setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean> {
+      assertMutationAllowed("spindle.chat.setSwipeVariables()");
+      return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
     },
-    async appendMessage(chatId: string, message, options?: ChatAppendMessageOptions) {
+    getMessages: getChatMessages,
+    async appendMessage(chatId: string, message: ChatAppendMessageDTO, options?: ChatAppendMessageOptionsDTO) {
       assertMutationAllowed("spindle.chat.appendMessage()");
       const requestId = crypto.randomUUID();
       const result = await request({
@@ -2455,6 +2522,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   connections: {
+    organization: organizationRuntime.api,
     async list(userId?: string): Promise<ConnectionProfileDTO[]> {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_list", requestId, userId });
@@ -2603,6 +2671,8 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   theme: {
+    authoring: createThemeAuthoringRuntime(request, assertMutationAllowed),
+    references: createThemeReferencesRuntime(request),
     async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.apply()");
       const requestId = crypto.randomUUID();
@@ -2917,6 +2987,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const result = await request({ type: "presets_get", requestId, presetId, userId });
       return result as Preset | null;
     },
+    async getActive(chatId?: string, userId?: string): Promise<ActivePresetDTO> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "presets_get_active", requestId, chatId, userId });
+      return result as ActivePresetDTO;
+    },
     async create(input: CreatePresetInput, userId?: string): Promise<Preset> {
       assertMutationAllowed("spindle.presets.create()");
       const requestId = crypto.randomUUID();
@@ -2982,7 +3057,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   characters: {
-    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: CharacterDTO[]; total: number }> {
+    async list(options?: { limit?: number; offset?: number; search?: string; userId?: string }): Promise<{ data: CharacterDTO[]; total: number }> {
       const requestId = crypto.randomUUID();
       const result = await request({
         type: "characters_list",
@@ -2990,6 +3065,7 @@ const spindleApi: RuntimeSpindleAPI = {
         limit: options?.limit,
         offset: options?.offset,
         userId: options?.userId,
+        ...{ search: options?.search },
       });
       return result as { data: CharacterDTO[]; total: number };
     },
@@ -3057,6 +3133,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "chats_update", requestId, chatId, input, userId });
       return result as ChatDTO;
+    },
+    async compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null> {
+      assertMutationAllowed("spindle.chats.compareAndSetMetadata()");
+      const requestId = crypto.randomUUID();
+      return await request({ type: "chats_compare_metadata", requestId, chatId, input, userId }) as ChatDTO | null;
     },
     async delete(chatId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.chats.delete()");
@@ -3167,6 +3248,10 @@ const spindleApi: RuntimeSpindleAPI = {
         const result = await request({ type: "world_book_entries_delete", requestId, entryId, userId });
         return result as boolean;
       },
+    },
+    async resolveForChat(chatId, options) {
+      const requestId = crypto.randomUUID();
+      return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as ResolvedWorldInfoEntryDTO[];
     },
     async getActivated(chatId: string, userId?: string) {
       const requestId = crypto.randomUUID();
@@ -4013,6 +4098,24 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  liveActivities: {
+    async getStatus(userId) {
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "status", userId }) as import("./live-activities-contract").LiveActivityStatus;
+    },
+    async start(input, userId) {
+      assertMutationAllowed("spindle.liveActivities.start()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "start", input, userId }) as import("./live-activities-contract").LiveActivityResult;
+    },
+    async update(id, input, userId) {
+      assertMutationAllowed("spindle.liveActivities.update()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "update", id, input, userId }) as import("./live-activities-contract").LiveActivityResult;
+    },
+    async end(id, userId) {
+      assertMutationAllowed("spindle.liveActivities.end()");
+      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "end", id, userId }) as import("./live-activities-contract").LiveActivityResult;
+    },
+  },
+
   push: {
     async send(
       input: { title: string; body: string; tag?: string; url?: string; icon?: string; rawTitle?: boolean; image?: string },
@@ -4178,6 +4281,8 @@ const spindleApi: RuntimeSpindleAPI = {
     worldInfoActivationCapture: 1,
     worldInfoRuntimePlacement: 1,
     worldInfoOutputOrdering: 1,
+    worldInfoAdditionalEntries: 1,
+    runtimeMessageMutations: 1,
   }),
 
   registerContextHandler(
@@ -4532,7 +4637,7 @@ const spindleApi: RuntimeSpindleAPI = {
       assertMutationAllowed("spindle.commands.unregister()");
       post({ type: "commands_unregister", commandIds: commandIds ?? [] } as any);
     },
-    onInvoked(handler: (commandId: string, context: any) => void | Promise<void>) {
+    onInvoked(handler: (commandId: string, context: any, origin?: { userId: string; frontendSessionId?: string }) => void | Promise<void>) {
       commandInvokedHandlers.add(handler);
       return () => {
         commandInvokedHandlers.delete(handler);
@@ -4578,6 +4683,7 @@ const spindleApi: RuntimeSpindleAPI = {
 async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
   switch (msg.type) {
+    case 'connection_organization_snapshot': organizationRuntime.receive(msg); break;
     case "init": {
       manifest = msg.manifest;
       storagePath = msg.storagePath;
@@ -5170,7 +5276,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     case "command_invoked": {
       for (const handler of commandInvokedHandlers) {
         try {
-          handler(msg.commandId, msg.context);
+          Promise.resolve(handler(msg.commandId, msg.context, { userId: msg.userId, frontendSessionId: msg.frontendSessionId })).catch((err: any) => {
+            post({ type: "log", level: "error", message: `Command handler error (${msg.commandId}): ${err?.message ?? err}` } as any);
+          });
         } catch (err: any) {
           post({
             type: "log",
@@ -5251,6 +5359,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "shutdown": {
+      organizationRuntime.dispose();
       // Signal the host so it doesn't have to wait for the 5s fallback
       // timeout in WorkerHost.stop(). Posting via the existing log channel
       // matches the __worker_ready__ pattern and avoids touching the

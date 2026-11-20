@@ -30,7 +30,8 @@ function healLegacyColor(color: string): string {
  */
 export function normalizeLegacyFontTags(html: string): string {
   return html
-    .replace(/<font\b([^>]*)>/gi, (_match, attributes: string) => {
+    .replace(/<font\b([^>]*)(>|$)/gi, (match, attributes: string, end: string) => {
+      if (!end) return match
       const color = getAttributeValue(attributes, 'color')
       const style = getAttributeValue(attributes, 'style')
       const healedColor = color ? healLegacyColor(color) : null

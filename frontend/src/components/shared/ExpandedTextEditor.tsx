@@ -913,7 +913,7 @@ export default function ExpandedTextEditor({
       onMouseDown={(e) => { overlayMouseDownRef.current = e.target }}
       onClick={(e) => { if (e.target === e.currentTarget && overlayMouseDownRef.current === e.currentTarget) onClose() }}
     >
-      {editorContent}
+      <div className={s.viewport}>{editorContent}</div>
     </div>,
     document.body
   )

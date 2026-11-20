@@ -315,7 +315,9 @@ export interface StripNonProseOptions {
    * Nested HTML tag names that remain intact inside preserved font/color
    * blocks. The tags still get removed anywhere else by the strict prose pass.
    * Memory Cortex uses this for configured thought delimiters so it can
-   * classify thought colors before stripping formatting.
+   * classify thought colors before stripping formatting. Italic i/em tags
+   * are also preserved. Wrappers around colored prose survive too; the same
+   * tags without colored prose still follow the strict prose policy.
    */
   preserveFontInnerTags?: string[];
   /**
@@ -424,7 +426,7 @@ function cleanFontBlockInner(fontBlock: string, preserveInnerTags: string[] = []
 export function stripNonProseTags(content: string, options?: StripNonProseOptions): string {
   let result = content;
   const preserveFontInnerTags = options?.keepFontTags
-    ? normalizeHtmlTagNames(options.preserveFontInnerTags)
+    ? normalizeHtmlTagNames(["i", "em", ...(options.preserveFontInnerTags ?? [])])
     : [];
 
   // A configured thought tag must survive only inside a color block. A
@@ -458,11 +460,25 @@ export function stripNonProseTags(content: string, options?: StripNonProseOption
       });
     };
     stashPair(/<font\b[^>]*>[\s\S]*?<\/font\s*>/gi);
-    stashPair(/<span\s+style\s*=\s*["'][^"']*color\s*:[^"']*["'][^>]*>[\s\S]*?<\/span\s*>/gi);
+    stashPair(/<span\b[^>]*?\bstyle\s*=\s*["'][^"']*(?<![-\w])color\s*:[^"']*["'][^>]*>[\s\S]*?<\/span\s*>/gi);
+
+    // Preserve thought/italic wrappers AROUND a stashed color block, as well
+    // as those inside it. Only their tags are protected: an enclosing HUD,
+    // details or other structural island still removes the entire content.
+    const wrappers: string[] = [];
+    for (const tag of preserveFontInnerTags) {
+      result = result.replace(new RegExp(`(<${tag}\\b[^>]*>)([\\s\\S]*?)(<\\/${tag}\\s*>)`, "gi"), (match, open, inner, close) => {
+        if (!inner.includes("\x00FT")) return match;
+        const start = wrappers.push(open) - 1;
+        const end = wrappers.push(close) - 1;
+        return `\x00FCW${start}\x00${inner}\x00FCW${end}\x00`;
+      });
+    }
 
     result = stripAllXmlTagsAndContent(result);
 
     result = result.replace(/\x00FT(\d+)\x00/g, (_, idx) => stash[Number(idx)]);
+    result = result.replace(/\x00FCW(\d+)\x00/g, (_, idx) => wrappers[Number(idx)]);
   } else {
     // Even when not preserving font tags, the inner colored prose is still
     // authored narrative text and must flow through. Replace each font /
@@ -471,7 +487,7 @@ export function stripNonProseTags(content: string, options?: StripNonProseOption
     result = result.replace(/<font\b[^>]*>([\s\S]*?)<\/font\s*>/gi, (_, inner) =>
       stripAllHtmlTagsPreserveContent(inner));
     result = result.replace(
-      /<span\s+style\s*=\s*["'][^"']*color\s*:[^"']*["'][^>]*>([\s\S]*?)<\/span\s*>/gi,
+      /<span\b[^>]*?\bstyle\s*=\s*["'][^"']*(?<![-\w])color\s*:[^"']*["'][^>]*>([\s\S]*?)<\/span\s*>/gi,
       (_, inner) => stripAllHtmlTagsPreserveContent(inner),
     );
 

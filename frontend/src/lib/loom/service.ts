@@ -65,6 +65,7 @@ export function createMarkerBlock(markerType: string, name?: string): PromptBloc
     marker: markerType,
     content: '',
     isLocked: isStructural,
+    position: markerType === 'post_history_instructions' ? 'post_history' : 'pre_history',
   })
 }
 
@@ -330,12 +331,8 @@ function markPresetAsLocalImport(preset: LoomPreset): LoomPreset {
 }
 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
-  const bag: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(meta)) {
-    if (isLoomOwnedPresetMetadataKey(key)) continue
-    bag[key] = value
-  }
-  return bag
+  return Object.fromEntries(Object.entries(meta)
+    .filter(([key]) => !isLoomOwnedPresetMetadataKey(key)))
 }
 
 function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
@@ -1484,6 +1481,7 @@ interface STPrompt {
   enabled?: boolean
   injection_trigger?: string[]
   lumiverse_character_tag_trigger?: string[]
+  lumiverse_character_instruction?: unknown
   system_prompt?: boolean
   marker?: boolean
   injection_position?: number
@@ -1498,6 +1496,7 @@ interface STPresetData {
   prompt_order?: Record<string, { order?: Array<{ identifier: string; enabled?: boolean }> }>
   extensions?: {
     regex_scripts?: unknown[]
+    [key: string]: unknown
   }
   // Root-level behavior prompts (ST stores these outside the prompts array)
   continue_nudge_prompt?: string
@@ -1509,13 +1508,45 @@ interface STPresetData {
 }
 
 /**
+ * Keep the extension data an ST preset carries (e.g. JS-Slash-Runner scripts)
+ * as passthrough metadata, stored as-is and never executed. regex_scripts is
+ * imported separately as preset-linked regex rows; Loom-owned keys are skipped.
+ */
+function importSTExtensions(extensions: unknown): Record<string, unknown> {
+  if (!isRecord(extensions)) return {}
+  return Object.fromEntries(Object.entries(extensions).filter(([key, value]) => (
+    key !== 'regex_scripts' && !isLoomOwnedPresetMetadataKey(key) && value !== undefined
+  )))
+}
+
+/**
  * Convert a single ST prompt entry to an internal block.
  * Recognizes well-known ST identifiers and converts them to marker blocks.
+ * Other prompts keep their ST identifier as the block id (when safe and unused), so
+ * preset extensions that reference prompts by identifier still resolve them.
  */
-function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
-  const markerType = p.identifier ? ST_IDENTIFIER_TO_MARKER[p.identifier] : undefined
+function convertSTPromptToBlock(p: STPrompt, enabled: boolean, allocateId: (preferred?: string) => string): PromptBlock {
+  const instruction = p.lumiverse_character_instruction
+  if (
+    isRecord(instruction)
+    && (instruction.marker === 'system_prompt' || instruction.marker === 'post_history_instructions')
+    && isPromptBlockPlacement(instruction.placement)
+  ) {
+    return {
+      ...createMarkerBlock(instruction.marker, p.name || undefined),
+      ...instruction.placement,
+      id: allocateId(p.identifier),
+      enabled,
+      injectionTrigger: Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : [],
+      characterTagTrigger: sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger),
+    }
+  }
+  const markerType = p.identifier && Object.hasOwn(ST_IDENTIFIER_TO_MARKER, p.identifier)
+    ? ST_IDENTIFIER_TO_MARKER[p.identifier]
+    : undefined
   if (markerType) {
     const block = createMarkerBlock(markerType, p.name || undefined)
+    block.id = allocateId()
     block.enabled = enabled
     block.injectionTrigger = Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : []
     block.characterTagTrigger = sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger)
@@ -1549,6 +1580,7 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
   }
 
   return createBlock({
+    id: allocateId(p.identifier),
     name: displayName,
     content: p.content || '',
     role: (p.role as PromptBlock['role']) || 'system',
@@ -1602,31 +1634,49 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     if (p.identifier) promptByIdentifier.set(p.identifier, p)
   }
 
-  const processedIdentifiers = new Set<string>()
+  const processedPrompts = new Set<STPrompt>()
+  const usedBlockIds = new Set<string>()
+  // Reserve source identities before generating any marker/fallback ids.
+  const reservedIds = new Set(prompts.map((p) => p.identifier).filter((id): id is string => (
+    typeof id === 'string' && !!id.trim()
+  )))
+  const allocateBlockId = (preferred?: string): string => {
+    // Profiles and prompt-variable maps use object keys. Prototype property
+    // names must receive fresh ids rather than reaching those existing maps.
+    if (typeof preferred === 'string' && preferred.trim()
+      && !Object.hasOwn(Object.prototype, preferred) && !usedBlockIds.has(preferred)) {
+      usedBlockIds.add(preferred)
+      return preferred
+    }
+    let id = generateUUID()
+    while (usedBlockIds.has(id) || reservedIds.has(id)) id = generateUUID()
+    usedBlockIds.add(id)
+    return id
+  }
 
   // First pass: follow prompt_order sequence
   for (const identifier of orderSequence) {
     const p = promptByIdentifier.get(identifier)
-    if (!p) continue
-    processedIdentifiers.add(identifier)
+    if (!p || processedPrompts.has(p)) continue
+    processedPrompts.add(p)
 
     const enabled = p.identifier && enabledOverrides.has(p.identifier)
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, allocateBlockId))
   }
 
   // Second pass: append any prompts not in prompt_order (preserves prompts[] order)
   for (const p of prompts) {
-    if (p.identifier && processedIdentifiers.has(p.identifier)) continue
-    processedIdentifiers.add(p.identifier || '')
+    if (processedPrompts.has(p)) continue
+    processedPrompts.add(p)
 
     const enabled = p.identifier && enabledOverrides.has(p.identifier)
       ? enabledOverrides.get(p.identifier)!
       : (p.enabled !== false)
 
-    blocks.push(convertSTPromptToBlock(p, enabled))
+    blocks.push(convertSTPromptToBlock(p, enabled, allocateBlockId))
   }
 
   // Ensure chat_history marker exists
@@ -1639,7 +1689,9 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
         break
       }
     }
-    blocks.splice(insertIdx, 0, createMarkerBlock('chat_history'))
+    const chatHistory = createMarkerBlock('chat_history')
+    chatHistory.id = allocateBlockId()
+    blocks.splice(insertIdx, 0, chatHistory)
   }
 
   return {
@@ -1649,7 +1701,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     coverUrl: null,
     presetVersion: null,
     lumihubMeta: null,
-    passthroughMetadata: {},
+    passthroughMetadata: importSTExtensions(stPresetData.extensions),
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
@@ -1715,12 +1767,15 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
 
   for (const block of exportLoom.blocks) {
     // Determine ST identifier — well-known markers use their ST name,
-    // everything else (custom blocks, categories) uses the block's own UUID
+    // everything else (custom blocks, categories) uses the block's own id
     const markerMapping = block.marker && block.marker !== 'category'
       ? MARKER_TO_ST_IDENTIFIER[block.marker]
       : undefined
     const identifier = markerMapping ?? block.id
     const isWellKnown = !!markerMapping
+    const characterInstructionMacro = block.marker === 'system_prompt' ? '{{charPrompt}}'
+      : block.marker === 'post_history_instructions' ? '{{charInstruction}}'
+      : null
 
     // Map position → injection_position / injection_depth
     let injection_position = 0
@@ -1744,7 +1799,7 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
       name: block.marker === 'category' && !block.name.startsWith(CATEGORY_MARKER)
         ? `${CATEGORY_MARKER}${block.name}`
         : block.name,
-      content: block.content || '',
+      content: characterInstructionMacro ?? (block.content || ''),
       role,
       enabled: block.enabled,
       system_prompt: false,
@@ -1753,6 +1808,15 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
       injection_depth,
       injection_order: 100,
       forbid_overrides: false,
+    }
+
+    // These slots have no ST marker identifier. Export their macro content and
+    // retain native placement so importing back into Loom preserves opt-outs.
+    if (characterInstructionMacro) {
+      stPrompt.lumiverse_character_instruction = {
+        marker: block.marker,
+        placement: { role: block.role, position: block.position, depth: block.depth },
+      }
     }
 
     // Include injection_trigger for non-marker prompts (maps 1:1 with ST)

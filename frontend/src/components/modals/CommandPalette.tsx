@@ -11,7 +11,7 @@ import { commandGroupLabel, translateCommand } from '@/lib/i18n/resolveLabel'
 import { extensionTabsToCommands, extensionCommandsToCommands, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
 import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import styles from './CommandPalette.module.css'
-import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
+import { filterEnabledFrontendContributions, filterEnabledCommandContributions } from '@/lib/spindle/frontend-extension-availability'
 
 // ── Match highlight ────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ function CommandPaletteNative() {
   const { grouped, orderedFlat, flatIndexMap } = useMemo(() => {
     void settingsTabs
     const enabledDrawerTabs = filterEnabledFrontendContributions(drawerTabs, extensions)
-    const enabledExtensionCommands = filterEnabledFrontendContributions(extensionCommands, extensions)
+    const enabledExtensionCommands = filterEnabledCommandContributions(extensionCommands, extensions)
     const allCommands = [...buildCommands(userRole), ...extensionTabsToCommands(enabledDrawerTabs), ...extensionCommandsToCommands(enabledExtensionCommands)]
       .map(translateCommand)
 

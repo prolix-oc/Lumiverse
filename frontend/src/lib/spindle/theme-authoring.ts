@@ -1,3 +1,5 @@
+import type { ThemeInspectionOptions, ThemeInspectionResult } from './theme-inspection'
+import { uploadThemePackAssets } from '@/lib/themePackAssets'
 import type { SpindleUploadFile } from 'lumiverse-spindle-types'
 import type { ThemeAsset } from '@/types/api'
 import { sanitizeCSS, validateCSS } from '@/lib/cssValidator'
@@ -14,6 +16,7 @@ import {
 
 export const THEME_AUTHORING_HOST_CAPABILITIES = Object.freeze({
   'theme-assets-v1': 1,
+  'theme-inspection-v1': 1,
   'theme-packs-v1': 1,
   'theme-catalog-v1': 1,
   'theme-editor-navigation-v1': 1,
@@ -86,6 +89,7 @@ export type SpindleThemeEditorTarget = 'global' | 'assets' | 'component'
 export interface SpindleThemeEditorOptions { target?: SpindleThemeEditorTarget; componentId?: string }
 
 export interface SpindleThemeAuthoringAPI {
+  inspect(options: ThemeInspectionOptions): ThemeInspectionResult
   readonly assets: {
     getActiveBundleId(): string | null
     createBundle(): string
@@ -139,6 +143,7 @@ export interface ThemeComponentRegistryEntry {
 }
 
 export interface ThemeAuthoringDependencies {
+  inspect?(options: ThemeInspectionOptions): ThemeInspectionResult
   assertActive(): void
   requireAppManipulation(member: string): void
   assetClient: ThemeAssetClient
@@ -178,12 +183,6 @@ async function blobToBase64(blob: Blob): Promise<string> {
   let binary = ''
   for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index])
   return btoa(binary)
-}
-
-function base64ToFile(asset: ThemePackAsset): File {
-  const binary = atob(asset.dataBase64)
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  return new File([bytes], asset.originalFilename, { type: asset.mimeType })
 }
 
 function prepareStylesheet(label: string, css: string, warnings?: string[]): string {
@@ -241,20 +240,7 @@ async function uploadPackAssets(
   bundleId: string,
   client: ThemeAssetClient,
 ): Promise<SpindleThemeAsset[]> {
-  const uploaded: ThemeAsset[] = []
-  try {
-    for (const asset of packAssets) {
-      uploaded.push(await client.upload(base64ToFile(asset), {
-        bundleId,
-        slug: asset.slug,
-        tags: asset.tags,
-        metadata: asset.metadata,
-      }))
-    }
-  } catch (error) {
-    await Promise.all(uploaded.map((asset) => client.delete(asset.id).catch(() => {})))
-    throw error
-  }
+  const uploaded = await uploadThemePackAssets(packAssets, bundleId, client)
   return uploaded.map((asset) => toPublicAsset(asset, client))
 }
 
@@ -269,6 +255,11 @@ export function createThemeAuthoringAPI(dependencies: ThemeAuthoringDependencies
   const mutate = (member: string) => { active(); dependencies.requireAppManipulation(member) }
 
   return Object.freeze({
+    inspect(options) {
+      active(); dependencies.requireAppManipulation('ctx.theme.inspect')
+      if (!dependencies.inspect) throw new Error('Theme inspection is unavailable.')
+      return dependencies.inspect(options)
+    },
     assets: Object.freeze({
       getActiveBundleId() { active(); return dependencies.getStore().customCSS.bundleId },
       createBundle() { active(); return dependencies.createBundleId() },

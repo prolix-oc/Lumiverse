@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
-import { upgradeWebSocket } from "hono/bun";
+import { upgradeWebSocket } from "@hono/bun";
 import type { ServerWebSocket } from "bun";
 import { queuedWebSocketEvents } from "./receive-queue";
 import { websocket } from "./transport";

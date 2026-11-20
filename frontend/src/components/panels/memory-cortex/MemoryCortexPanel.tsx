@@ -493,6 +493,7 @@ function EntityCard({
           </div>
           <div className={styles.entityMeta}>
             {entity.entityType} &middot; {t('memoryCortexPanel.entity.mentions', { count: entity.mentionCount })}
+            {' '}&middot; {t('memoryCortexPanel.entity.facts')}: {entity.facts.length}
             {lastSeen && <span className={styles.lastSeen}> &middot; {lastSeen}</span>}
             {entity.salienceAvg > 0 && (
               <span className={styles.salienceBadge} style={{

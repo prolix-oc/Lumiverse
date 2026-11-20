@@ -131,6 +131,11 @@ app.delete("/stash/:stashId", async (c) => {
   return c.json({ success: true });
 });
 
+app.get("/:id/capabilities", async (c) => {
+  const capabilities = await svc.getPresetCapabilitiesAsync(c.get("userId"), c.req.param("id"));
+  return capabilities ? c.json(capabilities) : c.json({ error: "Not found" }, 404);
+});
+
 app.get("/:id", async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");

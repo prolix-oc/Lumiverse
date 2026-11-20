@@ -30,9 +30,18 @@ export interface TicketSubmissionResponse {
   uses: number
 }
 
+export interface ImportJobProgress {
+  phase: string
+  table?: string
+  processed?: number
+  total?: number
+  bytesProcessed?: number
+  bytesTotal?: number
+}
+
 export interface ImportJobStatus {
   jobId: string
-  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled'
+  status: 'queued' | 'awaiting_ticket' | 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted'
   startedAt: number
   finishedAt: number | null
   manifest: {
@@ -41,6 +50,7 @@ export interface ImportJobStatus {
     archiveId: string
     producerVersion: string | null
     includeVectors: boolean
+    includeExtensionData?: boolean
     embeddingConfig: { provider: string | null; model: string | null; dimension: number | null }
     counts: Record<string, number>
     missingFiles: string[]
@@ -50,19 +60,28 @@ export interface ImportJobStatus {
   summary: Record<string, { imported: number; skipped: number }>
   fileSummary: Record<string, number>
   error: string | null
+  progress?: ImportJobProgress | null
 }
 
 export const userDataApi = {
+  getImportJobs(): Promise<{ jobs: Pick<ImportJobStatus, 'jobId' | 'status'>[] }> {
+    return get('/user-data/import')
+  },
+
+  resumeImport(jobId: string): Promise<{ jobId: string }> {
+    return post(`/user-data/import/${jobId}/resume`)
+  },
+
   /** Returns the URL the browser can navigate to / GET for a streamed export
    *  without API keys. */
-  exportUrl(includeVectors: boolean): string {
-    return `${BASE_URL}/user-data/export?includeVectors=${includeVectors ? '1' : '0'}`
+  exportUrl(includeVectors: boolean, includeExtensionData = false): string {
+    return `${BASE_URL}/user-data/export?includeVectors=${includeVectors ? '1' : '0'}&includeExtensionData=${includeExtensionData ? '1' : '0'}`
   },
 
   /** Prepare a secrets-bearing export. Returns the ticket JSON (to download
    *  out-of-band) and the URL to stream the archive from. */
-  prepareSecretsExport(includeVectors: boolean): Promise<ExportPrepareResponse> {
-    return post('/user-data/export/prepare', { includeVectors, includeSecrets: true })
+  prepareSecretsExport(includeVectors: boolean, includeExtensionData = false): Promise<ExportPrepareResponse> {
+    return post('/user-data/export/prepare', { includeVectors, includeSecrets: true, includeExtensionData })
   },
 
   /** Submit the parsed ticket JSON to a job awaiting one. */

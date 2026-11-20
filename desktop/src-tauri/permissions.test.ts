@@ -18,7 +18,7 @@ const PERMISSIONS_DIR = join(HERE, "permissions");
 const CAPABILITIES_DIR = join(HERE, "capabilities");
 
 function readSource(name: string): string {
-  return readFileSync(join(HERE, "src", name), "utf8");
+  return readFileSync(join(HERE, "src", name), "utf8").replace(/\r\n/g, "\n");
 }
 
 /** Commands exposed to the webview via `generate_handler!`. */
@@ -165,6 +165,26 @@ describe("capability origins", () => {
           "http://localhost:1430/server-setup.html", "http://127.0.0.1:1430/server-setup.html",
         ]);
       } else expect(capability.json.local).toBe(true);
+    }
+  });
+  test("network access settings belong only to the local tray host", () => {
+    const grants = capabilities().filter((capability) =>
+      (capability.json.permissions as string[]).includes("bundled-server-controls"));
+    expect(grants.length).toBe(2);
+    for (const capability of grants) {
+      expect(capability.json.windows).toEqual(["main"]);
+      if (capability.json.remote !== undefined) {
+        expect((capability.json.remote as { urls: string[] }).urls).toEqual([
+          "http://127.0.0.1:1430", "http://localhost:1430",
+        ]);
+      } else expect(capability.json.local).toBe(true);
+    }
+    const source = readSource("bundled_server.rs");
+    const build = readFileSync(join(HERE, "build.rs"), "utf8");
+    for (const command of ["bundled_server_network_access", "bundled_server_set_network_access"]) {
+      expect(build).toContain(`"${command}"`);
+      const body = source.slice(source.indexOf(`pub async fn ${command}`)).split("#[tauri::command]")[0];
+      expect(body).toContain('require_window(&window, "main")?');
     }
   });
   /**
@@ -366,57 +386,46 @@ describe("native capture boundary", () => {
     expect(plist).toContain("NSAudioCaptureUsageDescription");
   });
 
-  test("macOS explicitly offers other-app windows and entire displays through the system picker", () => {
+  test("macOS source selection opens directly without a capture window or Send step", () => {
     const native = readSource("capture/macos.m");
-    expect(native).toContain('addItemWithTitle:@"Entire Display"');
-    expect(native).toContain('addItemWithTitle:@"Window"');
-    expect(native).toContain("self.sourcePicker.lastItem.tag = SCShareableContentStyleDisplay;");
-    expect(native).toContain("self.sourcePicker.lastItem.tag = SCShareableContentStyleWindow;");
-    expect(native).toContain("contentStyle != SCShareableContentStyleWindow && contentStyle != SCShareableContentStyleDisplay");
+    expect(native).toContain('initWithTitle:self.requestedDisplay.length ? @"Approve the selected display for Lumiverse" : @"Choose a source for Lumiverse"');
+    expect(native).toContain('[sources popUpMenuPositioningItem:nil atLocation:NSEvent.mouseLocation inView:nil]');
+    expect(native).toContain('action:@selector(selectSource:)');
+    expect(native).toContain("item.representedObject = display;");
+    expect(native).toContain("item.representedObject = window;");
     expect(native).toContain("SCContentSharingPickerModeSingleDisplay | SCContentSharingPickerModeSingleWindow;");
-    expect(native).toContain("[picker presentPickerUsingContentStyle:contentStyle];");
-    expect(native).toContain("if (self.panel.windowNumber > 0) configuration.excludedWindowIDs = @[@(self.panel.windowNumber)];");
-    expect(native).toContain("self.sourcePicker.enabled = NO;");
-    expect(native).toContain("self.sourcePicker.hidden = YES;");
-    expect(native).not.toContain("[picker present];");
-    expect(native).toContain("filter.style != self.requestedStyle");
+    expect(native).toContain("[picker presentPickerUsingContentStyle:self.requestedStyle];");
+    for (const removed of ["NSPanel", "NSWindow", "Capture & Send", "createPanel", "showReview", "Share This Capture", "Review Before Sending"]) expect(native).not.toContain(removed);
   });
 
-  test("macOS app-wide permission requests and source enumeration require a native owner action", () => {
+  test("macOS requests missing OS permission directly and reuses existing permission", () => {
     const native = readSource("capture/macos.m");
     const action = native.match(/- \(void\)screenRecordingAccess:\(id\)sender \{[\s\S]*?\n\}/)?.[0];
-    expect(action).toBeDefined();
+    expect(action).toContain("if (!CGPreflightScreenCaptureAccess()) {");
     expect(action).toContain("CGRequestScreenCaptureAccess()");
     expect(native.match(/CGRequestScreenCaptureAccess\(\)/g)?.length).toBe(1);
-    expect(action).toContain("if (!CGPreflightScreenCaptureAccess()) { [self refreshScreenRecordingAccess]; return; }");
     expect(action).toContain("getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES");
-    expect(native.match(/getShareableContent/g)?.length).toBe(1);
-    expect(native).toContain("action:@selector(screenRecordingAccess:)");
-    expect(native).toContain("Privacy_ScreenCapture");
+    expect(native.match(/getShareableContent/g)?.length).toBe(2);
     expect(action).toContain("systemUptime >= self.expiresAt");
     expect(native).not.toContain("localizedDescription");
     expect(readSource("capture/platform.rs")).not.toContain("CGRequestScreenCaptureAccess");
   });
 
-  test("macOS permissioned fallback cannot auto-select or silently change its capture source", () => {
+  test("macOS source selection cannot auto-select or silently change its capture source", () => {
     const native = readSource("capture/macos.m");
-    const selection = native.match(/- \(void\)chooseSource:\(id\)sender \{[\s\S]*?\n\}/)?.[0];
+    const selection = native.match(/- \(void\)selectSource:\(NSMenuItem \*\)sender \{[\s\S]*?\n\}/)?.[0];
     const capture = native.match(/- \(void\)captureFilter:\(SCContentFilter \*\)filter \{[\s\S]*?\n\}/)?.[0];
-    const share = native.match(/- \(void\)share:\(id\)sender \{[\s\S]*?\n\}/)?.[0];
     expect(selection).toContain("if (!CGPreflightScreenCaptureAccess()) { [self finishOutcome:1]; return; }");
-    expect(selection).toContain("self.permissionedSources.selectedItem.representedObject");
-    expect(selection).toContain("initWithDisplay:source excludingWindows:excluded");
-    expect(selection).toContain("initWithDesktopIndependentWindow:source");
-    expect(selection).toContain("window.owningApplication.processID == getpid()");
-    expect(native).toContain('addItemWithTitle:@"Select a display or another app\'s window…"');
-    expect(native).toContain("self.primary.enabled = self.permissionedSources.selectedItem.representedObject != nil;");
+    expect(selection).toContain("sender.representedObject");
+    expect(selection).toContain("[self filterForDisplay:source content:self.permissionedContent]");
+    expect(selection).toContain("initWithDesktopIndependentWindow:window");
+    expect(native).toContain("window.owningApplication.processID == getpid()");
+    expect(native).toContain("excludingApplications:excluded exceptingWindows:@[]");
+    expect(native).toContain("if (!self->_sourceChosen && !atomic_load(&self->_completed)) [self finishOutcome:2];");
     expect(capture).toContain("filter.style != self.requestedStyle");
     expect(capture).toContain("_usingPermissionedSources && !CGPreflightScreenCaptureAccess()");
-    expect(share).toContain("_usingPermissionedSources && !CGPreflightScreenCaptureAccess()");
     expect(native).toContain("self.permissionedContent = nil;");
-    expect(native).toContain("[self.permissionedSources removeAllItems];");
-    expect(native).toContain("self.sourcePicker.enabled = YES;");
-    expect(native).toContain("self.permissionedSources.numberOfItems >= 257");
+    expect(native).toContain("sources.numberOfItems >= 258");
   });
 
   test("macOS TCC denial is reported as denied rather than a generic capture failure", () => {
@@ -430,6 +439,7 @@ describe("native capture boundary", () => {
   test("only metadata controls cross IPC; pixels never pass through the frontend", () => {
     expect(registeredCommands().filter((name) => name.startsWith("desktop_capture_"))).toEqual([
       "desktop_capture_connect", "desktop_capture_disconnect", "desktop_capture_status",
+      "desktop_capture_request_setup", "desktop_capture_setup_finished", "desktop_capture_reset_approvals",
     ]);
     const source = readSource("capture/mod.rs");
     expect(source).toContain('redirect(reqwest::redirect::Policy::none())');
@@ -451,68 +461,63 @@ describe("native capture boundary", () => {
     expect(native).toContain("tracks.count != 0");
   });
 
-  test("native preview, expiry, lock, and cleanup stay independent of extension UI", () => {
+  test("native cancellation, expiry, lock, and cleanup stay independent of extension UI", () => {
     const native = readSource("capture/macos.m");
     expect(native).toContain("SCContentSharingPicker.sharedPicker");
     expect(native).toContain("configuration.allowsChangingSelectedContent = NO;");
-    expect(native).toContain('@"Share This Capture"');
-    expect(native).toContain('@"Stop & Discard"');
+    expect(native).toContain('@"Cancel This Capture"');
     expect(native).toContain('@"com.apple.screenIsLocked"');
     expect(native).toContain("now >= self.expiresAt");
     expect(native).toContain("size.unsignedLongLongValue > self.maximumBytes");
     expect(native).toContain("mkdtemp(path)");
     expect(native).toContain("removeItemAtURL:self.directory");
+    expect(native).toContain("[self.sourceMenu cancelTracking];");
   });
 
-  test("macOS opens only the system picker and records without a Lumiverse popup", () => {
+  test("macOS restores approved sources and records without a foreground popup", () => {
     const native = readSource("capture/macos.m");
     const start = native.match(/- \(void\)start \{[\s\S]*?\n\}/)?.[0];
-    const recording = native.match(/- \(void\)startRecordingWithFilter:[\s\S]*?\n\}/)?.[0];
-    const review = native.match(/- \(void\)showReview \{[\s\S]*?\n\}/)?.[0];
-    expect(start).not.toContain("NSPanel");
-    expect(start).not.toContain("createPanel");
-    expect(start).not.toContain("orderFront");
-    expect(recording).not.toContain("createPanel");
-    expect(recording).not.toContain("orderFront");
     expect(start).toContain("NSStatusBar.systemStatusBar statusItemWithLength:");
-    expect(start).toContain("[self chooseSource:nil];");
-    expect(native).toContain("NSWindowStyleMaskNonactivatingPanel");
+    expect(start).toContain("[self restoreSource];");
+    expect(start).toContain("[self showSetup];");
+    expect(native).not.toContain("orderFront");
     expect(native).not.toContain("activateIgnoringOtherApps");
     expect(native).not.toContain("makeKeyAndOrderFront");
-    expect(native).toContain("self.detailsPopover.contentViewController = detailsController;");
-    expect(native).toContain("if (self.automaticShare) { [self share:nil]; return; }");
-    expect(review!.indexOf("if (self.automaticShare)")).toBeLessThan(review!.indexOf("[self createPanel]"));
-    expect(native).toContain("capture.automaticShare = YES;");
-    expect(native).toContain("self.automaticShare = NO;");
-    expect(native).toContain('self.primary.title = @"Review Before Sending";');
+    expect(native).toContain("[self share:nil];");
+    expect(native).toContain("capture.rememberSource = remember;");
   });
 
-  test("macOS keeps native menu-bar identity, cancellation and optional recovery controls", () => {
-    const native = readSource("capture/macos.m");
-    expect(native).toContain("identity.toolTip = self.consent;");
-    expect(native).toContain('initWithTitle:@"Stop & Discard" action:@selector(discard:)');
-    expect(native).toContain('initWithTitle:@"Capture Details & Permissions…"');
-    expect(native).toContain("self.windowAction.enabled = NO;");
-    expect(native).toContain("self.displayAction.enabled = NO;");
-    expect(native).toContain("self.sourcePicker ? self.sourcePicker.selectedTag : self.requestedStyle;");
-    expect(native).toContain("self.captureIndicator.menu = nil;");
-    expect(native).toContain("removeStatusItem:self.captureIndicator");
-    expect(native).toContain("if (self.imageView) [self.panel.contentView addSubview:self.imageView];");
-    expect(native).toContain("if (self.playerView) [self.panel.contentView addSubview:self.playerView];");
-    const details = native.match(/- \(void\)openDetails:\(id\)sender \{[\s\S]*?\n\}/)?.[0];
-    expect(details).toContain("[self createPanel];");
-    expect(details).toContain("[self.panel orderFrontRegardless];");
+  test("source selection persists independently of cancellation and only explicit disable revokes approval", () => {
+    const cocoa = readSource("capture/macos.m");
+    expect(cocoa).toContain("identity.toolTip = self.consent;");
+    expect(cocoa).toContain('initWithTitle:@"Cancel This Capture" action:@selector(discard:)');
+    expect(cocoa).toContain("self.rememberSource(self.context, self.selectedSource.UTF8String)");
+    expect(cocoa).toContain("- (void)discard:(id)sender { [self finishOutcome:2]; }");
+    expect(cocoa).toContain("self.captureIndicator.menu = nil;");
+    expect(cocoa).toContain("removeStatusItem:self.captureIndicator");
+    for (const file of ["capture/platform.rs", "capture/windows.rs"]) {
+      const native = readSource(file);
+      expect(native).not.toContain(".pause()");
+      expect(native).not.toContain(".disable(");
+      expect(native).not.toContain("desktop-capture-disabled");
+    }
+    const windows = readSource("capture/windows.rs");
+    const selected = windows.match(/    fn selected\(&mut self, item: GraphicsCaptureItem\) -> Result<\(\)> \{[\s\S]*?\n    \}/)?.[0];
+    const finish = windows.match(/    fn finish\(&mut self, result:[\s\S]*?\n    \}/)?.[0];
+    expect(selected).toContain("self.approval.remember(source.clone());");
+    expect(finish).not.toContain("self.approval");
+    expect(finish).not.toContain("sources.remove");
   });
 
-  test("one-shot release cannot bypass native source selection or change the wire protocol", () => {
+  test("persistent approval cannot be requested through worker-controlled capture flags", () => {
     const native = readSource("capture/mod.rs");
     const request = native.match(/struct CaptureRequest \{[\s\S]*?\n\}/)?.[0];
     expect(request).not.toContain("automatic_share");
     expect(request).not.toContain("remember");
     expect(native).not.toContain("ConsentState");
     expect(native).not.toContain("runtime_id:");
-    expect(native).not.toContain("revision:");
-    expect(native).toContain("Selecting a source authorizes this one capture");
+    expect(native).toContain("approval_revision: Option<String>");
+    expect(native).toContain("Selecting a source authorizes capture and release");
     const macos = readSource("capture/platform.rs");
     expect(macos).toContain("completion.active.load(Ordering::SeqCst)");
     const cocoa = readSource("capture/macos.m");
@@ -521,20 +526,32 @@ describe("native capture boundary", () => {
     expect(share).toContain("systemUptime >= self.expiresAt");
     expect(share).toContain("_usingPermissionedSources && !CGPreflightScreenCaptureAccess()");
     const windows = readSource("capture/windows.rs");
-    expect(windows).toContain("automatic_share: true,");
     expect(windows).toContain("self.phase != Phase::Preview");
     expect(windows).toContain("!self.control.active.load(Ordering::SeqCst)");
   });
 
-  test("Windows opens its picker immediately without a foreground consent window", () => {
+  test("capture exposes one persistent tray toggle and no separate Remember control", () => {
+    const tray = readFileSync(join(HERE, "../src/main.ts"), "utf8").replace(/\r\n/g, "\n");
+    const browser = tray.match(/frontendItem = await Submenu\.new\(\{[\s\S]*?\n  \}\);/)?.[0];
+    const root = tray.match(/const menu = await Menu\.new\(\{[\s\S]*?\n  \}\);/)?.[0];
+    expect(browser).not.toContain("desktopCaptureItem");
+    expect(root).toContain("systemAudioItem,\n      desktopCaptureItem,");
+    expect(tray).not.toContain("Allow Screen Capture Requests Again");
+    expect(tray).not.toContain("Forget Screen Capture Approvals");
+    expect(readSource("capture/macos.m")).not.toContain("checkboxWithTitle");
+    expect(readSource("capture/windows.rs")).not.toContain("BS_AUTOCHECKBOX");
+  });
+
+  test("Windows uses an invisible owner and opens only the system source picker when needed", () => {
     const native = readSource("capture/windows.rs");
-    expect(native).toContain("ShowWindow(window, SW_SHOWNOACTIVATE)");
     expect(native).toContain("state.choose()?;");
+    expect(native).toContain("self.share()");
+    expect(native).not.toContain("ShowWindow(");
     expect(native).not.toContain("SetForegroundWindow");
-    expect(native).toContain("if self.automatic_share {");
-    expect(native).toContain("return self.share();");
-    expect(native).not.toContain("BS_AUTOCHECKBOX");
-    expect(native).toContain("DETAILS_BUTTON =>");
+    expect(native).not.toContain("CreateWindowExW(\n                WS_EX_TOPMOST");
+    expect(native).not.toContain("Capture & Send");
+    expect(native).not.toContain("Stop & Discard");
+    expect(native).not.toContain("Review Before Sending");
   });
 
   test("Windows uses the system picker and GPU surfaces without frontend or filesystem capture", () => {
@@ -575,16 +592,13 @@ describe("native capture boundary", () => {
     expect(native).toContain("SetHardwareAccelerationEnabled(true)");
     expect(readSource("capture/mod.rs")).toContain("Windows may fall back to software H.264.");
     expect(native).toContain("profile.SetAudio(None::<&AudioEncodingProperties>)");
-    expect(native).toContain("output.SetBitrate(4_000_000)");
+    expect(native).toContain("output.SetBitrate(8_000_000)");
     expect(native).toContain("MediaStreamSample::CreateFromDirect3D11Surface");
     expect(native).toContain("playback.AudioTracks()?.Size()? != 0");
     expect(native).toContain("session.NaturalVideoWidth()? != self.width");
     expect(native).toContain("VideoFrameAvailable(");
     expect(native).toContain("CopyFrameToVideoSurface(");
     expect(native).toContain("self.pixels.is_none()");
-    expect(native).toContain('w!("Share This Capture")');
-    expect(native).toContain('"Stop & Discard"');
-    expect(native).toContain('"Replay Clip"');
   });
 
   test("Windows cancellation, backpressure and deferral cleanup fail closed", () => {

@@ -28,7 +28,7 @@ test('frontend extension lifecycle cases pass in an isolated module graph', asyn
       .filter((line) => /^\d+ (?:pass|fail|skip)$/.test(line))
     try {
       expect(exitCode).toBe(0)
-      expect(summaryLines).toEqual(['18 pass', '0 fail'])
+      expect(summaryLines).toEqual(['19 pass', '0 fail'])
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       throw new Error(`Isolated lifecycle tests failed (${detail}):\n${output}`)

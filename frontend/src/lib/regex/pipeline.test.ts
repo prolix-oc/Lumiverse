@@ -170,7 +170,7 @@ describe('isolated regex pipeline', () => {
 
   test('gating preserves ordered matches introduced across worker and backend batches', async () => {
     const { spawned } = makeHarness()
-    const bodies: Array<{ content: string; scripts: RegexScript[] }> = []
+    const bodies: Array<{ content: string; preprocessed?: boolean; scripts: RegexScript[] }> = []
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (_url, init) => {
       bodies.push(JSON.parse(String(init?.body)))
       return new Response(JSON.stringify({ result: 'Alice' }), { status: 200 })
@@ -187,6 +187,7 @@ describe('isolated regex pipeline', () => {
       expect((await promise).result).toBe('done')
       expect(bodies).toHaveLength(1)
       expect(bodies[0].content).toBe('statusENDING')
+      expect(bodies[0].preprocessed).toBe(true)
       expect(bodies[0].scripts.map((s) => s.id)).toEqual(['consume'])
     } finally {
       fetchSpy.mockRestore()
@@ -379,7 +380,18 @@ describe('isolated regex pipeline', () => {
       const body = `${'a'.repeat(40)}X`
       const outcome = await applyDisplayRegexTiered(body, [risky], context)
       expect(outcome).toMatchObject({ result: body, cacheable: false })
-      expect(toastCalls).toHaveLength(1)
+      expect(toastCalls).toEqual(['panels:regexPanel.unavailableDisplay'])
+      expect(getRegexExecTier(risky).tier).toBe('worker')
+      expect(evidenceReports).toEqual([])
+
+      // A temporary failure must not consume the warning for a later real
+      // quarantine of the same script.
+      quarantineRegexScript(risky)
+      await applyDisplayRegexTiered(body, [risky], context)
+      expect(toastCalls).toEqual([
+        'panels:regexPanel.unavailableDisplay',
+        'panels:regexPanel.quarantinedDisplay',
+      ])
     } finally {
       fetchSpy.mockRestore()
     }
@@ -394,6 +406,28 @@ describe('isolated regex pipeline', () => {
     expect(spawned).toHaveLength(0)
   })
 
+  test('temporary executor failures leave unchanged scripts eligible for a later successful render', async () => {
+    makeHarness({ spawnThrows: true })
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 503 }))
+    try {
+      const unchanged = script('retry')
+      expect(await applyDisplayRegexTiered('x', [unchanged], context)).toMatchObject({
+        result: 'x', cacheable: false,
+      })
+
+      const { spawned } = makeHarness()
+      const retry = applyDisplayRegexTiered('x', [unchanged], context)
+      await flush()
+      echoWorker(spawned[0])
+      expect((await retry).result).toBe('y')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(evidenceReports).toEqual([])
+      expect(toastCalls).toEqual(['panels:regexPanel.unavailableDisplay'])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   test('owned processing state reaches the final callback without transport', async () => {
     const applyScripts = mock(async ({ processingState }: { processingState?: string }) => ({ content: processingState ?? 'missing' }))
     registryState.owned = true
@@ -402,6 +436,18 @@ describe('isolated regex pipeline', () => {
     expect(result.result).toBe('')
     expect(applyScripts).toHaveBeenCalledTimes(1)
   })
+
+  test('owned chats receive selected preset context through their resolver bypass', async () => {
+    const { spawned } = makeHarness();
+    registryState.owned = true;
+    const applyScripts = mock(async (_args: unknown) => ({ content: 'owned:source', cacheable: false }));
+    registryState.resolver = { applyScripts };
+    const presetContext = { preset_id: 'source', variables: { local: { mode: 'captured' } } };
+    const result = await applyDisplayRegexTiered('body', [], { ...context, chatId: 'chat', presetContext, presetRegexIds: ['source-rule'] });
+    expect(result.result).toBe('owned:source');
+    expect(applyScripts.mock.calls[0]?.[0]).toMatchObject({ context: { presetContext, presetRegexIds: ['source-rule'] } });
+    expect(spawned).toHaveLength(0);
+  });
 
   test('owned chats retain their resolver bypass', async () => {
     const { spawned } = makeHarness()

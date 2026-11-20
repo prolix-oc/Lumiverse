@@ -23,6 +23,8 @@ const bundle = await build({
 })
 const js = bundle.outputFiles.find(file => file.path.endsWith('.js')).text
 const css = bundle.outputFiles.find(file => file.path.endsWith('.css')).text
+const formsOnly = process.argv.includes('--forms-only')
+const keyboardOnly = formsOnly || process.argv.includes('--keyboard-only')
 const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 const change = async (page, method, value) => {
   await page.evaluate(([method, value]) => window.expandedEditorFixture[method](value), [method, value])
@@ -34,7 +36,7 @@ const change = async (page, method, value) => {
 }
 const checkMetrics = async (page, label) => {
   const metrics = await page.evaluate(() => {
-    const textarea = document.querySelector('textarea'), pre = document.querySelector('pre')
+    const textarea = document.querySelector('textarea[data-keyboard-caret-managed]'), pre = document.querySelector('pre')
     const a = getComputedStyle(textarea), b = getComputedStyle(pre)
     return { font: [a.fontSize, b.fontSize], line: [a.lineHeight, b.lineHeight], scroll: [textarea.scrollHeight, pre.scrollHeight], client: [textarea.clientWidth, pre.clientWidth] }
   })
@@ -42,6 +44,149 @@ const checkMetrics = async (page, label) => {
   assert.equal(metrics.line[0], metrics.line[1], `${label} line height`)
   assert.equal(metrics.client[0], metrics.client[1], `${label} wrapping width`)
   assert.ok(Math.abs(metrics.scroll[0] - metrics.scroll[1]) <= 1, `${label} wrapping: ${JSON.stringify(metrics)}`)
+}
+
+// Simulate the two host contracts: Android resizes the WebView itself, while
+// iOS keeps the shell full-height and reports a smaller/panned visual viewport.
+// Physical keyboard animations remain a device check.
+const checkKeyboardLayout = async (page, name) => {
+  const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 2, `${name} ${label}: ${actual} vs ${expected}`)
+  await change(page, 'setInline', false)
+  await change(page, 'setOpen', false)
+  await change(page, 'setShowShell', true)
+  await change(page, 'setFontScale', 1)
+  for (const platform of formsOnly ? ['ios', 'ios-pwa'] : ['android', 'ios', 'ios-pwa']) {
+    await page.evaluate(platform => {
+      document.documentElement.removeAttribute('data-tauri-desktop')
+      document.documentElement.removeAttribute('data-ios-pwa')
+      document.documentElement.removeAttribute('data-tauri-mobile')
+      if (platform === 'ios-pwa') document.documentElement.setAttribute('data-ios-pwa', '')
+      else document.documentElement.setAttribute('data-tauri-mobile', platform)
+      document.documentElement.setAttribute('data-platform', platform === 'ios-pwa' ? 'ios' : platform)
+    }, platform)
+    for (const scale of [1, 0.8, 1.25]) {
+      await change(page, 'setUiScale', scale)
+      for (const visibleHeight of [844, 520, 844, 460, 844]) {
+        const focused = visibleHeight !== 844
+        await page.setViewportSize({ width: 390, height: platform === 'android' ? visibleHeight : 844 })
+        await change(page, 'setViewport', { height: visibleHeight, fullHeight: 844, offsetTop: platform !== 'android' && focused ? 140 : 0, focused })
+        const boxes = await page.evaluate(() => {
+          const box = selector => document.querySelector(selector).getBoundingClientRect().toJSON()
+          return { shell: box('[data-fixture-shell]'), wallpaper: box('[data-fixture-wallpaper]'),
+            header: box('[data-fixture-header]'), composer: box('[data-fixture-composer]'), scrollY }
+        })
+        near(boxes.header.top, 0, `${platform} header stays visible`)
+        near(boxes.wallpaper.bottom, platform === 'android' ? visibleHeight : 844, `${platform} wallpaper covers shell`)
+        near(boxes.composer.bottom, visibleHeight, `${platform} composer clears keyboard once`)
+        near(boxes.scrollY, 0, `${platform} document does not scroll`)
+        if (!focused) continue
+        if (!formsOnly) {
+        await change(page, 'setOpen', true)
+        const editor = page.locator('textarea[data-keyboard-caret-managed]')
+        const geometry = async () => page.evaluate(() => {
+          const dialog = document.querySelector('[class*="ExpandedTextEditor_dialog"]')
+          return { dialog: dialog.getBoundingClientRect().toJSON(),
+            backdrop: dialog.parentElement.parentElement.getBoundingClientRect().toJSON() }
+        })
+        for (const highlighted of [true, false]) for (const lineCount of [1, 20, 80]) {
+          await change(page, 'setHighlighted', highlighted)
+          const draft = Array.from({ length: lineCount }, (_, i) => `Line ${i}: {{char}} text`).join('\n') + '\n\n'
+          await change(page, 'setValue', draft)
+          // Start with the keyboard closed, then open it with the caret at the
+          // end. Short values include a tail that initially fits the full field.
+          await change(page, 'setViewport', { height: 844, fullHeight: 844, focused: false })
+          await editor.evaluate(el => {
+            el.focus({ preventScroll: true }); el.setSelectionRange(el.value.length, el.value.length)
+            el.dispatchEvent(new Event('select'))
+          })
+          await settle(page)
+          const before = await geometry()
+          await change(page, 'setViewport', { height: visibleHeight, fullHeight: 844, offsetTop: platform !== 'android' ? 140 : 0, focused: true })
+          const open = await geometry()
+          near(open.backdrop.bottom, 844, `${platform} editor backdrop fills shell`)
+          near(open.dialog.top, 0, `${platform} editor ignores stale pan`)
+          near(open.dialog.bottom, before.dialog.bottom, `${platform} fullscreen frame does not shrink`)
+          near(open.dialog.bottom, 844, `${platform} editor extends behind keyboard`)
+          const caret = await page.evaluate(() => window.expandedEditorFixture.getCaret())
+          assert.ok(caret && caret.bottom <= visibleHeight + 1 && caret.top >= open.dialog.top,
+            `${name}/${platform}/ui=${scale}/highlighted=${highlighted}/lines=${lineCount} caret clears keyboard: ${JSON.stringify(caret)}`)
+          assert.equal(await editor.evaluate(el => el.selectionEnd), draft.length, 'keyboard does not rewrite selection')
+          await checkMetrics(page, `${name}/${platform}/ui=${scale}/keyboard/highlighted=${highlighted}`)
+          if (lineCount === 80) {
+            // iOS may report a forward range even when the upper handle moves.
+            // Native handle autoscroll must survive every selection notification
+            // and viewport callback while the lower endpoint stays offscreen.
+            for (const direction of ['forward', 'backward', 'none']) {
+              for (const start of [Math.floor(draft.length / 2), 0]) {
+                await editor.evaluate((el, { start, direction }) => {
+                  el.setSelectionRange(start, el.value.length, direction)
+                  el.scrollTop = 20
+                  el.dispatchEvent(new Event('select'))
+                  document.dispatchEvent(new Event('selectionchange'))
+                  visualViewport.dispatchEvent(new Event('scroll'))
+                }, { start, direction })
+                await settle(page)
+                near(await editor.evaluate(el => el.scrollTop), 20, `${platform} selection handle owns scrolling (${direction})`)
+                assert.deepEqual(await editor.evaluate(el => [el.selectionStart, el.selectionEnd]), [start, draft.length])
+              }
+            }
+            await editor.evaluate(el => {
+              el.setSelectionRange(el.value.length, el.value.length)
+              el.dispatchEvent(new Event('select'))
+            })
+            await settle(page)
+            await editor.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+            await settle(page)
+            await change(page, 'setViewport', { height: visibleHeight, fullHeight: 844, offsetTop: platform !== 'android' ? 140 : 0, focused: true })
+            near(await editor.evaluate(el => el.scrollTop), 0, 'duplicate viewport event respects reading scroll')
+            // A real selection request resumes caret following.
+            await editor.evaluate(el => el.dispatchEvent(new Event('click')))
+            await settle(page)
+            assert.ok((await page.evaluate(() => window.expandedEditorFixture.getCaret())).bottom <= visibleHeight + 1, 'caret follows a new editing request')
+          }
+          await editor.blur()
+          await change(page, 'setViewport', { height: visibleHeight, fullHeight: 844, offsetTop: 140, focused: false })
+          near((await geometry()).dialog.bottom, 844, `${platform} dismissal keeps fullscreen frame`)
+          assert.equal(await editor.inputValue(), draft, 'resize preserves draft')
+        }
+        await change(page, 'setOpen', false)
+        }
+        if (platform !== 'android') {
+          await change(page, 'setShowForm', true)
+          const field = page.getByRole('textbox', { name: 'Form text' })
+          await change(page, 'setViewport', { height: 844, focused: false })
+          await field.evaluate(el => { el.focus({ preventScroll: true }); el.setSelectionRange(el.value.length, el.value.length) })
+          await change(page, 'setViewport', { height: visibleHeight, offsetTop: 140, focused: true })
+          const form = await page.locator('[data-component="KeyboardFixture"]').boundingBox()
+          near(form.y + form.height, 844, 'shared fullscreen modal frame stays behind keyboard')
+          const formCaret = await page.evaluate(() => window.expandedEditorFixture.getFormCaret())
+          const formGeometry = await page.evaluate(() => {
+            const field = document.querySelector('textarea[aria-label="Form text"]'), mirror = document.querySelector('[data-keyboard-caret-mirror]')
+            const container = document.querySelector('[data-fixture-form-scroll]')
+            return { field: field.getBoundingClientRect().toJSON(), mirror: mirror.getBoundingClientRect().toJSON(),
+              container: container.getBoundingClientRect().toJSON(), scroll: [field.scrollTop, mirror.scrollTop, container.scrollTop],
+              size: [container.scrollHeight, container.clientHeight], padding: getComputedStyle(container).paddingBottom }
+          })
+          assert.ok(formCaret && formCaret.bottom <= visibleHeight + 1, `${name}/${platform}/ui=${scale} form caret clears keyboard: ${JSON.stringify({ caret: formCaret, ...formGeometry })}`)
+          assert.ok(await page.locator('[data-fixture-form-scroll]').evaluate(el => el.scrollTop > 0), 'ordinary textarea scrolls its form')
+          await page.getByRole('textbox', { name: 'Form name' }).focus()
+          await settle(page)
+          const fieldBox = await page.getByRole('textbox', { name: 'Form name' }).boundingBox()
+          assert.ok(fieldBox.y + fieldBox.height <= visibleHeight + 1, 'ordinary input scrolls into view')
+          await change(page, 'setShowForm', false)
+        }
+      }
+    }
+  }
+  // The new content wrapper must leave ordinary backdrop dismissal working.
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await change(page, 'setUiScale', 1)
+  await change(page, 'setViewport', { height: 900, focused: false })
+  await change(page, 'setOpen', true)
+  await page.mouse.click(5, 5)
+  assert.equal(await page.locator('textarea[data-keyboard-caret-managed]').count(), 0, 'backdrop click closes editor')
+  console.log(formsOnly ? `${name}: fullscreen form frame and caret scrolling checks passed`
+    : `${name}: fullscreen keyboard frame, caret scrolling, stale iOS dismissal, scaling and backdrop checks passed`)
 }
 
 let cases = 0
@@ -55,6 +200,7 @@ for (const name of (process.argv.find(arg => arg.startsWith('--browsers='))?.spl
     await page.setContent(`<html data-tauri-desktop data-platform="macos"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head><body><div id="root"></div></body></html>`)
     await page.addScriptTag({ content: js })
     await page.waitForFunction(() => !!window.expandedEditorFixture)
+    if (!keyboardOnly) {
     const initialValue = await page.locator('textarea').inputValue()
     for (const width of [1200, 800, 390]) for (const uiScale of [1, 0.8, 1.25]) for (const highlighted of [true, false]) {
       await page.setViewportSize({ width, height: 900 })
@@ -141,9 +287,11 @@ for (const name of (process.argv.find(arg => arg.startsWith('--browsers='))?.spl
       await page.keyboard.insertText('!')
       assert.equal(await page.locator('textarea').inputValue(), initialValue.slice(0, target.offset) + '!' + initialValue.slice(target.offset), `${name} scrolled edit`)
     }
+    }
+    await checkKeyboardLayout(page, name)
     assert.deepEqual(errors, [], `${name} browser errors`)
     await page.close()
   } finally { await browser.close() }
-  console.log(`${name}: font scale caret checks passed`)
+  if (!keyboardOnly) console.log(`${name}: font scale caret checks passed`)
 }
-console.log(`${cases} expanded editor scale cases passed`)
+if (cases) console.log(`${cases} expanded editor scale cases passed`)

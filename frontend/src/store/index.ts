@@ -38,7 +38,6 @@ import { createContainersSlice } from './slices/containers'
 import { registerUserScopedResetStore } from './user-scoped-reset'
 import { configurePresetSelectionCoordinator } from '@/lib/loom/preset-selection-coordinator'
 import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
-import { resolveLoomPresetSelection } from '@/lib/loom/preset-recovery'
 
 
 export const useStore = create<AppStore>()((...a) => ({
@@ -83,7 +82,12 @@ configurePresetSelectionCoordinator({
   getActivePresetId: () => useStore.getState().activeLoomPresetId,
   setActivePresetId: (presetId) => useStore.getState().setActiveLoomPreset(presetId),
   flushPreset: flushPresetForGeneration,
-  resolvePresetId: resolveLoomPresetSelection,
+  // Recovery reports through the UI toast store. Resolve it after this store
+  // exists rather than pulling that consumer back into store construction.
+  resolvePresetId: async (...args) => {
+    const { resolveLoomPresetSelection } = await import('@/lib/loom/preset-recovery')
+    return resolveLoomPresetSelection(...args)
+  },
 })
 
 registerUserScopedResetStore(useStore, useStore.getState())

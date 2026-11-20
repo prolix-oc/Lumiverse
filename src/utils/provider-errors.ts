@@ -173,7 +173,7 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
         : normalizeText(data?.code) || normalizeText(data?.status) || normalizeText(data?.type) || normalizeText(error));
       const detail = error && typeof error === "object"
         ? normalizeText(error.message) || normalizeText(data?.error_description) || normalizeText(data?.message)
-        : normalizeText(data?.error_description) || normalizeText(data?.message) || normalizeText(data?.detail) || normalizeText(error);
+        : normalizeText(data?.error_description) || normalizeText(data?.message) || normalizeText(data?.detail) || normalizeText(data?.detail?.message) || normalizeText(error);
       return {
         code: code ? truncateDetail(code) : undefined,
         detail: detail ? truncateDetail(detail) : undefined,

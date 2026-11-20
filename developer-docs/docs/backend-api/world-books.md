@@ -214,6 +214,23 @@ Behavior notes:
 
 ---
 
+## Resolved World Info
+
+### `spindle.world_books.resolveForChat(chatId, options?)`
+
+```ts
+const entries = await spindle.world_books.resolveForChat('chat-id', { reserveTokens: 2000 })
+// [{ content: 'Final text', role: 'system' }]
+```
+
+Returns the world info active for the chat as final text and role, in output order, with macros run. Nothing is saved: macro changes and activation state are discarded. Requires `world_books`, `chats`, `characters`, `personas` and `presets`, and `spindle.host.capabilities['world-info-resolve-for-chat-v1']`.
+
+`reserveTokens` stops the list once it would exceed the preset's context size minus that amount. A negative value raises the limit. With no option, or no configured context size, there is no limit. World info interceptors run with `purpose: 'query'`.
+
+The cost is close to the world info part of building a prompt, so do not call it per frame or per token.
+
+---
+
 ## World Info Activation
 
 Query which world info entries would activate for a given chat — without running a full generation. This runs the complete activation pipeline: keyword matching, selective logic, probability rolls, sticky/cooldown/delay state, group competition, budget enforcement, and vector-based activation (if embeddings are configured).
@@ -232,6 +249,8 @@ for (const entry of activated) {
   spindle.log.info(`[${source}] ${entry.comment} — keys: ${entry.keys.join(', ')}`)
 }
 ```
+
+`getActivated` returns a summary without entry text. Use `resolveForChat` when you need the text.
 
 This is useful for:
 

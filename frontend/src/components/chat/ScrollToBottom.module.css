@@ -28,7 +28,7 @@
 }
 
 :global([data-glass]) .btn {
-  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
+  backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px)) var(--lcs-liquid-filter, );
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
 }
 

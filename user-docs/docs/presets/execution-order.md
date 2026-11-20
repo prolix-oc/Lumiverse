@@ -297,7 +297,7 @@ If you're porting presets from SillyTavern, here are the behaviors that will tri
 | **World info macros** | Entries are macro-evaluated | Entries are macro-evaluated before injection |
 | **`{{random}}`** | May return same value if cached | Always returns a fresh value per call |
 | **Side effects** | May be smoothed by caching | Immediate and visible to subsequent macros |
-| **Error handling** | Varies | Unknown macros pass through as literal `{{name}}` text |
+| **Error handling** | Varies | Closed, non-scoped unknown macros retain their [source spelling](macros-reference.md#unknown-macros-and-imported-templates), including nested arguments; unterminated or escaped forms use recovery |
 | **Legacy syntax** | Varies | `<USER>`, `<BOT>`, `<CHAR>` auto-converted |
 
 ### Practical Migration Tips

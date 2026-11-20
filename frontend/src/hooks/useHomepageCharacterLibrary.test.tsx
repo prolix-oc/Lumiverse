@@ -117,12 +117,12 @@ function summary(index: number) {
 const firstPage = Array.from({ length: 80 }, (_, index) => summary(index))
 const secondPage = Array.from({ length: 80 }, (_, index) => summary(index + 80))
 
-/* eslint-disable react-compiler/react-compiler */
+/* eslint-disable react-hooks/globals */
 function HookHarness() {
   hookSurface = useHomepageCharacterLibrary()
   return null
 }
-/* eslint-enable react-compiler/react-compiler */
+/* eslint-enable react-hooks/globals */
 
 async function flush(): Promise<void> {
   for (let index = 0; index < 5; index += 1) await Promise.resolve()

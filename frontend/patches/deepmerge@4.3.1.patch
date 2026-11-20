@@ -1,0 +1,75 @@
+diff --git a/dist/cjs.js b/dist/cjs.js
+index 7c36cbdd06cc22c92d590be3f87a08a91ca06b40..ad194fff6c0fe3580102fb6864e35c52387241aa 100644
+--- a/dist/cjs.js
++++ b/dist/cjs.js
+@@ -80,7 +80,7 @@ function mergeObject(target, source, options) {
+ 	var destination = {};
+ 	if (options.isMergeableObject(target)) {
+ 		getKeys(target).forEach(function(key) {
+-			destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
++			Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(target[key], options), enumerable: true, configurable: true, writable: true });
+ 		});
+ 	}
+ 	getKeys(source).forEach(function(key) {
+@@ -89,9 +89,9 @@ function mergeObject(target, source, options) {
+ 		}
+ 
+ 		if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-			destination[key] = getMergeFunction(key, options)(target[key], source[key], options);
++			Object.defineProperty(destination, key, { value: getMergeFunction(key, options)(target[key], source[key], options), enumerable: true, configurable: true, writable: true });
+ 		} else {
+-			destination[key] = cloneUnlessOtherwiseSpecified(source[key], options);
++			Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(source[key], options), enumerable: true, configurable: true, writable: true });
+ 		}
+ 	});
+ 	return destination
+diff --git a/dist/umd.js b/dist/umd.js
+index 4071e7c56ec8e5273fe166f6e723ac460fab8b72..508322ce23c4edbc011fe2b6470de6e62b7833b1 100644
+--- a/dist/umd.js
++++ b/dist/umd.js
+@@ -84,7 +84,7 @@
+ 		var destination = {};
+ 		if (options.isMergeableObject(target)) {
+ 			getKeys(target).forEach(function(key) {
+-				destination[key] = cloneUnlessOtherwiseSpecified(target[key], options);
++				Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(target[key], options), enumerable: true, configurable: true, writable: true });
+ 			});
+ 		}
+ 		getKeys(source).forEach(function(key) {
+@@ -93,9 +93,9 @@
+ 			}
+ 
+ 			if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-				destination[key] = getMergeFunction(key, options)(target[key], source[key], options);
++				Object.defineProperty(destination, key, { value: getMergeFunction(key, options)(target[key], source[key], options), enumerable: true, configurable: true, writable: true });
+ 			} else {
+-				destination[key] = cloneUnlessOtherwiseSpecified(source[key], options);
++				Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(source[key], options), enumerable: true, configurable: true, writable: true });
+ 			}
+ 		});
+ 		return destination
+diff --git a/index.js b/index.js
+index 77968aed5d456cccc294f60912ef381fa1e52a7b..c846299a491aba840ddcee2095d69837a5568104 100644
+--- a/index.js
++++ b/index.js
+@@ -55,7 +55,7 @@ function mergeObject(target, source, options) {
+ 	var destination = {}
+ 	if (options.isMergeableObject(target)) {
+ 		getKeys(target).forEach(function(key) {
+-			destination[key] = cloneUnlessOtherwiseSpecified(target[key], options)
++			Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(target[key], options), enumerable: true, configurable: true, writable: true });
+ 		})
+ 	}
+ 	getKeys(source).forEach(function(key) {
+@@ -64,9 +64,9 @@ function mergeObject(target, source, options) {
+ 		}
+ 
+ 		if (propertyIsOnObject(target, key) && options.isMergeableObject(source[key])) {
+-			destination[key] = getMergeFunction(key, options)(target[key], source[key], options)
++			Object.defineProperty(destination, key, { value: getMergeFunction(key, options)(target[key], source[key], options), enumerable: true, configurable: true, writable: true });
+ 		} else {
+-			destination[key] = cloneUnlessOtherwiseSpecified(source[key], options)
++			Object.defineProperty(destination, key, { value: cloneUnlessOtherwiseSpecified(source[key], options), enumerable: true, configurable: true, writable: true });
+ 		}
+ 	})
+ 	return destination

@@ -264,7 +264,7 @@ export function getThemeAsset(userId: string, id: string): ThemeAsset | null {
   return row ? rowToThemeAsset(row) : null;
 }
 
-export async function createThemeAsset(userId: string, input: CreateThemeAssetInput): Promise<ThemeAsset> {
+export async function createThemeAsset(userId: string, input: CreateThemeAssetInput, beforeCommit?: () => void): Promise<ThemeAsset> {
   const bundleId = normalizeBundleId(input.bundleId);
   const mimeType = inferMimeType(input.file);
   const storageType = resolveStorageType(mimeType);
@@ -285,6 +285,7 @@ export async function createThemeAsset(userId: string, input: CreateThemeAssetIn
   }
 
   try {
+    beforeCommit?.();
     getDb()
       .query(
         `INSERT INTO theme_assets
@@ -372,7 +373,7 @@ export function deleteThemeAsset(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
-export async function optimizeThemeAssetToWebp(userId: string, id: string): Promise<ThemeAsset | null> {
+export async function optimizeThemeAssetToWebp(userId: string, id: string, beforeCommit?: () => void): Promise<ThemeAsset | null> {
   const row = getThemeAssetRow(userId, id);
   if (!row) return null;
   if (row.storage_type !== "image" || !row.image_id) {
@@ -407,6 +408,7 @@ export async function optimizeThemeAssetToWebp(userId: string, id: string): Prom
   const now = Math.floor(Date.now() / 1000);
 
   try {
+    beforeCommit?.();
     getDb()
       .query(
         "UPDATE theme_assets SET image_id = ?, original_filename = ?, mime_type = ?, byte_size = ?, updated_at = ? WHERE id = ? AND user_id = ?"

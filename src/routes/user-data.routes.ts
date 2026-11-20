@@ -17,6 +17,9 @@ import {
   persistUploadedArchive,
   startImport,
   getJob,
+  listJobsForUser,
+  resumeImport,
+  importUploadSignal,
   reserveImportUpload,
   releaseImportUpload,
   cancelJob,
@@ -24,7 +27,6 @@ import {
   submitTicket,
   skipTicket,
   ArchiveValidationError,
-  MAX_COMPRESSED_BYTES,
 } from "../services/user-data/import.service";
 import { TicketError } from "../services/user-data/secret-ticket.service";
 import { unlinkSync } from "fs";
@@ -84,11 +86,13 @@ function streamingResponse(stream: ReadableStream<Uint8Array>, filename: string)
 app.get("/export", (c) => {
   const userId = c.get("userId");
   const includeVectors = c.req.query("includeVectors") !== "0";
+  const includeExtensionData = c.req.query("includeExtensionData") === "1";
   const slug = lookupUserSlug(userId);
   const filename = `lumiverse-${slug}-${exportTimestamp()}.lvbak`;
   const stream = buildExportStream({
     userId,
     includeVectors,
+    includeExtensionData,
     signal: c.req.raw.signal,
     producerVersion: null,
   });
@@ -108,7 +112,7 @@ app.get("/export", (c) => {
 // blobs it into a download alongside the archive.
 app.post("/export/prepare", async (c) => {
   const userId = c.get("userId");
-  let body: { includeVectors?: boolean; includeSecrets?: boolean } = {};
+  let body: { includeVectors?: boolean; includeSecrets?: boolean; includeExtensionData?: boolean } = {};
   try {
     body = (await c.req.json()) ?? {};
   } catch {
@@ -116,6 +120,7 @@ app.post("/export/prepare", async (c) => {
   }
   const includeVectors = !!body.includeVectors;
   const includeSecrets = !!body.includeSecrets;
+  const includeExtensionData = body.includeExtensionData === true;
   const archiveId = crypto.randomUUID();
 
   let ticket: ReturnType<typeof createTicket> extends Promise<infer R>
@@ -172,6 +177,7 @@ app.post("/export/prepare", async (c) => {
   stashPrepareEntry(archiveId, {
     userId,
     includeVectors,
+    includeExtensionData,
     includeSecrets,
     smk,
     secretKeys,
@@ -212,6 +218,7 @@ app.get("/export/archive/:archiveId", (c) => {
   const stream = buildExportStream({
     userId: entry.userId,
     includeVectors: entry.includeVectors,
+    includeExtensionData: entry.includeExtensionData === true,
     signal: c.req.raw.signal,
     producerVersion: null,
     archiveId,
@@ -239,13 +246,6 @@ app.post("/import", async (c) => {
 
   try {
     const declared = Number(c.req.header("content-length") || "0");
-    if (declared > MAX_COMPRESSED_BYTES) {
-      return c.json(
-        { error: "archive exceeds compressed size cap", maxBytes: MAX_COMPRESSED_BYTES },
-        413,
-      );
-    }
-
     try {
       const ct = c.req.header("content-type") || "";
       if (ct.startsWith("multipart/form-data")) {
@@ -265,7 +265,7 @@ app.post("/import", async (c) => {
       const size = declared > 0 ? declared : null;
       if (!body) return c.json({ error: "request body is empty" }, 400);
 
-      const persisted = await persistUploadedArchive(userId, body, size, jobId);
+      const persisted = await persistUploadedArchive(userId, body, size, jobId, importUploadSignal(jobId));
       archivePath = persisted.path;
     } catch (err: any) {
       if (err instanceof ArchiveValidationError) {
@@ -283,6 +283,7 @@ app.post("/import", async (c) => {
     );
     try {
       await verifyArchiveFast(archivePath);
+      importUploadSignal(jobId)?.throwIfAborted();
     } catch (err: any) {
       try {
         unlinkSync(archivePath);
@@ -313,9 +314,25 @@ app.post("/import", async (c) => {
   }
 });
 
+app.get("/import", (c) => {
+  const jobs = listJobsForUser(c.get("userId"))
+    .filter(job => ["queued", "running", "awaiting_ticket", "interrupted"].includes(job.status))
+    .sort((a, b) => Number(a.status === "interrupted") - Number(b.status === "interrupted") || b.startedAt - a.startedAt);
+  return c.json({ jobs: jobs.map(job => ({ jobId: job.jobId, status: job.status })) });
+});
+
+app.post("/import/:jobId/resume", (c) => {
+  const userId = c.get("userId");
+  if (!getJob(c.req.param("jobId"), userId)) return c.json({ error: "job not found" }, 404);
+  try {
+    const job = resumeImport(userId, c.req.param("jobId"));
+    return c.json({ jobId: job.jobId, status: job.status }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 409); }
+});
+
 app.get("/import/:jobId/status", (c) => {
   const userId = c.get("userId");
-  const job = getJob(c.req.param("jobId"));
+  const job = getJob(c.req.param("jobId"), userId);
   if (!job || job.userId !== userId) {
     return c.json({ error: "job not found" }, 404);
   }
@@ -327,6 +344,7 @@ app.get("/import/:jobId/status", (c) => {
     manifest: job.manifest,
     summary: job.summary,
     fileSummary: job.fileSummary,
+    progress: job.progress,
     error: job.error,
   });
 });

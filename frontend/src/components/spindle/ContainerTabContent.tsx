@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useStore } from '@/store'
-import { ensureRegistryRoot } from '@/lib/drawer-tab-registry'
+import { ensureRegistryRoot, getRegistryRoot } from '@/lib/drawer-tab-registry'
 import { filterEnabledFrontendContributions } from '@/lib/spindle/frontend-extension-availability'
 
 /**
@@ -53,7 +53,7 @@ export default function ContainerTabContent() {
       if (!container.element) continue
 
       for (const [tabId, location] of Object.entries(tabLocations)) {
-        const registryRoot = ensureRegistryRoot(tabId)
+        const registryRoot = getRegistryRoot(tabId)
         const extTab = enabledDrawerTabs.find((t) => t.id === tabId)
         const root = registryRoot ?? extTab?.root
         if (!root) continue

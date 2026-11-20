@@ -1,6 +1,11 @@
+import type { RecentConnections } from '@/lib/connectionRecents'
+import type { CharacterIndexItem } from './api'
+import type { ConnectionLibraries } from '@/lib/connectionLibrary'
 import type { Message, Character, Persona, Preset, ConnectionProfile, ProviderInfo, RecentChat, GroupedRecentChat, PaginatedResult, Pack, PackWithItems, LumiaItem, LoomItem, ImageGenConnectionProfile, ImageGenProviderInfo } from './api'
 import type { WeaverSession, WeaverStage, WeaverExtraction, WeaverSpineSlot, WeaverSynthesisGroup, WeaverBookRole, WeaverBuildType, WeaverNarrationMode, WeaverPersonaRegister, WeaverPersonaPlan, PersonaDraft, CreateWeaverSessionInput, WeaverCommittedFact, WeaverGap, WeaverInterviewQuestion, WeaverInterviewState, WeaverResponseKind, WeaverCandidate, WeaverBible, UpdateWeaverBibleInput, WeaverFieldDef, WeaverField, WeaverFinalizeResult, WeaverFinalizeInput, WeaverStartChatResult } from '@/api/weaver'
+import type { ChatImageSize, ChatImageAlignment, ChatImageTargets } from '@/lib/chatImagePresentation'
 import type { ImpersonationPreference } from '@/lib/impersonationPreset'
+import type { UiLanguage } from '@/i18n/languages'
 
 // ---- Chat Slice ----
 export interface ChatSlice {
@@ -16,6 +21,8 @@ export interface ChatSlice {
    * write).
    */
   activeChatMetadata: Record<string, any> | null
+  /** null while opening; IDs whose character data was refreshed for this chat. */
+  activeChatLoadedCharacterIds: string[] | null
   activeChatDisplayOwner: string | null
   /** The chat row's `name` for the currently-open chat (group chats display it as the group name) */
   activeChatName: string | null
@@ -34,7 +41,9 @@ export interface ChatSlice {
   /** Index of the swipe the active generation streams into. Lets the UI gate the
    *  streaming buffer to that swipe so the user can navigate to other swipes
    *  mid-generation. null when unknown (pre-GENERATION_STARTED) or idle. */
+  streamingRenderMode: "persisted-message" | null
   streamingSwipeId: number | null
+  streamingPreserveSwipe: boolean
   streamingGenerationType: string | null
   /** The generation type of the last completed generation — survives endStreaming() */
   lastCompletedGenerationType: string | null
@@ -51,6 +60,7 @@ export interface ChatSlice {
    * it when applied, so later mounts and WS-driven refreshes always refetch.
    */
   landingRecentChats: PaginatedResult<GroupedRecentChat> | null
+  landingRecentChatsScope: number | null
   setLandingRecentChats: (result: PaginatedResult<GroupedRecentChat> | null) => void
   setActiveChat: (
     chatId: string | null,
@@ -67,16 +77,18 @@ export interface ChatSlice {
   setActiveChatWallpaper: (wallpaper: WallpaperRef | null) => void
   setActiveChatAvatarId: (imageId: string | null) => void
   setActiveChatMetadata: (metadata: Record<string, any> | null) => void
+  setActiveChatLoadedCharacterIds: (ids: string[]) => void
   setActiveChatDisplayOwner: (owner: string | null) => void
   setActiveChatName: (name: string | null) => void
   setMessages: (messages: Message[], total?: number) => void
-  reconcileMessagesTail: (page: Pick<PaginatedResult<Message>, 'data' | 'total' | 'offset'>) => void
+  reconcileMessagesTail: (page: import('@/store/messageTailReconciliation').MessageTailPage) => void
   prependMessages: (messages: Message[]) => void
   addMessage: (message: Message) => void
+  insertMessage: (message: Message) => void
   updateMessage: (id: string, updates: Partial<Message>) => void
   removeMessage: (id: string) => void
-  beginStreaming: (regeneratingMessageId?: string, generationType?: string) => void
-  startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string) => void
+  beginStreaming: (regeneratingMessageId?: string, generationType?: string, backgroundSwipeId?: number) => void
+  startStreaming: (generationId: string, regeneratingMessageId?: string, generationType?: string, renderMode?: "persisted-message") => void
   pauseStreamingForNavigation: () => void
   /** Append a live stream segment. When `offset` (char position of the segment
    *  start in the server's cumulative buffer) is provided, overlap with already-
@@ -93,7 +105,7 @@ export interface ChatSlice {
   getStreamBuffers: () => { content: string; reasoning: string }
   setStreamingReasoningStartedAt: (ts: number | null) => void
   /** Set the confirmed streaming swipe index and recover its slot if a staging event was missed. */
-  setStreamingSwipeId: (swipeId: number | null) => void
+  setStreamingSwipeId: (swipeId: number | null, preserveSelection?: boolean) => void
   /** Flag a freshly-generated swipe as unseen (drives the "new swipe ready" badge). */
   setUnseenSwipe: (messageId: string, swipeId: number) => void
   /** Clear the unseen-swipe flag for a message (e.g. once the user views it). */
@@ -140,6 +152,7 @@ export interface StartupSettings {
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
   landingPageGalleryWidth?: 'compact' | 'expanded'
+  landingPinFavorites?: boolean
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
   spindleSettings?: Partial<SpindleSettings>
@@ -147,9 +160,18 @@ export interface StartupSettings {
   activeProfileId?: string | null
   toastPosition?: ToastPosition
   defaultImpersonationMode?: ImpersonationPreference
+  showGreetingImage?: boolean
+  greetingImagePosition?: 'top' | 'bottom'
 }
 
 export interface CharactersSlice {
+  characterIndex: CharacterIndexItem[]
+  characterIndexLoaded: boolean
+  characterIndexRevision: number
+  characterIndexGeneration: number
+  invalidateCharacterIndex: () => void
+  characterIndexChanges: Record<string, number>
+  setCharacterIndex: (items: CharacterIndexItem[], startedAtRevision: number) => void
   characters: Character[]
   charactersLoaded: boolean
   favorites: string[]
@@ -515,6 +537,7 @@ export interface SavedThemeConfigEntry {
 }
 /** A user-saved theme made from a .lumitheme bundle import — preserves CSS, components, and assets. */
 export interface SavedThemePackEntry {
+  authoringSnapshot?: { version: 1; globalEnabled: boolean; themeWasNull: boolean }
   kind: 'pack'
   id: string
   name: string
@@ -748,6 +771,8 @@ export interface EnterToSendSettings {
 }
 
 export interface SettingsSlice {
+  /** Saved account preference; null until account settings are hydrated. */
+  uiLanguage: UiLanguage | null
   settingsLoaded: boolean
   /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
   fullSettingsLoaded: boolean
@@ -756,11 +781,19 @@ export interface SettingsSlice {
   /** Keeps the landing gallery comfortable on wide screens unless expanded by the user. */
   landingPageGalleryWidth: 'compact' | 'expanded'
   landingHiddenCharacterIds: string[]
+  landingPinFavorites: boolean
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
   chatDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  /** Show the selected greeting's artwork with the starting message. Opt-in. */
+  showGreetingImage: boolean
+  greetingImagePosition: 'top' | 'bottom'
+  chatImageSize: ChatImageSize
+  chatImageAlignment: ChatImageAlignment
+  chatImageTargets: ChatImageTargets
   longMessageCollapseEnabled: boolean
+  longMessageCollapseUserMessages: boolean
   longMessageCollapsePreset: LongMessageCollapsePreset
   longMessageCollapseCustomHeight: number
   longMessageCollapseDepth: number
@@ -773,6 +806,8 @@ export interface SettingsSlice {
   bubbleOpacity: number
   inputBarEnterToSend: EnterToSendSettings
   saveDraftInput: boolean
+  /** Opt-in paired formatting controls above the chat input. */
+  showComposerFormattingBar: boolean
   /** Account-synced composer action bar layout; null until first saved. */
   composerActionBar: { order: string[]; hidden: string[] } | null
   defaultImpersonationMode: ImpersonationPreference
@@ -836,6 +871,8 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
+  recentConnections: RecentConnections
+  connectionLibraries: ConnectionLibraries
   connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts' | 'decision', string[]>
   quickToolbarSettings: QuickToolbarSettings
   connectionsPickerSettings: ConnectionsPickerSettings
@@ -847,13 +884,16 @@ export interface SettingsSlice {
   showEmbeddingFallbackUi: boolean
   showCortexSecondaryUi: boolean
   showEditAndSend: boolean
+  showRecentConnections: boolean
+  showRecentPersonas: boolean
   enableToolbarIconReorder: boolean
   productivityTabPosition: string
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
   setInputBarEnterToSend: (settings: EnterToSendSettings) => void
-  setSetting: <K extends keyof SettingsSlice>(key: K, value: SettingsSlice[K], source?: SettingsWriteSource) => void
+  // Character filters also use coordinated persistence to survive startup hydration.
+  setSetting: <K extends keyof (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)>(key: K, value: (SettingsSlice & Pick<CharactersSlice, 'filterTab'>)[K], source?: SettingsWriteSource) => void
   setTheme: (theme: ThemeConfig | null) => void
   setCharacterThemeOverlay: (overlay: CharacterThemeOverlay | null) => void
   setCustomCSS: (css: string) => void
@@ -867,7 +907,7 @@ export interface SettingsSlice {
   addSavedTheme: (input: SavedThemeInput) => SavedTheme
   renameSavedTheme: (id: string, name: string) => void
   deleteSavedTheme: (id: string) => Promise<void>
-  applySavedTheme: (id: string) => void
+  applySavedTheme: (id: string) => void | Promise<void>
   /** Replace a saved theme with the complete current theme snapshot and persist it. */
   updateSavedTheme: (id: string) => Promise<void>
   loadSettings: () => Promise<void>
@@ -933,6 +973,8 @@ export interface DrawerSettings {
   /** Drag-resized width in layout pixels. Legacy vw widths are used until the first resize. */
   panelWidthPx?: number
   showTabLabels: boolean
+  /** Keep the drawer in a separate pane while iPhone Duo is unfolded. Defaults to true. */
+  duoAlwaysOpen?: boolean
   hiddenTabIds: string[]
   /** Legacy flat tab order retained for downgrade compatibility and migration. */
   tabOrder: string[]
@@ -951,6 +993,7 @@ export interface SpindleSettings {
 
 // ---- Loom Registry Entry ----
 export interface LoomRegistryEntry {
+  cacheRevision?: number
   name: string
   blockCount: number
   coverUrl: string | null
@@ -964,6 +1007,7 @@ export interface PresetsSlice {
   activePresetId: string | null
   activeLoomPresetId: string | null
   loomRegistry: Record<string, LoomRegistryEntry>
+  loomRegistryLoaded: boolean
   setActiveLoomPreset: (id: string | null) => void
   setPresets: (presets: Record<string, Preset>) => void
   setActivePreset: (id: string | null) => void
@@ -1316,6 +1360,8 @@ export interface BulkUpdateStatus {
 
 export interface SpindleSlice {
   extensions: ExtensionInfo[]
+  /** A successful installed-extension snapshot is available for reconciliation. */
+  extensionsLoaded: boolean
   extensionUpdates: import('./spindle-updates').ExtensionUpdateInfo[]
   /** Active theme overrides from Spindle extensions, keyed by extensionId */
   extensionThemeOverrides: Record<string, ExtensionThemeOverride>

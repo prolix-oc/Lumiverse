@@ -1,4 +1,4 @@
-import { getConnInfo } from "hono/bun";
+import { getConnInfo } from "@hono/bun";
 import type { Context } from "hono";
 import { env } from "../env";
 

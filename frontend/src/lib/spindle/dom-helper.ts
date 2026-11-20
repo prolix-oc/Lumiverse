@@ -47,6 +47,15 @@ export function createDOMHelper(
   const trackedDisposers: (() => void)[] = []
   const trackedStyles: (() => void)[] = []
 
+  const releaseElement = (element: Element): void => {
+    trackedRootUnregisters.get(element)?.()
+    trackedRootUnregisters.delete(element)
+    trackedElements.delete(element)
+    // An extension may still hold the wrapper. Sever its parent link so
+    // that reference cannot retain the entire old message/chat tree.
+    element.remove()
+  }
+
   return {
     inject(target: string | Element, html: string, position?: InsertPosition): Element {
       assertActive()
@@ -112,6 +121,7 @@ export function createDOMHelper(
               position: resolvedPosition,
               outer: isOuterMessageRoot(messageId, messageRoot),
               element: wrapper,
+              dispose: () => releaseElement(wrapper),
             })
           }
         }
@@ -121,12 +131,8 @@ export function createDOMHelper(
     },
 
     uninject(element: Element): void {
-      const unregisterRoot = trackedRootUnregisters.get(element)
-      unregisterRoot?.()
-      trackedRootUnregisters.delete(element)
       unregisterByElement(element)
-      trackedElements.delete(element)
-      element.remove()
+      releaseElement(element)
     },
 
     addStyle(css: string, options?: ScopedStyleOptions): () => void {

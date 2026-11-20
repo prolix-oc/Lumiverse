@@ -1,4 +1,4 @@
-import type { CortexIngestionStatus } from '@/api/memory-cortex'
+import type { CortexIngestionStatus, CortexActivitySnapshot, CortexActivityRun } from '@/api/memory-cortex'
 
 export const CORTEX_ERROR_NOTICE_VISIBLE_MS = 8_000
 
@@ -9,6 +9,8 @@ export interface CortexNotice {
   percent?: number
   errorKey?: string
   occurredAt?: number
+  elapsed?: string
+  batches?: Array<{ id: string; label: string; detail: string; phase: string }>
 }
 
 export interface CortexRebuildStatus {
@@ -79,7 +81,13 @@ export function buildCortexNotice(
   ingestionStatus: CortexIngestionStatus | null,
   rebuildStatus: CortexRebuildStatus | null,
   t: Translator,
+  activity?: CortexActivitySnapshot | null,
+  requestedAt?: number | null,
+  now = Date.now(),
+  initiatedAt?: number | null,
 ): CortexNotice | null {
+  const runs = activity?.runs.filter((run) => run.status === 'processing') ?? []
+  if (runs.length || requestedAt) return buildActivityNotice(runs, requestedAt ?? initiatedAt, t, now)
   if (rebuildStatus?.status === 'error') {
     return {
       variant: 'error',
@@ -139,6 +147,54 @@ export function buildCortexNotice(
   }
 
   return null
+}
+
+/** Merge socket snapshots and reads by server revision, never by arrival order. */
+export function mergeCortexActivity(current: CortexActivitySnapshot | null, incoming: CortexActivitySnapshot): CortexActivitySnapshot {
+  return current?.chatId === incoming.chatId && current.revision > incoming.revision ? current : incoming
+}
+
+function buildActivityNotice(runs: CortexActivityRun[], requestedAt: number | null | undefined, t: Translator, now: number): CortexNotice {
+  const requests = runs.flatMap((run) => run.requests)
+  const counts = new Map<string, number>()
+  for (const request of requests) {
+    const key = request.purpose === 'candidate review' && request.phase === 'waiting' ? 'reviewing' : request.phase
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  const label = (phase: string) => t(`chatView.cortexActivity.${phase}`)
+  const details: string[] = []
+  const total = runs.reduce((sum, run) => sum + run.totalChunks, 0)
+  const current = runs.reduce((sum, run) => sum + run.completedChunks, 0)
+  const totalBatches = runs.reduce((sum, run) => sum + run.totalBatches, 0)
+  if (totalBatches) details.push(t('chatView.cortexBatchProgress', {
+    current: runs.reduce((sum, run) => sum + run.completedBatches, 0), total: totalBatches,
+    queued: Math.max(0, totalBatches - runs.reduce((sum, run) => sum + run.completedBatches + run.failedBatches + run.activeBatches.length, 0)),
+  }))
+  const failedBatches = runs.reduce((sum, run) => sum + run.failedBatches, 0)
+  if (failedBatches) details.push(t('chatView.cortexFailedBatches', { count: failedBatches }))
+  if (total) details.push(t('chatView.cortexChunks', { current, total }).replace(/^,\s*/, ''))
+  for (const phase of ['queued', 'waiting', 'thinking', 'responding', 'reviewing']) {
+    if (counts.has(phase)) details.push(`${counts.get(phase)} ${label(phase)}`)
+  }
+  if (!requests.length) {
+    const phase = runs.some((run) => run.phase.startsWith('consolidating')) ? 'consolidating'
+      : runs.some((run) => run.activeBatches.some((batch) => batch.phase === 'persisting') || run.phase === 'persisting') ? 'saving'
+      : runs.some((run) => run.startedAt) ? 'preparing' : 'queued'
+    details.push(label(phase))
+  }
+  const start = requestedAt ?? Math.min(...runs.map((run) => run.clientRequestedAt ?? run.requestedAt))
+  const elapsed = t('chatView.cortexElapsed', { seconds: Math.max(0, Math.floor((now - start) / 1000)) })
+  const batches = runs.flatMap((run) => run.activeBatches.map((batch) => {
+    const batchRequests = run.requests.filter((request) => request.batch === batch.batch)
+    const phases = [...new Set(batchRequests.map((request) => request.purpose === 'candidate review' && request.phase === 'waiting' ? 'reviewing' : request.phase))]
+    const phase = phases[0] ?? (batch.phase === 'persisting' ? 'saving' : 'preparing')
+    return { id: `${run.id}:${batch.batch}`, phase,
+      label: t('chatView.cortexBatchActivity', { batch: batch.batch, phase: phases.length ? phases.map(label).join(' / ') : label(phase) }),
+      detail: [t('chatView.cortexBatchChunks', { count: batch.chunks }), ...batchRequests.map((request) => request.model).filter(Boolean)].join(' · '),
+    }
+  }))
+  return { variant: 'processing', title: t('chatView.memory'), detail: details.join(' · '), elapsed, batches,
+    percent: total > 0 && !runs.some((run) => run.phase.startsWith('consolidating')) ? Math.round(current / total * 100) : undefined }
 }
 
 export function cortexErrorNoticeRemainingMs(notice: CortexNotice, now = Date.now()): number {

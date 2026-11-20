@@ -46,6 +46,34 @@ afterEach(() => {
 })
 
 describe('clearRegexScriptQuarantine', () => {
+  test('observes quarantine-only metadata updates without a definition or timestamp change', () => {
+    const original = script('remote-update')
+    expect(isRegexScriptQuarantined(original)).toBe(false)
+
+    // Evidence writes deliberately do not bump updated_at. A WS refetch must
+    // still expose the badge and recovery action after a prior healthy read.
+    const quarantined = { ...original, metadata: { regex_evidence: { quarantined: true } } }
+    expect(isRegexScriptQuarantined(quarantined)).toBe(true)
+    expect(getRegexExecTier(quarantined).tier).toBe('quarantined')
+
+    // A clear in another tab is also a metadata-only update.
+    expect(isRegexScriptQuarantined({ ...original })).toBe(false)
+    expect(evidenceReports).toEqual([])
+  })
+
+  test('persisted and stale snapshots cannot overwrite local quarantine or an explicit retry', async () => {
+    const original = script('snapshots')
+    quarantineRegexScript(original)
+
+    const persisted = { ...original, metadata: { regex_evidence: { quarantined: true } } }
+    expect(isRegexScriptQuarantined(persisted)).toBe(true)
+    expect(isRegexScriptQuarantined(original)).toBe(true)
+
+    await clearRegexScriptQuarantine(persisted)
+    expect(isRegexScriptQuarantined({ ...original })).toBe(false)
+    expect(isRegexScriptQuarantined(persisted)).toBe(false)
+  })
+
   test('clears the session overlay, persists quarantined:false, and restores the worker tier', async () => {
     const hung = script('hung', { metadata: { regex_evidence: { quarantined: true } } })
     expect(isRegexScriptQuarantined(hung)).toBe(true)

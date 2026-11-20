@@ -7,7 +7,25 @@ Send OS-level push notifications to users' devices. Browser Web Push destination
 
 Notifications are automatically **suppressed** on the server when any of the user's connected sessions reports the app as visible. Presence is refreshed after each WebSocket connection and authentication, including PWA resume. User-triggered, per-destination test notifications bypass this suppression so they can be verified from the open Settings page.
 
-Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, or native iOS APNs destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications directly through APNs while backgrounded or closed. Its backend provider credentials and signing setup are documented in the [iOS client guide](../getting-started/ios-client.md#native-push-notifications).
+Registered destinations may be browser Web Push subscriptions, Lumiverse Desktop native destinations, native iOS APNs destinations, or native Android destinations. The desktop companion's Rust host maintains the notification-only socket and heartbeat independently of its WebViews, then presents the payload through the operating system; it never joins the user's general event channel. iOS receives alert notifications through APNs while backgrounded or closed. The official app uses the encrypted Lumiverse relay by default; self-built IPAs can use their owner's provider credentials. See [iOS notification delivery](../getting-started/ios-notification-relay.md).
+
+Native Android destinations (`android_native`) use a notification-only socket
+for the embedded backend and FCM for remote servers. The official APK defaults to
+the encrypted Lumiverse FCM relay; operators can build an APK for their own
+Firebase project and configure direct delivery. They participate in the same
+preferences, presence suppression, destination removal and test flow. Completion
+alerts can show the character avatar; error alerts preserve their failure details.
+See [Android notification setup](../getting-started/android-notifications.md) for
+relay enrollment, APK configuration, provider credentials and local backend lifetime limits.
+Android currently renders title, body and owned character avatar thumbnails;
+`image` attachments are not rendered. Taps accept `/chat/{id}` and otherwise open
+the server's home page.
+
+Native iOS generation Live Activities use a separate, generation-scoped enrollment
+and ActivityKit update token. They continue receiving status updates regardless of
+ordinary alert preferences or session visibility. Their restricted native token
+transport and browser enrollment endpoints are documented in the
+[Live Activities integration guide](../getting-started/ios-live-activities-plan.md#backend-enrollment-contract).
 
 Once a push has been sent, the service worker displays it even if the app returns to the foreground before delivery. [WebKit requires every received push to display a notification](https://webkit.org/blog/12945/meet-web-push/); silently discarding it can revoke the subscription.
 
@@ -64,7 +82,7 @@ Check if push notifications are available for a user.
 
 **Returns:** `Promise<{ available: boolean; subscriptionCount: number }>`
 
-- `available`: `true` if the user has at least one registered browser, desktop, or iOS notification destination
+- `available`: `true` if the user has at least one registered browser, desktop, iOS, or Android notification destination
 - `subscriptionCount`: number of registered devices
 
 ## Attribution
@@ -127,6 +145,25 @@ The desktop companion downloads `image` in its native Rust host and presents it 
 - An unavailable or invalid image never suppresses the notification: delivery falls back to title and body only.
 - The final placement, crop, and size are controlled by macOS, Windows, or the Linux notification daemon. The Lumiverse application identity icon remains unchanged, especially on macOS where it cannot be replaced per notification.
 
+### Native iOS character avatars
+
+Successful built-in chat generation notifications include an APNs communication
+sender and a short-lived avatar URL. The signed iOS notification service extension
+uses the sender image with `INSendMessageIntent`. iOS controls its presentation;
+the application identity remains Lumiverse. Errors and notifications without a
+character keep their ordinary alert title and body.
+
+`GET /api/ios-notifications/v1/avatar/{destinationId}/{characterId}?expires={unixSeconds}&signature={hmac}`
+returns a bounded JPEG thumbnail for the destination owner's character. This route
+does not require a login cookie: its signature grants access only to that exact
+destination, character, and expiry (at most 65 minutes). The URL is a bearer
+capability and must not be logged or reused as general media authorization.
+An invalid, modified, or expired signature returns 401; a deleted destination or
+unowned/missing avatar returns 404; an unsupported or oversized image returns 415.
+Responses use `Cache-Control: no-store`. The extension rejects redirects and
+cross-origin media and falls back to the original alert on download or intent
+failure. Existing iOS builds continue receiving ordinary alerts.
+
 ## Example: Character "Bugging" the User
 
 ```ts
@@ -174,3 +211,7 @@ async function runLongAnalysis(chatId: string) {
     - Fall back to `spindle.toast` when push isn't available
     - Keep titles short and bodies actionable
     - Use `url` so clicking the notification takes the user somewhere useful
+
+## Extension Live Activities
+
+For native iOS status, progress and image preview cards, see [Live Activities](live-activities.md). The separate lifecycle API supports encrypted background updates after a foreground start.

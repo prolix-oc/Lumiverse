@@ -1,8 +1,13 @@
 import type { STTConfig, STTEngine } from '../sttEngine'
 import type {
   SpindleSTTAPI, SpindleSTTOptions, SpindleSTTProviderOption, SpindleSTTSession,
-  SpindleSTTStartOptions, SpindleSTTTranscript, SpindleSTTPcmAudio,
+  SpindleSTTStartOptions, SpindleSTTTranscript, SpindleSTTPcmAudio, SpindleSTTTranscribeOptions,
 } from 'lumiverse-spindle-types'
+
+export interface STTTranscribeExtras {
+  keywords?: readonly string[]
+  words: boolean
+}
 
 export interface FrontendSTTDependencies {
   assertActive(): void
@@ -12,7 +17,9 @@ export interface FrontendSTTDependencies {
   listProviders(): SpindleSTTProviderOption[]
   createEngine(config: STTConfig): STTEngine
   prepare(config: STTConfig, signal: AbortSignal, onStatus: SpindleSTTOptions['onStatus']): Promise<void>
-  transcribe(audio: Blob | SpindleSTTPcmAudio, config: STTConfig, signal: AbortSignal, onStatus: SpindleSTTOptions['onStatus']): Promise<SpindleSTTTranscript>
+  transcribe(audio: Blob | SpindleSTTPcmAudio, config: STTConfig, signal: AbortSignal, onStatus: SpindleSTTOptions['onStatus'], extras: STTTranscribeExtras): Promise<SpindleSTTTranscript>
+  isHostCapturing(): boolean
+  subscribeHostCapture(listener: (active: boolean) => void): () => void
 }
 
 // Extensions in one document share microphone ownership; the shared Whistle
@@ -20,13 +27,36 @@ export interface FrontendSTTDependencies {
 let captureOwner: symbol | null = null
 const aborted = () => new DOMException('Speech recognition cancelled', 'AbortError')
 const asError = (error: unknown) => error instanceof Error ? error : new Error(String(error))
+const MAX_KEYWORDS = 500
+const MAX_KEYWORD_LENGTH = 100
+
+function transcribeExtras(options: SpindleSTTTranscribeOptions): STTTranscribeExtras {
+  const { keywords, words } = options
+  if (words !== undefined && typeof words !== 'boolean') throw new Error('STT_OPTIONS_INVALID: words must be a boolean')
+  if (keywords === undefined) return { words: words === true }
+  if (!Array.isArray(keywords) || keywords.length > MAX_KEYWORDS) {
+    throw new Error(`STT_OPTIONS_INVALID: keywords must be an array of at most ${MAX_KEYWORDS} strings`)
+  }
+  const copy = Array.from(keywords, (keyword) => {
+    const value = typeof keyword === 'string' ? keyword.trim() : ''
+    if (!value || value.length > MAX_KEYWORD_LENGTH || /[\0\r\n\u2028\u2029]/.test(keyword)) {
+      throw new Error(`STT_OPTIONS_INVALID: each keyword must be 1-${MAX_KEYWORD_LENGTH} characters without line breaks or NUL`)
+    }
+    return value
+  })
+  return { keywords: copy, words: words === true }
+}
 
 export function createFrontendSTTAPI(deps: FrontendSTTDependencies) {
   let disposed = false
   const operations = new Set<AbortController>()
-  const authorize = (member: string) => {
+  const hostCaptureSubscriptions = new Set<() => void>()
+  const assertLive = () => {
     deps.assertActive()
     if (disposed) throw new Error('SPINDLE_FRONTEND_INACTIVE: speech API has been disposed')
+  }
+  const authorize = (member: string) => {
+    assertLive()
     deps.requirePermission('media', member)
   }
   const configFor = (options: SpindleSTTOptions, capture = false): STTConfig => {
@@ -87,15 +117,37 @@ export function createFrontendSTTAPI(deps: FrontendSTTDependencies) {
   }
   const api: SpindleSTTAPI = {
     listProviders() {
-      deps.assertActive()
-      if (disposed) throw new Error('SPINDLE_FRONTEND_INACTIVE: speech API has been disposed')
+      assertLive()
       return deps.listProviders().map((provider) => ({ ...provider,
         ...(provider.languages ? { languages: [...provider.languages] } : {}),
       }))
     },
     prepare(options = {}) { return run('ctx.stt.prepare', options, deps.prepare) },
     transcribe(audio, options = {}) {
-      return run('ctx.stt.transcribe', options, (config, signal, onStatus) => deps.transcribe(audio, config, signal, onStatus))
+      return run('ctx.stt.transcribe', options, (config, signal, onStatus) =>
+        deps.transcribe(audio, config, signal, onStatus, transcribeExtras(options)))
+    },
+    onHostActivity(listener) {
+      assertLive()
+      if (typeof listener !== 'function') throw new Error('STT_OPTIONS_INVALID: listener must be a function')
+      let subscribed = true
+      const unsubscribe = deps.subscribeHostCapture((active) => {
+        if (!subscribed) return
+        try { assertLive() } catch { return }
+        try { listener(active) } catch (error) { console.error('[Spindle] Speech callback failed', error) }
+      })
+      const release = () => {
+        if (!subscribed) return
+        subscribed = false
+        unsubscribe()
+        hostCaptureSubscriptions.delete(release)
+      }
+      hostCaptureSubscriptions.add(release)
+      return release
+    },
+    isHostCapturing() {
+      assertLive()
+      return deps.isHostCapturing()
     },
     start(options = {}) {
       const member = 'ctx.stt.start'
@@ -192,7 +244,12 @@ export function createFrontendSTTAPI(deps: FrontendSTTDependencies) {
     },
   }
   const revoke = () => { for (const operation of [...operations]) operation.abort(aborted()) }
-  const dispose = () => { if (!disposed) { disposed = true; revoke() } }
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    revoke()
+    for (const release of [...hostCaptureSubscriptions]) release()
+  }
   deps.onTeardown(dispose)
   return { api, revoke, dispose }
 }

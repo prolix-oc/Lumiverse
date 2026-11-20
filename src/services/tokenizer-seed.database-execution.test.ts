@@ -120,7 +120,7 @@ describe("tokenizer startup with supervised SQLite", () => {
     await waitForBackfill();
   });
 
-  for (const transport of (process.platform === "win32" ? ["stdio"] : ["stdio", "ipc"]) as Array<"stdio" | "ipc">) {
+  for (const transport of (process.platform === "win32" ? ["socket"] : ["socket", "stdio", "ipc"]) as Array<"socket" | "stdio" | "ipc">) {
     test(`background activation during startup survives a child replacement over ${transport}`, async () => {
       const executor = new DatabaseExecutor(path, { transport, deferBackgroundWork: true });
       try {

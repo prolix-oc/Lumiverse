@@ -1,11 +1,24 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
 import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
+import type { LlmMessage } from "../types";
 
 export class ZAIProvider extends OpenAICompatibleProvider {
   readonly name = "zai";
   readonly displayName = "Z.AI";
   readonly defaultUrl = "https://api.z.ai/api/paas/v4";
+
+  protected formatContent(message: LlmMessage): string | any[] {
+    if (typeof message.content === "string") return message.content;
+    return message.content.flatMap((part) => {
+      if (part.type !== "video") return super.formatContent({ ...message, content: [part] });
+      if (!["video/mp4", "video/quicktime", "video/x-matroska"].includes(part.mime_type)) {
+        throw new Error("Z.AI video input requires MP4, MOV, or MKV.");
+      }
+      // Same private inline transport used by Z.ai's ZCode adapter. No public upload.
+      return [{ type: "video_url", video_url: { url: `data:${part.mime_type};base64,${part.data}` } }];
+    });
+  }
 
   readonly capabilities: ProviderCapabilities = {
     parameters: {
@@ -60,6 +73,8 @@ export class ZAIProvider extends OpenAICompatibleProvider {
   async listModels(_apiKey: string, _apiUrl: string): Promise<string[]> {
     return [
       "glm-5.3-flash",
+      "glm-5.3-flashx",
+      "glm-5.3-flashx-legal",
       "glm-5.3",
       "glm-5.2",
       "glm-5.1",

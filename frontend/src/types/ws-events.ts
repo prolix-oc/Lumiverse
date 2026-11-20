@@ -63,6 +63,8 @@ export enum EventType {
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
   CONNECTION_PROFILE_LOADED = 'CONNECTION_PROFILE_LOADED',
   PRESET_PROFILE_CHANGED = 'PRESET_PROFILE_CHANGED',
+  PRESET_CHANGED = 'PRESET_CHANGED',
+  PRESET_DELETED = 'PRESET_DELETED',
 
   // World Books (lorebook editor live-sync — mirror src/ws/events.ts)
   WORLD_BOOK_CHANGED = 'WORLD_BOOK_CHANGED',
@@ -171,7 +173,11 @@ export enum EventType {
 
   // Memory Cortex
   CORTEX_REBUILD_PROGRESS = 'CORTEX_REBUILD_PROGRESS',
+  CORTEX_ACTIVITY = 'CORTEX_ACTIVITY',
   CORTEX_INGESTION_PROGRESS = 'CORTEX_INGESTION_PROGRESS',
+
+  // Local inference scheduling
+  INFERENCE_SCHEDULER_STATE = 'INFERENCE_SCHEDULER_STATE',
 
   // MCP Servers
   MCP_SERVER_CONNECTED = 'MCP_SERVER_CONNECTED',
@@ -361,6 +367,8 @@ export interface GenerationStartedPayload {
   targetMessageId?: string
   /** Swipe index the generation streams into (for swipe-gated streaming display). */
   targetSwipeId?: number
+  renderMode?: "persisted-message"
+  backgroundSwipe?: boolean
   generationType?: string
   characterId?: string
   characterName?: string
@@ -449,6 +457,9 @@ export interface GenerationAcknowledgedPayload {
 }
 
 export interface MessageSentPayload {
+  authored?: boolean
+  /** Rows at or after this message's index moved down by one. */
+  inserted?: boolean
   chatId: string
   message: import('./api').Message
 }
@@ -536,6 +547,8 @@ export interface RoomHydrationGeneration {
   generationType?: string
   targetMessageId?: string
   targetSwipeId?: number
+  renderMode?: "persisted-message"
+  backgroundSwipe?: boolean
   characterName?: string
   characterId?: string
   reasoningStartedAt?: number

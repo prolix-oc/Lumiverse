@@ -3,9 +3,26 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { isTermuxLikeEnvironment } from "./utils/termux";
 
-const NATIVE_BINARY_VERSION = "0.37.1";
-const NATIVE_BINARY_RELEASE_TAG = "android-lancedb-v0.37.1";
-const NATIVE_BINARY_SHA256 = "4c269c41e8969589c4df1683d062172a541b48d2b748e3a4dfe0d142fd9f0fec";
+const NATIVE_BINARY_VERSION = "0.41.0";
+const NATIVE_BINARY_RELEASE_TAG = "android-lancedb-v0.41.0";
+const NATIVE_BINARY_SHA256 = "b67a2da3b216ad8e7a6d3c63879c02cce3ae7757fc55945e47baf1a3340fff7e";
+
+let runtimePromise: Promise<typeof import("@lancedb/lancedb")> | null = null;
+
+/** Load native bindings only when a LanceDB operation actually needs them.
+ * Shared service imports and external vector stores must not run preflight. */
+export function loadLanceDb(): Promise<typeof import("@lancedb/lancedb")> {
+  if (!runtimePromise) {
+    runtimePromise = (async () => {
+      await configureLanceDbNativeOverride();
+      return import("@lancedb/lancedb");
+    })().catch((err) => {
+      runtimePromise = null;
+      throw err;
+    });
+  }
+  return runtimePromise;
+}
 
 function needsDownload(binaryPath: string, stampPath: string): boolean {
   if (!existsSync(binaryPath)) return true;

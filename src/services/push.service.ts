@@ -10,6 +10,9 @@ import { clampErrorMessage } from "../utils/provider-errors";
 import { normalizePushNotificationPayload } from "../utils/notification-text";
 import { getSetting } from "./settings.service";
 import { getAPNsInfo, sendAPNsNotification } from "./apns.service";
+import { openIOSNotificationSecret, sealIOSNotificationSecret, validateIOSNotificationEncryption } from "./apns-encryption";
+import { isAPNsRelayCredential, revokeAPNsRelayDestination } from "./apns-relay.service";
+import { listAndroidDestinations, deleteAndroidDestination, sendAndroidNotifications } from "./android-notifications.service";
 import type {
   PushSubscriptionRecord,
   DesktopNotificationDestinationRecord,
@@ -24,6 +27,7 @@ import type {
 } from "../types/push";
 
 interface GenerationEndedPushPayload {
+  generationId?: string;
   chatId?: string;
   content?: string;
   error?: string;
@@ -40,6 +44,7 @@ export interface PushDispatchResult {
 interface PushDeliveryOptions {
   bypassPresence?: boolean;
   destinationId?: string;
+  generationId?: string;
 }
 
 const DEFAULT_PREFERENCES: PushNotificationPreferences = {
@@ -77,12 +82,12 @@ export function listDesktopDestinations(userId: string): DesktopNotificationDest
 }
 
 export function listNotificationDestinations(userId: string): NotificationDestinationRecord[] {
-  return [...listIOSDestinations(userId), ...listDesktopDestinations(userId), ...listSubscriptions(userId)]
+  return [...listAndroidDestinations(userId), ...listIOSDestinations(userId), ...listDesktopDestinations(userId), ...listSubscriptions(userId)]
     .sort((a, b) => b.created_at - a.created_at);
 }
 
 export function listIOSDestinations(userId: string): IOSPushDestinationRecord[] {
-  return (getDb().query(`SELECT id, user_id, device_id, bundle_id, environment, label, user_agent, created_at, updated_at
+  return (getDb().query(`SELECT id, user_id, device_id, bundle_id, environment, delivery_mode, label, user_agent, created_at, updated_at
     FROM ios_push_destinations WHERE user_id = ? ORDER BY created_at DESC`).all(userId) as
     Array<Omit<IOSPushDestinationRecord, "type">>).map(row => ({ ...row, type: "ios_apns" }));
 }
@@ -91,9 +96,14 @@ export function createIOSDestination(userId: string, input: CreateIOSPushDestina
   if (!input || typeof input.deviceId !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(input.deviceId)
     || typeof input.deviceToken !== "string" || !/^[a-fA-F0-9]{32,512}$/.test(input.deviceToken) || input.deviceToken.length % 2 !== 0
     || !["development", "production"].includes(input.environment)) throw new Error("Invalid iOS push destination");
-  const info = getAPNsInfo();
+  const info = getAPNsInfo(input.bundleId);
   if (!info.configured) throw new Error(info.reason!);
   if (input.bundleId !== info.bundleId) throw new Error("The app bundle ID does not match this server's APNs configuration");
+  const delivery = info.delivery || "direct";
+  if (input.delivery && input.delivery !== delivery) throw new Error("The notification delivery route changed. Try enrolling again.");
+  const encryption = input.encryption ? validateIOSNotificationEncryption(input.encryption) : undefined;
+  if (delivery === "relay" && (!encryption || !isAPNsRelayCredential(input.relayCredential)))
+    throw new Error("Update the iOS app and complete relay verification before enabling notifications.");
   let origin: URL;
   try { origin = new URL(input.serverOrigin); } catch { throw new Error("Invalid iOS server origin"); }
   if (!["https:", "http:"].includes(origin.protocol) || origin.origin !== input.serverOrigin || origin.origin.length > 512 || origin.username || origin.password)
@@ -109,14 +119,19 @@ export function createIOSDestination(userId: string, input: CreateIOSPushDestina
       .get(userId, input.deviceId, input.bundleId, input.environment) as { id: string } | null;
     const id = existing?.id || crypto.randomUUID();
     getDb().query(`INSERT INTO ios_push_destinations
-      (id, user_id, device_id, device_token, bundle_id, environment, server_origin, label, user_agent, created_at, updated_at, registered_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, user_id, device_id, device_token, bundle_id, environment, server_origin, label, user_agent, created_at, updated_at, registered_at,
+        delivery_mode, relay_credential, encryption_key, encryption_key_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, device_id, bundle_id, environment) DO UPDATE SET
         device_token = excluded.device_token, server_origin = excluded.server_origin, label = excluded.label,
-        user_agent = excluded.user_agent, updated_at = excluded.updated_at, registered_at = excluded.registered_at`)
+        user_agent = excluded.user_agent, updated_at = excluded.updated_at, registered_at = excluded.registered_at,
+        delivery_mode = excluded.delivery_mode, relay_credential = excluded.relay_credential,
+        encryption_key = excluded.encryption_key, encryption_key_id = excluded.encryption_key_id`)
       .run(id, userId, input.deviceId, token, input.bundleId, input.environment, origin.origin,
         typeof input.label === "string" ? input.label.trim().slice(0, 100) || "Lumiverse iOS" : "Lumiverse iOS",
-        typeof input.userAgent === "string" ? input.userAgent.slice(0, 500) : "", now, now, registeredAt);
+        typeof input.userAgent === "string" ? input.userAgent.slice(0, 500) : "", now, now, registeredAt,
+        delivery, sealIOSNotificationSecret(delivery === "relay" ? input.relayCredential : undefined, `ios-relay:${id}`),
+        sealIOSNotificationSecret(encryption?.key, `ios-key:${id}`), encryption?.keyId ?? null);
     return listIOSDestinations(userId).find(row => row.id === id)!;
   })();
 }
@@ -257,9 +272,18 @@ export function deleteSubscription(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
-export function deleteNotificationDestination(userId: string, id: string): boolean {
+export async function deleteNotificationDestination(userId: string, id: string): Promise<boolean> {
+  if (await deleteAndroidDestination(userId, id)) return true;
   if (deleteSubscription(userId, id)) return true;
-  if (getDb().query("DELETE FROM ios_push_destinations WHERE id = ? AND user_id = ?").run(id, userId).changes > 0) return true;
+  const removed = getDb().query("DELETE FROM ios_push_destinations WHERE id = ? AND user_id = ? RETURNING bundle_id, delivery_mode, relay_credential")
+    .get(id, userId) as { bundle_id: string; delivery_mode: string; relay_credential: string | null } | null;
+  if (removed) {
+    if (removed.delivery_mode === "relay" && removed.relay_credential) {
+      try { await revokeAPNsRelayDestination(removed.bundle_id, openIOSNotificationSecret(removed.relay_credential, `ios-relay:${id}`)); }
+      catch { /* Local removal always stops backend delivery, including during a relay outage. */ }
+    }
+    return true;
+  }
   const deleted = getDb().query(`
     DELETE FROM desktop_notification_destinations WHERE id = ? AND user_id = ?
   `).run(id, userId).changes > 0;
@@ -287,10 +311,11 @@ export async function sendPushToUser(
   );
   const iosDestinations = (getDb().query("SELECT * FROM ios_push_destinations WHERE user_id = ?").all(userId) as
     Array<IOSPushDestinationRecord & { device_token: string; server_origin: string }>).filter(row => !options.destinationId || row.id === options.destinationId);
-  if (subs.length === 0 && desktopDestinations.length === 0 && iosDestinations.length === 0) return 0;
   const normalizedNotification = normalizePushNotificationPayload(notification);
 
   let sent = 0;
+  const androidDelivery = sendAndroidNotifications(userId, normalizedNotification, options.destinationId,
+    () => !!options.bypassPresence || !eventBus.isUserVisible(userId));
   if (options.bypassPresence || !eventBus.isUserVisible(userId)) {
     sent += eventBus.sendDesktopNotification(
       userId,
@@ -302,8 +327,21 @@ export async function sendPushToUser(
   const iosDelivery = Promise.allSettled(iosDestinations.map(async destination => {
     try {
       if (!options.bypassPresence && eventBus.isUserVisible(userId)) return;
+      // A prepared enrollment alone isn't an activity: ActivityKit must have
+      // created it and registered its token. Keep a just-ended activity covered
+      // too, because its terminal update and this dispatch run concurrently.
+      if (options.generationId && getDb().query(`SELECT 1 FROM ios_live_activities
+        WHERE user_id = ? AND generation_id = ? AND device_id = ? AND bundle_id = ? AND environment = ?
+          AND server_origin = ? AND activity_id IS NOT NULL AND push_token IS NOT NULL
+          AND expires_at > ? AND (ended_at IS NULL OR ended_at > ?) LIMIT 1`)
+        .get(userId, options.generationId, destination.device_id, destination.bundle_id, destination.environment,
+          destination.server_origin, Date.now(), Date.now() - 120_000)) return;
       const result = await sendAPNsNotification(destination, normalizedNotification);
       if (result.sent) sent++;
+      else if (result.invalidToken) {
+        getDb().query("DELETE FROM ios_push_destinations WHERE id = ? AND device_token = ? AND registered_at = ?")
+          .run(destination.id, destination.device_token, (destination as typeof destination & { registered_at: number }).registered_at);
+      }
       else if (result.invalidatedAt !== undefined) {
         // A response for an older token must not delete a freshly rotated enrollment.
         getDb().query(`DELETE FROM ios_push_destinations WHERE id = ? AND device_token = ? AND registered_at <= ?`)
@@ -311,7 +349,7 @@ export async function sendPushToUser(
       }
     } catch { console.warn(`[apns] Delivery failed for destination ${destination.id}`); }
   }));
-  if (subs.length === 0) { await iosDelivery; return sent; }
+  if (subs.length === 0) { await iosDelivery; sent += await androidDelivery; return sent; }
   const privateJWK = getVapidPrivateJWK();
 
   const results = await Promise.allSettled(
@@ -389,6 +427,7 @@ export async function sendPushToUser(
   );
 
   await iosDelivery;
+  sent += await androidDelivery;
   return sent;
 }
 
@@ -518,7 +557,7 @@ export async function dispatchGenerationEndedPush(
   }
 
   const notification = await buildGenerationEndedNotification(userId, payload);
-  const sent = await sendPushToUser(userId, notification, options);
+  const sent = await sendPushToUser(userId, notification, { ...options, generationId: payload.generationId });
   return { sent };
 }
 

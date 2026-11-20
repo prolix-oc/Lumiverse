@@ -1,5 +1,5 @@
 import type { TtsProviderCapabilities } from "./param-schema";
-import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "./types";
+import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice, TtsVoiceLibraryOptions, TtsVoiceLibraryResult } from "./types";
 
 export interface TtsVoiceListOptions {
   /** Selected model id when a provider exposes model-specific voices. */
@@ -20,4 +20,6 @@ export interface TtsProvider {
   listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>>;
 
   listVoices(apiKey: string, apiUrl: string, options?: TtsVoiceListOptions): Promise<TtsVoice[]>;
+
+  listVoiceLibrary?(apiKey: string, apiUrl: string, options: TtsVoiceLibraryOptions): Promise<TtsVoiceLibraryResult>;
 }

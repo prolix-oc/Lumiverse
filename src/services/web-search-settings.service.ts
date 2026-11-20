@@ -6,10 +6,18 @@ export const WEB_SEARCH_SETTINGS_KEY = "webSearchSettings";
 export const WEB_SEARCH_API_KEY_SECRET = "web_search_api_key";
 export const EXA_WEB_SEARCH_API_KEY_SECRET = "web_search_exa_api_key";
 export const TAVILY_WEB_SEARCH_API_KEY_SECRET = "web_search_tavily_api_key";
+export const DEEPSEEK_WEB_SEARCH_API_KEY_SECRET = "web_search_deepseek_api_key";
 export const EXA_SEARCH_API_URL = "https://api.exa.ai/search";
 export const TAVILY_SEARCH_API_URL = "https://api.tavily.com/search";
+export const DEEPSEEK_SEARCH_API_URL = "https://api.deepseek.com/v1/tools/search";
 
-export type WebSearchProvider = "searxng" | "exa" | "tavily";
+export type WebSearchProvider = "searxng" | "exa" | "tavily" | "deepseek";
+
+const HOSTED_SEARCH_API_URLS: Partial<Record<WebSearchProvider, string>> = {
+  exa: EXA_SEARCH_API_URL,
+  tavily: TAVILY_SEARCH_API_URL,
+  deepseek: DEEPSEEK_SEARCH_API_URL,
+};
 
 /**
  * API keys are deliberately kept out of the user-settings JSON. Each
@@ -19,6 +27,7 @@ export type WebSearchProvider = "searxng" | "exa" | "tavily";
 export function webSearchApiKeySecretForProvider(provider: WebSearchProvider): string {
   if (provider === "exa") return EXA_WEB_SEARCH_API_KEY_SECRET;
   if (provider === "tavily") return TAVILY_WEB_SEARCH_API_KEY_SECRET;
+  if (provider === "deepseek") return DEEPSEEK_WEB_SEARCH_API_KEY_SECRET;
   return WEB_SEARCH_API_KEY_SECRET;
 }
 
@@ -103,7 +112,7 @@ function normalizeApiUrl(value: unknown): string {
 }
 
 function normalizeProvider(value: unknown): WebSearchProvider {
-  return value === "exa" || value === "tavily" ? value : "searxng";
+  return value === "exa" || value === "tavily" || value === "deepseek" ? value : "searxng";
 }
 
 function normalizeLanguage(value: unknown): string {
@@ -138,11 +147,7 @@ function normalizeBaseSettings(raw: Partial<WebSearchSettingsInput> | null | und
     provider,
     // Hosted provider endpoints are fixed. Do not let a stale SearXNG URL get
     // used when a client switches providers without resetting apiUrl.
-    apiUrl: provider === "exa"
-      ? EXA_SEARCH_API_URL
-      : provider === "tavily"
-        ? TAVILY_SEARCH_API_URL
-        : normalizeApiUrl(merged.apiUrl),
+    apiUrl: HOSTED_SEARCH_API_URLS[provider] ?? normalizeApiUrl(merged.apiUrl),
     requestTimeoutMs: clampInt(merged.requestTimeoutMs, 5_000, 120_000, DEFAULT_SETTINGS.requestTimeoutMs),
     defaultResultCount,
     maxResultCount,
@@ -164,7 +169,7 @@ function normalizeProviderProfiles(raw: unknown): Partial<Record<WebSearchProvid
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
 
   const profiles: Partial<Record<WebSearchProvider, WebSearchProviderProfile>> = {};
-  for (const provider of ["searxng", "exa", "tavily"] as const) {
+  for (const provider of ["searxng", "exa", "tavily", "deepseek"] as const) {
     const profile = (raw as Record<string, unknown>)[provider];
     if (!profile || typeof profile !== "object" || Array.isArray(profile)) continue;
     profiles[provider] = toProviderProfile(normalizeBaseSettings({

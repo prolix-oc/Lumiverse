@@ -1,0 +1,1 @@
+function e(e,t,n=()=>``){let r=t.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);return e.filter(e=>{let t=[e.name,e.provider,e.model,n(e.id)].filter(Boolean).join(` `).toLocaleLowerCase();return r.every(e=>t.includes(e))})}export{e as t};

@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react'
+import {
+  ViewTransition, addTransitionType, startTransition,
+  useId, useState, useEffect, useCallback, useMemo, useRef,
+  type CSSProperties, type KeyboardEvent,
+} from 'react'
 import { useParams } from 'react-router'
-import { AnimatePresence, motion } from 'motion/react'
 import { Marked } from 'marked'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
@@ -19,8 +22,10 @@ import { extractPalette, extractRenderedHeroTitleBand, type ImagePalette } from 
 import { deriveHeroTextVars } from '@/lib/characterTheme'
 import type { Character } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
+import { ActivityPanel } from '@/components/shared/ActivityPanel'
 import clsx from 'clsx'
 import styles from './CharacterProfile.module.css'
+import './CharacterProfile.transitions.css'
 
 const profileMarked = new Marked({ gfm: true, breaks: true })
 const HERO_CACHE_LIMIT = 60
@@ -78,6 +83,7 @@ export default function CharacterProfile() {
 
   return (
     <SingleCharacterProfile
+      key={params.id || activeCharacterId || 'empty'}
       paramId={params.id}
       activeCharacterId={activeCharacterId}
       characters={characters}
@@ -109,8 +115,30 @@ function SingleCharacterProfile({
   const [heroTextVars, setHeroTextVars] = useState<CSSProperties | undefined>(undefined)
   const [heroImageLoadedUrl, setHeroImageLoadedUrl] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<ProfileViewMode>('profile')
+  const viewId = useId()
   const heroImageRef = useRef<HTMLDivElement>(null)
   const heroNameRef = useRef<HTMLHeadingElement>(null)
+
+  const selectView = (view: ProfileViewMode) => {
+    // Skip snapshot allocation for reduced motion and the efficiency theme.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      || document.documentElement.dataset.renderingMode === 'efficiency') {
+      setActiveView(view)
+    } else {
+      startTransition(() => {
+        addTransitionType('character-profile-view')
+        setActiveView(view)
+      })
+    }
+  }
+  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const view = event.key === 'Home' ? 'profile' : event.key === 'End' ? 'creatorNotes'
+      : activeView === 'profile' ? 'creatorNotes' : 'profile'
+    document.getElementById(`${viewId}-${view}-tab`)?.focus()
+    selectView(view)
+  }
 
   const handleEditCharacter = useCallback(() => {
     if (!charId) return
@@ -266,134 +294,143 @@ function SingleCharacterProfile({
             <button
               type="button"
               role="tab"
+              id={`${viewId}-profile-tab`}
+              aria-controls={`${viewId}-profile-panel`}
+              tabIndex={activeView === 'profile' ? 0 : -1}
               aria-selected={activeView === 'profile'}
               className={clsx(styles.viewTab, activeView === 'profile' && styles.viewTabActive)}
-              onClick={() => setActiveView('profile')}
+              onClick={() => selectView('profile')}
+              onKeyDown={handleTabKey}
             >
               {t('drawer.profile.tabName')}
             </button>
             <button
               type="button"
               role="tab"
+              id={`${viewId}-creatorNotes-tab`}
+              aria-controls={`${viewId}-creatorNotes-panel`}
+              tabIndex={activeView === 'creatorNotes' ? 0 : -1}
               aria-selected={activeView === 'creatorNotes'}
               className={clsx(styles.viewTab, activeView === 'creatorNotes' && styles.viewTabActive)}
-              onClick={() => setActiveView('creatorNotes')}
+              onClick={() => selectView('creatorNotes')}
+              onKeyDown={handleTabKey}
             >
               {t('characterEditor.creatorNotes')}
             </button>
           </div>
         )}
 
-        <AnimatePresence mode="wait" initial={false}>
-          {activeView === 'creatorNotes' && hasCreatorNotes ? (
-            <motion.div
-              key="creator-notes"
-              className={styles.creatorNotesView}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18, ease: 'easeOut' }}
-            >
-              <div className={styles.creatorNotesHeader}>
-                <span className={styles.creatorNotesEyebrow}>{character.name}</span>
-                <h3 className={styles.creatorNotesTitle}>{t('characterEditor.creatorNotes')}</h3>
-                {character.creator && (
-                  <span className={styles.creatorNotesCreator}>
-                    {t('characterProfile.byCreator', { creator: character.creator })}
-                  </span>
-                )}
-                <p className={styles.creatorNotesHelper}>{t('characterEditor.creatorNotesHelper')}</p>
-              </div>
-              <div className={styles.creatorNotesSurface}>
-                <MessageContent
-                  content={character.creator_notes}
-                  isUser={false}
-                  userName={macroUserName}
-                  characterNameOverride={character.name}
-                  risuAssetMapOverride={creatorNotesAssetMap}
-                  disableInterceptors
-                />
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="profile"
-              className={styles.profile}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18, ease: 'easeOut' }}
-            >
-              {/* Hero avatar */}
-              <div className={styles.hero}>
-                <div className={styles.heroImage} ref={heroImageRef}>
-                  <LazyImage
-                    src={avatarUrl}
-                    alt={character.name}
-                    onLoad={() => setHeroImageLoadedUrl(avatarUrl)}
-                    onError={() => setHeroImageLoadedUrl(null)}
-                    fallback={
-                      <div className={styles.avatarFallback}>
-                        {character.name[0]?.toUpperCase()}
-                      </div>
-                    }
+        <ViewTransition default="none" update={{ 'character-profile-view': 'lumiverse-profile-view', default: 'none' }}>
+          <div>
+            {activeView === 'creatorNotes' && hasCreatorNotes && (
+              <div
+                id={`${viewId}-creatorNotes-panel`}
+                role="tabpanel"
+                aria-labelledby={`${viewId}-creatorNotes-tab`}
+                className={styles.creatorNotesView}
+              >
+                <div className={styles.creatorNotesHeader}>
+                  <span className={styles.creatorNotesEyebrow}>{character.name}</span>
+                  <h3 className={styles.creatorNotesTitle}>{t('characterEditor.creatorNotes')}</h3>
+                  {character.creator && (
+                    <span className={styles.creatorNotesCreator}>
+                      {t('characterProfile.byCreator', { creator: character.creator })}
+                    </span>
+                  )}
+                  <p className={styles.creatorNotesHelper}>{t('characterEditor.creatorNotesHelper')}</p>
+                </div>
+                <div className={styles.creatorNotesSurface}>
+                  <MessageContent
+                    content={character.creator_notes}
+                    isUser={false}
+                    userName={macroUserName}
+                    characterNameOverride={character.name}
+                    risuAssetMapOverride={creatorNotesAssetMap}
+                    disableInterceptors
                   />
                 </div>
-                <div className={styles.heroMeta} style={heroTextVars}>
-                  <h2 className={styles.name} ref={heroNameRef}>{character.name}</h2>
-                  <button type="button" className={styles.editBtn} onClick={handleEditCharacter}>
-                    <Pencil size={12} />
-                    <span>{t('characterProfile.editCharacter')}</span>
-                  </button>
-                  {character.creator && <span className={styles.creator}>{t('characterProfile.byCreator', { creator: character.creator })}</span>}
-                  {character.tags.length > 0 && (
-                    <TagList tags={character.tags} />
-                  )}
-                </div>
               </div>
+            )}
+            {/* Retain native disclosure state. Rich creator notes unmount on exit
+                so embedded media cannot keep playing in a hidden Activity. */}
+            <ActivityPanel active={activeView === 'profile'}>
+              <div
+                id={`${viewId}-profile-panel`}
+                role={hasCreatorNotes ? 'tabpanel' : undefined}
+                aria-labelledby={hasCreatorNotes ? `${viewId}-profile-tab` : undefined}
+                className={styles.profile}
+              >
+                {/* Hero avatar */}
+                <div className={styles.hero}>
+                  <div className={styles.heroImage} ref={heroImageRef}>
+                    <LazyImage
+                      src={avatarUrl}
+                      alt={character.name}
+                      onLoad={() => setHeroImageLoadedUrl(avatarUrl)}
+                      onError={() => setHeroImageLoadedUrl(null)}
+                      fallback={
+                        <div className={styles.avatarFallback}>
+                          {character.name[0]?.toUpperCase()}
+                        </div>
+                      }
+                    />
+                  </div>
+                  <div className={styles.heroMeta} style={heroTextVars}>
+                    <h2 className={styles.name} ref={heroNameRef}>{character.name}</h2>
+                    <button type="button" className={styles.editBtn} onClick={handleEditCharacter}>
+                      <Pencil size={12} />
+                      <span>{t('characterProfile.editCharacter')}</span>
+                    </button>
+                    {character.creator && <span className={styles.creator}>{t('characterProfile.byCreator', { creator: character.creator })}</span>}
+                    {character.tags.length > 0 && (
+                      <TagList tags={character.tags} />
+                    )}
+                  </div>
+                </div>
 
-              {/* Description */}
-              <EditorSection Icon={BookOpen} title={t('characterProfile.sections.description')} defaultExpanded={false}>
-                {character.description
-                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.description) }} />
-                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.description')}</span></div>
-                }
-              </EditorSection>
+                {/* Description */}
+                <EditorSection Icon={BookOpen} title={t('characterProfile.sections.description')} defaultExpanded={false}>
+                  {character.description
+                    ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.description) }} />
+                    : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.description')}</span></div>
+                  }
+                </EditorSection>
 
-              {/* Personality */}
-              <EditorSection Icon={Sparkles} title={t('characterProfile.sections.personality')} defaultExpanded={false}>
-                {character.personality
-                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.personality) }} />
-                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.personality')}</span></div>
-                }
-              </EditorSection>
+                {/* Personality */}
+                <EditorSection Icon={Sparkles} title={t('characterProfile.sections.personality')} defaultExpanded={false}>
+                  {character.personality
+                    ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.personality) }} />
+                    : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.personality')}</span></div>
+                  }
+                </EditorSection>
 
-              {/* Scenario */}
-              <EditorSection Icon={FileText} title={t('characterProfile.sections.scenario')} defaultExpanded={false}>
-                {character.scenario
-                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.scenario) }} />
-                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.scenario')}</span></div>
-                }
-              </EditorSection>
+                {/* Scenario */}
+                <EditorSection Icon={FileText} title={t('characterProfile.sections.scenario')} defaultExpanded={false}>
+                  {character.scenario
+                    ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.scenario) }} />
+                    : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.scenario')}</span></div>
+                  }
+                </EditorSection>
 
-              {/* First Message */}
-              <EditorSection Icon={MessageSquare} title={t('characterProfile.sections.firstMessage')} defaultExpanded={false}>
-                {character.first_mes
-                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.first_mes) }} />
-                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.firstMessage')}</span></div>
-                }
-              </EditorSection>
+                {/* First Message */}
+                <EditorSection Icon={MessageSquare} title={t('characterProfile.sections.firstMessage')} defaultExpanded={false}>
+                  {character.first_mes
+                    ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.first_mes) }} />
+                    : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.firstMessage')}</span></div>
+                  }
+                </EditorSection>
 
-              {/* System Prompt */}
-              <EditorSection Icon={FileText} title={t('characterProfile.sections.systemPrompt')} defaultExpanded={false}>
-                {character.system_prompt
-                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.system_prompt) }} />
-                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.systemPrompt')}</span></div>
-                }
-              </EditorSection>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                {/* System Prompt */}
+                <EditorSection Icon={FileText} title={t('characterProfile.sections.systemPrompt')} defaultExpanded={false}>
+                  {character.system_prompt
+                    ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.system_prompt) }} />
+                    : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.systemPrompt')}</span></div>
+                  }
+                </EditorSection>
+              </div>
+            </ActivityPanel>
+          </div>
+        </ViewTransition>
       </div>
     </PanelFadeIn>
   )

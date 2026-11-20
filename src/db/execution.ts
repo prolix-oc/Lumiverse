@@ -1,11 +1,13 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { bunCmd } from "../utils/bun-cmd";
+import { configuredBunExecutable } from "../runtime/bun-runtime";
 import { getDatabasePath, getDb, onDbReset } from "./connection";
 import { executeOperation } from "./execute-operation";
 import { formatImageReferenceDiagnostics } from "./image-reference-diagnostics";
 import { formatCheckpointDiagnostics } from "./checkpoint-diagnostics";
 import { encodeDatabaseMessage, readDatabaseMessages } from "./execution-transport";
+import { createDatabaseSocketHost } from "./execution-socket";
 import type { DatabaseMaintenanceResult } from "./maintenance";
 import type {
   DatabaseChildMessage, DatabaseExecutionFailure, DatabaseExecutionOutcome,
@@ -34,34 +36,52 @@ interface PendingOperation {
   timer: ReturnType<typeof setTimeout>;
   attempts: number;
   dispatched: boolean;
+  interactiveRead?: boolean;
 }
 export interface DatabaseExecutionOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Promote SELECT reads within a read-only queue segment, never across writes. */
+  priority?: "interactive";
 }
 export interface DatabaseExecutorOptions {
   maxPending?: number;
   startupTimeoutMs?: number;
   runtimePath?: string;
-  transport?: "ipc" | "stdio";
+  transport?: "ipc" | "stdio" | "socket";
   /** Bootstrap requests may start the child before synchronous initialization ends. */
   deferBackgroundWork?: boolean;
+}
+
+// Be conservative: PRAGMAs, transactions, mutations and unrecognized SQL
+// remain ordering barriers even when they happen to return rows.
+function isReorderableRead(operation: DatabaseOperation): boolean {
+  return operation.kind === "read"
+    && (operation.statement.mode === "get" || operation.statement.mode === "all")
+    && /^\s*SELECT\b/i.test(operation.statement.sql);
 }
 
 /** One bounded queue and one native operation at a time per backend database. */
 export class DatabaseExecutor {
   private process: ReturnType<typeof Bun.spawn> | null = null;
   private sendMessage: ((message: DatabaseHostMessage) => void) | null = null;
+  private closeTransport: (() => void) | null = null;
+  private readonly transport: "ipc" | "stdio" | "socket";
+  private childRuntime = "";
   private ready = false;
   private closed = false;
   private queue: PendingOperation[] = [];
   private active: PendingOperation | null = null;
+  private interactiveReadStreak = 0;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping: Promise<unknown> | null = null;
   private backgroundWorkEnabled: boolean;
 
   constructor(readonly path: string, private readonly options: DatabaseExecutorOptions = {}, previousClosed?: Promise<void>) {
+    // Windows has had failures in both Bun IPC and binary stdio pipes. Use the
+    // same loopback strategy as the Windows runner, retaining binary values.
+    this.transport = options.transport ?? (process.platform === "win32" ? "socket" : "ipc");
     this.backgroundWorkEnabled = !options.deferBackgroundWork;
     if (previousClosed) {
       this.stopping = previousClosed;
@@ -93,6 +113,7 @@ export class DatabaseExecutor {
         requestId: crypto.randomUUID(), operation, deadline: Date.now() + timeoutMs,
         resolve: resolve as (result: unknown) => void, reject, attempts: 0, dispatched: false,
         timer: setTimeout(() => this.expire(item), timeoutMs),
+        interactiveRead: options.priority === "interactive" && isReorderableRead(operation),
       };
       const abort = () => this.expire(item, options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
       options.signal?.addEventListener("abort", abort, { once: true });
@@ -147,32 +168,56 @@ export class DatabaseExecutor {
     const index = this.queue.indexOf(item);
     if (index < 0) return;
     this.queue.splice(index, 1);
-    this.finish(item, null, reason ?? new DatabaseExecutionError("Database operation expired before execution", "DATABASE_QUEUE_TIMEOUT", "not-started"));
+    const starting = !this.ready && !!this.process;
+    this.finish(item, null, reason ?? (starting ? this.startupFailure()
+      : new DatabaseExecutionError("Database operation expired before execution", "DATABASE_QUEUE_TIMEOUT", "not-started")));
+    if (starting && this.queue.length === 0) void this.retire();
+  }
+
+  private startupFailure(): DatabaseExecutionError {
+    return new DatabaseExecutionError(
+      `Database subprocess did not become ready (transport=${this.transport}, pid=${this.process?.pid ?? "none"}, runtime=${this.childRuntime})`,
+      "DATABASE_STARTUP_TIMEOUT", "not-started",
+    );
   }
 
   private spawn(): void {
     try {
-      // The desktop runner also avoids Bun's Windows IPC exit/disconnect gaps.
-      const pipes = this.options.transport === "stdio";
-      // Note: stdio fallback removed for win32 due to Bun 1.4.2 binary stream corruption (PR #39897, #23340).
+      const pipes = this.transport === "stdio";
+      let proc: ReturnType<typeof Bun.spawn>;
+      const socket = this.transport === "socket" ? createDatabaseSocketHost({
+        receive: (message) => { if (this.process === proc) this.receive(message as DatabaseChildMessage); },
+        disconnect: () => { if (this.process === proc) this.transportFailed(proc); },
+      }) : null;
+      this.closeTransport = socket ? () => socket.close() : null;
       let outputDrained: Promise<void> = Promise.resolve();
+      const args = [this.options.runtimePath ?? join(import.meta.dir, "execution-subprocess.ts"), this.path,
+        ...(pipes ? ["--stdio"] : []), ...(socket ? ["--socket"] : []),
+        ...(!this.backgroundWorkEnabled ? ["--defer-background"] : [])];
+      // A Windows side-by-side runtime need not be the bare `bun` on PATH.
+      // Bun IPC also requires compatible runtimes on both sides. Preserve the
+      // external wrapper that is needed to execute Bun on native Termux.
+      const cmd = process.env.LUMIVERSE_BUN_METHOD && process.env.LUMIVERSE_BUN_PATH
+        ? bunCmd(...args) : [configuredBunExecutable(), ...args];
+      this.childRuntime = cmd[0]!;
       const launch = {
-        cmd: bunCmd(this.options.runtimePath ?? join(import.meta.dir, "execution-subprocess.ts"), this.path,
-          ...(pipes ? ["--stdio"] : []), ...(!this.backgroundWorkEnabled ? ["--defer-background"] : [])),
+        cmd,
+        ...(socket ? { env: { ...process.env, ...socket.env } } : {}),
         stderr: "inherit" as const,
+        windowsHide: true,
         onExit: (child: ReturnType<typeof Bun.spawn>) => {
           // Pipe messages already written before exit must be delivered first.
           if (pipes) void outputDrained.then(() => this.childExited(child));
           else this.childExited(child);
         },
       };
-      const proc = pipes
+      proc = socket ? Bun.spawn({ ...launch, stdin: "ignore", stdout: "inherit" }) : pipes
         ? Bun.spawn({ ...launch, stdin: "pipe", stdout: "pipe" })
         : Bun.spawn({ ...launch, stdin: "ignore", stdout: "inherit", serialization: "advanced", ipc: (message, child) => {
           if (this.process === child) this.receive(message as DatabaseChildMessage);
         } });
       this.process = proc;
-      this.sendMessage = pipes ? (message) => {
+      this.sendMessage = socket ? (message) => socket.send(message) : pipes ? (message) => {
         const input = proc.stdin as Bun.FileSink;
         input.write(encodeDatabaseMessage(message));
         void Promise.resolve(input.flush()).catch(() => this.transportFailed(proc));
@@ -181,10 +226,13 @@ export class DatabaseExecutor {
         if (this.process === proc) this.receive(message as DatabaseChildMessage);
       }).then(() => this.transportFailed(proc), () => this.transportFailed(proc));
       this.startupTimer = setTimeout(() => {
-        this.failQueued(new DatabaseExecutionError("Database subprocess startup timed out", "DATABASE_STARTUP_TIMEOUT", "not-started"));
+        if (this.process !== proc || this.ready) return;
+        this.failQueued(this.startupFailure());
         void this.retire();
       }, this.options.startupTimeoutMs ?? 10_000);
     } catch (err) {
+      this.closeTransport?.();
+      this.closeTransport = null;
       this.failQueued(new DatabaseExecutionError(`Unable to start database subprocess: ${String(err)}`, "DATABASE_UNAVAILABLE", "not-started"));
     }
   }
@@ -193,6 +241,8 @@ export class DatabaseExecutor {
     if (this.process !== child) return;
     this.process = null;
     this.sendMessage = null;
+    this.closeTransport?.();
+    this.closeTransport = null;
     this.ready = false;
     this.clearStartup();
     if (this.active) {
@@ -270,10 +320,23 @@ export class DatabaseExecutor {
   }
 
   private pump(): void {
-    if (this.closed || this.active || this.stopping || this.queue.length === 0) return;
+    if (this.closed || this.active || this.stopping) return;
+    if (this.queue.length === 0) { this.interactiveReadStreak = 0; return; }
     if (!this.process) { this.spawn(); return; }
     if (!this.ready) return;
-    const item = this.queue.shift()!;
+    let nextIndex = 0;
+    if (this.interactiveReadStreak < 4) {
+      // Only overtake SELECTs before the first ordering barrier. Earlier
+      // writes must commit before an interactive read can observe their state.
+      for (let index = 0; index < this.queue.length; index++) {
+        const candidate = this.queue[index];
+        if (!isReorderableRead(candidate.operation)) break;
+        if (candidate.interactiveRead) { nextIndex = index; break; }
+      }
+    }
+    const [item] = this.queue.splice(nextIndex, 1);
+    // After four interactive reads, give the oldest queued operation a turn.
+    this.interactiveReadStreak = item.interactiveRead ? this.interactiveReadStreak + 1 : 0;
     this.active = item;
     item.dispatched = true;
     try {
@@ -297,9 +360,11 @@ export class DatabaseExecutor {
     const proc = this.process;
     this.process = null;
     const sendMessage = this.sendMessage;
+    const closeTransport = this.closeTransport;
+    this.closeTransport = null;
     this.sendMessage = null;
     this.ready = false;
-    if (!proc) return Promise.resolve();
+    if (!proc) { closeTransport?.(); return Promise.resolve(); }
     // Graceful shutdown: send shutdown message before SIGKILL to avoid disconnect gaps.
     if (sendMessage) {
       try { sendMessage({ type: "shutdown" }); } catch { /* ignore */ }
@@ -310,6 +375,7 @@ export class DatabaseExecutor {
     }, 500);
     const stopping = proc.exited.catch(() => {}).finally(() => {
       clearTimeout(gracefulTimeout);
+      closeTransport?.();
       if (this.stopping === stopping) this.stopping = null;
     });
     this.stopping = stopping;

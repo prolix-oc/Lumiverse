@@ -1,5 +1,6 @@
 export type ChatPipelineTaskKind =
   | "chunk_rebuild"
+  | "chunk_finalize"
   | "cortex_ingest"
   | "cortex_rebuild"
   | "cortex_warmup";
@@ -116,6 +117,7 @@ function taskToSnapshot(task: QueueTask<unknown>): ChatPipelineTaskSnapshot {
 function buildQueuedCounts(lane: ChatPipelineLane): Record<ChatPipelineTaskKind, number> {
   const counts: Record<ChatPipelineTaskKind, number> = {
     chunk_rebuild: 0,
+    chunk_finalize: 0,
     cortex_ingest: 0,
     cortex_rebuild: 0,
     cortex_warmup: 0,
@@ -192,7 +194,7 @@ function preemptActiveCortexTask(
 ): void {
   if (incomingKind !== "chunk_rebuild") return;
   const active = lane.activeTask;
-  if (!active || active.kind === "chunk_rebuild" || active.controller.signal.aborted) return;
+  if (!active || active.kind === "chunk_rebuild" || active.kind === "chunk_finalize" || active.controller.signal.aborted) return;
 
   const reason = `superseded_by_${incomingKind}`;
   active.supersededReason = reason;

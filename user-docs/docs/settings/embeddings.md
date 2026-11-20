@@ -4,6 +4,9 @@ title: Embeddings
 
 # Embeddings
 
+For external Milvus deployments, see [Milvus maintenance](milvus-maintenance.md)
+for migration, BM25 backfill, flush policy, and benchmark commands.
+
 Embeddings power two features in Lumiverse: **semantic world book activation** (finding lorebook entries by meaning, not just keywords) and **long-term chat memory** (recalling relevant past moments). Both require an embedding provider to be configured.
 
 ---
@@ -46,6 +49,7 @@ The available providers include Lumiverse's built-ins and any embedding provider
 | **ElectronHub** | Model aggregator |
 | **BananaBread** | Lumiverse's local embedding server. Defaults to `http://localhost:8008/v1/embeddings` and pulls its model list from `/v1/models`. |
 | **Nano-GPT** | Pay-per-token aggregator |
+| **NVIDIA NIM** | NVIDIA Build or a self-hosted NIM embedding endpoint. Supports Nemotron 3 and 3.5 Embed 1B; Lumiverse automatically sends passage/query input types. |
 | **Spindle extension** | An enabled extension may contribute an embedding provider. Availability and model options depend on that extension. |
 
 ### 4. Configure the Connection
@@ -60,6 +64,8 @@ The available providers include Lumiverse's built-ins and any embedding provider
 | **Send Dimensions** | Whether to include the dimension value in API requests (some providers require it, others reject it) |
 
 For Mistral and Cohere, Lumiverse translates **Send Dimensions** to each native API's `output_dimension` field. Cohere requests are also split automatically when a batch exceeds its 96-text API limit.
+
+For NVIDIA Build, select **NVIDIA NIM** and use `https://integrate.api.nvidia.com/v1/embeddings` with the model ID `nvidia/nemotron-3.5-embed-1b` for Nemotron 3.5 Embed 1B. Lumiverse sends `input_type: "passage"` when testing or indexing content and `input_type: "query"` when searching. These roles are required by [NVIDIA's API](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3_5-embed-1b-infer); no manual request fields are needed.
 
 ### 5. Add Fallback Connections (Optional)
 

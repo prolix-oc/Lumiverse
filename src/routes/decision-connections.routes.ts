@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { DecisionValidationError } from "../decision/validation";
 import * as svc from "../services/decision-connections.service";
+import * as oauth from "../services/decision-connection-oauth.service";
 import { parsePagination } from "../services/pagination";
 import { withReadableApiKeyStatus, withReadableApiKeyStatuses } from "../services/connection-secret-status";
 
@@ -20,6 +21,14 @@ app.post("/models/preview", async (c) => {
   const result = await svc.listConnectionModelsPreview(userId, body);
   return c.json(result);
 });
+
+app.post("/auth/callback", async (c) => c.json(await oauth.completeOAuth(c.get("userId"), await c.req.json())));
+
+app.post("/auth/:provider", async (c) => c.json(await oauth.initiateOAuth(
+  // The app's origin middleware validates Origin before these routes. Prefer
+  // it to the upstream URL, whose host can be rewritten by a reverse proxy.
+  c.get("userId"), c.req.param("provider"), await c.req.json(), c.req.header("origin") || new URL(c.req.url).origin,
+)));
 
 app.get("/", async (c) => {
   const userId = c.get("userId");

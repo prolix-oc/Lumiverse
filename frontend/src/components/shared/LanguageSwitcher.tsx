@@ -1,42 +1,27 @@
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { changeUiLanguage } from '@/i18n'
+import { DEFAULT_UI_LANGUAGE, UI_LANGUAGES, isUiLanguage } from '@/i18n/languages'
+import { useStore } from '@/store'
 import sectionStyles from '@/components/settings/SettingsSection.module.css'
 import styles from './LanguageSwitcher.module.css'
-
-const LANGUAGES = [
-  { code: 'en', labelKey: 'language.en' },
-  { code: 'zh', labelKey: 'language.zh' },
-  { code: 'zh-TW', labelKey: 'language.zh-TW' },
-  { code: 'ja', labelKey: 'language.ja' },
-  { code: 'fr', labelKey: 'language.fr' },
-  { code: 'it', labelKey: 'language.it' },
-  { code: 'de', labelKey: 'language.de' },
-  { code: 'ko', labelKey: 'language.ko' },
-] as const
 
 interface LanguageSwitcherProps {
   className?: string
 }
 
-function resolveUiLanguage(resolved?: string): string {
-  if (!resolved) return 'en'
-  if (resolved === 'zh-TW' || resolved.startsWith('zh-TW')) return 'zh-TW'
-  if (resolved.startsWith('zh')) return 'zh'
-  if (resolved.startsWith('ja')) return 'ja'
-  if (resolved.startsWith('fr')) return 'fr'
-  if (resolved.startsWith('it')) return 'it'
-  if (resolved.startsWith('de')) return 'de'
-  if (resolved.startsWith('ko')) return 'ko'
-  return 'en'
-}
-
 export default function LanguageSwitcher({ className }: LanguageSwitcherProps) {
   const { t, i18n } = useTranslation('common')
-  const current = resolveUiLanguage(i18n.resolvedLanguage)
+  const current = isUiLanguage(i18n.resolvedLanguage) ? i18n.resolvedLanguage : DEFAULT_UI_LANGUAGE
 
   const setLanguage = (code: string) => {
-    void changeUiLanguage(code)
+    if (!isUiLanguage(code)) return
+    const state = useStore.getState()
+    if (state.isAuthenticated) {
+      state.setSetting('uiLanguage', code)
+    } else {
+      void changeUiLanguage(code)
+    }
   }
 
   return (
@@ -52,9 +37,9 @@ export default function LanguageSwitcher({ className }: LanguageSwitcherProps) {
         onChange={(e) => setLanguage(e.target.value)}
         aria-label={t('language.label')}
       >
-        {LANGUAGES.map(({ code, labelKey }) => (
+        {UI_LANGUAGES.map(code => (
           <option key={code} value={code}>
-            {t(labelKey)}
+            {t(`language.${code}`)}
           </option>
         ))}
       </select>

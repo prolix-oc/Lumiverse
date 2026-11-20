@@ -205,6 +205,7 @@ export function filterConnectionProfiles(
   profileTags: ConnectionProfileTag[],
   query: string,
   selectedTagId?: string | null,
+  folderFor?: (id: string) => string,
 ): ConnectionProfile[] {
   const normalizedQuery = query.trim().toLowerCase()
   const tagById = new Map(profileTags.map((tag) => [tag.id, tag]))
@@ -218,6 +219,7 @@ export function filterConnectionProfiles(
       profile.name,
       profile.provider,
       profile.model,
+      folderFor?.(profile.id),
       ...tagIds.map((id) => tagById.get(id)?.name ?? ''),
     ].join(' ').toLowerCase()
 

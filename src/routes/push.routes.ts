@@ -1,22 +1,42 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { getVapidPublicKey } from "../crypto/vapid";
 import * as pushSvc from "../services/push.service";
 import type { CreatePushSubscriptionInput } from "../types/push";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
 import { getAPNsInfo } from "../services/apns.service";
+import { createAndroidDestination, getAndroidNotificationInfo } from "../services/android-notifications.service";
 
 const app = new Hono();
 
-app.get("/ios/info", (c) => {
+app.get("/android/info", c => {
   c.header("Cache-Control", "no-store");
-  return c.json(getAPNsInfo());
+  return c.json(getAndroidNotificationInfo());
+});
+app.post("/android", bodyLimit({ maxSize: 8192 }), async c => {
+  c.header("Cache-Control", "no-store");
+  try {
+    const input = await c.req.json();
+    if (input.transport === "fcm" && !getAndroidNotificationInfo().configured)
+      return c.json({ error: getAndroidNotificationInfo().reason }, 503);
+    return c.json(createAndroidDestination(c.get("userId"), input), 201);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Invalid Android destination" }, 400);
+  }
 });
 
-app.post("/ios", async (c) => {
+app.get("/ios/info", (c) => {
   c.header("Cache-Control", "no-store");
-  if (!getAPNsInfo().configured) return c.json({ error: getAPNsInfo().reason }, 503);
+  return c.json(getAPNsInfo(c.req.query("bundleId")));
+});
+
+app.post("/ios", bodyLimit({ maxSize: 8192 }), async (c) => {
+  c.header("Cache-Control", "no-store");
   try {
-    return c.json(pushSvc.createIOSDestination(c.get("userId"), await c.req.json()), 201);
+    const input = await c.req.json();
+    const info = getAPNsInfo(typeof input?.bundleId === "string" ? input.bundleId : undefined);
+    if (!info.configured) return c.json({ error: info.reason }, 503);
+    return c.json(pushSvc.createIOSDestination(c.get("userId"), input), 201);
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Invalid iOS push destination" }, 400);
   }
@@ -80,9 +100,9 @@ app.post("/subscriptions", async (c) => {
   return c.json(sub, 201);
 });
 
-app.delete("/subscriptions/:id", (c) => {
+app.delete("/subscriptions/:id", async (c) => {
   const userId = c.get("userId");
-  const deleted = pushSvc.deleteNotificationDestination(userId, c.req.param("id"));
+  const deleted = await pushSvc.deleteNotificationDestination(userId, c.req.param("id"));
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });

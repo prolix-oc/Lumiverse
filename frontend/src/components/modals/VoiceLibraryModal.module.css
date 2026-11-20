@@ -1,0 +1,30 @@
+.dialog {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 12px;
+}
+
+.card {
+  flex-wrap: wrap;
+}
+
+.card > :first-child {
+  flex: 1 1 260px;
+}
+
+.footer {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.preview {
+  flex: 1 1 100%;
+  min-width: 0;
+}

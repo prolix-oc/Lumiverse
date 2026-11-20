@@ -74,6 +74,13 @@ describe("normalizeVectorStoreConfig", () => {
     ).toBe(0);
   });
 
+  it("accepts explicit flush policies and drops invalid values", () => {
+    for (const flushPolicy of ["manual", "per_write"] as const) {
+      expect(normalizeVectorStoreConfig({ provider: "milvus", milvus: { address: "h:1", flushPolicy } }).milvus?.flushPolicy).toBe(flushPolicy);
+    }
+    expect(normalizeVectorStoreConfig({ provider: "milvus", milvus: { address: "h:1", flushPolicy: "sometimes" } }).milvus?.flushPolicy).toBeUndefined();
+  });
+
   it("normalizes milvus hybrid candidate tuning independently of the connection block", () => {
     const cfg = normalizeVectorStoreConfig({
       provider: "milvus",

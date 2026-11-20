@@ -53,7 +53,7 @@ import { extname, join, resolve } from "path";
 import { tmpdir } from "os";
 
 type ContentPermission = "characters" | "images" | "media" | "chats" | "world_books" | "databanks" | "personas" | "presets" | "regex_scripts";
-type ContentApiPermission = ContentPermission | "regex_scripts_unrestricted";
+type ContentApiPermission = ContentPermission | "regex_scripts_unrestricted" | "chat_mutation";
 export type SpindleEntityExtensionEntity = worldBooksSvc.EntityExtensionEntity;
 
 export function getEntityExtensionPermission(entity: string): ContentPermission {
@@ -171,17 +171,29 @@ export type WorkerHostContentApiContext = {
   postResponse: (message: { type: "response"; requestId: string; result?: unknown; error?: string }) => void;
 };
 
+function touchedWorldBookIds(events: ReadonlyArray<{ event: string; payload: unknown }>): Set<string> {
+  const ids = new Set<string>();
+  for (const { event, payload } of events) {
+    const record = payload as { id?: unknown; worldBookId?: unknown } | null;
+    const id = event === EventType.WORLD_BOOK_CHANGED ? record?.id
+      : event === EventType.WORLD_BOOK_ENTRY_CHANGED || event === EventType.WORLD_BOOK_ENTRY_DELETED ? record?.worldBookId
+      : undefined;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return ids;
+}
+
 /** Content CRUD and media conversion surface exposed to one Spindle extension. */
 export class WorkerHostContentApi {
   constructor(private readonly context: WorkerHostContentApiContext) {}
 
   private get manifest(): { identifier: string } { return this.context.manifest; }
-  private hasPermission(permission: ContentPermission): boolean { return this.context.hasPermission(permission); }
+  private hasPermission(permission: ContentApiPermission): boolean { return this.context.hasPermission(permission); }
   private resolveEffectiveUserId(userId?: string): string | null { return this.context.resolveEffectiveUserId(userId); }
   private enforceScopedUser(userId: string | null | undefined): void { this.context.enforceScopedUser(userId); }
   private postToWorker(message: { type: "response"; requestId: string; result?: unknown; error?: string }): void { this.context.postResponse(message); }
 
-  private toCharacterDTO(c: any): CharacterDTO {
+  private toCharacterDTO(c: any): CharacterDTO & { avatar_url: string | null } {
     return {
       id: c.id,
       name: c.name,
@@ -197,6 +209,7 @@ export class WorkerHostContentApi {
       alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
       creator: c.creator || "",
       image_id: c.image_id || null,
+      avatar_url: c.image_id && c.user_id ? imagesSvc.getImage(c.user_id, c.image_id, { specificity: "sm" })?.url ?? null : null,
       world_book_ids: getCharacterWorldBookIds(c.extensions),
       extensions: c.extensions || {},
       created_at: c.created_at,
@@ -221,7 +234,7 @@ export class WorkerHostContentApi {
     return out;
   }
 
-  handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+  handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string, search?: string): void {
     try {
       if (!this.hasPermission("characters")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
@@ -230,15 +243,20 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const result = charactersSvc.listCharacters(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
+      if (search !== undefined && (typeof search !== "string" || search.length > 200)) throw new Error("search must be a string of at most 200 characters");
+      const pagination = { limit: Math.min(Math.max(Math.trunc(limit || 50), 1), 200), offset: Math.max(Math.trunc(offset || 0), 0) };
+      const query = search?.trim();
+      const result = query
+        ? charactersSvc.listCharacterSummaries(resolvedUserId, pagination, { search: query })
+        : charactersSvc.listCharacters(resolvedUserId, pagination);
+      const data = query
+        ? result.data.map(c => charactersSvc.getCharacter(resolvedUserId, c.id)).filter(c => c !== null)
+        : result.data;
       this.postToWorker({
         type: "response",
         requestId,
         result: {
-          data: result.data.map((c) => this.toCharacterDTO(c)),
+          data: data.map((c) => this.toCharacterDTO(c)),
           total: result.total,
         },
       });
@@ -1030,12 +1048,13 @@ export class WorkerHostContentApi {
 
   // ─── Chats CRUD (gated: "chats") ──────────────────────────────────
 
-  private toChatDTO(c: any): ChatDTO {
+  private toChatDTO(c: any): ChatDTO & { variable_revision?: string } {
     return {
       id: c.id,
       character_id: c.character_id,
       name: c.name || "",
       metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
+      ...(typeof c.metadata?._swipe_variable_state?.revision === "string" ? { variable_revision: c.metadata._swipe_variable_state.revision } : {}),
       created_at: c.created_at,
       updated_at: c.updated_at,
     };
@@ -1135,6 +1154,43 @@ export class WorkerHostContentApi {
         }
       }
       this.postToWorker({ type: "response", requestId, result: this.toChatDTO(c) });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  handleChatsCompareAndSetMetadata(requestId: string, chatId: string, input: any, userId?: string): void {
+    try {
+      if (!this.hasPermission("chats")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
+      }
+      // The comparison result can disclose message text, selection and metadata,
+      // so require the same permission as chat.getMessages().
+      if (!this.hasPermission("chat_mutation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} chat_mutation — Chat mutation permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const isPlainObject = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value);
+      if (!isPlainObject(input?.expected_metadata) || !isPlainObject(input?.metadata)) {
+        throw new Error("expected_metadata and metadata must be objects");
+      }
+      if (input.expected_last_message_id !== undefined && input.expected_last_message_id !== null &&
+          (typeof input.expected_last_message_id !== "string" || !input.expected_last_message_id)) {
+        throw new Error("Invalid expected_last_message_id");
+      }
+      const message = input.expected_message;
+      if (message !== undefined && (!isPlainObject(message) || typeof message.id !== "string" || !message.id ||
+          !Number.isSafeInteger(message.swipe_id) || message.swipe_id < 0 || !Array.isArray(message.swipes) ||
+          !message.swipes.every((value: unknown) => typeof value === "string") || !isPlainObject(message.metadata))) {
+        throw new Error("Invalid expected_message");
+      }
+      let chat = chatsSvc.compareAndSetChatMetadata(resolvedUserId, chatId, input);
+      if (chat && JSON.stringify(input.expected_metadata.chat_world_book_ids ?? []) !== JSON.stringify(chat.metadata.chat_world_book_ids ?? [])) {
+        chat = pruneOrphanedWiState(resolvedUserId, chat);
+      }
+      this.postToWorker({ type: "response", requestId, result: chat ? this.toChatDTO(chat) : null });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
@@ -1509,6 +1565,7 @@ export class WorkerHostContentApi {
     userId: string,
     operation: SpindleBatchOperation,
     expectedRevisions: Record<string, number> | undefined,
+    deferredVectorEffects: worldBooksSvc.WorldBookEntryVectorEffects,
   ): SpindleBatchJsonValue {
     const args = this.asBatchRecord(operation.args, "operation args");
     const id = args.id ?? args.entryId ?? args.characterId ?? args.presetId ?? args.personaId ?? args.scriptId;
@@ -1523,6 +1580,8 @@ export class WorkerHostContentApi {
         userId,
         entryId,
         input as unknown as Parameters<typeof worldBooksSvc.updateEntry>[2],
+        // Vector deletes and reindexes must follow the final committed source state.
+        { deferredVectorEffects },
       );
       if (!entry) throw new Error("World book entry not found");
       return this.toBatchJson(this.toWorldBookEntryDTO(entry));
@@ -1651,13 +1710,14 @@ export class WorkerHostContentApi {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
+      const deferredVectorEffects: worldBooksSvc.WorldBookEntryVectorEffects = new Map();
       const batch = eventBus.withBufferedEvents(() => getDb().transaction((): SpindleBatchResult[] => {
         const completed: SpindleBatchResult[] = [];
         try {
           for (const operation of operations) {
             completed.push({
               ok: true,
-              result: this.executeSpindleBatchOperation(resolvedUserId, operation, expectedRevisions),
+              result: this.executeSpindleBatchOperation(resolvedUserId, operation, expectedRevisions, deferredVectorEffects),
             });
           }
           return completed;
@@ -1666,10 +1726,13 @@ export class WorkerHostContentApi {
           throw new Error(`BATCH_ROLLED_BACK: ${message}`);
         }
       })());
+      worldBooksSvc.flushWorldBookEntryVectorEffects(resolvedUserId, deferredVectorEffects);
       eventBus.emit(EventType.SPINDLE_BATCH_CHANGED, {
         operationCount: operations.length,
         sourceEvents: [...new Set(batch.events.map((entry) => entry.event))],
       }, resolvedUserId);
+      // Buffered entry events are dropped, so each touched book gets one change event.
+      for (const worldBookId of touchedWorldBookIds(batch.events)) worldBooksSvc.emitWorldBookChanged(resolvedUserId, worldBookId);
       this.postToWorker({ type: "response", requestId, result: batch.value });
     } catch (err: any) {
       const message = err?.message || String(err);
@@ -2334,6 +2397,21 @@ export class WorkerHostContentApi {
   }
 
   // ─── Activated World Info (gated: "world_books") ─────────────────────
+
+  async handleWorldBooksResolveForChat(requestId: string, chatId: string, reserveTokens?: number, userId?: string): Promise<void> {
+    try {
+      for (const permission of ["world_books", "chats", "characters", "personas", "presets"] as const) {
+        if (!this.hasPermission(permission)) throw new Error(`${PERMISSION_DENIED_PREFIX} ${permission}`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const result = await promptAssemblySvc.getResolvedWorldInfoForChat(resolvedUserId, chatId, reserveTokens);
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
 
   async handleWorldBooksGetActivated(
     requestId: string,

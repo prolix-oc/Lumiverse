@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle, Volume2, VolumeX, PencilLine, UsersRound } from 'lucide-react'
 import { useStore } from '@/store'
+import { playHaptic } from '@/lib/haptics'
 import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
@@ -283,7 +284,7 @@ export default function ChatHeads() {
       longPressTimer.current = setTimeout(() => {
         if (!isDragging.current && dragging.current) {
           dragging.current = false
-          navigator.vibrate?.(50)
+          playHaptic('impact', 50)
           setContextMenu({ x: e.clientX, y: e.clientY })
         }
       }, LONG_PRESS_MS)

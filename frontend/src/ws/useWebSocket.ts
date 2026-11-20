@@ -14,8 +14,10 @@ import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/p
 import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
+import type { ExtensionCommandState } from '@/store/slices/spindle-placement'
 import type { DecisionConnectionProfile } from '@/types/api'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import { createRegexRefreshScheduler } from './regex-refresh'
 import {
   createProviderRegistryProjection,
   FRONTEND_PROVIDER_SCOPE,
@@ -34,6 +36,8 @@ import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
 import { presetsApi } from '@/api/presets'
 import { refreshAppDataAfterImport } from '@/hooks/useAppInit'
+import { refreshCachedCharacters } from '@/hooks/useCharacterCatalog'
+import { readAccountEpoch } from '@/lib/shared-read'
 import { toast } from '@/lib/toast'
 import { notifyImageDeleted, notifyDeletionOperation, notifyDeletionReconnect, notifyGalleryItemRemoved, onImageDeleted, type DeletionOperation, type GalleryItemRemoved } from '@/lib/deletion-events'
 import i18n from '@/i18n'
@@ -41,9 +45,12 @@ import {
   invalidateDisplayRegexCache,
   invalidateDisplayRegexCacheForMessage,
   invalidateDisplayRegexCacheForVars,
+  invalidateDisplayRegexCacheForPresetHistory,
 } from '@/hooks/useDisplayRegex'
+import { selectedPresetHistorySignature } from '@/lib/preset-history'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
+import { getIOSAppState, subscribeIOSAppState } from '@/lib/ios-app-state'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
@@ -123,6 +130,10 @@ const spindleUiActionRuntime: HostActionRuntime = {
   openWorldBookEditor: () => { throw new Error('HOST_ACTION_UNMAPPED:modal') },
   invokeInputBarAction: () => { throw new Error('HOST_ACTION_UNMAPPED:input_bar_action') },
   invokeExtensionCommand: () => { throw new Error('HOST_ACTION_UNMAPPED:ext_command') },
+  switchPersona: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  switchPreset: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  applyTheme: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
+  openCharacterChat: () => { throw new Error('HOST_ACTION_UNMAPPED:entity_action') },
 }
 
 const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([
@@ -323,8 +334,12 @@ function summarizeVarChanges(changedFields: readonly string[]): VarChangeSummary
  * Returns the last N messages from the chat, where N is the user's messagesPerPage setting.
  */
 function fetchLatestMessages(chatId: string) {
-  const pageSize = useStore.getState().messagesPerPage || 50
-  return messagesApi.list(chatId, { limit: pageSize, tail: true })
+  const state = useStore.getState()
+  const pageSize = state.messagesPerPage || 50
+  const requestSnapshot = state.activeChatId === chatId ? {
+    ids: state.messages.filter(message => !isLocalStreamPlaceholderId(message.id)).map(message => message.id), total: state.totalChatLength,
+  } : undefined
+  return messagesApi.list(chatId, { limit: pageSize, tail: true }).then(page => ({ ...page, requestSnapshot }))
 }
 
 function isCurrentGeneration(chatId: string, epoch: number) {
@@ -345,21 +360,39 @@ const pendingGenerationMetrics = new Map<string, GenerationMetricsReadyPayload>(
 /** Patch buffered/live metrics onto the in-store message (no-op if absent). */
 function applyGenerationMetrics(payload: GenerationMetricsReadyPayload): void {
   const state = useStore.getState()
-  if (payload.chatId !== state.activeChatId || !payload.messageId) return
+  if (!payload.messageId) return
   if (payload.tokenCount == null && !payload.generationMetrics) return
-  const msg = state.messages.find((m) => m.id === payload.messageId)
-  if (!msg) return
+  const msg = payload.chatId === state.activeChatId ? state.messages.find((m) => m.id === payload.messageId) : undefined
+  if (!msg) {
+    // History macros can read beyond the loaded page or from a cached, inactive chat.
+    if (payload.generationMetrics?.presetId || payload.generationMetrics?.presetName) {
+      invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
+    }
+    return
+  }
   // Metrics are anchored to the generated swipe; top-level extra is the active
   // swipe's projection. Skip when the user is viewing a different swipe — the
   // persisted value surfaces when they navigate to it.
   if (payload.swipeId != null && msg.swipe_id !== payload.swipeId) return
+  const generationMetricsBySwipe = payload.generationMetrics && Array.isArray(msg.extra.generationMetricsBySwipe)
+    ? [...msg.extra.generationMetricsBySwipe] : undefined
+  if (generationMetricsBySwipe) generationMetricsBySwipe[msg.swipe_id] = payload.generationMetrics
   state.updateMessage(payload.messageId, {
     extra: {
       ...msg.extra,
       ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
       ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
+      ...(generationMetricsBySwipe ? { generationMetricsBySwipe } : {}),
     },
   })
+  invalidatePresetHistoryForChange(payload.chatId, msg, useStore.getState().messages.find(m => m.id === msg.id))
+}
+
+function invalidatePresetHistoryForChange(chatId: string, before: Message | null | undefined, after: Message | null | undefined) {
+  // An event for unloaded history can still change another message's macro output.
+  if (before === undefined || selectedPresetHistorySignature(before) !== selectedPresetHistorySignature(after)) {
+    invalidateDisplayRegexCacheForPresetHistory(chatId)
+  }
 }
 
 function withReasoningSnapshot(
@@ -424,7 +457,9 @@ function sendDrawerTabRegistrySnapshot(drawerTabs: ReadonlyArray<{
 }
 
 async function refreshLoomRegistry() {
-  const result = await presetsApi.listRegistry({ provider: 'loom', limit: 200 })
+  const epoch = readAccountEpoch()
+  const result = await presetsApi.listRegistryAll({ provider: 'loom' })
+  if (epoch !== readAccountEpoch()) return
   useStore.getState().setLoomRegistry(Object.fromEntries(
     result.data.map((preset) => [
       preset.id,
@@ -433,6 +468,7 @@ async function refreshLoomRegistry() {
         blockCount: preset.block_count,
         coverUrl: preset.cover_url ?? null,
         updatedAt: preset.updated_at,
+        cacheRevision: preset.cache_revision,
         isDefault: false,
       },
     ]),
@@ -616,6 +652,8 @@ export function useWebSocket() {
     // Connect only once; the singleton client handles reconnects internally.
     wsClient.connect()
 
+    const regexRefresh = createRegexRefreshScheduler((shouldApply) => store.getState().loadRegexScripts(shouldApply))
+
     const unsubs = [
       wsClient.on(EventType.DECISION_CONNECTION_CHANGED, (payload: { id: string; deleted?: boolean; profile?: DecisionConnectionProfile }) => {
         const store = useStore.getState()
@@ -632,6 +670,7 @@ export function useWebSocket() {
       // overlay. Each disconnect resets all three signals; reconnect flips them
       // back to true (socket open → CONNECTED with role → pong received).
       wsClient.on(WS_OPEN, () => {
+        invalidateDisplayRegexCacheForPresetHistory()
         notifyDeletionReconnect()
         store.getState().setWsConnected(true)
         // Push the current extension drawer-tab snapshot so the backend's
@@ -661,6 +700,7 @@ export function useWebSocket() {
       wsClient.on(WS_RESUME_RECOVERY_COMPLETE, () => {
         notifyDeletionReconnect()
         store.getState().setWsResumeRecovering(false)
+        void reconcileActiveChatOnResume()
       }),
       wsClient.on(WS_RESUME_RECOVERY_FAILED, () => {
         store.getState().setWsResumeRecovering(false)
@@ -677,18 +717,23 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_SENT, (payload: MessageSentPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, null, payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+          if (payload.inserted) {
+            state.insertMessage(payload.message)
+            return
+          }
 
           // Suppress completed assistant messages while streaming — the streaming
           // card already displays the content. GENERATION_ENDED will reconcile
           // the full message list, preventing a duplicate bubble flash.
-          if (state.isStreaming && !payload.message.is_user && payload.message.content) return
+          if (!payload.authored && state.isStreaming && state.streamingRenderMode !== "persisted-message" && !payload.message.is_user && payload.message.content) return
 
           // If streaming with a placeholder (regeneration), replace it with the
           // real staged message from the backend instead of adding a duplicate.
           if (
-            state.isStreaming &&
+            !payload.authored && state.isStreaming &&
             isLocalStreamPlaceholderId(state.regeneratingMessageId) &&
             !payload.message.is_user &&
             !payload.message.content
@@ -703,7 +748,7 @@ export function useWebSocket() {
           // Add it to the store and set it as the regenerating target so streaming
           // renders in-place on this card instead of spawning a duplicate ephemeral bubble.
           if (
-            state.isStreaming &&
+            !payload.authored && state.isStreaming &&
             !state.regeneratingMessageId &&
             !payload.message.is_user &&
             !payload.message.content
@@ -719,8 +764,20 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_EDITED, (payload: MessageEditedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.message?.id), payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
-          if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
+          const next = payload.message
+          const preset = next?.extra?.spindle_metadata?.preset_contexts?.[next.swipe_id]
+          const previous = preset?.preset_id ? state.messages.find(message => message.id === next?.id) : undefined
+          const previousFields = previous as unknown as Record<string, unknown> | undefined
+          const nextFields = next as unknown as Record<string, unknown>
+          // Hidden swipes can stream without changing the selected message's render inputs.
+          const samePresetFrame = !!preset?.preset_id && previousFields && Object.keys({ ...previousFields, ...nextFields }).every(key =>
+            ['swipes', 'swipe_dates', 'revision'].includes(key) || (key === 'extra'
+              ? JSON.stringify(previousFields.extra) === JSON.stringify(nextFields.extra)
+              : previousFields[key] === nextFields[key]),
+          )
+          if (next?.id && !samePresetFrame) invalidateDisplayRegexCacheForMessage(next.id)
 
           // A continue buffer appends to saved text until the terminal event.
           // Adopt later edits atomically with buffer cleanup to avoid duplicating it.
@@ -740,6 +797,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_DELETED, (payload: MessageDeletedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.messageId), null)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           state.removeMessage(payload.messageId)
           if (payload.messageId) invalidateDisplayRegexCacheForMessage(payload.messageId)
@@ -748,6 +806,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.MESSAGE_SWIPED, (payload: MessageSwipedPayload) => {
         const state = store.getState()
+        invalidatePresetHistoryForChange(payload.chatId, state.messages.find(m => m.id === payload.message?.id), payload.message)
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           state.updateMessage(payload.message.id, payload.message)
           // Deleting a swipe shifts indices, so a pending "new swipe" pointer is
@@ -797,7 +856,7 @@ export function useWebSocket() {
             state.setRespondingCharacterId(payload.characterId)
           }
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType, payload.renderMode)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             // Generation already wired via HTTP response — just set the target message.
             // This happens when council sidecar stages a message after startStreaming was
@@ -808,7 +867,7 @@ export function useWebSocket() {
           if (store.getState().activeGenerationId !== payload.generationId) return
           // Anchor the streaming buffer to its swipe so the user can navigate to
           // other swipes mid-generation without smearing live tokens onto them.
-          state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          state.setStreamingSwipeId(payload.targetSwipeId ?? null, payload.backgroundSwipe === true)
           // A new generation supersedes any stale "new swipe ready" badge on this
           // message — the upcoming completion will re-flag the fresh swipe if needed.
           if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
@@ -831,14 +890,14 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType, payload.renderMode)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
           if (store.getState().activeGenerationId !== payload.generationId) return
           // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
           // authoritative source; only overwrite if this event actually carries it.
-          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
+          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId, payload.backgroundSwipe === true)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -922,6 +981,7 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.GENERATION_ENDED, (payload: GenerationEndedPayload) => {
+        invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
         const state = store.getState()
         if (payload.chatId === state.activeChatId && !state.streamingNavigationPaused) {
           // Guard: ignore events from stale generations that were replaced by a newer one
@@ -970,6 +1030,7 @@ export function useWebSocket() {
             const mpPeerErr = !!sErr.mpRoomId && !sErr.mpIsHost && sErr.mpChatId === payload.chatId
             if (payload.chatId && !mpPeerErr) {
               fetchLatestMessages(payload.chatId).then(async (res) => {
+                invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
                 if (!isCurrentGeneration(payload.chatId, generationEpoch)) return
                 const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
@@ -1083,6 +1144,7 @@ export function useWebSocket() {
             // backend work (sidecar LLM scene analysis, DB reads) cannot delay
             // message delivery and cause a perceived UI stall.
             fetchLatestMessages(payload.chatId).then((res) => {
+              invalidateDisplayRegexCacheForPresetHistory(payload.chatId)
               const s = store.getState()
               if (isCurrentGeneration(payload.chatId, generationEpoch)) {
                 const messages = completedMessageId && completedReasoning
@@ -1282,6 +1344,7 @@ export function useWebSocket() {
 
       wsClient.on(EventType.GENERATION_STOPPED, (payload: { generationId?: string; chatId?: string }) => {
         const state = store.getState()
+        invalidateDisplayRegexCacheForPresetHistory(payload.chatId || state.activeChatId || undefined)
         if ((payload.chatId && payload.chatId !== state.activeChatId) || state.streamingNavigationPaused) {
           if (payload.generationId) state.updateChatHead(payload.generationId, { status: 'stopped' })
           if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
@@ -1321,6 +1384,7 @@ export function useWebSocket() {
           state.stopStreaming()
         } else if (chatId) {
           fetchLatestMessages(chatId).then(async (res) => {
+            invalidateDisplayRegexCacheForPresetHistory(chatId)
             if (!isCurrentGeneration(chatId, generationEpoch)) return
             const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
             const s = store.getState()
@@ -1391,7 +1455,7 @@ export function useWebSocket() {
         }
       }),
 
-      wsClient.on(EventType.CONNECTED, (payload: { role?: string }) => {
+      wsClient.on(EventType.CONNECTED, (payload: { role?: string; extensionCommands?: ExtensionCommandState[] }) => {
         // The client emits CONNECTED twice per connection: once locally from
         // onopen with an empty payload, and once when the backend's CONNECTED
         // message arrives (carrying the user role). Only the second one means
@@ -1400,7 +1464,10 @@ export function useWebSocket() {
         if (!shouldSyncExtensionsAfterConnected(payload)) {
           // Local onopen: hold provider_changed until the snapshot resync.
           providers?.beginReconnectResync()
+          return
         } else {
+          // Replace stale registrations missed while disconnected, including removals.
+          if (Array.isArray(payload.extensionCommands)) store.setState({ extensionCommands: payload.extensionCommands })
           store.getState().reconcileRole(payload.role)
           store.getState().setWsAuthSynced(true)
           // Immediately verify round-trip so the overlay can dismiss without
@@ -1450,6 +1517,31 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.PRESET_CHANGED, (payload: { id: string; preset?: import('@/types/api').Preset }) => {
+        invalidateDisplayRegexCacheForPresetHistory()
+        const preset = payload.preset
+        if (!preset) {
+          void refreshLoomRegistry().catch(error => console.warn('[presets] Could not refresh registry:', error))
+          return
+        }
+        const registry = { ...store.getState().loomRegistry }
+        if (preset.provider === 'loom') {
+          registry[payload.id] = {
+            name: preset.name, blockCount: preset.prompt_order.length,
+            coverUrl: preset.metadata?.coverUrl ?? preset.metadata?.cover_url ?? null,
+            updatedAt: preset.updated_at, cacheRevision: preset.cache_revision, isDefault: false,
+          }
+        } else delete registry[payload.id]
+        // A pushed entry does not imply the entire registry has been loaded.
+        store.setState({ loomRegistry: registry })
+      }),
+      wsClient.on(EventType.PRESET_DELETED, (payload: { id: string }) => {
+        invalidateDisplayRegexCacheForPresetHistory()
+        const registry = { ...store.getState().loomRegistry }
+        delete registry[payload.id]
+        store.setState({ loomRegistry: registry })
+      }),
+
       wsClient.on(EventType.CHARACTER_EDITED, (payload: { id: string; character?: import('@/types/api').Character }) => {
         if (payload?.character) {
           store.getState().updateCharacter(payload.id, payload.character)
@@ -1461,6 +1553,8 @@ export function useWebSocket() {
         // Mark the full-object cache stale; paginated surfaces independently
         // refresh their lightweight summaries once.
         store.getState().setCharactersLoaded(false)
+        store.getState().invalidateCharacterIndex()
+        void refreshCachedCharacters().catch(error => console.warn('[character-library] Could not refresh cached details:', error))
       }),
 
       wsClient.on(EventType.CHARACTER_DELETED, (payload: { id: string }) => {
@@ -1586,7 +1680,7 @@ export function useWebSocket() {
           payload.operation,
           payload.name ?? null
         )
-        if (payload.operation === 'installed') syncExtensions(true)
+        if (payload.operation === 'installed' || payload.operation === 'removed') syncExtensions(true)
         if (payload.operation === 'disabled' && payload.extensionId) {
           const state = useStore.getState()
           state.setExtensionUpdates(
@@ -1895,13 +1989,9 @@ export function useWebSocket() {
         }
       }),
 
-      // Regex script events — reload for multi-tab sync
-      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, () => {
-        store.getState().loadRegexScripts()
-      }),
-      wsClient.on(EventType.REGEX_SCRIPT_DELETED, () => {
-        store.getState().loadRegexScripts()
-      }),
+      // Preset activation/import can emit hundreds of these in one burst.
+      wsClient.on(EventType.REGEX_SCRIPT_CHANGED, regexRefresh.request),
+      wsClient.on(EventType.REGEX_SCRIPT_DELETED, regexRefresh.request),
 
       // Expression change events
       wsClient.on(EventType.EXPRESSION_CHANGED, (payload: { chatId: string; characterId: string; label: string; imageId: string }) => {
@@ -2084,8 +2174,8 @@ export function useWebSocket() {
             const gen = payload.generation
             if (gen?.active && gen.generationId) {
               const st = store.getState()
-              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType)
-              st.setStreamingSwipeId(gen.targetSwipeId ?? null)
+              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType, gen.renderMode)
+              st.setStreamingSwipeId(gen.targetSwipeId ?? null, gen.backgroundSwipe === true)
               if (gen.content) st.reconcileStreamContent(gen.content, gen.contentOffset ?? 0)
               if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)
               if (gen.reasoningDurationMs) store.setState({ streamingReasoningDuration: gen.reasoningDurationMs })
@@ -2231,8 +2321,12 @@ export function useWebSocket() {
     // deferred METRICS_READY event (TTFT/TPS/model/provider) or a stale final
     // message snapshot is refreshed from the authoritative saved row.
     let resumeReconcileInFlight = false
+    const isAppVisible = () => {
+      const iosAppState = getIOSAppState()
+      return iosAppState ? iosAppState === 'active' : document.visibilityState === 'visible'
+    }
     const reconcileActiveChatOnResume = async () => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       if (resumeReconcileInFlight) return
       resumeReconcileInFlight = true
       try {
@@ -2266,20 +2360,23 @@ export function useWebSocket() {
     const onResume = () => { void reconcileActiveChatOnResume() }
     document.addEventListener('visibilitychange', onResume)
     window.addEventListener('focus', onResume)
+    const unsubscribeIOSAppState = subscribeIOSAppState(state => {
+      if (state === 'active') onResume()
+    })
 
     // Mobile browsers occasionally deliver the full token stream but miss or
     // delay the terminal WS event. While a chat is streaming, poll the pooled
     // status endpoint at a low frequency so a dropped GENERATION_ENDED/STOPPED
     // cannot leave the stop button stuck indefinitely.
     const recoveryWatchdog = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       const state = store.getState()
       if (!state.isStreaming || !state.activeChatId) return
       recoverPooledGeneration(state.activeChatId).catch(() => { /* best-effort */ })
     }, 4000)
 
     const chatHeadReconcile = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
+      if (!isAppVisible()) return
       const heads = store.getState().chatHeads
       if (!heads.some((h) => h.status === 'assembling' || h.status === 'council' || h.status === 'council_failed' || h.status === 'reasoning' || h.status === 'streaming')) return
       store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
@@ -2336,10 +2433,12 @@ export function useWebSocket() {
     return () => {
       document.removeEventListener('visibilitychange', onResume)
       window.removeEventListener('focus', onResume)
+      unsubscribeIOSAppState()
       clearInterval(recoveryWatchdog)
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
       unsubPersonaRelay()
+      regexRefresh.dispose()
       store.getState().setWsResumeRecovering(false)
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()

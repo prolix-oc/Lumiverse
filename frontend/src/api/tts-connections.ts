@@ -8,6 +8,8 @@ import type {
   TtsConnectionVoicesResult,
   TtsConnectionModelsPreviewInput,
   TtsConnectionVoicesPreviewInput,
+  TtsVoiceLibraryOptions,
+  TtsVoiceLibraryResult,
   TtsProviderInfo,
   PaginatedResult,
   QwenCustomVoiceCreateResult,
@@ -57,6 +59,10 @@ export const ttsConnectionsApi = {
 
   previewVoices(input: TtsConnectionVoicesPreviewInput, options?: RequestOptions) {
     return post<TtsConnectionVoicesResult>('/tts-connections/voices/preview', input, options)
+  },
+
+  voiceLibrary(input: TtsConnectionVoicesPreviewInput & TtsVoiceLibraryOptions, options?: RequestOptions) {
+    return post<TtsVoiceLibraryResult>('/tts-connections/voices/library', input, options)
   },
 
   setApiKey(id: string, apiKey: string) {

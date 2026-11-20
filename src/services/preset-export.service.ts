@@ -74,7 +74,11 @@ function splitMetadata(metadata: Record<string, any>): {
       if (key !== "_lumiverse_preset_version") lumihubMeta[key] = value;
       continue;
     }
-    if (!OWNED_METADATA_KEYS.has(key)) passthroughMetadata[key] = value;
+    if (!OWNED_METADATA_KEYS.has(key)) {
+      Object.defineProperty(passthroughMetadata, key, {
+        value, enumerable: true, writable: true, configurable: true,
+      });
+    }
   }
   return {
     lumihubMeta: Object.keys(lumihubMeta).length > 0 ? lumihubMeta : null,

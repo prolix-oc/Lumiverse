@@ -1,5 +1,12 @@
 import { get, put, patch, del } from './client'
 import type { PromptVariableValues } from '@/lib/loom/types'
+import { shareRead } from '@/lib/shared-read'
+
+function read<T>(path: string, params?: Record<string, unknown>): Promise<T> {
+  return shareRead(`profile:${path}:${JSON.stringify(params ?? {})}`, () => get<T>(path, params))
+}
+
+export type PresetProfileContext = Record<'defaults' | 'chat' | 'persona' | 'character' | 'connection', PresetProfileBinding | null>
 
 export interface PresetProfileBinding {
   preset_id: string
@@ -17,9 +24,12 @@ export interface ResolvedPresetProfile {
 }
 
 export const presetProfilesApi = {
+  context(params: { preset_id?: string; chat_id?: string; persona_id?: string; character_id?: string; connection_id?: string; is_group?: boolean; revision?: number }) {
+    return read<PresetProfileContext>('/preset-profiles/context', params)
+  },
   // Defaults
   getDefaults(presetId: string) {
-    return get<PresetProfileBinding>('/preset-profiles/defaults', { preset_id: presetId })
+    return read<PresetProfileBinding>('/preset-profiles/defaults', { preset_id: presetId })
   },
 
   captureDefaults(presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
@@ -43,7 +53,7 @@ export const presetProfilesApi = {
 
   // Character bindings
   getCharacterBinding(characterId: string) {
-    return get<PresetProfileBinding>(`/preset-profiles/character/${characterId}`)
+    return read<PresetProfileBinding>(`/preset-profiles/character/${characterId}`)
   },
 
   setCharacterBinding(characterId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
@@ -66,7 +76,7 @@ export const presetProfilesApi = {
 
   // Persona bindings
   getPersonaBinding(personaId: string) {
-    return get<PresetProfileBinding>(`/preset-profiles/persona/${personaId}`)
+    return read<PresetProfileBinding>(`/preset-profiles/persona/${personaId}`)
   },
 
   setPersonaBinding(personaId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
@@ -89,7 +99,7 @@ export const presetProfilesApi = {
 
   // Chat bindings
   getChatBinding(chatId: string) {
-    return get<PresetProfileBinding>(`/preset-profiles/chat/${chatId}`)
+    return read<PresetProfileBinding>(`/preset-profiles/chat/${chatId}`)
   },
 
   setChatBinding(chatId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
@@ -112,7 +122,7 @@ export const presetProfilesApi = {
 
   // Connection profile bindings
   getConnectionBinding(connectionId: string) {
-    return get<PresetProfileBinding>(`/preset-profiles/connection/${connectionId}`)
+    return read<PresetProfileBinding>(`/preset-profiles/connection/${connectionId}`)
   },
 
   setConnectionBinding(connectionId: string, presetId: string, blockStates: Record<string, boolean>, promptVariables?: PromptVariableValues) {
@@ -135,7 +145,7 @@ export const presetProfilesApi = {
 
   // Resolution
   resolve(chatId: string, presetId?: string | null, connectionId?: string | null, personaId?: string | null) {
-    return get<ResolvedPresetProfile>(`/preset-profiles/resolve/${chatId}`, {
+    return read<ResolvedPresetProfile>(`/preset-profiles/resolve/${chatId}`, {
       ...(presetId ? { preset_id: presetId } : {}),
       ...(connectionId ? { connection_id: connectionId } : {}),
       ...(personaId ? { persona_id: personaId } : {}),

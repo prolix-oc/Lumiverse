@@ -128,22 +128,21 @@ pub fn child_environment(env: &Environment) -> Environment {
     child
 }
 
+#[cfg(unix)]
 pub fn launcher(env: &Environment) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
     let path = env
         .get(std::ffi::OsStr::new("PATH"))
         .cloned()
         .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into());
     for directory in std::env::split_paths(&path).filter(|path| path.is_absolute()) {
         let candidate = directory.join("xdg-open");
-        #[cfg(unix)]
+        if candidate
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         {
-            use std::os::unix::fs::PermissionsExt;
-            if candidate
-                .metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            {
-                return Ok(candidate);
-            }
+            return Ok(candidate);
         }
     }
     Err("No host xdg-open launcher was found. Install your desktop's URL handler or use the sign-in link manually.".into())

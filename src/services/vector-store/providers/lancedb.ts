@@ -1,7 +1,8 @@
 /**
  * LanceDB vector store provider.
  *
- * This is the ONLY module that imports `@lancedb/lancedb`. It contains all of the
+ * Native bindings are loaded on demand through `loadLanceDb`. Shared imports
+ * of this module never load or prepare the native engine. It contains the
  * LanceDB infrastructure that historically lived inline in
  * `embeddings.service.ts` — connection singleton, write lock + cross-process
  * Termux lock, read/maintenance gate, table-handle cache, schema-drift &
@@ -18,7 +19,9 @@
  * dependency: embeddings.service → lancedb.ts). Embedding *generation* stays in
  * embeddings.service.ts.
  */
-import { connect, Index, type Connection, type Table } from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
+import { loadLanceDb } from "../../../lancedb-preflight";
+import { getResolvedVectorStoreConfig } from "../../vector-store-config.service";
 
 export type { Table } from "@lancedb/lancedb";
 import { dirname, join } from "path";
@@ -785,7 +788,9 @@ function resetInMemoryVectorStoreState(): void {
  */
 export function refreshLanceDbAfterExternalMaintenance(): void {
   resetInMemoryVectorStoreState();
-  startIndexHealthMonitor(EMBEDDINGS_TABLE);
+  if (getResolvedVectorStoreConfig().provider === "lancedb") {
+    startIndexHealthMonitor(EMBEDDINGS_TABLE);
+  }
 }
 
 export function resetSqliteVectorizationState(): void {
@@ -957,8 +962,11 @@ async function getConnection(): Promise<Connection> {
   logLanceDbPathDiagnostics();
   cleanupBrokenTermuxLanceDbMirror();
   if (!connPromise) {
-    connPromise = connect(LANCEDB_URI, {
+    connPromise = loadLanceDb().then(({ connect }) => connect(LANCEDB_URI, {
       readConsistencyInterval: READ_CONSISTENCY_INTERVAL_SECONDS,
+    })).catch((err) => {
+      connPromise = null;
+      throw err;
     });
   }
 
@@ -1146,9 +1154,10 @@ function getVectorIndexPartitions(rowCount: number): number | null {
   ));
 }
 
-function getVectorIndexConfig(rowCount: number): any | null {
+async function getVectorIndexConfig(rowCount: number): Promise<any | null> {
   const numPartitions = getVectorIndexPartitions(rowCount);
   if (numPartitions === null) return null;
+  const { Index } = await loadLanceDb();
 
   if (rowCount < MIN_ROWS_FOR_PQ_VECTOR_INDEX) {
     return Index.ivfFlat({
@@ -1187,7 +1196,7 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
     }
 
     const rowCount = await activeTable.countRows();
-    const indexConfig = getVectorIndexConfig(rowCount);
+    const indexConfig = await getVectorIndexConfig(rowCount);
     if (indexConfig === null) {
       // Brute-force search is fast enough for small tables and avoids
       // KMeans warnings about empty clusters when rows < num_partitions * 256.
@@ -1314,6 +1323,7 @@ export async function ensureScalarIndexes(tableName: string, table: Table, force
   await create("owner_id");
   await create("source_id");
   if (tableName !== WORLD_BOOK_EMBEDDINGS_TABLE) {
+    const { Index } = await loadLanceDb();
     await create("source_type", Index.bitmap());
   }
   state.scalarIndexReady = !failed;
@@ -1350,6 +1360,7 @@ export async function ensureFtsIndex(tableName: string, table: Table, force = fa
   try {
     await withRetryableLanceWriteConflictRetry(`${tableName}: create FTS index`, tableName, async () => {
       activeTable = await reopenTableForWrite(tableName);
+      const { Index } = await loadLanceDb();
       await activeTable.createIndex("content", { config: Index.fts(), replace: true });
     });
     rebuilt = true;
@@ -1376,6 +1387,10 @@ function startIndexHealthMonitor(tableName = EMBEDDINGS_TABLE): void {
   if (state.indexHealthTimer) return;
   state.indexHealthTimer = setInterval(async () => {
     try {
+      if (getResolvedVectorStoreConfig().provider !== "lancedb") {
+        resetInMemoryVectorStoreState();
+        return;
+      }
       const table = await getTableIfExists(tableName);
       if (table) await checkAndRebuildIndexes(tableName, table);
     } catch (err) {
@@ -1409,7 +1424,7 @@ async function checkAndRebuildIndexes(tableName: string, table: Table): Promise<
   try {
     const rowCount = await table.countRows();
     const scalarIndexNames = expectedScalarIndexNames(tableName);
-    const expectsVectorIndex = getVectorIndexConfig(rowCount) !== null;
+    const expectsVectorIndex = getVectorIndexPartitions(rowCount) !== null;
     const expectedIndexNames = [
       ...scalarIndexNames,
       "content_idx",
@@ -1532,7 +1547,7 @@ export async function runStartupVectorMaintenance(): Promise<void> {
 
           if (needsMigration) {
             const rowCount = await activeTable.countRows();
-            const indexConfig = getVectorIndexConfig(rowCount);
+            const indexConfig = await getVectorIndexConfig(rowCount);
             if (indexConfig !== null) {
               console.info(`[embeddings] Migrating vector index for ${tableName} from HNSW_PQ → IVF (${rowCount} rows)...`);
               try {
@@ -1752,6 +1767,10 @@ export function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book"
     optimizeTimer = null;
     optimizeQueuedAt = null;
     try {
+      if (getResolvedVectorStoreConfig().provider !== "lancedb") {
+        resetInMemoryVectorStoreState();
+        return;
+      }
       const includeWorldBooks = optimizeWorldBooksQueued;
       optimizeWorldBooksQueued = false;
       await optimizeTable(includeWorldBooks ? undefined : [EMBEDDINGS_TABLE]);
@@ -2054,8 +2073,7 @@ export class LanceDbStore implements VectorStore {
   readonly id: VectorStoreProviderId = "lancedb";
   readonly capabilities: ProviderCapabilities = LANCEDB_CAPABILITIES;
 
-  /** Open the connection. Idempotent. Native preflight is handled separately
-   *  (index.ts / lancedb-preflight) before any application code imports. */
+  /** Open the connection, running native preflight on first use. Idempotent. */
   async init(): Promise<void> {
     await getConnection();
   }

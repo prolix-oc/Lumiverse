@@ -1,5 +1,4 @@
 import tsParser from '@typescript-eslint/parser'
-import reactCompiler from 'eslint-plugin-react-compiler'
 import reactHooks from 'eslint-plugin-react-hooks'
 
 export default [
@@ -27,13 +26,18 @@ export default [
       },
     },
     plugins: {
-      'react-compiler': reactCompiler,
       'react-hooks': reactHooks,
     },
     rules: {
-      'react-compiler/react-compiler': 'error',
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+      // Keep the old compiler plugin's correctness checks. Its defaults did
+      // not report ref access, memoization bailouts, or effect-setState advice.
+      // Adopting the broader recommended preset is a separate UI refactor.
+      ...Object.fromEntries([
+        'config', 'gating', 'error-boundaries', 'globals', 'immutability',
+        'purity', 'set-state-in-render', 'static-components', 'use-memo',
+      ].map((rule) => [`react-hooks/${rule}`, 'error'])),
     },
   },
 ]

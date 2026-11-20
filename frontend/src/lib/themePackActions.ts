@@ -62,7 +62,7 @@ export function createThemePackActions(
       const pack = createThemePack(theme, customCSS, componentOverrides, assets, {
         name: activeSavedThemeName(savedThemes, customCSS.bundleId) || theme?.name || t('customThemeName'),
       })
-      exportThemePack(pack)
+      await exportThemePack(pack)
       toast.success(t('exportSuccess'))
     } catch (err: any) {
       toast.error(err?.body?.error || err?.message || t('exportFailed'))

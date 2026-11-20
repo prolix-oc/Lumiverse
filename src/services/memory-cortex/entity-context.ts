@@ -134,7 +134,8 @@ export function getActiveRelationEdges(
 // ─── Formatting for Prompt Injection ───────────────────────────
 
 /**
- * Format entity snapshots into compact text for prompt injection.
+ * Format entity descriptions and facts for prompt injection.
+ * Relationship edges are rendered separately by formatRelationships().
  */
 export function formatEntitySnapshots(snapshots: EntitySnapshot[]): string {
   if (snapshots.length === 0) return "";
@@ -151,14 +152,6 @@ export function formatEntitySnapshots(snapshots: EntitySnapshot[]): string {
 
     if (snap.topFacts.length > 0) {
       lines.push(`  Facts: ${snap.topFacts.join(". ")}.`);
-    }
-
-    if (snap.relationships.length > 0) {
-      const relStrs = snap.relationships.map((r) => {
-        const label = r.label ? ` — ${r.label}` : "";
-        return `${r.targetName} (${r.type}${label})`;
-      });
-      lines.push(`  Relations: ${relStrs.join(" | ")}`);
     }
   }
 

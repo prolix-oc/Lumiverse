@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,9 @@ import { ArchiveValidationError } from "../services/user-data/import.service";
 import { clFileSha256, safeClArchivePath, validateClManifest } from "./cl-bundle-source";
 import { ClMigrationError, clMigrationArchivePath, deleteClMigrationJob, getClMigrationJob, stageClMigrationBundle, startClMigration, waitForClMigrations } from "./cl-migration.service";
 import type { ClMigrationOptions, ClMigrationReport } from "./cl-types";
+import * as vectorStores from "../services/vector-store";
+import type { VectorStore } from "../services/vector-store/types";
+import { stubVectorStore } from "../services/test-fixtures/vector-store";
 
 const OWNER = "cl-owner";
 const OTHER = "cl-other";
@@ -26,6 +29,8 @@ const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQ
 const local = "/user/images/shared/scene.png";
 let workDir = "";
 let originalDataDir = "";
+const deleteVectors = mock<VectorStore["deleteByFilter"]>(async () => {});
+let vectorStoreSpy: ReturnType<typeof spyOn<typeof vectorStores, "getActiveVectorStore">>;
 
 function card(description = `![Scene](${local}) ${local}.backup https://example.com${local}`) {
   return embedPngTextChunk(png, "ccv3", Buffer.from(JSON.stringify({ spec: "chara_card_v3", spec_version: "3.0", data: {
@@ -96,12 +101,23 @@ function storedZip(entries: Array<[string, Uint8Array]>): Uint8Array {
 }
 
 beforeEach(async () => {
+  deleteVectors.mockClear();
+  vectorStoreSpy = spyOn(vectorStores, "getActiveVectorStore").mockResolvedValue(stubVectorStore({ deleteByFilter: deleteVectors }));
   closeDatabase(); initDatabase(":memory:");
   getDb().run(await Bun.file(join(import.meta.dir, "../db/baseline.sql")).text());
   for (const id of [OWNER, OTHER]) getDb().query('INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, 0, 0)').run(id, id, `${id}@example.com`);
   originalDataDir = env.dataDir; workDir = mkdtempSync(join(tmpdir(), "lumiverse-cl-test-")); env.dataDir = workDir;
 });
-afterEach(async () => { await waitForClMigrations(); closeDatabase(); env.dataDir = originalDataDir; rmSync(workDir, { recursive: true, force: true }); });
+afterEach(async () => {
+  try {
+    await waitForClMigrations();
+  } finally {
+    vectorStoreSpy.mockRestore();
+    closeDatabase();
+    env.dataDir = originalDataDir;
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
 
 describe("CharacterLibrary migration", () => {
   test("imports distinct identities, shared gallery ownership, real lore links, regex and chat data", async () => {
@@ -196,6 +212,14 @@ describe("CharacterLibrary migration", () => {
     expect(getDb().query("SELECT id FROM world_books WHERE id = ?").get(partial.id)).toBeNull();
     expect(getDb().query("SELECT id FROM world_books WHERE id = ?").get(unrelated.id)).not.toBeNull();
     expect(count("world_books")).toBe(5);
+    expect(deleteVectors).toHaveBeenCalledWith("embeddings_world_books", {
+      op: "and",
+      clauses: [
+        { op: "eq", field: "user_id", value: OWNER },
+        { op: "eq", field: "source_type", value: "world_book_entry" },
+        { op: "in", field: "owner_id", values: [partial.id] },
+      ],
+    });
   });
 
   test("cleans up a failed chunked world-book import", async () => {

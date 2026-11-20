@@ -1,5 +1,5 @@
 import type { WebSocketHandler } from "bun";
-import { websocket as honoWebsocket, type BunWebSocketData } from "hono/bun";
+import { websocket as honoWebsocket, type BunWebSocketData } from "@hono/bun";
 
 export const WEBSOCKET_BACKPRESSURE_LIMIT = 8 * 1024 * 1024;
 

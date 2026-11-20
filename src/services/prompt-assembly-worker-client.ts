@@ -7,6 +7,8 @@ import { resolveConnection } from "./connections.service";
 import { getTokenizerIdForModel, onTokenizerInvalidation } from "./tokenizer.service";
 import { releaseTokenizerResourceLocks } from "./tokenizer-resource-cache";
 import type { AssemblyWorkerRequest, AssemblyWorkerResponse } from "./prompt-assembly-worker-protocol";
+import { getCortexCacheSnapshot } from "./memory-cortex";
+import { scheduleCortexPromptWarm } from "./cortex-prompt-warm.service";
 
 function workerDisabledByEnv(): boolean {
   return process.env.LUMIVERSE_PROMPT_ASSEMBLY_WORKER === "false";
@@ -164,7 +166,13 @@ function onMessage(pw: PoolWorker, msg: AssemblyWorkerResponse | undefined): voi
   if (!job || !msg || msg.requestId !== job.requestId) return;
   pw.job = null;
   if (msg.type === "result") {
-    settleJob(job, () => job.resolve(msg.result));
+    settleJob(job, () => {
+      const { deferredCortexWarmJob, ...result } = msg.result;
+      if (deferredCortexWarmJob && !job.signal?.aborted) {
+        scheduleCortexPromptWarm(job.ctx.userId, job.ctx.chatId, deferredCortexWarmJob, job.signal);
+      }
+      job.resolve(result);
+    });
   } else {
     const err = new Error(msg.error);
     err.name = msg.name || "PromptAssemblyWorkerError";
@@ -213,7 +221,7 @@ function assign(pw: PoolWorker, job: Job): void {
   pw.worker.postMessage({
     type: "assemble",
     requestId: job.requestId,
-    ctx: job.ctx,
+    ctx: { ...job.ctx, cortexCache: getCortexCacheSnapshot(job.ctx.chatId) },
     tokenizerRevision,
     resourceOwner: pw.resourceOwner,
   } satisfies AssemblyWorkerRequest);

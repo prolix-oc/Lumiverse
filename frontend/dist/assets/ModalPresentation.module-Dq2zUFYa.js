@@ -1,0 +1,1 @@
+var e={header:`_header_cgm88_1`,headerText:`_headerText_cgm88_11`,title:`_title_cgm88_18`,subtitle:`_subtitle_cgm88_25`,body:`_body_cgm88_32`,footer:`_footer_cgm88_42`};export{e as t};

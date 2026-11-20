@@ -19,6 +19,7 @@ import { dryRunGeneration, startGeneration, stopAllGenerations, stopGenerationSw
 const userId = "provider-outcomes-test";
 const ended: any[] = [];
 const metricsReady: any[] = [];
+const chatChanges: any[] = [];
 const origins: Array<{ chatId: string; phase: string; session: unknown }> = [];
 let fetchSpy: ReturnType<typeof spyOn> | undefined;
 let secretSpy: ReturnType<typeof spyOn>;
@@ -40,6 +41,7 @@ beforeAll(async () => {
   eventSpy = spyOn(eventBus, "emit").mockImplementation((type, payload) => {
     if (type === EventType.GENERATION_ENDED) ended.push(payload);
     if (type === EventType.GENERATION_METRICS_READY) metricsReady.push(payload);
+    if (type === EventType.CHAT_CHANGED) chatChanges.push(payload);
   });
 });
 afterEach(async () => {
@@ -54,7 +56,7 @@ afterAll(() => {
   secretSpy.mockRestore(); eventSpy.mockRestore(); closeDatabase();
 });
 
-async function run(provider: string, body: object[], options: { responses?: boolean; nonStreaming?: boolean; presetName?: string; presetMetadata?: Record<string, unknown>; chunkDelayMs?: number; assistantPrefill?: string } = {}) {
+async function run(provider: string, body: object[], options: { responses?: boolean; nonStreaming?: boolean; presetName?: string; presetMetadata?: Record<string, unknown>; chunkDelayMs?: number; assistantPrefill?: string; promptContent?: string } = {}) {
   const connection = await connections.createConnection(userId, {
     name: "Mock", provider, model: "test-model", api_url: "https://example.test",
   });
@@ -62,8 +64,8 @@ async function run(provider: string, body: object[], options: { responses?: bool
     ? presets.createPreset(userId, {
         name: options.presetName,
         provider,
-        prompt_order: options.assistantPrefill ? [{
-          id: "main", name: "Main", content: "Be brief.", role: "system", enabled: true, position: "pre_history",
+        prompt_order: options.assistantPrefill || options.promptContent ? [{
+          id: "main", name: "Main", content: options.promptContent ?? "Be brief.", role: "system", enabled: true, position: "pre_history",
           depth: 0, marker: null, isLocked: false, color: null, injectionTrigger: [], group: null,
         }] : [],
         ...(options.assistantPrefill ? { prompts: { completionSettings: { assistantPrefill: options.assistantPrefill } } } : {}),
@@ -104,7 +106,82 @@ async function run(provider: string, body: object[], options: { responses?: bool
     { chatId: chat.id, phase: 'context', session: '0123456789abcdef0123456789abcdef' },
     { chatId: chat.id, phase: 'interceptor', session: '0123456789abcdef0123456789abcdef' },
   ]);
-  return { event, generationId: result.generationId, preset };
+  return { event, generationId: result.generationId, preset, connection, chat };
+}
+
+test("native generations preserve before and after variables through regeneration, continuation, old swipes and forks", async () => {
+  const { event, chat, preset, connection } = await run("openai", [
+    { choices: [{ delta: { content: "{{addchatvar::count::1}}Reply." }, finish_reason: "stop" }] },
+  ], { presetName: "Variable history", promptContent: "{{addchatvar::count::1}}Before response: {{getchatvar::count}}" });
+  const count = () => chats.getChat(userId, chat.id)!.metadata.chat_variables.count;
+  const generate = async (generation_type: "normal" | "regenerate" | "continue", message_id?: string) => {
+    const result = await startGeneration({ userId, chat_id: chat.id, connection_id: connection.id,
+      preset_id: preset!.id, force_preset_id: true, generation_type, message_id });
+    const deadline = Date.now() + 3000;
+    while (!ended.some(value => value.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
+    const completed = ended.find(value => value.generationId === result.generationId);
+    expect(completed?.error).toBeUndefined(); expect(completed?.messageId).toBeString();
+    return chats.getMessage(userId, completed.messageId)!;
+  };
+  expect(count()).toBe("2");
+  const first = chats.getMessage(userId, event.messageId)!;
+  expect(first.extra.variableStateBySwipe[0].before.values.chat.count).toBeUndefined();
+  expect(first.extra.variableStateBySwipe[0].values.chat.count).toBe("2");
+  const alternate = await generate("regenerate", first.id);
+  expect(count()).toBe("2");
+  expect(alternate.extra.variableStateBySwipe[1].before.values.chat.count).toBeUndefined();
+  await generate("continue", first.id);
+  expect(count()).toBe("4");
+  expect(chats.getMessage(userId, first.id)!.extra.variableStateBySwipe[1].before.values.chat.count).toBeUndefined();
+  const laterUser = chats.createMessage(chat.id, { is_user: true, name: "User", content: "Continue." }, userId);
+  chats.cycleSwipe(userId, first.id, "left");
+  expect(count()).toBe("4");
+  const second = await generate("normal");
+  expect(count()).toBe("6");
+  expect(second.extra.variableStateBySwipe[0].before.values.chat.count).toBe("4");
+  chats.cycleSwipe(userId, first.id, "right"); chats.cycleSwipe(userId, first.id, "left");
+  expect(count()).toBe("6");
+  const fork = chats.branchChat(userId, chat.id, first.id)!;
+  expect(fork.metadata.chat_variables.count).toBe("2");
+  expect(count()).toBe("6");
+  const copied = chats.getMessages(userId, fork.id).at(-1)!;
+  chats.cycleSwipe(userId, copied.id, "right");
+  expect(chats.getChat(userId, fork.id)!.metadata.chat_variables.count).toBe("4");
+  chats.addSwipe(userId, second.id, "Manual alternative.");
+  const userFork = chats.branchChat(userId, chat.id, laterUser.id)!;
+  expect(userFork.metadata.chat_variables.count).toBe("4");
+  chats.deleteMessage(userId, second.id);
+  expect(count()).toBe("4");
+  chats.deleteMessage(userId, laterUser.id);
+  expect(count()).toBe("2");
+  chats.cycleSwipe(userId, first.id, "right"); expect(count()).toBe("4");
+});
+
+for (const explicitMessages of [false, true]) {
+  test(`regeneration with no variable writes retains its starting state after a partial response (explicit messages: ${explicitMessages})`, async () => {
+    const { event, chat, connection } = await run("openai", [
+      { choices: [{ delta: { content: "{{addchatvar::count::1}}Original." }, finish_reason: "stop" }] },
+    ]);
+    expect(chats.getChat(userId, chat.id)!.metadata.chat_variables.count).toBe("1");
+    const changeStart = chatChanges.length;
+    fetchSpy!.mockImplementation((async () => new Response(`data: ${JSON.stringify({
+      choices: [{ delta: { content: "Partial." }, finish_reason: "length" }],
+    })}\n\n`)) as unknown as typeof fetch);
+    const result = await startGeneration({ userId, chat_id: chat.id, connection_id: connection.id,
+      generation_type: "regenerate", message_id: event.messageId,
+      ...(explicitMessages ? { messages: [{ role: "user" as const, content: "Another reply." }] } : {}),
+    });
+    const deadline = Date.now() + 3000;
+    while (!ended.some(value => value.generationId === result.generationId) && Date.now() < deadline) await Bun.sleep(5);
+    expect(ended.find(value => value.generationId === result.generationId)).toBeDefined();
+    expect(chats.getMessage(userId, event.messageId)!.content).toBe("Partial.");
+    expect(chats.getChat(userId, chat.id)!.metadata.chat_variables.count).toBeUndefined();
+    expect(chatChanges.slice(changeStart).some(change => change.chat?.id === chat.id && change.changedFields.includes("metadata.chat_variables.count"))).toBe(true);
+    chats.cycleSwipe(userId, event.messageId, "left");
+    expect(chats.getChat(userId, chat.id)!.metadata.chat_variables.count).toBe("1");
+    chats.cycleSwipe(userId, event.messageId, "right");
+    expect(chats.getChat(userId, chat.id)!.metadata.chat_variables.count).toBeUndefined();
+  });
 }
 const chatThought = { choices: [{ delta: { reasoning_content: "A thought." } }] };
 const responseThought = { type: "response.reasoning_summary_text.delta", delta: "A thought." };

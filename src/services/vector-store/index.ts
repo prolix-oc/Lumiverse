@@ -9,7 +9,6 @@
  * Re-exports the addressing helpers + types so orchestration (embeddings.service)
  * can import everything vector-store-related from one place.
  */
-import { LanceDbStore } from "./providers/lancedb";
 import type { VectorStore } from "./types";
 import {
   getResolvedVectorStoreConfig,
@@ -32,7 +31,10 @@ export async function buildVectorStore(
 ): Promise<VectorStore> {
   switch (config.provider) {
     case "lancedb":
+    default: {
+      const { LanceDbStore } = await import("./providers/lancedb");
       return new LanceDbStore();
+    }
     case "qdrant": {
       const { QdrantStore } = await import("./providers/qdrant");
       return new QdrantStore(config.qdrant, secrets.qdrantApiKey, config.tuningProfile);
@@ -41,8 +43,6 @@ export async function buildVectorStore(
       const { MilvusStore } = await import("./providers/milvus");
       return new MilvusStore(config.milvus, secrets.milvusPassword, config.tuningProfile, config.milvusHybridSearch);
     }
-    default:
-      return new LanceDbStore();
   }
 }
 
@@ -51,8 +51,11 @@ export async function buildVectorStore(
  * is idempotent and safe to repeat.
  */
 export async function getActiveVectorStore(): Promise<VectorStore> {
+  const config = getResolvedVectorStoreConfig();
+  // Workers/subprocesses retain their own handle across requests. Notice a
+  // provider switch committed by the server before reusing that handle.
+  if (activeStore && activeStore.id !== config.provider) resetActiveVectorStore();
   if (!activeStore) {
-    const config = getResolvedVectorStoreConfig();
     const secrets = await getVectorStoreConnectionSecrets();
     activeStore = await buildVectorStore(config, secrets);
   }

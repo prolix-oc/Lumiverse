@@ -1,11 +1,14 @@
+import type { ConnectionPlacement } from '@/lib/connectionPlacement'
+import type { ConnectionAccount } from '@/hooks/useConnectionAccount'
+import { useConnectionRow } from '@/components/panels/connection-manager/useConnectionRow'
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSortable } from '@dnd-kit/sortable'
 
 import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical, Shuffle, GripVertical } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
-import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
-import { buildNanoGptOAuthCallbackUrl, nanoGptApi, type NanoGptAccountUsage } from '@/api/nanogpt'
+import { buildOpenRouterOAuthCallbackUrl, openrouterApi } from '@/api/openrouter'
+import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
 import { startProviderOAuthPopup } from '@/lib/providerOAuthPopup'
 import {
   getReasoningBindingSummary,
@@ -14,8 +17,6 @@ import {
 } from '@/lib/reasoning-binding'
 import { formatAnthropicPromptCachingSummary } from '@/lib/anthropic-prompt-caching'
 import { formatNanoGptCachingSummary } from '@/lib/nanogpt-prompt-caching'
-import { useScaledSortableStyle } from '@/lib/dndUiScale'
-import { useDragHandleBlur } from './useDragHandleBlur'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
@@ -62,6 +63,8 @@ function getRouletteConnectionCount(profile: ConnectionProfile) {
 }
 
 interface ConnectionItemProps {
+  placement?: ConnectionPlacement
+  account: ConnectionAccount
   profile: ConnectionProfile
   isActive: boolean
   providers: ProviderInfo[]
@@ -72,21 +75,18 @@ interface ConnectionItemProps {
 }
 
 export default function ConnectionItem({
-  profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete,
+  placement = 'list', account, profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete,
 }: ConnectionItemProps) {
 
   const { t } = useTranslation('panels')
   const oauthCleanupRef = useRef<(() => void) | null>(null)
-  const [editing, setEditing] = useState(false)
+  const { editing, setEditing, isRecent, ...sortable } = useConnectionRow(profile.id, placement)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [oauthLoading, setOauthLoading] = useState(false)
-  const [credits, setCredits] = useState<OpenRouterCreditsInfo | null>(null)
-  const [creditsLoading, setCreditsLoading] = useState(false)
-  const [nanoGptAccount, setNanoGptAccount] = useState<NanoGptAccountUsage | null>(null)
-  const [nanoGptError, setNanoGptError] = useState<string | null>(null)
+  const { credits, nanoGptAccount, loading: accountLoading, error: accountError, refresh: refreshAccount } = account
   const nanoGptUsage = nanoGptAccount?.subscription
-  const [nanoGptUsageLoading, setNanoGptUsageLoading] = useState(false)
+  const nanoGptError = accountError === null ? null : accountError || t('connectionItem.nanoGptUsageUnavailable')
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
 
   const isOpenRouter = profile.provider === 'openrouter'
@@ -97,58 +97,10 @@ export default function ConnectionItem({
   const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
   const unknownReset = t('connectionItem.unknown')
 
-  // Fetch credits when this is the active OpenRouter connection.
-  // Preserve existing data when showCredits flickers false during drag
-  // re-renders — clearing then refetching causes a visible flash.
-  const creditsFetchedRef = useRef(false)
-  useEffect(() => {
-    if (!showCredits) {
-      if (!creditsFetchedRef.current) setCredits(null)
-      return
-    }
-    if (credits) return
-    creditsFetchedRef.current = true
-    setCreditsLoading(true)
-    openrouterApi.credits(profile.id)
-      .then(setCredits)
-      .catch(() => setCredits(null))
-      .finally(() => setCreditsLoading(false))
-  }, [showCredits, profile.id, credits])
-
-  useEffect(() => {
-    if (!showCredits) creditsFetchedRef.current = false
-  }, [showCredits])
-
-  const refreshCredits = useCallback(() => {
-    if (!showCredits) return
-    setCreditsLoading(true)
-    openrouterApi.credits(profile.id)
-      .then(setCredits)
-      .catch(() => setCredits(null))
-      .finally(() => setCreditsLoading(false))
-  }, [showCredits, profile.id])
-
-  useEffect(() => {
-    if (!showNanoGptUsage) return
-    let cancelled = false
-    setNanoGptError(null)
-    setNanoGptUsageLoading(true)
-    nanoGptApi.account(profile.id)
-      .then((account) => { if (!cancelled) setNanoGptAccount(account) })
-      .catch((err) => { if (!cancelled) setNanoGptError(err.body?.error || err.message || t('connectionItem.nanoGptUsageUnavailable')) })
-      .finally(() => { if (!cancelled) setNanoGptUsageLoading(false) })
-    return () => { cancelled = true }
-  }, [showNanoGptUsage, profile.id, profile.updated_at, t])
-
-  const refreshNanoGptUsage = useCallback(() => {
-    if (!showNanoGptUsage) return
-    setNanoGptError(null)
-    setNanoGptUsageLoading(true)
-    nanoGptApi.account(profile.id)
-      .then(setNanoGptAccount)
-      .catch((err) => setNanoGptError(err.body?.error || err.message || t('connectionItem.nanoGptUsageUnavailable')))
-      .finally(() => setNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id, t])
+  const creditsLoading = accountLoading && isOpenRouter
+  const nanoGptUsageLoading = accountLoading && isNanoGpt
+  const refreshCredits = refreshAccount
+  const refreshNanoGptUsage = refreshAccount
 
   // Auto-dismiss test result after 5s
   useEffect(() => {
@@ -170,15 +122,16 @@ export default function ConnectionItem({
     }
   }, [profile.id, t])
 
-  const handleSaveEdit = useCallback(async (input: CreateConnectionProfileInput) => {
+  const handleSaveEdit = useCallback(async (input: CreateConnectionProfileInput, folderId = '') => {
     try {
       const updated = await connectionsApi.update(profile.id, input)
+      saveConnectionFolder('llm', profile.id, folderId)
       onUpdate(updated)
       setEditing(false)
     } catch (err) {
       console.error('[ConnectionItem] Failed to update:', err)
     }
-  }, [profile.id, onUpdate])
+  }, [profile.id, onUpdate, setEditing])
 
   const handleOAuthLogin = useCallback(async () => {
     const isNanoGptOAuth = profile.provider === 'nanogpt'
@@ -235,33 +188,12 @@ export default function ConnectionItem({
       ].filter((entry): entry is typeof entry & { window: NonNullable<typeof entry.window> } => entry.window != null)
     : []
 
-  // Track whether the credits/usage bars have already animated in.
-  // The ref survives re-renders so the fadeIn class only plays once
-  // per activation cycle (profile toggled on → bar appears with animation,
-  // profile toggled off → ref resets, next activation animates again).
-  const creditsAnimatedRef = useRef(false)
-  if (showCredits && credits && !creditsAnimatedRef.current) {
-    creditsAnimatedRef.current = true
-  } else if (!showCredits && creditsAnimatedRef.current) {
-    creditsAnimatedRef.current = false
-  }
-
   const nanoGptShown = showNanoGptUsage && (nanoGptAccount || nanoGptError || nanoGptUsageLoading)
-  const nanoGptAnimatedRef = useRef(false)
-  if (nanoGptShown && !nanoGptAnimatedRef.current) {
-    nanoGptAnimatedRef.current = true
-  } else if (!nanoGptShown && nanoGptAnimatedRef.current) {
-    nanoGptAnimatedRef.current = false
-  }
 
-
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
-  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
-  const handleRef = useDragHandleBlur(isDragging)
+  const { attributes, listeners, setNodeRef, style, isDragging, handleRef } = sortable
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)} data-component="ConnectionItem">
+    <div ref={setNodeRef} style={style} data-dragging={isDragging || undefined} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)} data-component="ConnectionItem">
       {editing ? (
         <div data-component="ConnectionItem">
           <ConnectionForm
@@ -274,7 +206,7 @@ export default function ConnectionItem({
       ) : (
         <>
           <div className={styles.itemRow}>
-            <button
+            {!isRecent && <button
               ref={handleRef}
               type="button"
               className={styles.dragHandle}
@@ -284,8 +216,8 @@ export default function ConnectionItem({
               {...listeners}
             >
               <GripVertical size={16} />
-            </button>
-            <button type="button" className={styles.itemBtn} onClick={onSelect}>
+            </button>}
+            <button type="button" className={styles.itemBtn} onMouseDown={event => listeners?.onMouseDown?.(event)} onTouchStart={event => listeners?.onTouchStart?.(event)} onClick={onSelect}>
               {isRoulette ? (
                 <span className={clsx(styles.itemIcon, styles.rouletteIcon)}>
                   <Shuffle size={16} />
@@ -369,7 +301,7 @@ export default function ConnectionItem({
             </div>
           )}
           {isOpenRouter && profile.has_api_key && credits && (
-            <div key="credits" className={clsx(styles.creditsBar, !creditsAnimatedRef.current && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
+            <div key="credits" className={clsx(styles.creditsBar, showCredits && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
               <div className={styles.creditCell}>
                 <span className={styles.creditLabel}>{t('connectionItem.remaining')}</span>
                 <span className={styles.creditValue}>
@@ -421,7 +353,7 @@ export default function ConnectionItem({
               {nanoGptError && <div className={clsx(styles.testMessage, styles.testMessageFail)} role="alert">{nanoGptError}</div>}
               {nanoGptUsageRows.length > 0
               ? nanoGptUsageRows.map(({ key, label, window: win }, idx) => (
-                <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
+                <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && nanoGptShown && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
                     <span className={styles.creditLabel}>{label}</span>
                     <span className={styles.creditValue}>
@@ -441,7 +373,7 @@ export default function ConnectionItem({
                 </div>
               ))
               : nanoGptSubscriptionInactive && profile.metadata?.use_subscription_api ? (
-                <div key="nanoGpt-inactive" className={clsx(styles.creditsBar, styles.nanoGptUsageBar, !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
+                <div key="nanoGpt-inactive" className={clsx(styles.creditsBar, styles.nanoGptUsageBar, nanoGptShown && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
                     <span className={styles.creditLabel}>{t('connectionItem.status')}</span>
                     <span className={styles.creditValue}>{t('connectionItem.inactive')}</span>

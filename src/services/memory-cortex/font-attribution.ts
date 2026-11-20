@@ -8,20 +8,13 @@
  * The extraction runs BEFORE entity heuristics, so colors are harvested
  * and then stripped — the rest of the pipeline sees clean text.
  *
- * Attribution strategy (layered, with paragraph-level context):
- *   1. Chunk prefix: [CHARACTER | Name] or [USER | Name] tells us message owner
- *   2. Existing color map: if we've seen this hex before with high confidence, reuse
- *   3. Third-person name + verb in colored block: "Melina sighed" → Melina
- *   4. Pre-attribution: 'Melina said, "Hello"' → Melina (speech)
- *   5. Dialogue attribution: '"Hello," said Melina' → Melina (speech)
- *   6. Proximity scan: character name within ~200 chars of the font tag → likely owner
- *   7. Paragraph focal character: if a paragraph is "about" a character, colored blocks inherit
- *   8. First-person pronouns: "I drew my blade" → message owner
- *   9. Propagation pass: unattributed blocks inherit from confident neighbors in same paragraph
+ * Attribution uses explicit local speech/thought attribution, name + action
+ * patterns, paragraph focus and the current message owner. Existing mappings
+ * are a fallback only and never count as fresh supporting observations.
  *
  * Usage type detection within a colored block:
- *   - Contains "..." quotes → speech
- *   - Contains *...* asterisk narration → thought
+ *   - Inside configured/italic thought wrappers → thought, including quoted thoughts
+ *   - Other quoted text → speech
  *   - Otherwise → narration
  */
 
@@ -30,6 +23,9 @@ import { getDb } from "../../db/connection";
 // ─── Types ─────────────────────────────────────────────────────
 
 export type ColorUsageType = "speech" | "thought" | "narration" | "unknown";
+
+/** Changes to detection/persistence require rebuilding previously warmed chunks. */
+export const FONT_ATTRIBUTION_VERSION = 3;
 
 export interface FontColorMapping {
   id: string;
@@ -51,6 +47,8 @@ export interface ExtractedColorBlock {
   offset: number;
   /** Index of the paragraph (split by double-newline) containing this block */
   paragraphIndex: number;
+  /** Original colored container when a mixed block is split into channels. */
+  sourceMarkup?: string;
 }
 
 export interface ColorAttribution {
@@ -58,6 +56,10 @@ export interface ColorAttribution {
   entityName: string | null;
   usageType: ColorUsageType;
   confidence: number;
+  /** Source markup and local context, supplied to the candidate reviewer. */
+  evidence?: string[];
+  /** Reusing a stored mapping is not a new, independent observation. */
+  fromHistory?: boolean;
 }
 
 export interface ThoughtDelimiters {
@@ -69,9 +71,30 @@ export interface ThoughtDelimiters {
 
 // Matches <font color="...">content</font> and <span style="color: ...">content</span>
 // Also handles UNQUOTED attributes: <font color=#E6E6FA> (common in RP formatting)
-const FONT_TAG_QUOTED = /<font\s+color\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/font>/gi;
-const FONT_TAG_UNQUOTED = /<font\s+color\s*=\s*([#\w]+)[^>]*>([\s\S]*?)<\/font>/gi;
-const SPAN_COLOR_PATTERN = /<span\s+style\s*=\s*["'][^"']*color\s*:\s*([^;"']+)[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi;
+const FONT_TAG_QUOTED = /<font\b[^>]*?\bcolor\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/font\s*>/gi;
+const FONT_TAG_UNQUOTED = /<font\b[^>]*?\bcolor\s*=\s*([#\w]+)[^>]*>([\s\S]*?)<\/font\s*>/gi;
+const SPAN_COLOR_PATTERN = /<span\b[^>]*?\bstyle\s*=\s*["'][^"']*(?<![-\w])color\s*:\s*([^;"']+)[^"']*["'][^>]*>([\s\S]*?)<\/span\s*>/gi;
+
+interface UsageRange { start: number; end: number; usage: "thought" | "speech" }
+
+/** Keep source offsets while hiding attribute quotes and escaped Markdown markers. */
+function usageRanges(content: string, delimiters?: ThoughtDelimiters): UsageRange[] {
+  const visible = content.replace(/<[^>]*>/g, (tag) => " ".repeat(tag.length))
+    .replace(/\\[*_"\\]/g, (escaped) => " ".repeat(escaped.length));
+  const ranges: UsageRange[] = [];
+  const collect = (source: string, pattern: RegExp, usage: UsageRange["usage"]) => {
+    for (const match of source.matchAll(pattern)) ranges.push({ start: match.index!, end: match.index! + match[0].length, usage });
+  };
+  // Single emphasis is the RP thought channel; bold emphasis alone is not.
+  collect(visible, /(?<!\*)\*(?!\*)[^*]+\*(?!\*)/g, "thought");
+  collect(visible, /(?<![\p{L}\p{N}_])_(?!_)[^_]+_(?![\p{L}\p{N}_])/gu, "thought");
+  collect(content, /<(i|em)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "thought");
+  if (delimiters?.prefix.trim() && delimiters?.suffix.trim()) {
+    collect(content, new RegExp(`${escapeRegex(delimiters.prefix.trim())}[\\s\\S]*?(?:${escapeRegex(delimiters.suffix.trim())}|$)`, "gi"), "thought");
+  }
+  collect(visible, /"[^"\n]*(?:\n(?!\s*\n)[^"\n]*)*"|“[^”]+”/g, "speech");
+  return ranges;
+}
 
 /**
  * Extract all font-colored blocks from content.
@@ -83,6 +106,7 @@ export function extractColorBlocks(content: string, thoughtDelimiters?: ThoughtD
 
   // Pre-compute paragraph boundaries (split on double newline or paragraph-style breaks)
   const paragraphBoundaries = buildParagraphBoundaries(content);
+  const ranges = usageRanges(content, thoughtDelimiters);
 
   const seenOffsets = new Set<number>(); // Prevent double-matching quoted + unquoted
   for (const pattern of [FONT_TAG_QUOTED, FONT_TAG_UNQUOTED, SPAN_COLOR_PATTERN]) {
@@ -94,17 +118,32 @@ export function extractColorBlocks(content: string, thoughtDelimiters?: ThoughtD
 
       const rawColor = match[1].trim();
       const innerContent = match[2];
-      const hexColor = normalizeColor(rawColor);
+      const hexColor = normalizeFontColor(rawColor);
       if (!hexColor) continue;
-
-      blocks.push({
-        hexColor,
-        content: innerContent,
-        fullMatch: match[0],
-        usageType: detectUsageType(innerContent, thoughtDelimiters),
-        offset: match.index,
-        paragraphIndex: findParagraphIndex(match.index, paragraphBoundaries),
-      });
+      const innerStart = match.index + match[0].indexOf(">") + 1;
+      const innerEnd = innerStart + innerContent.length;
+      // Split a shared color into its actual usage channels. Wrappers may sit
+      // inside OR outside the color tag; a thought wrapper wins over quotes.
+      const boundaries = [...new Set([innerStart, innerEnd, ...ranges.flatMap((range) =>
+        [range.start, range.end].filter((offset) => offset > innerStart && offset < innerEnd))])].sort((a, b) => a - b);
+      const segments: Array<{ content: string; usageType: ColorUsageType; start: number }> = [];
+      for (let i = 0; i < boundaries.length - 1; i++) {
+        const start = boundaries[i], end = boundaries[i + 1];
+        const covering = ranges.filter((range) => range.start <= start && range.end >= end);
+        const usageType = covering.some((range) => range.usage === "thought") ? "thought"
+          : covering.some((range) => range.usage === "speech") ? "speech" : "narration";
+        const text = content.slice(start, end);
+        const prior = segments.at(-1);
+        if (prior?.usageType === usageType) prior.content += text;
+        else segments.push({ content: text, usageType, start });
+      }
+      for (const segment of segments) {
+        if (!/[\p{L}\p{N}]/u.test(segment.content.replace(/<[^>]*>/g, ""))) continue;
+        const offset = segments.length === 1 ? match.index : segment.start;
+        blocks.push({ hexColor, content: segment.content, usageType: segment.usageType,
+          fullMatch: segments.length === 1 ? match[0] : segment.content, sourceMarkup: match[0], offset,
+          paragraphIndex: findParagraphIndex(offset, paragraphBoundaries) });
+      }
     }
   }
 
@@ -126,7 +165,8 @@ function buildParagraphBoundaries(content: string): number[] {
     // The next paragraph starts after the whitespace gap
     boundaries.push(m.index + m[0].length);
   }
-  return boundaries;
+  for (const match of content.matchAll(/^\[(?:CHARACTER|USER)\s*\|[^\]]+\]/gmi)) boundaries.push(match.index!);
+  return [...new Set(boundaries)].sort((a, b) => a - b);
 }
 
 /** Find which paragraph index a character offset falls into. */
@@ -142,21 +182,13 @@ function findParagraphIndex(offset: number, boundaries: number[]): number {
  * Call this AFTER extractColorBlocks to clean content for the entity pipeline.
  */
 export function stripFontTags(content: string): string {
-  let result = content;
-  // Quoted: <font color="...">
-  result = result.replace(/<font\s+color\s*=\s*["'][^"']*["'][^>]*>([\s\S]*?)<\/font>/gi, "$1");
-  // Unquoted: <font color=#hex>
-  result = result.replace(/<font\s+color\s*=\s*[#\w]+[^>]*>([\s\S]*?)<\/font>/gi, "$1");
-  // Orphaned closing tags
-  result = result.replace(/<\/font>/gi, "");
-  // Span color
-  result = result.replace(/<span\s+style\s*=\s*["'][^"']*color\s*:\s*[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, "$1");
-  return result;
+  return content.replace(/<\/?font\b[^>]*>/gi, "")
+    .replace(SPAN_COLOR_PATTERN, "$2");
 }
 
 // ─── Color Normalization ───────────────────────────────────────
 
-function normalizeColor(raw: string): string | null {
+export function normalizeFontColor(raw: string): string | null {
   const trimmed = raw.trim().toLowerCase();
 
   // Already hex: #abc or #aabbcc
@@ -169,6 +201,7 @@ function normalizeColor(raw: string): string | null {
   // rgb(r, g, b)
   const rgbMatch = trimmed.match(/^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
   if (rgbMatch) {
+    if (rgbMatch.slice(1).some((n) => Number(n) > 255)) return null;
     const hex = [rgbMatch[1], rgbMatch[2], rgbMatch[3]]
       .map((n) => parseInt(n, 10).toString(16).padStart(2, "0"))
       .join("");
@@ -182,25 +215,13 @@ function normalizeColor(raw: string): string | null {
     orange: "#ffa500", pink: "#ffc0cb", purple: "#800080", gray: "#808080",
     grey: "#808080", gold: "#ffd700", silver: "#c0c0c0", crimson: "#dc143c",
   };
-  if (NAMED[trimmed]) return NAMED[trimmed];
+  if (Object.hasOwn(NAMED, trimmed)) return NAMED[trimmed];
 
   return null;
 }
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isDelimitedThought(content: string, delimiters?: ThoughtDelimiters): boolean {
-  if (!delimiters?.prefix || !delimiters?.suffix) return false;
-
-  const prefix = delimiters.prefix.trim();
-  const suffix = delimiters.suffix.trim();
-  if (!prefix || !suffix) return false;
-
-  const escapedPrefix = escapeRegex(prefix);
-  const escapedSuffix = escapeRegex(suffix);
-  return new RegExp(`^\\s*${escapedPrefix}[\\s\\S]*?(?:${escapedSuffix})?\\s*$`, "i").test(content);
 }
 
 export function stripThoughtDelimiters(content: string, delimiters?: ThoughtDelimiters): string {
@@ -217,24 +238,10 @@ export function stripThoughtDelimiters(content: string, delimiters?: ThoughtDeli
   return result;
 }
 
-// ─── Usage Type Detection ──────────────────────────────────────
-
-function detectUsageType(coloredContent: string, thoughtDelimiters?: ThoughtDelimiters): ColorUsageType {
-  const trimmed = coloredContent.trim();
-  // Quoted dialogue: "Hello" or "Hello," she said
-  if (/[""\u201C][^""\u201D]+[""\u201D]/.test(trimmed)) return "speech";
-  if (isDelimitedThought(trimmed, thoughtDelimiters)) return "thought";
-  // Asterisk-wrapped narration: *she hesitated*
-  if (/^\*[^*]+\*$/.test(trimmed) || /^\*/.test(trimmed)) return "thought";
-  // Italic HTML
-  if (/<[ie]m>/i.test(trimmed)) return "thought";
-  return "narration";
-}
-
 // ─── Linguistic Attribution ────────────────────────────────────
 
 // First-person pronouns — strong signal that the colored text belongs to the message owner
-const FIRST_PERSON = /\b(I|I'm|I've|I'll|I'd|me|my|mine|myself)\b/;
+const FIRST_PERSON = /\b(I|I'm|I've|I'll|I'd|me|my|mine|myself)\b/i;
 
 // Third-person name + verb adjacency within colored text
 // Comprehensive list covering movement, speech, expression, combat, and general actions
@@ -254,7 +261,7 @@ function findSurroundingDialogueAttribution(
   knownNames: string[],
   paragraphBounds?: { start: number; end: number },
 ): { entityName: string; confidence: number } | null {
-  if (block.usageType !== "speech") return null;
+  if (block.usageType !== "speech" && block.usageType !== "thought") return null;
 
   const before = paragraphBounds
     ? rawContent.slice(paragraphBounds.start, block.offset)
@@ -263,21 +270,24 @@ function findSurroundingDialogueAttribution(
     ? rawContent.slice(block.offset + block.fullMatch.length, paragraphBounds.end)
     : rawContent.slice(block.offset + block.fullMatch.length);
 
-  const plainBefore = stripFontTags(before);
-  const plainAfter = stripFontTags(after);
+  const plainBefore = stripFontTags(before).replace(/<[^>]*>/g, "").replace(/[*_]+/g, "");
+  const plainAfter = stripFontTags(after).replace(/<[^>]*>/g, "").replace(/[*_]+/g, "");
+  const verbs = block.usageType === "thought"
+    ? "(?:thought|wondered|reflected|mused|realized|remembered|considered|reasoned|wished|hoped|feared|told herself|told himself|told themselves)"
+    : DIALOGUE_ATTR_VERBS;
 
   for (const name of knownNames) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`\\b${escaped}\\s+${DIALOGUE_ATTR_VERBS}\\s*,?\\s*$`, "i").test(plainBefore)) {
+    if (new RegExp(`\\b${escaped}\\s+${verbs}\\s*[:,]?\\s*["“]?\\s*$`, "i").test(plainBefore)) {
       return { entityName: name, confidence: 0.92 };
     }
-    if (new RegExp(`\\b${DIALOGUE_ATTR_VERBS}\\s+${escaped}\\s*$`, "i").test(plainBefore)) {
+    if (new RegExp(`\\b${verbs}\\s+${escaped}\\s*[:,]?\\s*$`, "i").test(plainBefore)) {
       return { entityName: name, confidence: 0.9 };
     }
-    if (new RegExp(`^\\s*(?:[,.!?]\\s*)?${escaped}\\s+${DIALOGUE_ATTR_VERBS}\\b`, "i").test(plainAfter)) {
+    if (new RegExp(`^\\s*["”]?\\s*(?:[,.!?]\\s*)?${escaped}\\s+${verbs}\\b`, "i").test(plainAfter)) {
       return { entityName: name, confidence: 0.92 };
     }
-    if (new RegExp(`^\\s*(?:[,.!?]\\s*)?${DIALOGUE_ATTR_VERBS}\\s+${escaped}\\b`, "i").test(plainAfter)) {
+    if (new RegExp(`^\\s*["”]?\\s*(?:[,.!?]\\s*)?${verbs}\\s+${escaped}\\b`, "i").test(plainAfter)) {
       return { entityName: name, confidence: 0.9 };
     }
   }
@@ -299,7 +309,7 @@ export function detectParagraphFocalCharacter(
   knownNames: string[],
 ): { name: string; confidence: number } | null {
   // Strip font tags to analyze plain narrative text
-  const plainText = stripFontTags(paragraphText);
+  const plainText = stripFontTags(paragraphText).replace(/"[^"]*"|“[^”]*”/g, " ");
   if (!plainText.trim()) return null;
 
   // Score each known name by how strongly they appear in this paragraph
@@ -405,7 +415,7 @@ function proximityNameScan(
   const window = rawContent.slice(windowStart, windowEnd);
 
   // Strip font tags from the window so we only match names in plain text context
-  const plainWindow = stripFontTags(window);
+  const plainWindow = stripFontTags(window).replace(/"[^"]*"|“[^”]*”/g, (quoted) => " ".repeat(quoted.length));
 
   let bestMatch: { name: string; distance: number } | null = null;
 
@@ -448,8 +458,30 @@ export function attributeColorBlock(
   focalCharacter: { name: string; confidence: number } | null = null,
   multiCharacterContent: boolean = false,
   paragraphBounds?: { start: number; end: number },
+  firstPersonNarrator: boolean = false,
 ): { entityName: string | null; confidence: number } {
   const text = block.content;
+  // Explicit speaker/thinker attribution outranks a character merely
+  // described inside their words ("Kael walked away," Melina said).
+  if (rawContent) {
+    const surrounding = findSurroundingDialogueAttribution(block, rawContent, knownNames, paragraphBounds);
+    if (surrounding) return surrounding;
+  }
+  // First-person narration establishes a viewpoint even when the author also
+  // writes other characters. A standalone "My ..." thought must not lose its
+  // owner merely because another paragraph mentions an NPC or an addressee.
+  if (block.usageType === "thought" && FIRST_PERSON.test(text) && messageOwner && firstPersonNarrator) {
+    const outsideBlock = paragraphBounds
+      ? rawContent.slice(paragraphBounds.start, block.offset)
+        + rawContent.slice(block.offset + block.fullMatch.length, paragraphBounds.end)
+      : "";
+    const localFocus = detectParagraphFocalCharacter(outsideBlock, knownNames);
+    if (!localFocus || localFocus.name.toLowerCase() === messageOwner.toLowerCase()) {
+      return { entityName: messageOwner, confidence: 0.8 };
+    }
+  }
+  // A character described inside someone else's quotation is not the speaker.
+  const actingText = text.replace(/"[^"]*"|“[^”]*”/g, " ");
 
   // Strategy 1: Third-person name + verb directly in the colored text
   // "Melina sighed" → Melina, high confidence
@@ -457,11 +489,11 @@ export function attributeColorBlock(
   for (const name of knownNames) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     // Name + verb: "Melina sighed"
-    if (new RegExp(`${escaped}\\s+${CHAR_VERB_INLINE.source}`, "i").test(text)) {
+    if (new RegExp(`\\b${escaped}\\s+${CHAR_VERB_INLINE.source}`, "i").test(actingText)) {
       return { entityName: name, confidence: 0.9 };
     }
     // Verb + name: "said Melina"
-    if (new RegExp(`${CHAR_VERB_INLINE.source}\\s+${escaped}`, "i").test(text)) {
+    if (new RegExp(`${CHAR_VERB_INLINE.source}\\s+${escaped}\\b`, "i").test(actingText)) {
       return { entityName: name, confidence: 0.9 };
     }
   }
@@ -483,14 +515,6 @@ export function attributeColorBlock(
   if (postNameVerb) {
     const matched = knownNames.find((n) => n.toLowerCase() === postNameVerb[1].toLowerCase());
     if (matched) return { entityName: matched, confidence: 0.85 };
-  }
-
-  // Strategy 4: Dialogue tags just outside the colored block.
-  // Handles common RP patterns like:
-  //   <font>"Stay close."</font> <font>Melina said...</font>
-  if (rawContent) {
-    const surrounding = findSurroundingDialogueAttribution(block, rawContent, knownNames, paragraphBounds);
-    if (surrounding) return surrounding;
   }
 
   // Strategy 5: Paragraph focal character — BEFORE proximity.
@@ -620,12 +644,16 @@ export function getColorMap(chatId: string): FontColorMapping[] {
 /**
  * Look up which entity owns a specific hex color.
  */
-export function lookupColor(chatId: string, hexColor: string): FontColorMapping | null {
-  const row = getDb()
-    .query("SELECT * FROM memory_font_colors WHERE chat_id = ? AND hex_color = ? AND confidence >= 0.5 ORDER BY confidence DESC LIMIT 1")
-    .get(chatId, hexColor) as any;
+export function lookupColor(chatId: string, hexColor: string, usageType?: ColorUsageType): FontColorMapping | null {
+  const rows = getDb()
+    .query(`SELECT * FROM memory_font_colors WHERE chat_id = ? AND hex_color = ? AND confidence >= 0.6
+      ${usageType ? "AND usage_type = ?" : ""} ORDER BY confidence DESC, sample_count DESC, id`)
+    .all(...(usageType ? [chatId, hexColor, usageType] : [chatId, hexColor])) as any[];
+  const row = rows[0];
 
   if (!row) return null;
+  // Shared colors are formatting, not unique character identifiers.
+  if (rows.some((other) => other.entity_id !== row.entity_id)) return null;
   return {
     id: row.id,
     chatId: row.chat_id,
@@ -648,50 +676,40 @@ export function recordColorAttribution(
   entityId: string | null,
   usageType: ColorUsageType,
   sampleExcerpt: string | null,
+  evidenceConfidence = 0.7,
 ): void {
+  const normalized = normalizeFontColor(hexColor);
+  if (!normalized || !entityId || !Number.isFinite(evidenceConfidence) || evidenceConfidence < 0.6) return;
+  hexColor = normalized;
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
 
-  // Check for existing mapping with same color + entity
+  // A character may use the same color for speech AND thoughts. Never let a
+  // later observation overwrite the other channel (or another character).
   const existing = db
-    .query("SELECT * FROM memory_font_colors WHERE chat_id = ? AND hex_color = ? AND entity_id IS ?")
-    .get(chatId, hexColor, entityId) as any;
+    .query("SELECT * FROM memory_font_colors WHERE chat_id = ? AND hex_color = ? AND entity_id = ? AND usage_type = ? ORDER BY confidence DESC, sample_count DESC, id LIMIT 1")
+    .get(chatId, hexColor, entityId, usageType) as any;
 
   if (existing) {
     // Reinforce: increase count and confidence
     const newCount = existing.sample_count + 1;
-    // Confidence approaches 1.0 asymptotically: 0.5 + 0.5 * (1 - 1/(count+1))
-    const newConfidence = Math.min(0.95, 0.4 + 0.55 * (1 - 1 / (newCount + 1)));
+    // Repetition cannot turn weak evidence into certainty; preserve manual
+    // confidence overrides while bounding automatic reinforcement.
+    const newConfidence = Math.max(existing.confidence, Math.min(0.95, evidenceConfidence + 0.05 * (1 - 1 / newCount)));
 
     db.query(
       `UPDATE memory_font_colors SET
-        sample_count = ?, confidence = ?, usage_type = ?,
+        sample_count = ?, confidence = ?,
         sample_excerpt = COALESCE(?, sample_excerpt),
         updated_at = ?
        WHERE id = ?`,
-    ).run(newCount, newConfidence, usageType, sampleExcerpt, now, existing.id);
+    ).run(newCount, newConfidence, sampleExcerpt, now, existing.id);
   } else {
-    // Check if this color is attributed to a DIFFERENT entity
-    const conflict = db
-      .query("SELECT * FROM memory_font_colors WHERE chat_id = ? AND hex_color = ? AND entity_id IS NOT ?")
-      .get(chatId, hexColor, entityId) as any;
-
-    if (conflict && conflict.confidence > 0.7) {
-      // High-confidence conflict — don't overwrite, this might be a POV switch in group chat
-      // Only override if we accumulate enough counter-evidence
-      return;
-    }
-
-    // New mapping or low-confidence override
-    if (conflict) {
-      db.query("DELETE FROM memory_font_colors WHERE id = ?").run(conflict.id);
-    }
-
     db.query(
       `INSERT INTO memory_font_colors
         (id, chat_id, entity_id, hex_color, usage_type, confidence, sample_count, sample_excerpt, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 0.4, 1, ?, ?, ?)`,
-    ).run(crypto.randomUUID(), chatId, entityId, hexColor, usageType, sampleExcerpt, now, now);
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).run(crypto.randomUUID(), chatId, entityId, hexColor, usageType, Math.min(0.9, evidenceConfidence), sampleExcerpt, now, now);
   }
 }
 
@@ -709,21 +727,9 @@ export function deleteColorMapForChat(chatId: string): void {
  * both the text and the start offset of each paragraph.
  */
 function splitParagraphs(content: string): Array<{ text: string; startOffset: number }> {
-  const result: Array<{ text: string; startOffset: number }> = [];
-  const parts = content.split(/\n\s*\n/);
-  let offset = 0;
-  for (let i = 0; i < parts.length; i++) {
-    result.push({ text: parts[i], startOffset: offset });
-    // Account for the delimiter we split on (approximate — at minimum 2 chars \n\n)
-    offset += parts[i].length;
-    if (i < parts.length - 1) {
-      // Find the actual delimiter length in the original content
-      const remaining = content.slice(offset);
-      const delimMatch = remaining.match(/^\n\s*\n/);
-      offset += delimMatch ? delimMatch[0].length : 2;
-    }
-  }
-  return result;
+  return buildParagraphBoundaries(content).map((startOffset, index, offsets) => ({
+    text: content.slice(startOffset, offsets[index + 1] ?? content.length), startOffset,
+  }));
 }
 
 /**
@@ -763,23 +769,36 @@ export function processChunkFontColors(
   knownEntityNames: string[],
   entityIdByName: Map<string, string>,
   thoughtDelimiters?: ThoughtDelimiters,
+  persist = true,
 ): { strippedContent: string; attributions: ColorAttribution[] } {
+  const seenNames = new Set<string>();
+  knownEntityNames = knownEntityNames.filter((name) => {
+    const key = name.toLowerCase();
+    if (seenNames.has(key)) return false;
+    seenNames.add(key);
+    return true;
+  });
   const blocks = extractColorBlocks(content, thoughtDelimiters);
   if (blocks.length === 0) {
     return { strippedContent: stripThoughtDelimiters(content, thoughtDelimiters), attributions: [] };
   }
 
   // ── Phase 0: Context analysis ──
-  // Extract message owner from chunk prefix
-  const lines = content.split("\n");
-  let currentOwner: string | null = null;
-  for (const line of lines) {
-    const owner = extractMessageOwner(line);
-    if (owner) currentOwner = owner;
-  }
+  // Chunk hydration can contain several message owners. Each block belongs
+  // to its preceding prefix, rather than the final message in the chunk.
+  const owners = [...content.matchAll(/^\[(?:CHARACTER|USER)\s*\|\s*([^\]]+)\]/gmi)]
+    .map((match) => ({ offset: match.index!, name: match[1].trim() }));
 
-  // Detect multi-character content (reduces message-owner fallback confidence)
-  const multiChar = isMultiCharacterContent(content, knownEntityNames);
+  const messageContexts = owners.map((owner, index) => {
+    const message = content.slice(owner.offset, owners[index + 1]?.offset ?? content.length);
+    // Quoted words and thoughts cannot establish who narrates the message.
+    // Inspect only the surrounding authored narration for first-person cues.
+    const narrative = usageRanges(message, thoughtDelimiters).sort((a, b) => b.start - a.start)
+      .reduce((text, range) => text.slice(0, range.start) + " ".repeat(range.end - range.start) + text.slice(range.end), message)
+      .replace(/^\[(?:CHARACTER|USER)\s*\|[^\]]+\]:?/i, "");
+    return { ...owner, multiChar: isMultiCharacterContent(message, knownEntityNames),
+      firstPersonNarrator: FIRST_PERSON.test(stripFontTags(narrative).replace(/<[^>]*>/g, "")) };
+  });
 
   // ── Phase 1: Compute paragraph focal characters ──
   const paragraphs = splitParagraphs(content);
@@ -798,41 +817,35 @@ export function processChunkFontColors(
   }> = [];
 
   for (const block of blocks) {
-    // Check existing high-confidence mapping first
-    const existing = lookupColor(chatId, block.hexColor);
-    if (existing && existing.entityId) {
-      recordColorAttribution(chatId, block.hexColor, existing.entityId, block.usageType, block.content.slice(0, 80));
-      const entityName = knownEntityNames.find((n) => entityIdByName.get(n.toLowerCase()) === existing.entityId);
-      blockResults.push({
-        block,
-        attribution: {
-          hexColor: block.hexColor,
-          entityName: entityName || null,
-          usageType: existing.usageType,
-          confidence: existing.confidence,
-        },
-        fromExisting: true,
-      });
-      continue;
-    }
-
     // Fresh attribution via linguistic analysis with paragraph context + proximity
+    const messageContext = messageContexts.findLast((owner) => owner.offset <= block.offset);
+    const currentOwner = messageContext?.name ?? null;
     const focal = focalByParagraph.get(block.paragraphIndex) || null;
     const para = paragraphs[block.paragraphIndex];
     const paraBounds = para
       ? { start: para.startOffset, end: para.startOffset + para.text.length }
       : undefined;
-    const attr = attributeColorBlock(block, currentOwner, knownEntityNames, content, focal, multiChar, paraBounds);
+    const attr = attributeColorBlock(block, currentOwner, knownEntityNames, content, focal,
+      messageContext?.multiChar ?? isMultiCharacterContent(content, knownEntityNames), paraBounds, messageContext?.firstPersonNarrator);
+
+    // Direct passage evidence takes precedence over old mappings. Historical
+    // reuse keeps the newly detected channel and cannot reinforce itself.
+    const existing = attr.confidence < 0.6 ? lookupColor(chatId, block.hexColor, block.usageType) : null;
+    const existingName = existing?.entityId
+      ? knownEntityNames.find((name) => entityIdByName.get(name.toLowerCase()) === existing.entityId) : null;
 
     blockResults.push({
       block,
       attribution: {
         hexColor: block.hexColor,
-        entityName: attr.entityName,
+        entityName: existingName ?? attr.entityName,
         usageType: block.usageType,
-        confidence: attr.confidence,
+        confidence: existingName ? Math.min(existing!.confidence, 0.7) : attr.confidence,
+        evidence: [content.slice(Math.max(paraBounds?.start ?? 0, block.offset - 250),
+          Math.min(paraBounds?.end ?? content.length, block.offset + block.fullMatch.length + 250))],
+        fromHistory: !!existingName,
       },
-      fromExisting: false,
+      fromExisting: !!existingName,
     });
   }
 
@@ -844,12 +857,14 @@ export function processChunkFontColors(
   // Handles pronoun-only paragraphs where a character's color was established
   // earlier (e.g., Kael's #4682B4 from P1 reappears in P5 with no names).
   const colorToEntity = new Map<string, { entityName: string; confidence: number }>();
+  const sharedColors = new Set<string>();
 
   // Build color→entity map from confident attributions
   for (const result of blockResults) {
-    if (!result.attribution.entityName || result.attribution.confidence < 0.6) continue;
-    const key = result.block.hexColor;
+    if (result.fromExisting || !result.attribution.entityName || result.attribution.confidence < 0.6) continue;
+    const key = `${result.block.hexColor}:${result.block.usageType}`;
     const existing = colorToEntity.get(key);
+    if (existing && existing.entityName !== result.attribution.entityName) sharedColors.add(key);
     if (!existing || result.attribution.confidence > existing.confidence) {
       colorToEntity.set(key, {
         entityName: result.attribution.entityName,
@@ -863,11 +878,13 @@ export function processChunkFontColors(
     if (result.fromExisting) continue;
     if (result.attribution.entityName && result.attribution.confidence >= 0.6) continue;
 
-    const established = colorToEntity.get(result.block.hexColor);
+    const key = `${result.block.hexColor}:${result.block.usageType}`;
+    const established = sharedColors.has(key) ? undefined : colorToEntity.get(key);
     if (established && (!result.attribution.entityName || established.confidence > result.attribution.confidence)) {
       // Color consistency confidence: slightly below the source, capped at 0.7
       result.attribution.entityName = established.entityName;
       result.attribution.confidence = Math.min(established.confidence - 0.1, 0.7);
+      result.attribution.fromHistory = false;
     }
   }
 
@@ -885,11 +902,14 @@ export function processChunkFontColors(
 
     // Find the best-attributed block in the same paragraph
     let bestNeighbor: { entityName: string; confidence: number } | null = null;
+    const neighborOwners = new Set<string>();
     for (let j = 0; j < blockResults.length; j++) {
       if (j === i) continue;
       const neighbor = blockResults[j];
       if (neighbor.block.paragraphIndex !== paragraphIdx) continue;
+      if (neighbor.fromExisting) continue;
       if (!neighbor.attribution.entityName || neighbor.attribution.confidence < 0.65) continue;
+      neighborOwners.add(neighbor.attribution.entityName);
 
       // Same-color blocks are an even stronger signal
       const sameColor = neighbor.block.hexColor === result.block.hexColor;
@@ -902,29 +922,47 @@ export function processChunkFontColors(
       }
     }
 
-    if (bestNeighbor && (!result.attribution.entityName || bestNeighbor.confidence > result.attribution.confidence)) {
+    if (neighborOwners.size === 1 && bestNeighbor && (!result.attribution.entityName || bestNeighbor.confidence > result.attribution.confidence)) {
       result.attribution.entityName = bestNeighbor.entityName;
       result.attribution.confidence = Math.min(bestNeighbor.confidence, 0.75);
     }
   }
 
   // ── Phase 4: Record and collect results ──
-  const attributions: ColorAttribution[] = [];
-  for (const result of blockResults) {
-    if (result.fromExisting) {
-      attributions.push(result.attribution);
-      continue;
+  const attributions = blockResults.map((result) => result.attribution);
+  if (persist) {
+    for (const attr of mergeColorAttributions(content, attributions, [], thoughtDelimiters)) {
+      const entityId = entityIdByName.get(attr.entityName!.toLowerCase()) ?? null;
+      recordColorAttribution(chatId, attr.hexColor, entityId, attr.usageType, attr.evidence?.[0]?.slice(0, 500) ?? null, attr.confidence);
     }
-
-    if (result.attribution.entityName) {
-      const entityId = entityIdByName.get(result.attribution.entityName.toLowerCase()) || null;
-      recordColorAttribution(chatId, result.block.hexColor, entityId, result.block.usageType, result.block.content.slice(0, 80));
-    }
-    attributions.push(result.attribution);
   }
 
-  const strippedContent = stripThoughtDelimiters(stripFontTags(content), thoughtDelimiters);
+  const strippedContent = stripThoughtDelimiters(stripFontTags(content), thoughtDelimiters).replace(/<\/?(?:i|em)\b[^>]*>/gi, "");
   return { strippedContent, attributions };
+}
+
+/** Only observed color/channel pairs can be proposed; one observation per owner
+ * and channel per chunk prevents heuristic + sidecar double reinforcement. */
+export function mergeColorAttributions(
+  content: string,
+  heuristic: ColorAttribution[],
+  sidecar: Array<{ hexColor: string; characterName: string; usageType: ColorUsageType }>,
+  thoughtDelimiters?: ThoughtDelimiters,
+  canonicalize: (name: string) => string = (name) => name,
+): ColorAttribution[] {
+  const blocks = extractColorBlocks(content, thoughtDelimiters);
+  const proposals = new Map<string, ColorAttribution>();
+  for (const attr of [...heuristic, ...sidecar.map((color): ColorAttribution => ({ ...color, entityName: color.characterName, confidence: 0.8 }))]) {
+    const hexColor = normalizeFontColor(attr.hexColor);
+    const observed = blocks.filter((block) => block.hexColor === hexColor && block.usageType === attr.usageType);
+    if (!hexColor || !attr.entityName || attr.fromHistory || attr.confidence < 0.6 || !observed.length) continue;
+    const entityName = canonicalize(attr.entityName);
+    const key = `${hexColor}:${attr.usageType}:${entityName.toLowerCase()}`;
+    const prior = proposals.get(key);
+    proposals.set(key, { hexColor, usageType: attr.usageType, entityName, confidence: Math.max(prior?.confidence ?? 0, attr.confidence),
+      evidence: [...new Set([...(prior?.evidence ?? []), ...(attr.evidence ?? []), ...observed.map((block) => block.sourceMarkup ?? block.fullMatch)])] });
+  }
+  return [...proposals.values()];
 }
 
 // ─── Prompt Injection Formatting ───────────────────────────────
@@ -953,7 +991,7 @@ const USAGE_LABELS: Record<ColorUsageType, string> = {
  *   - Thoughts: #fec987
  */
 export function formatColorMapForPrompt(chatId: string): string {
-  const mappings = getColorMap(chatId);
+  const mappings = getColorMap(chatId).sort((a, b) => b.confidence - a.confidence || b.sampleCount - a.sampleCount || a.hexColor.localeCompare(b.hexColor));
   if (mappings.length === 0) return "";
 
   // Group by entity, keeping only the highest-confidence speech/thought color.

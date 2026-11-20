@@ -186,6 +186,18 @@ export function createDesktopApiRoutes(
     commands: captureBroker.poll(context.get("desktopPrincipal").id, context.req.param("deviceId"), context.req.header("X-Lumiverse-Capture-Lease") ?? ""),
   })));
 
+  app.post("/capture/devices/:deviceId/displays", (context) => captureResponse(context, async () => {
+    captureBroker.updateDisplays(context.get("desktopPrincipal").id, context.req.param("deviceId"),
+      context.req.header("X-Lumiverse-Capture-Lease") ?? "", await readCaptureBody(context, 8192));
+    return { ok: true };
+  }));
+
+  app.post("/capture/devices/:deviceId/approval-status", (context) => captureResponse(context, async () => {
+    captureBroker.completeInspection(context.get("desktopPrincipal").id, context.req.param("deviceId"),
+      context.req.header("X-Lumiverse-Capture-Lease") ?? "", await readCaptureBody(context, 1024));
+    return { ok: true };
+  }));
+
   app.post("/capture/devices/:deviceId/responses", (context) => captureResponse(context, async () => {
     await captureBroker.receive(context.get("desktopPrincipal").id, context.req.param("deviceId"),
       context.req.header("X-Lumiverse-Capture-Lease") ?? "", (maxBytes, signal) => readCaptureBody(context, maxBytes, signal));

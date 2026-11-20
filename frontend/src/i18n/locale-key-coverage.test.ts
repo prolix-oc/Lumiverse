@@ -76,6 +76,31 @@ function assertLeafKeyParity(enPath: string, otherPath: string, label: string) {
 describe('i18n locale key coverage', () => {
   const enFiles = enNamespaceFiles()
 
+  test('favorite pinning controls are translated in every supported locale', () => {
+    for (const lng of localeDirs()) {
+      const settings = loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as {
+        display: { landing: Record<string, string> }
+      }
+      for (const key of ['pinFavorites', 'pinFavoritesHint']) {
+        expect(typeof settings.display.landing[key], `${lng} ${key}`).toBe('string')
+        expect(settings.display.landing[key].trim()).not.toBe('')
+      }
+    }
+  })
+
+  test('composer formatting controls are translated in every supported locale', () => {
+    for (const lng of localeDirs()) {
+      const settings = loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as { chat: Record<string, string> }
+      const chat = loadJson(join(LOCALES_ROOT, lng, 'chat.json')) as { input: { formatting: Record<string, string> } }
+      for (const key of ['formattingBar', 'formattingBarHint']) {
+        expect(settings.chat[key]?.trim(), `${lng} ${key}`).toBeTruthy()
+      }
+      for (const key of ['label', 'bold', 'italic', 'underline', 'quotes', 'singleQuotes', 'parentheses']) {
+        expect(chat.input.formatting[key]?.trim(), `${lng} formatting ${key}`).toBeTruthy()
+      }
+    }
+  })
+
   test('english locale has the expected namespace files', () => {
     expect(enFiles).toContain('panels.json')
     expect(enFiles).toContain('weaver.json')
@@ -104,6 +129,21 @@ describe('i18n locale key coverage', () => {
         expect(panels.drawer?.[tabId], `${lng} drawer.${tabId}`).toBeTruthy()
       }
       expect(panels.multiplayerPanel, `${lng} multiplayerPanel`).toBeTruthy()
+    }
+  })
+
+  test('long-message collapse settings have complete keys in every locale', () => {
+    const settings = (lng: string) => loadJson(join(LOCALES_ROOT, lng, 'settings.json')) as {
+      display: { longMessages: Record<string, string> }
+    }
+    const expected = leafKeyPaths(settings('en').display.longMessages).sort()
+    for (const lng of localeDirs()) {
+      const section = settings(lng).display.longMessages
+      expect(leafKeyPaths(section).sort(), `${lng} long-message settings`).toEqual(expected)
+      for (const value of Object.values(section)) {
+        expect(typeof value).toBe('string')
+        expect(value.trim()).not.toBe('')
+      }
     }
   })
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,9 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { env } from "../env";
 import { resetStBackupUploadState } from "../migration/st-backup-upload";
 
-initDatabase(":memory:");
+// Sessions are supplied by createApp; retain the real role gate without
+// starting Better Auth against this suite's deliberately minimal schema.
+mock.module("../auth/index", () => ({ auth: { api: {} } }));
 const { stMigrationRoutes } = await import("./st-migration.routes");
 
 function createApp(): Hono {

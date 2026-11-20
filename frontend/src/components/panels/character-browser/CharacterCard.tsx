@@ -35,6 +35,8 @@ function CharacterCardNative({
   onToggleFavorite,
   onToggleBatch,
 }: CharacterCardProps) {
+  'use memo'
+
   const { t } = useTranslation('panels')
   const avatarUrl = (useLargeTier ? getCharacterAvatarLargeUrl(character) : getCharacterAvatarThumbUrl(character)) ?? ''
   const tags = character.tags?.slice(0, 3) || []

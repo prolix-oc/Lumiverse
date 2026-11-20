@@ -503,11 +503,17 @@ export function hostSurfacePermission(surfaceId: string): string | null {
   return frontendAuthorityRow('host_surface', surfaceId).permission
 }
 
-export function registerHostSurfaceRenderer(id: string, renderer: HostSurfaceRenderer): void {
+export function registerHostSurfaceRenderer(id: string, renderer: HostSurfaceRenderer): () => void {
   if (!HOST_SURFACE_ROWS_BY_ID.has(id)) throw new Error(`HOST_SURFACE_UNKNOWN:${id}`)
   if (typeof renderer !== 'function') throw new Error(`HOST_SURFACE_RENDERER_INVALID:${id}`)
   if (HOST_SURFACE_RENDERERS.has(id)) throw new Error(`HOST_SURFACE_DUPLICATE_RENDERER:${id}`)
   HOST_SURFACE_RENDERERS.set(id, renderer)
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    if (HOST_SURFACE_RENDERERS.get(id) === renderer) HOST_SURFACE_RENDERERS.delete(id)
+  }
 }
 
 export function getHostSurfaceRenderer(id: string): HostSurfaceRenderer | undefined {

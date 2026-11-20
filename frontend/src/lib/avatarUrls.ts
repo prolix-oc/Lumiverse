@@ -5,6 +5,7 @@ import { personasApi } from '@/api/personas'
 type AvatarEntity = {
   id: string
   image_id?: string | null
+  avatar_crop_image_id?: string | null
   extensions?: { avatar_crop_image_id?: string | null } & Record<string, any>
   metadata?: {
     avatar_crop_image_id?: string | null
@@ -50,7 +51,7 @@ export function pickCharacterThumbImageId(
   entity: AvatarEntity
 ): string | null | undefined {
   if (!entity) return null
-  const crop = asImageId(entity.extensions?.avatar_crop_image_id)
+  const crop = asImageId(entity.extensions?.avatar_crop_image_id) ?? asImageId(entity.avatar_crop_image_id)
   if (crop) return crop
   return entity.image_id
 }

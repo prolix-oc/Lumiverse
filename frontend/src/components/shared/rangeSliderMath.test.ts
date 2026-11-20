@@ -3,9 +3,8 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestNumericRangeHandle, snapNumericRange, snapRangeValue, updateNumericRange } from './rangeSliderMath'
 import { JSDOM } from 'jsdom'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import { flushSync } from 'react-dom'
 import { LabeledDualRangeSlider } from './RangeSlider'
 
 describe('snapRangeValue', () => {
@@ -46,7 +45,7 @@ describe('numeric range helpers', () => {
 })
 
 describe('LabeledDualRangeSlider DOM interaction', () => {
-  test('renders both slider handles and commits clamped keyboard adjustments', () => {
+  test('commits keyboard, touch, and pointer adjustments using updated bounds and steps', async () => {
     const dom = new JSDOM('<!doctype html><html><body></body></html>', {
       url: 'http://localhost/',
       pretendToBeVisual: true,
@@ -60,6 +59,7 @@ describe('LabeledDualRangeSlider DOM interaction', () => {
       HTMLElement: globalObject.HTMLElement,
       Node: globalObject.Node,
       KeyboardEvent: globalObject.KeyboardEvent,
+      IS_REACT_ACT_ENVIRONMENT: globalObject.IS_REACT_ACT_ENVIRONMENT,
     }
     Object.defineProperty(domWindow, 'event', { configurable: true, value: undefined, writable: true })
     Object.assign(globalThis, {
@@ -69,20 +69,20 @@ describe('LabeledDualRangeSlider DOM interaction', () => {
       HTMLElement: domWindow.HTMLElement,
       Node: domWindow.Node,
       KeyboardEvent: domWindow.KeyboardEvent,
+      IS_REACT_ACT_ENVIRONMENT: true,
     })
 
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     let committed: [number, number] = [20, 80]
+    let bounds = { min: 0, max: 100, step: 5 }
     const render = () => {
-      flushSync(() => {
+      act(() => {
         root.render(
           createElement(LabeledDualRangeSlider, {
             label: 'Temperature Window',
-            min: 0,
-            max: 100,
-            step: 5,
+            ...bounds,
             value: committed,
             formatValue: ([start, end]) => `${start}% – ${end}%`,
             startLabel: 'Window start',
@@ -102,25 +102,61 @@ describe('LabeledDualRangeSlider DOM interaction', () => {
       expect(sliders.length).toBe(2)
       expect(host.textContent).toContain('20% – 80%')
 
-      flushSync(() => {
+      act(() => {
         sliders[0]!.dispatchEvent(new domWindow.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
       })
       expect(committed).toEqual([25, 80])
 
-      flushSync(() => {
+      act(() => {
         sliders[1]!.dispatchEvent(new domWindow.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
       })
       expect(committed).toEqual([25, 75])
 
-      flushSync(() => {
+      act(() => {
         sliders[0]!.dispatchEvent(new domWindow.KeyboardEvent('keydown', { key: 'End', bubbles: true }))
       })
       expect(committed).toEqual([75, 75])
       expect(host.textContent).toContain('75% – 75%')
+
+      bounds = { min: 10, max: 210, step: 20 }
+      committed = [30, 170]
+      render()
+      const track = sliders[0]!.parentElement!.parentElement!
+      track.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect
+      track.setPointerCapture = () => {}
+      track.releasePointerCapture = () => {}
+      const touch = (type: string, clientX: number) => {
+        const event = new domWindow.Event(type, { bubbles: true, cancelable: true })
+        Object.assign(event, {
+          touches: type === 'touchend' ? [] : [{ clientX, clientY: 0 }],
+          changedTouches: [{ clientX, clientY: 0 }],
+        })
+        act(() => { track.dispatchEvent(event) })
+      }
+      touch('touchstart', 10)
+      touch('touchmove', 23)
+      expect(host.textContent).toContain('50% – 170%')
+      touch('touchend', 23)
+      expect(committed).toEqual([50, 170])
+
+      committed = [70, 190]
+      render()
+      expect(host.textContent).toContain('70% – 190%')
+      const pointer = async (type: string, clientX: number) => {
+        const event = new domWindow.MouseEvent(type, { clientX, bubbles: true, cancelable: true })
+        Object.assign(event, { pointerId: 1, pointerType: 'mouse' })
+        await act(async () => { track.dispatchEvent(event) })
+      }
+      await pointer('pointerdown', 40)
+      await pointer('pointermove', 65)
+      expect(host.textContent).toContain('150% – 190%')
+      await pointer('pointerup', 65)
+      expect(committed).toEqual([150, 190])
     } finally {
-      flushSync(() => root.unmount())
+      act(() => root.unmount())
       host.remove()
       Object.assign(globalObject, saved)
+      dom.window.close()
     }
   })
 })

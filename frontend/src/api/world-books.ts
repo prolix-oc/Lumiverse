@@ -180,7 +180,7 @@ export const worldBooksApi = {
   async downloadWorldBook(bookId: string, bookName: string, format: WorldBookExportFormat = 'lumiverse') {
     const data = await worldBooksApi.export(bookId, format)
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    triggerBlobDownload(blob, `${sanitizeDownloadName(bookName)}.json`)
+    await triggerBlobDownload(blob, `${sanitizeDownloadName(bookName)}.json`)
   },
 
   importJson(payload: Record<string, any>) {

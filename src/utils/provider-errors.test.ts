@@ -81,6 +81,11 @@ describe("parseProviderErrorBody", () => {
     expect(parsed.detail).toBe("Invalid sub-type.");
   });
 
+  test("reads a message nested in a detail object (TypeSafe)", () => {
+    const parsed = parseProviderErrorBody(JSON.stringify({ detail: { error_type: "api_usage_error", message: "Invalid image dimensions." } }));
+    expect(parsed.detail).toBe("Invalid image dimensions.");
+  });
+
   test("returns empty on empty input", () => {
     expect(parseProviderErrorBody("")).toEqual({});
     expect(parseProviderErrorBody("   ")).toEqual({});

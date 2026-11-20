@@ -58,22 +58,14 @@ export default function McpServerSettings() {
   }, [setServers, setStatus])
 
   const handleCreate = useCallback(async (input: CreateMcpServerInput) => {
-    try {
-      const server = await mcpServersApi.create(input)
-      addServer(server)
-      setCreating(false)
-    } catch (err) {
-      console.error('[McpServerSettings] Create failed:', err)
-    }
+    const server = await mcpServersApi.create(input)
+    addServer(server)
+    setCreating(false)
   }, [addServer])
 
   const handleUpdate = useCallback(async (id: string, input: Partial<CreateMcpServerInput>) => {
-    try {
-      const server = await mcpServersApi.update(id, input)
-      updateServer(id, server)
-    } catch (err) {
-      console.error('[McpServerSettings] Update failed:', err)
-    }
+    const server = await mcpServersApi.update(id, input)
+    updateServer(id, server)
   }, [updateServer])
 
   const confirmDelete = useCallback(async () => {

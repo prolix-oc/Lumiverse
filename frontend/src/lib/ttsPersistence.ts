@@ -21,6 +21,8 @@ export interface FreshAttachmentMarker {
   autoPlay: boolean
   /** Wall time (ms) when the marker was set; used for staleness pruning. */
   markedAt: number
+  /** Engine session when the audio was attached; a later stop cancels pending auto-play. */
+  playbackSession?: number
 }
 
 const EXPIRATION_MS = 10_000
@@ -48,9 +50,9 @@ const recentlyConsumed = new Map<string, ConsumedEntry>()
 
 export function markFreshlyAttached(
   messageId: string,
-  opts: { autoPlay: boolean },
+  opts: { autoPlay: boolean; playbackSession?: number },
 ): void {
-  markers.set(messageId, { autoPlay: opts.autoPlay, markedAt: Date.now() })
+  markers.set(messageId, { ...opts, markedAt: Date.now() })
   // Clear any stale "recently consumed" entry for this id so a brand-new
   // marker isn't shadowed by the previous one's reconsume window.
   recentlyConsumed.delete(messageId)

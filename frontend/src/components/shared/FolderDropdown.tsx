@@ -9,11 +9,13 @@ interface FolderDropdownProps {
   folders: string[]
   selectedFolder: string
   onSelect: (folder: string) => void
-  onCreateFolder: (name: string) => void
+  onCreateFolder: (name: string) => void | boolean
   onRenameFolder?: (oldName: string, newName: string) => void | Promise<void>
   onDeleteFolder?: (name: string) => void
   placeholder?: string
+  noneLabel?: string
   className?: string
+  disabled?: boolean
 }
 
 export default function FolderDropdown({
@@ -24,9 +26,12 @@ export default function FolderDropdown({
   onRenameFolder,
   onDeleteFolder,
   placeholder,
+  noneLabel,
   className,
+  disabled = false,
 }: FolderDropdownProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'folderDropdown' })
+  const { t: tc } = useTranslation('common')
   const resolvedPlaceholder = placeholder ?? t('noFolder')
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -73,7 +78,7 @@ export default function FolderDropdown({
     if (!trimmed) return
     // Reserved: matches the "Uncategorized" bucket label used by grouped selectors.
     if (trimmed.toLowerCase() === 'uncategorized') return
-    onCreateFolder(trimmed)
+    if (onCreateFolder(trimmed) === false) return
     onSelect(trimmed)
     setCreating(false)
     setNewName('')
@@ -110,6 +115,7 @@ export default function FolderDropdown({
       <button
         type="button"
         className={clsx(styles.trigger, open && styles.triggerOpen)}
+        disabled={disabled}
         onClick={() => setOpen(!open)}
       >
         <FolderOpen size={12} />
@@ -150,7 +156,7 @@ export default function FolderDropdown({
               setSearch('')
             }}
           >
-            {t('none')}
+            {noneLabel ?? t('none')}
           </button>
 
           {filtered.map((folder) => (
@@ -271,6 +277,7 @@ export default function FolderDropdown({
                 type="button"
                 className={styles.createBtn}
                 onClick={handleConfirmCreate}
+                aria-label={t('createNew')}
                 disabled={!newName.trim() || newName.trim().toLowerCase() === 'uncategorized'}
               >
                 <Check size={12} />
@@ -278,6 +285,7 @@ export default function FolderDropdown({
               <button
                 type="button"
                 className={styles.createBtn}
+                aria-label={tc('actions.cancel')}
                 onClick={() => {
                   setCreating(false)
                   setNewName('')

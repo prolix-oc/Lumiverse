@@ -93,6 +93,9 @@ export default function VirtualGrid<T>({
         width: '100%',
         boxSizing: 'border-box',
         display: 'grid',
+        // TanStack owns scroll correction. Blink must not choose a recycled
+        // card as a second scroll anchor when the visible row range changes.
+        overflowAnchor: 'none',
         gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
         alignItems: 'stretch',
         columnGap: gap,

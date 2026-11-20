@@ -1,19 +1,24 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Hono } from "hono";
 import { join } from "node:path";
 
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { initMacros } from "../macros";
+import { macrosRoutes } from "../routes/macros.routes";
 import type { PromptBlock } from "../types/preset";
 import { abortChatBackground } from "./chat-background.service";
 import { createCharacter } from "./characters.service";
-import { createChat, createMessage } from "./chats.service";
+import { createChat, createMessage, updateChat } from "./chats.service";
+import { refreshChatMemoryCache } from "./chat-memory-cache.service";
 import { createDatabank } from "./databank";
 import { clearAllDatabankCache, setCachedDatabankResult } from "./databank/retrieval-cache.service";
-import { clearCortexResultCaches, primeCortexCache, primeLinkedCortexCache, type CortexResult } from "./memory-cortex";
+import { clearCortexResultCaches, getCortexCacheSnapshot, getCachedCortexResult, getCachedLinkedCortexResult, primeCortexCache, primeLinkedCortexCache, putCortexConfig, type CortexResult } from "./memory-cortex";
+import { DEFAULT_CORTEX_CONFIG } from "./memory-cortex/config";
 import { recordColorAttribution } from "./memory-cortex/font-attribution";
 import { createPreset } from "./presets.service";
-import { assemblePrompt } from "./prompt-assembly.service";
+import { assemblePrompt, normalizePromptBlockText } from "./prompt-assembly.service";
 import { putSetting } from "./settings.service";
+import * as embeddingsSvc from "./embeddings.service";
 
 const userId = "memory-macro-user";
 const liveContent = "LIVE_USER_MESSAGE";
@@ -64,7 +69,13 @@ function cortexResult(overrides: Partial<CortexResult> = {}): CortexResult {
       mentionCount: 1,
       topFacts: ["ENTITY_FACT"],
       emotionalProfile: {},
-      relationships: [],
+      relationships: [{
+        targetName: "Mira",
+        type: "ally",
+        label: "RELATIONSHIP_LABEL",
+        strength: 0.8,
+        sentiment: 0.8,
+      }],
     }],
     activeRelationships: [{
       sourceName: "Kael",
@@ -88,7 +99,7 @@ function cortexResult(overrides: Partial<CortexResult> = {}): CortexResult {
 }
 
 function enableCortex(result = cortexResult(), useChatMemoryFormatting = false): void {
-  putSetting(userId, "memoryCortexConfig", { enabled: true, formatterMode: "shadow", useChatMemoryFormatting });
+  putCortexConfig(userId, { enabled: true, formatterMode: "shadow", useChatMemoryFormatting });
   primeCortexCache(chat.id, result, [message.id]);
 }
 
@@ -134,10 +145,67 @@ async function assemble(blocks: PromptBlock[] = []) {
   });
 }
 
+const memoryProbe = "BEGIN\n{{memoriesActive}}\n{{cortexActive}}\n{{memoriesCount}}\n{{memories}}\nRAW:{{memoriesRaw}}\nENTITY:{{entities}}\nEND";
+
+async function expectPreviewMatchesAssembly(template = memoryProbe) {
+  const previewBlock = block(template);
+  const assembled = await assemble([previewBlock]);
+  const expected = assembled.breakdown.find(({ blockId }) => blockId === previewBlock.id)?.content;
+  expect(expected).toBeDefined();
+
+  const app = new Hono();
+  app.use("*", async (c, next) => { c.set("userId", userId); await next(); });
+  app.route("/macros", macrosRoutes);
+  const context = {
+    chat_id: chat.id,
+    prompt_blocks: [previewBlock],
+  };
+  const single = await app.request("/macros/resolve", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...context, template, prompt_block_id: previewBlock.id, trim: true }),
+  });
+  expect(single.status).toBe(200);
+  expect((await single.json()).text).toBe(expected);
+
+  const batch = await app.request("/macros/resolve-batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...context, templates: { memory: template }, prompt_block_ids: { memory: previewBlock.id } }),
+  });
+  expect(batch.status).toBe(200);
+  // Batch resolution preserves whitespace; assembly normalizes each block.
+  expect(normalizePromptBlockText((await batch.json()).resolved.memory)).toBe(expected!);
+  return expected!;
+}
+
+async function enableBasicRecall() {
+  putSetting(userId, "embeddingConfig", { enabled: true, vectorize_chat_messages: true });
+  putSetting(userId, "chatMemorySettings", {
+    quickMode: null,
+    exclusionWindow: 5,
+    memoryHeaderTemplate: "RECALL[{{memories}}]",
+    chunkTemplate: "CHUNK[{{content}}]",
+  });
+  const insertMessage = getDb().query(
+    "INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, ?, 'User', ?)",
+  );
+  for (let i = 0; i < 7; i++) {
+    insertMessage.run(crypto.randomUUID(), chat.id, i + 1, i % 2 === 0 ? 1 : 0, `Recent turn ${i}`);
+  }
+  getDb().query(`INSERT INTO chat_chunks
+    (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 4, 1, 0, 0)`)
+    .run("basic-memory", chat.id, message.id, message.id, JSON.stringify([message.id]), "BASIC_MEMORY");
+  // Pending vectors exercise local SQLite recall without an embedding request.
+  await refreshChatMemoryCache(userId, chat.id);
+}
+
 beforeEach(async () => {
   const database = initDatabase(":memory:");
   database.run("PRAGMA foreign_keys = OFF");
   database.run(await Bun.file(join(import.meta.dir, "../db/baseline.sql")).text());
+  putCortexConfig(userId, DEFAULT_CORTEX_CONFIG);
   initMacros();
   originalWorkerState = workerState.__LUMIVERSE_ASSEMBLY_WORKER;
   workerState.__LUMIVERSE_ASSEMBLY_WORKER = true;
@@ -156,6 +224,23 @@ afterEach(async () => {
 });
 
 describe("memory macro placement", () => {
+  test("transferred Cortex results retain expiry, chat identity and exclusions", () => {
+    enableCortex();
+    primeLinkedCortexCache(chat.id, { vaults: [], interlinks: [] });
+    const snapshot = structuredClone(getCortexCacheSnapshot(chat.id));
+    expect(getCachedCortexResult(chat.id, [message.id], snapshot)).not.toBeNull();
+    expect(getCachedCortexResult(chat.id, ["another-target"], snapshot)).toBeNull();
+    expect(getCachedCortexResult("another-chat", [], snapshot)).toBeNull();
+    expect(getCachedLinkedCortexResult("another-chat", snapshot)).toBeNull();
+    snapshot.local!.queriedAt = Date.now() - 6 * 60_000;
+    snapshot.linked!.queriedAt = Date.now() - 6 * 60_000;
+    expect(getCachedCortexResult(chat.id, [], snapshot)).toBeNull();
+    expect(getCachedLinkedCortexResult(chat.id, snapshot)).toBeNull();
+    // Rejecting a transferred snapshot must not mutate the source caches.
+    expect(getCachedCortexResult(chat.id)).not.toBeNull();
+    expect(getCachedLinkedCortexResult(chat.id)).not.toBeNull();
+  });
+
   test("falls back before history when Cortex macros are absent, including with macro-only chat memory", async () => {
     enableCortex();
     const result = await assemble();
@@ -191,6 +276,52 @@ describe("memory macro placement", () => {
     expect(content).toContain("BEGIN");
     expect(result.memoryStats?.injectionMethod).toBe("macro");
     expect(result.breakdown.filter(({ type, excludeFromTotal }) => type === "long_term_memory" && !excludeFromTotal)).toHaveLength(0);
+  });
+
+  test.each(["{{entities}}", "{{entities::1}}"])("%s includes entity details without relationship blurbs", async (macro) => {
+    enableCortex();
+    const result = await assemble([block(macro)]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("[KNOWN ENTITIES]");
+    expect(content).toContain("Kael (character)");
+    expect(content).toContain("A traveler");
+    expect(content).toContain("ENTITY_FACT");
+    expect(content).not.toContain("Relations:");
+    expect(content).not.toContain("RELATIONSHIP_LABEL");
+    expect(content).not.toContain("Mira");
+  });
+
+  test("relationships includes edges without entity descriptions or facts", async () => {
+    enableCortex();
+    const result = await assemble([block("{{relationships}}")]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("[ACTIVE RELATIONSHIPS]");
+    expect(content).toContain("Kael -> Mira: ally (RELATIONSHIP_LABEL) [positive]");
+    expect(content).not.toContain("[KNOWN ENTITIES]");
+    expect(content).not.toContain("A traveler");
+    expect(content).not.toContain("ENTITY_FACT");
+  });
+
+  test("entities count limits snapshots without adding relationships", async () => {
+    const cortex = cortexResult();
+    cortex.entityContext.push({ ...cortex.entityContext[0]!, id: "entity-2", name: "Tovin" });
+    enableCortex(cortex);
+    const result = await assemble([block("{{entities::1}}")]);
+    const content = result.messages.map(({ content }) => content).join("\n");
+    expect(content).toContain("Kael (character)");
+    expect(content).not.toContain("Tovin");
+    expect(content).not.toContain("RELATIONSHIP_LABEL");
+  });
+
+  test("entities and relationships stay separate in assembly and macro previews", async () => {
+    enableCortex();
+    const content = await expectPreviewMatchesAssembly("{{entities}}\nRELATIONSHIP_SECTION\n{{relationships}}");
+    const [entitySection, relationshipSection] = content.split("RELATIONSHIP_SECTION");
+    expect(entitySection).toContain("ENTITY_FACT");
+    expect(entitySection).not.toContain("RELATIONSHIP_LABEL");
+    expect(relationshipSection).toContain("RELATIONSHIP_LABEL");
+    expect(relationshipSection).not.toContain("ENTITY_FACT");
+    expect(content.match(/RELATIONSHIP_LABEL/g)).toHaveLength(1);
   });
 
   test.each([
@@ -318,5 +449,246 @@ describe("memory macro placement", () => {
     enableCortex(cortexResult({ memories: [], entityContext: [], activeRelationships: [], arcContext: null }));
     const result = await assemble();
     expect(result.messages.map(({ content }) => content)).toEqual([liveContent]);
+  });
+});
+
+describe("basic recall regeneration", () => {
+  async function regenerate(excludeMessageId?: string) {
+    const preset = createPreset(userId, {
+      name: "Regeneration recall",
+      provider: "openai",
+      prompt_order: [block("{{memories}}"), block("", { marker: "chat_history" })],
+    });
+    const result = await assemblePrompt({ userId, chatId: chat.id, presetOverride: preset,
+      generationType: "regenerate", excludeMessageId, skipPromptRegex: true, macroCommit: false });
+    return { result, content: result.messages.map(({ content }) => content).join("\n") };
+  }
+
+  test.each([false, true])("retains old recall when the omitted target is blank: %s", async (blank) => {
+    await enableBasicRecall();
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    getDb().query("UPDATE messages SET is_user = 0, content = ? WHERE id = ?").run(blank ? "" : "Reply", target.id);
+    const { result, content } = await regenerate(target.id);
+    expect(content).toContain("BASIC_MEMORY");
+    expect(result.memoryStats?.chunksRetrieved).toBe(1);
+  });
+
+  test("rejects a cache when history was actually deleted", async () => {
+    await enableBasicRecall();
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    getDb().query("DELETE FROM messages WHERE id = ?").run(target.id);
+    const { content } = await regenerate(target.id);
+    expect(content).not.toContain("BASIC_MEMORY");
+  });
+
+  test("one omitted target cannot mask an additional history deletion", async () => {
+    await enableBasicRecall();
+    const rows = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 2").all(chat.id);
+    getDb().query("DELETE FROM messages WHERE id = ?").run(rows[1].id);
+    const { content } = await regenerate(rows[0].id);
+    expect(content).not.toContain("BASIC_MEMORY");
+  });
+
+  test("filters a cached chunk that overlaps the newly expanded live tail", async () => {
+    await enableBasicRecall();
+    // Index 2 is outside the last five messages normally, but moves into that
+    // window when regeneration omits index 7. Its cached chunk must then go.
+    const boundary = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? AND index_in_chat = 2").get(chat.id)!;
+    getDb().query(`INSERT INTO chat_chunks
+      (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at)
+      VALUES ('boundary-chunk', ?, ?, ?, ?, 'BOUNDARY_MEMORY', 4, 1, 0, 0)`)
+      .run(chat.id, boundary.id, boundary.id, JSON.stringify([boundary.id]));
+    await refreshChatMemoryCache(userId, chat.id);
+    const normal = await assemble([block("{{memories}}")]);
+    expect(normal.messages.map(({ content }) => content).join("\n")).toContain("BOUNDARY_MEMORY");
+    const target = getDb().query<{ id: string }, [string]>("SELECT id FROM messages WHERE chat_id = ? ORDER BY index_in_chat DESC LIMIT 1").get(chat.id)!;
+    const { content } = await regenerate(target.id);
+    expect(content).toContain("BASIC_MEMORY");
+    expect(content).not.toContain("BOUNDARY_MEMORY");
+  });
+});
+
+describe("memory macro previews", () => {
+  test("Cortex uses measured distance for the cutoff, independently of rank, in previews and assembly", async () => {
+    const base = cortexResult().memories[0];
+    const memories = [
+      { ...base, content: "CLOSE_DISTANCE_LOW_RANK", vectorDistance: 0.35, finalScore: 0.2 },
+      { ...base, sourceId: "far", content: "FAR_DISTANCE_HIGH_RANK", vectorDistance: 0.61, finalScore: 0.99 },
+      { ...base, sourceId: "unknown", content: "UNMEASURED_CORTEX_HIT" },
+    ];
+    enableCortex(cortexResult({ memories }));
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.6 });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toContain("CLOSE_DISTANCE_LOW_RANK");
+    expect(text).not.toContain("FAR_DISTANCE_HIGH_RANK");
+    expect(text).not.toContain("UNMEASURED_CORTEX_HIT");
+    // Filtering a prompt must not mutate the cached snapshot. Tightening and
+    // relaxing the cutoff can safely reuse its original measured results.
+    expect(getCachedCortexResult(chat.id)?.memories).toHaveLength(3);
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0.3 });
+    expect(await expectPreviewMatchesAssembly()).not.toContain("CLOSE_DISTANCE_LOW_RANK");
+    putSetting(userId, "chatMemorySettings", { similarityThreshold: 0 });
+    expect(await expectPreviewMatchesAssembly()).toContain("FAR_DISTANCE_HIGH_RANK");
+  });
+
+  test("an active distance cutoff excludes unmeasured recency fallback", async () => {
+    await enableBasicRecall();
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0.6 });
+    await refreshChatMemoryCache(userId, chat.id);
+    expect(await expectPreviewMatchesAssembly()).not.toContain("BASIC_MEMORY");
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0 });
+    await refreshChatMemoryCache(userId, chat.id);
+    expect(await expectPreviewMatchesAssembly()).toContain("BASIC_MEMORY");
+  });
+
+  test.each([0.35, 0.61])("partially indexed chats still search measured memories at distance %s", async (distance) => {
+    await enableBasicRecall();
+    getDb().query("UPDATE chat_chunks SET vectorized_at = 1 WHERE id = 'basic-memory'").run();
+    getDb().query(`INSERT INTO chat_chunks (id, chat_id, start_message_id, end_message_id, message_ids, content,
+      token_count, message_count, created_at, updated_at)
+      VALUES ('pending', ?, 'unused', 'unused', '["unused"]', 'UNMEASURED_PENDING', 4, 1, 0, 0)`).run(chat.id);
+    putSetting(userId, "chatMemorySettings", { quickMode: null, exclusionWindow: 5, similarityThreshold: 0.6 });
+    const embedSpy = spyOn(embeddingsSvc, "embedQuery").mockResolvedValue([1, 0]);
+    const searchSpy = spyOn(embeddingsSvc, "searchChatChunks").mockResolvedValue([
+      { chunk_id: "basic-memory", content: "BASIC_MEMORY", score: distance, metadata: { messageIds: [message.id] } },
+    ] as any);
+    try {
+      await refreshChatMemoryCache(userId, chat.id);
+      const text = await expectPreviewMatchesAssembly();
+      expect(searchSpy).toHaveBeenCalled();
+      expect(text.includes("BASIC_MEMORY")).toBe(distance <= 0.6);
+      expect(text).not.toContain("UNMEASURED_PENDING");
+    } finally {
+      embedSpy.mockRestore(); searchSpy.mockRestore();
+    }
+  });
+
+  test("a new turn retains usable Cortex context in previews and the assembled prompt", async () => {
+    enableCortex(cortexResult({ memories: [] }));
+    createMessage(chat.id, { is_user: false, name: "Character", content: "A reply" }, userId);
+    createMessage(chat.id, { is_user: true, name: "User", content: "And what happened next?" }, userId);
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("ENTITY_FACT");
+    const probe = await assemble([block("{{cortexActive}}")]);
+    expect(probe.breakdown.find(({ type }) => type === "block")?.content).toBe("yes");
+    expect(probe.messages.map(({ content }) => content).join("\n")).toContain("ENTITY_FACT");
+  });
+
+  test("saved Cortex graph data is available on a cold cache without a vector query", async () => {
+    putCortexConfig(userId, { enabled: true });
+    getDb().query("INSERT INTO memory_entities (id, chat_id, name, facts, created_at, updated_at) VALUES (?, ?, 'Kael', ?, 0, 0)")
+      .run("saved-entity", chat.id, JSON.stringify(["PERSISTED_FACT"]));
+    createMessage(chat.id, { is_user: true, name: "User", content: "What does Kael remember?" }, userId);
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("PERSISTED_FACT");
+  });
+
+  test.each(["global", "chat", "injection"])("cold graph reads respect the %s opt-out", async (scope) => {
+    putCortexConfig(userId, { enabled: true });
+    getDb().query("INSERT INTO memory_entities (id, chat_id, name, facts, created_at, updated_at) VALUES (?, ?, 'Kael', ?, 0, 0)")
+      .run("saved-entity", chat.id, JSON.stringify(["PERSISTED_FACT"]));
+    createMessage(chat.id, { is_user: true, name: "User", content: "What does Kael remember?" }, userId);
+    if (scope === "global") putCortexConfig(userId, { enabled: false });
+    if (scope === "chat") updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: false } } });
+    if (scope === "injection") putCortexConfig(userId, { retrieval: {
+      ...DEFAULT_CORTEX_CONFIG.retrieval, entityContextInjection: false, relationshipInjection: false, arcInjection: false,
+    } });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nno\nno\n0\n");
+    expect(text).not.toContain("PERSISTED_FACT");
+  });
+
+  test("single and batch previews include basic recall with Cortex off", async () => {
+    await enableBasicRecall();
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nno\n1\n");
+    expect(text).toContain("RECALL[CHUNK[BASIC_MEMORY]]");
+    expect(text).toContain("RAW:CHUNK[BASIC_MEMORY]");
+  });
+
+  test.each([false, true])("previews include warm Cortex recall with chat-memory formatting %s", async (useChatMemoryFormatting) => {
+    enableCortex(cortexResult(), useChatMemoryFormatting);
+    putSetting(userId, "chatMemorySettings", {
+      memoryHeaderTemplate: "RECALL[{{memories}}]",
+      chunkTemplate: "CHUNK[{{content}}]",
+    });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n1\n");
+    expect(text).toContain("CORTEX_MEMORY");
+    expect(text).toContain("ENTITY_FACT");
+    if (useChatMemoryFormatting) expect(text).toContain("RECALL[CHUNK[CORTEX_MEMORY]]");
+  });
+
+  test.each([false, true])("previews include graph-only Cortex context with chat-memory formatting %s", async (useChatMemoryFormatting) => {
+    enableCortex(cortexResult({ memories: [] }), useChatMemoryFormatting);
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("ENTITY_FACT");
+  });
+
+  test("previews include linked memory without local recall", async () => {
+    enableCortex(cortexResult({ memories: [], entityContext: [], activeRelationships: [], arcContext: null }));
+    primeLinkedCortexCache(chat.id, {
+      vaults: [{ vaultId: "vault-1", vaultName: "Linked", entities: cortexResult().entityContext, relations: [] }],
+      interlinks: [],
+    });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nno\n0\n");
+    expect(text).toContain("ENTITY_FACT");
+  });
+
+  test.each([false, true])("previews include color-only Cortex context with chat-memory formatting %s", async (useChatMemoryFormatting) => {
+    enableCortex(cortexResult({ memories: [], entityContext: [], activeRelationships: [], arcContext: null }), useChatMemoryFormatting);
+    enableCharacterColors();
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n0\n");
+    expect(text).toContain("#abcdef");
+  });
+
+  test("previews honor disabled memory injection while preserving standalone Cortex macros", async () => {
+    enableCortex();
+    putSetting(userId, "chatMemorySettings", { injectionStrategy: "disabled" });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nno\nyes\n1\n\nRAW:\nENTITY:");
+    expect(text).not.toContain("CORTEX_MEMORY");
+    expect(text).toContain("ENTITY_FACT");
+  });
+
+  test("previews honor per-chat basic-memory opt-out", async () => {
+    await enableBasicRecall();
+    updateChat(userId, chat.id, { metadata: { memory_settings: { enabled: false } } });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nno\nno\n0\n");
+    expect(text).not.toContain("BASIC_MEMORY");
+  });
+
+  test("previews ignore warm Cortex results when the chat opts out", async () => {
+    await enableBasicRecall();
+    enableCortex();
+    updateChat(userId, chat.id, { metadata: { cortex_settings: { enabled: false } } });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nno\n1\n");
+    expect(text).toContain("BASIC_MEMORY");
+    expect(text).not.toContain("CORTEX_MEMORY");
+  });
+
+  test("previews omit unverified cached chunks while retaining graph context and basic recall", async () => {
+    await enableBasicRecall();
+    enableCortex();
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nyes\n1\n");
+    expect(text).toContain("BASIC_MEMORY");
+    expect(text).toContain("ENTITY_FACT");
+    expect(text).not.toContain("CORTEX_MEMORY");
+  });
+
+  test("cold Cortex previews use available basic recall", async () => {
+    await enableBasicRecall();
+    putCortexConfig(userId, { enabled: true });
+    const text = await expectPreviewMatchesAssembly();
+    expect(text).toStartWith("BEGIN\nyes\nno\n1\n");
+    expect(text).toContain("BASIC_MEMORY");
   });
 });

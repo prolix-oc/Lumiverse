@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "frontend-sso-popup",
-  "description": "Allows a native frontend sign-in popup to close itself after authentication.",
+  "description": "Allows a native frontend authorization popup to close only itself, including extension and connector callbacks.",
   "local": false,
   "windows": ["frontend-popup-*"],
   "remote": {

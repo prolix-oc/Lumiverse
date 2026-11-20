@@ -6,10 +6,13 @@ import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { refreshAppDataAfterImport } from '@/hooks/useAppInit'
 import { flushSettingsNow } from '@/store/slices/settings'
+import { useStore } from '@/store'
+import { pendingImportJob, trackImportJob } from '@/lib/import-recovery'
 import {
   userDataApi,
   type DecryptionTicket,
   type ImportJobStatus,
+  type ImportJobProgress,
   type TicketSubmissionResponse,
 } from '@/api/user-data'
 import styles from './DataPortability.module.css'
@@ -21,12 +24,8 @@ interface ExportProgress {
   total?: number
 }
 
-interface ImportProgress {
+interface ImportProgress extends ImportJobProgress {
   jobId: string
-  phase: string
-  table?: string
-  processed?: number
-  total?: number
 }
 
 type ImportSummary = ImportJobStatus['summary']
@@ -38,6 +37,7 @@ export default function DataPortability() {
   // ── Export state ──────────────────────────────────────────────────────
   const [includeVectors, setIncludeVectors] = useState(true)
   const [includeSecrets, setIncludeSecrets] = useState(false)
+  const [includeExtensionData, setIncludeExtensionData] = useState(false)
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   const [exportWarnings, setExportWarnings] = useState<string[]>([])
@@ -46,13 +46,21 @@ export default function DataPortability() {
 
   // ── Import state ──────────────────────────────────────────────────────
   const [file, setFile] = useState<File | null>(null)
-  const [importing, setImporting] = useState(false)
+  const [importing, setImporting] = useState(() => {
+    const userId = useStore.getState().user?.id
+    return Boolean(userId && pendingImportJob(userId))
+  })
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
   const [importUploadPct, setImportUploadPct] = useState<number | null>(null)
-  const [importJobId, setImportJobId] = useState<string | null>(null)
+  const [importJobId, setImportJobId] = useState<string | null>(() => {
+    const userId = useStore.getState().user?.id
+    return userId ? pendingImportJob(userId) : null
+  })
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null)
   const [importFileSummary, setImportFileSummary] = useState<FileSummary | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  const [interruptedJobId, setInterruptedJobId] = useState<string | null>(null)
+  const importRequestStarted = useRef(false)
   const [importSuccess, setImportSuccess] = useState<string | null>(null)
   // Secret-ticket UX state
   const [awaitingTicket, setAwaitingTicket] = useState<{
@@ -61,6 +69,20 @@ export default function DataPortability() {
   } | null>(null)
   const [ticketSubmitting, setTicketSubmitting] = useState(false)
   const [ticketReuseWarning, setTicketReuseWarning] = useState<TicketSubmissionResponse | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const userId = useStore.getState().user?.id
+    if (!userId) return
+    void userDataApi.getImportJobs().then(({ jobs }) => {
+      if (cancelled || importRequestStarted.current || !jobs.length) return
+      const job = jobs[0]
+      trackImportJob(userId, job.jobId)
+      setImportJobId(job.jobId)
+      setImporting(true)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   // ── WebSocket wiring ──────────────────────────────────────────────────
   useEffect(() => {
@@ -136,6 +158,14 @@ export default function DataPortability() {
       try {
         const status = await userDataApi.getImportStatus(importJobId)
         if (cancelled) return
+        if (status.progress) setImportProgress({ ...status.progress, jobId: status.jobId })
+        if (status.status === 'interrupted') {
+          setInterruptedJobId(status.jobId)
+          setImporting(false)
+          setAwaitingTicket(null)
+          setImportError(t('dataPortability.importInterrupted'))
+          return
+        }
         if (status.status === 'complete') {
           setImportSummary(status.summary)
           setImportFileSummary(status.fileSummary)
@@ -181,14 +211,14 @@ export default function DataPortability() {
 
     if (!includeSecrets) {
       // Single-step path: browser handles a streaming GET as a native download.
-      a.href = userDataApi.exportUrl(includeVectors)
+      a.href = userDataApi.exportUrl(includeVectors, includeExtensionData)
       a.click()
       return
     }
 
     // Two-step path: prepare → fetch ticket + URL → trigger ticket save → kick the archive download.
     try {
-      const resp = await userDataApi.prepareSecretsExport(includeVectors)
+      const resp = await userDataApi.prepareSecretsExport(includeVectors, includeExtensionData)
       if (resp.unreachableSecrets?.length) {
         setExportWarnings(resp.unreachableSecrets)
       }
@@ -219,6 +249,8 @@ export default function DataPortability() {
   // ── Import action ─────────────────────────────────────────────────────
   const handleImport = async () => {
     if (!file) return
+    importRequestStarted.current = true
+    setInterruptedJobId(null)
     setImportError(null)
     setImportSuccess(null)
     setImportSummary(null)
@@ -229,6 +261,7 @@ export default function DataPortability() {
     setAwaitingTicket(null)
     setImporting(true)
     try {
+      const userId = useStore.getState().user?.id
       await flushSettingsNow()
       const { jobId } = await userDataApi.startImport(file, (pct) => {
         setImportUploadPct(pct)
@@ -241,11 +274,36 @@ export default function DataPortability() {
         }
       })
       setImportJobId(jobId)
+      // The start event can arrive before the upload response or be missed
+      // during a WebSocket reconnect. Leave the upload label immediately.
+      setImportProgress((previous) => previous?.phase === 'verifying' || !previous
+        ? { jobId, phase: 'start' }
+        : previous)
+      if (userId) trackImportJob(userId, jobId)
       setImportUploadPct(null)
     } catch (err: any) {
       setImporting(false)
       setImportUploadPct(null)
       setImportError(err?.message || t('dataPortability.uploadFailed'))
+    }
+  }
+
+  const handleResumeImport = async () => {
+    if (!interruptedJobId) return
+    importRequestStarted.current = true
+    setImporting(true)
+    setImportError(null)
+    try {
+      await flushSettingsNow()
+      const { jobId } = await userDataApi.resumeImport(interruptedJobId)
+      const userId = useStore.getState().user?.id
+      if (userId) trackImportJob(userId, jobId)
+      setImportJobId(jobId)
+      setInterruptedJobId(null)
+      setImportProgress({ jobId, phase: 'start' })
+    } catch (error: any) {
+      setImporting(false)
+      setImportError(error?.body?.error || error?.message || t('dataPortability.importFailed'))
     }
   }
 
@@ -330,6 +388,12 @@ export default function DataPortability() {
     const phase = importProgress.phase
     if (phase === 'verifying') return t('dataPortability.verifying')
     if (phase === 'start') return t('dataPortability.importQueued')
+    if (phase === 'extracting') {
+      return t('dataPortability.extracting', {
+        done: ((importProgress.bytesProcessed ?? 0) / (1024 ** 3)).toFixed(2),
+        total: ((importProgress.bytesTotal ?? 0) / (1024 ** 3)).toFixed(2),
+      })
+    }
     if (phase === 'awaiting_ticket') return t('dataPortability.awaitingTicket')
     if (phase === 'ticket_accepted') return t('dataPortability.ticketAccepted')
     if (phase === 'ticket_skipped') return t('dataPortability.ticketSkipped')
@@ -374,6 +438,15 @@ export default function DataPortability() {
             disabled={exporting}
           />
           <span>{t('dataPortability.includeVectors')}</span>
+        </label>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={includeExtensionData}
+            onChange={(e) => setIncludeExtensionData(e.target.checked)}
+            disabled={exporting}
+          />
+          <span>{t('dataPortability.includeExtensionData')}</span>
         </label>
         <label className={styles.checkboxRow}>
           <input
@@ -462,6 +535,12 @@ export default function DataPortability() {
             </Button>
           )}
         </div>
+        {interruptedJobId && !importing && (
+          <div className={styles.warning}>
+            <p>{t('dataPortability.resumeHint')}</p>
+            <Button variant="primary" onClick={handleResumeImport}>{t('dataPortability.resumeImport')}</Button>
+          </div>
+        )}
         {awaitingTicket && (
           <div className={styles.progress}>
             <div className={styles.progressLabel}>
@@ -512,7 +591,9 @@ export default function DataPortability() {
               ) : null}
             </div>
             <div className={styles.progressBar}>
-              {importUploadPct !== null ? (
+              {importProgress?.phase === 'extracting' && (importProgress.bytesTotal ?? 0) > 0 ? (
+                <div className={styles.progressFill} style={{ width: `${Math.min(100, 100 * (importProgress.bytesProcessed ?? 0) / importProgress.bytesTotal!)}%` }} />
+              ) : importUploadPct !== null ? (
                 <div className={styles.progressFill} style={{ width: `${importUploadPct}%` }} />
               ) : (
                 <div className={styles.progressFillIndeterminate} />

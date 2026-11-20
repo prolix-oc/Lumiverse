@@ -1,6 +1,8 @@
+import type { ConnectionPlacement } from '@/lib/connectionPlacement'
+import { useConnectionRow } from '@/components/panels/connection-manager/useConnectionRow'
+import { saveConnectionFolder } from '@/hooks/useConnectionLibrary'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSortable } from '@dnd-kit/sortable'
 
 import { Trash2, Edit3, Zap, Star, Copy, MoreVertical, Volume2, GripVertical } from 'lucide-react'
 import { ttsConnectionsApi } from '@/api/tts-connections'
@@ -9,13 +11,12 @@ import { useStore } from '@/store'
 import type { TtsConnectionProfile, TtsProviderInfo, CreateTtsConnectionInput } from '@/types/api'
 import TTSConnectionForm from './TTSConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
-import { useScaledSortableStyle } from '@/lib/dndUiScale'
-import { useDragHandleBlur } from '../connection-manager/useDragHandleBlur'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
 interface Props {
+  placement?: ConnectionPlacement
   profile: TtsConnectionProfile
   providers: TtsProviderInfo[]
   onUpdate: (profile: TtsConnectionProfile) => void
@@ -24,11 +25,11 @@ interface Props {
 }
 
 export default function TTSConnectionItem({
- profile, providers, onUpdate, onDuplicate, onDelete }: Props) {
+  placement = 'list', profile, providers, onUpdate, onDuplicate, onDelete }: Props) {
   const { t: tc } = useTranslation('common')
   const { t } = useTranslation('panels')
   const openModal = useStore((s) => s.openModal)
-  const [editing, setEditing] = useState(false)
+  const { editing, setEditing, isRecent, ...sortable } = useConnectionRow(profile.id, placement)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
@@ -54,23 +55,21 @@ export default function TTSConnectionItem({
     }
   }, [profile.id, t])
 
-  const handleSaveEdit = useCallback(async (input: CreateTtsConnectionInput) => {
+  const handleSaveEdit = useCallback(async (input: CreateTtsConnectionInput, folderId = '') => {
     try {
       const updated = await ttsConnectionsApi.update(profile.id, input)
+      saveConnectionFolder('tts', profile.id, folderId)
       onUpdate(updated)
       setEditing(false)
     } catch (err) {
       console.error('[TTSConnectionItem] Failed to update:', err)
     }
-  }, [profile.id, onUpdate])
+  }, [profile.id, onUpdate, setEditing])
 
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
-  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-
-  const handleRef = useDragHandleBlur(isDragging)
+  const { attributes, listeners, setNodeRef, style, isDragging, handleRef } = sortable
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging)}>
+    <div ref={setNodeRef} style={style} data-dragging={isDragging || undefined} className={clsx(styles.item, isDragging && styles.itemDragging)}>
       {editing ? (
         <TTSConnectionForm
           providers={providers}
@@ -81,7 +80,7 @@ export default function TTSConnectionItem({
       ) : (
         <>
           <div className={styles.itemRow}>
-            <button
+            {!isRecent && <button
               ref={handleRef}
               type="button"
               className={styles.dragHandle}
@@ -91,8 +90,8 @@ export default function TTSConnectionItem({
               {...listeners}
             >
               <GripVertical size={16} />
-            </button>
-            <div className={styles.itemBtn} style={{ cursor: 'default' }}>
+            </button>}
+            <div className={styles.itemBtn} onMouseDown={event => listeners?.onMouseDown?.(event)} onTouchStart={event => listeners?.onTouchStart?.(event)} style={{ cursor: 'default' }}>
               <ProviderIcon kind="tts" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
               <div className={styles.itemInfo}>
                 <span className={styles.itemName}>

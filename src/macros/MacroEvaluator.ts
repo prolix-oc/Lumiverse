@@ -397,8 +397,12 @@ async function evaluateMacroNode(
   }
 
   if (!def) {
-    // Unknown macro — pass through as-is
-    return reconstructMacro(node);
+    // Unknown macro — pass through as-is. The source text is used because the
+    // parsed form loses spelling, such as shorthand operands and bare separators.
+    // An unterminated macro is rebuilt so it cannot capture later text, and so is
+    // one with escaped braces, whose escapes must still be consumed.
+    if (node.unterminated || /\\[{}]/.test(node.raw)) return reconstructMacro(node);
+    return node.raw;
   }
 
   if (def.volatile && env._fingerprint) env._fingerprint.cacheable = false;

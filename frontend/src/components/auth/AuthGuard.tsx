@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { AUTH_SESSION_INVALID_EVENT } from '@/api/session-lifecycle'
+import { useAndroidPushSync } from '@/hooks/useAndroidPushSync'
 
 const SESSION_REVALIDATION_INTERVAL_MS = 15 * 60 * 1000
 
@@ -14,6 +15,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const isAuthLoading = useStore((s) => s.isAuthLoading)
   const checkSession = useStore((s) => s.checkSession)
   const navigate = useNavigate()
+  useAndroidPushSync(useStore(s => s.isAuthenticated ? s.user?.id ?? null : s.isAuthLoading ? undefined : null))
 
   useEffect(() => {
     // Only verify session on cold load — skip if we just logged in

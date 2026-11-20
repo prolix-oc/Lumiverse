@@ -75,17 +75,6 @@ function formatEntitiesShadow(
       lines.push(factStr + (factStr.endsWith(".") ? "" : "."));
     }
 
-    if (snap.relationships.length > 0) {
-      const relParts = snap.relationships.map((r) => {
-        const sentiment = r.sentiment > 0.3 ? "close" : r.sentiment < -0.3 ? "hostile" : "";
-        const label = r.label || r.type;
-        return sentiment
-          ? `${sentiment} ${label} with ${r.targetName}`
-          : `${label} with ${r.targetName}`;
-      });
-      lines.push(`Key connections: ${relParts.join("; ")}.`);
-    }
-
     const block = lines.join(" ");
     const blockTokens = estimateTokens(block);
     if (used + blockTokens > budget) break;

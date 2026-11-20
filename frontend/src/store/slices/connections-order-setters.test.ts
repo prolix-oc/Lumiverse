@@ -80,6 +80,7 @@ function createHarness(connectionsOrder: unknown): ProfileSetterHarness {
   const state = { connectionsOrder, fullSettingsLoaded: false }
   // Slice creators are typed against the aggregate store; these setters read only fields initialized below.
   const appState = state as unknown as AppStore
+  appState.setSetting = (key, value) => { Object.assign(appState, { [key]: value }); persistedSettings.push([key, value]) }
   const get: StoreApi<AppStore>['getState'] = () => appState
   const set = (partial: StoreUpdate, _replace?: boolean): void => {
     const patch = typeof partial === 'function' ? partial(appState) : partial

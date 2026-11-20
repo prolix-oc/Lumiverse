@@ -1,8 +1,12 @@
+import { rememberConnection, useConnectionRecents } from '@/hooks/useConnectionRecents'
 import { useEffect, useState } from 'react'
 import { embeddingsApi, type EmbeddingConnectionProfile } from '@/api/embeddings'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import styles from './SidecarConnectionPicker.module.css'
-import formStyles from './FormComponents.module.css'
+import SearchableSelect from './SearchableSelect'
+import ProviderIcon from './ProviderIcon'
+import { useConnectionLibrary } from '@/hooks/useConnectionLibrary'
+import { reorderProfiles } from '@/store/slices/connections-order-merge'
 
 interface Props {
   label: string
@@ -29,6 +33,8 @@ export default function EmbeddingConnectionPicker({
   disabled,
   testId,
 }: Props) {
+  const library = useConnectionLibrary('embedding')
+  const recentIds = useConnectionRecents('embedding')
   const [models, setModels] = useState<string[]>([])
   const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
@@ -63,25 +69,27 @@ export default function EmbeddingConnectionPicker({
         )}
       </div>
       <div className={styles.pickerControl}>
-        <select
-          className={formStyles.select}
+        <SearchableSelect
           value={connectionProfileId || ''}
-          onChange={(event) => {
-            const id = event.target.value || null
+          onChange={value => {
+            const id = value || null
             onConnectionChange(id)
-            const profile = profiles.find((entry) => entry.id === id)
+            if (id) rememberConnection('embedding', id)
+            const profile = profiles.find(entry => entry.id === id)
             if (profile) onModelChange(profile.model || null)
           }}
-          aria-label={ariaLabel || label}
+          options={reorderProfiles(profiles, library.library.profileOrder).map(profile => ({
+            value: profile.id, label: profile.name || profile.provider,
+            sublabel: `${profile.provider} / ${profile.model}`, group: library.folderName(profile.id),
+            leading: <ProviderIcon kind="embedding" provider={profile.provider} fill />,
+          }))}
+          groupOrder={library.folders.map(folder => folder.name)}
+          recentValues={recentIds}
+          forceSearch
+          clearable
+          ariaLabel={ariaLabel || label}
           disabled={disabled}
-        >
-          <option value="">Select an embedding connection…</option>
-          {profiles.map((profile) => (
-            <option key={profile.id} value={profile.id}>
-              {profile.name || profile.provider}{profile.model ? ` — ${profile.model}` : ''}
-            </option>
-          ))}
-        </select>
+        />
         {selected && (
           <ModelCombobox
             value={model || selected.model || ''}

@@ -16,9 +16,17 @@ export async function checkLanceDb(directory: string): Promise<void> {
     assert.equal((await table.vectorSearch(query).distanceType("cosine").limit(1).toArray())[0]?.id, "row-0");
     await table.createIndex("vector", { config: Index.ivfFlat({ numPartitions: 2, distanceType: "cosine" }) });
     await table.createIndex("content", { config: Index.fts() });
+    await table.createIndex("id", { config: Index.btree() });
     assert.equal((await table.vectorSearch(query).distanceType("cosine").nprobes(2).limit(1).toArray())[0]?.id, "row-0");
     assert.equal((await table.search("lumiverse", "fts").limit(1).toArray())[0]?.id, "row-0");
-    await table.add([{ id: "added", vector: [0, 1, 0, 0, 0, 0, 0, 0], content: "persisted addition" }]);
+    await table.mergeInsert("id").whenMatchedUpdateAll().whenNotMatchedInsertAll().execute([
+      { ...rows[0]!, content: "lumiverse updated native engine" },
+      { id: "added", vector: [0, 1, 0, 0, 0, 0, 0, 0], content: "persisted addition" },
+      { id: "deleted", vector: [0, 1, 0, 0, 0, 0, 0, 0], content: "temporary addition" },
+    ]);
+    await table.delete("id = 'deleted'");
+    assert.equal(await table.countRows(), rows.length + 1);
+    assert.equal((await table.query().where("id = 'row-0'").select(["content"]).toArray())[0]?.content, "lumiverse updated native engine");
   } finally { connection.close(); }
   const reopened = await connect(directory);
   try {
@@ -26,7 +34,8 @@ export async function checkLanceDb(directory: string): Promise<void> {
     assert.equal(await table.countRows(), rows.length + 1);
     assert.equal((await table.vectorSearch(query).distanceType("cosine").nprobes(2).limit(1).toArray())[0]?.id, "row-0");
     assert.equal((await table.search("lumiverse", "fts").limit(1).toArray())[0]?.id, "row-0");
-    assert.equal((await table.listIndices()).length, 2);
+    assert.equal((await table.listIndices()).length, 3);
+    assert.equal((await table.query().where("id = 'row-0'").select(["content"]).toArray())[0]?.content, "lumiverse updated native engine");
     await reopened.dropTable("check");
   } finally { reopened.close(); }
 }

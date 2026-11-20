@@ -4,6 +4,7 @@ import { executeSwipe } from './useSwipeAction'
 
 /**
  * Global keyboard listener for ArrowLeft/ArrowRight swipe navigation.
+ * - Ctrl/Cmd+Right: generates a background swipe of the final assistant reply
  * - Default (no Shift): targets the last assistant message
  * - Shift held: targets the currently hovered assistant message
  */
@@ -38,8 +39,9 @@ export default function useSwipeKeyboard(): void {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
 
-      // Block if any non-Shift modifier is held
-      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const background = (e.ctrlKey || e.metaKey) && e.key === 'ArrowRight' && !e.shiftKey
+      if (e.defaultPrevented || e.altKey || ((e.ctrlKey || e.metaKey) && !background)) return
+      if (background && e.repeat) return
 
       const state = useStore.getState()
 
@@ -84,9 +86,10 @@ export default function useSwipeKeyboard(): void {
       }
 
       if (!targetMessage) return
+      if (background && (state.isStreaming || state.messages.at(-1)?.id !== targetMessage.id)) return
 
       e.preventDefault()
-      executeSwipe(targetMessage, state.activeChatId, direction)
+      void executeSwipe(targetMessage, state.activeChatId, direction, background ? { background: true } : undefined)
     }
 
     document.addEventListener('keydown', handleKeyDown)

@@ -59,8 +59,13 @@ if (typeof (globalThis as any).window === 'undefined') {
 }
 
 if (typeof (globalThis as any).document === 'undefined') {
+  const rootElement = new TestElement()
   ;(globalThis as any).document = {
     createElement: (_tag: string) => new TestElement(),
+    documentElement: rootElement,
+    body: new TestElement(),
+    addEventListener() {},
+    removeEventListener() {},
   }
 }
 

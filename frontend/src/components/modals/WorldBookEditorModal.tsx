@@ -360,7 +360,7 @@ export default function WorldBookEditorModal() {
     setBulkActionPending(true)
     try {
       const blob = await worldBooksApi.bulkExport(bulkExportIds, bulkExportFormat)
-      triggerBlobDownload(blob, getBlobFilename(blob) || 'world-books.zip')
+      await triggerBlobDownload(blob, getBlobFilename(blob) || 'world-books.zip')
       setBulkExportIds(null)
     } catch {
     } finally {

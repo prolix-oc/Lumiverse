@@ -53,7 +53,7 @@ mock.module('@/api/spindle', () => ({ spindleApi: {
   clearManifestCache: () => {},
 } }))
 mock.module('@/ws/client', () => ({ wsClient: { send: () => {} } }))
-mock.module('@/lib/spindle/loader', () => ({
+mock.module('@/lib/spindle/extension-mount-points', () => ({
   loadFrontendExtension: async () => {},
   unloadFrontendExtension: async () => {},
   getExtensionMountPointsVersion: () => 0,

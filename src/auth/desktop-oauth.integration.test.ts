@@ -267,5 +267,18 @@ describe("desktop OAuth provider integration", () => {
       headers: { host: "app.example.test", cookie: cookie!.split(";", 1)[0]! },
     });
     expect(response.status).toBe(200);
+
+    // Session checks for a POST must still use the HTTPS cookie without
+    // forwarding the upload body to Better Auth's GET session endpoint.
+    const upload = await app.request("http://app.example.test/api/v1/user-data/import", {
+      method: "POST",
+      headers: {
+        host: "app.example.test", cookie: cookie!.split(";", 1)[0]!,
+        "content-type": "application/octet-stream", "content-length": String(14 * 1024 ** 3),
+      },
+      body: "invalid ZIP",
+    });
+    expect(upload.status).toBe(415);
+    expect((await upload.json()).code).toBe("not_zip");
   });
 });

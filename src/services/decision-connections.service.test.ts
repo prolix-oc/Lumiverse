@@ -5,6 +5,8 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 const keys = new Map<string, string>();
 const keyFor = (user: string, key: string) => `${user}:${key}`;
 mock.module("./secrets.service", () => ({
+  SYSTEM_SECRET_PRINCIPAL: "__system__",
+  SYSTEM_SECRET_PRINCIPAL_EMAIL: "system@lumiverse.local",
   getSecret: async (user: string, key: string) => keys.get(keyFor(user, key)) ?? null,
   getSecretForStatus: async (user: string, key: string) => keys.get(keyFor(user, key)) ?? null,
   putSecret: async (user: string, key: string, value: string) => { keys.set(keyFor(user, key), value); },
@@ -134,6 +136,31 @@ test("REST uses the authenticated account and preserves the resolved model", asy
   expect((await res.json() as any).model).toBe("jev-resolved");
   expect(svc.getDefaultConnection("alice")?.id).toBe(profile.id);
 });
+test("NanoGPT connections discover Decision models and evaluate through the native route", async () => {
+  const profile = await connection("alice", { provider: "nanogpt", model: "typesafe/jev-1.13", is_default: true });
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: any, options: any) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/models?detailed=true")) {
+      return Response.json({ data: [
+        { id: "typesafe/jev-1.13", name: "Jev 1.13", architecture: { output_modalities: ["decisions"] } },
+        { id: "chat/model", architecture: { output_modalities: ["text"] } },
+      ] });
+    }
+    expect(options.headers.Authorization).toBe("Bearer secret-for-test");
+    return Response.json({ model: "typesafe/jev-1.13", answers: { check: { type: "noul", noul: 0.9 } } });
+  }) as unknown as typeof fetch;
+  const tested = await svc.testConnection("alice", profile.id);
+  expect(tested.success).toBe(true);
+  expect(tested.message).toBe("Model catalog access verified. No decision was run.");
+  expect((await svc.listConnectionModels("alice", profile.id)).models.map((model) => model.id)).toEqual(["typesafe/jev-1.13"]);
+  expect((await evaluateDecision("alice", input)).model).toBe("typesafe/jev-1.13");
+  expect(calls).toEqual([
+    "https://nano-gpt.com/api/v1/models?detailed=true",
+    "https://nano-gpt.com/api/v1/models?detailed=true",
+    "https://nano-gpt.com/api/v1/decisions",
+  ]);
+});
 test("evaluation deadlines abort provider work and return HTTP 504", async () => {
   const profile = await connection();
   const originalTimeout = AbortSignal.timeout;
@@ -153,7 +180,7 @@ test("worker bridge enforces live permission and account scope on every call", a
   await api.handle({ type: "decisions_providers", requestId: "1" });
   expect(responses.pop().error).toContain("decisions");
   allowed = true; await api.handle({ type: "decisions_providers", requestId: "2" });
-  expect(responses.pop().result).toHaveLength(2);
+  expect(responses.pop().result.map((provider: { id: string }) => provider.id)).toEqual(["openrouter", "typesafe", "nanogpt", "inception"]);
   await api.handle({ type: "decisions_connections_list", requestId: "3", userId: "bob" });
   expect(responses.pop().error).toContain("scope denied");
   allowed = false; await api.handle({ type: "decisions_connections_list", requestId: "4" });
@@ -172,4 +199,23 @@ test.each(["cancel", "dispose"])("worker %s aborts pending inference", async (mo
   await started;
   if (mode === "cancel") await api.handle({ type: "decisions_cancel", requestId: "pending" }); else api.dispose();
   await pending; expect(responses[0].error).toContain("cancelled");
+});
+
+test("Inception profiles discover only decisions and evaluate with the owning account's saved key", async () => {
+  const profile = await connection("alice", { provider: "inception", model: "mercury-decide", is_default: true });
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: any, options: any) => {
+    calls.push(String(url));
+    expect(options.headers.Authorization).toBe("Bearer secret-for-test");
+    if (String(url).endsWith("/models")) return Response.json({ data: [
+      { id: "mercury-decide", supported_endpoints: ["decisions"] },
+      { id: "mercury-3", supported_endpoints: ["chat.completions"] },
+    ] });
+    expect(JSON.parse(options.body)).toEqual({ model: "mercury-decide", state: input.state, questions: input.questions });
+    return Response.json({ model: "mercury-decide", answers: { check: { type: "noul", noul: 0.9 } }, usage: { input_tokens: 10, output_tokens: 1 } });
+  }) as unknown as typeof fetch;
+  expect((await svc.listConnectionModels("alice", profile.id)).models.map(m => m.id)).toEqual(["mercury-decide"]);
+  expect(await evaluateDecision("alice", { ...input, connection_id: profile.id })).toMatchObject({ model: "mercury-decide", usage: { input_tokens: 10, output_tokens: 1 } });
+  await expect(evaluateDecision("bob", { ...input, connection_id: profile.id })).rejects.toThrow();
+  expect(calls).toEqual(["https://api.inceptionlabs.ai/v1/models", "https://api.inceptionlabs.ai/v1/decisions"]);
 });

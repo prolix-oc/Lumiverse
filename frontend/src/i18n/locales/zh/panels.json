@@ -158,6 +158,15 @@
     }
   },
   "connections": {
+    "finishEditBeforeDelete": "删除文件夹前，请保存或取消连接编辑。",
+    "newFolder": "新建文件夹",
+    "folder": "文件夹",
+    "invalidFolderName": "请输入 1–64 个字符的唯一文件夹名称。“未分类”为保留名称。",
+    "deleteFolderMessage": "删除“{{name}}”？其中的连接将移至未分类。",
+    "allFolders": "所有文件夹",
+    "filterFolder": "按文件夹筛选连接",
+    "search": "搜索连接、提供商、模型、文件夹…",
+    "noMatches": "没有匹配的连接。",
     "imageGeneration": "图像生成",
     "speechToText": "语音转文字",
     "textToSpeech": "文字转语音"
@@ -679,6 +688,10 @@
     "scopeGlobal": "全局",
     "scopeThisChar": "当前角色",
     "noScripts": "还没有正则脚本。",
+    "searchFolder": "搜索此文件夹中的脚本…",
+    "searchFolderAria": "搜索 {{folder}} 中的脚本",
+    "folderPagesAria": "{{folder}} 中的脚本分页",
+    "noSearchResults": "没有与搜索条件匹配的脚本。",
     "clickPlus": "点击 + 创建。",
     "uncategorized": "未分类",
     "deleteFolderConfirm": "删除“{{folder}}”中的 {{count}} 个正则脚本？此操作不可撤销。",
@@ -713,6 +726,8 @@
     "timedOutDetail": "该脚本触发了正则超时，执行时已被跳过。",
     "slowDetail": "该脚本被标记为慢，执行耗时 {{seconds}} 秒。",
     "quarantinedDisplay": "显示正则「{{name}}」卡死了隔离执行器，已被跳过。请在正则脚本中解除隔离后再次运行。",
+    "unavailableDisplay": "由于隔离执行环境不可用，本次渲染已跳过显示正则「{{name}}」。",
+    "skippedDisplayTitle": "已跳过正则脚本",
     "quarantined": "已隔离",
     "quarantinedDetail": "该脚本卡死了隔离执行器，正在被跳过。解除隔离即可再次运行。",
     "clearQuarantine": "再次运行",
@@ -1410,6 +1425,10 @@
       "noTagsFound": "未找到标签"
     },
     "alternateAvatars": {
+      "addFromGallery": "从图库添加",
+      "uploadImage": "上传头像",
+      "galleryLoadFailed": "无法加载图库图片。",
+      "uploadFailed": "无法上传备用头像。",
       "title": "备用头像",
       "helper": "该角色的额外头像，可在各聊天中分别切换。",
       "selectionHint": "点击头像以在此聊天中使用。",
@@ -2654,6 +2673,11 @@
     "fontScale": "字体缩放",
     "uiScale": "界面缩放",
     "glassEffects": "玻璃效果",
+    "liquidGlass": {
+      "label": "液态玻璃",
+      "hint": "折射并模糊表面后方的背景。需要开启玻璃效果。",
+      "requiresGlass": "请先开启玻璃效果"
+    },
     "renderingMode": {
       "label": "渲染",
       "hint": "节能模式会移除模糊；高质量模式会在桌面窗口重启后，于支持的 macOS 显示器上启用高刷新率渲染。",
@@ -3299,6 +3323,8 @@
         "persona_description": "用户人设",
         "scenario": "场景",
         "dialogue_examples": "示例消息",
+        "system_prompt": "角色系统提示词",
+        "post_history_instructions": "角色历史后指令",
         "main_prompt": "主提示词",
         "enhance_definitions": "增强定义",
         "jailbreak": "历史后指令",
@@ -3609,5 +3635,13 @@
     "skipTitle": "Skip",
     "kickTitle": "Kick",
     "banTitle": "Ban"
+  },
+  "decisionConnectionManager": {
+    "loading": "正在加载 Decision 连接...",
+    "newConnection": "新建 Decision 连接",
+    "empty": "还没有 Decision 连接。添加 OpenRouter、NanoGPT 或 TypeSafe 即可开始。",
+    "deleteTitle": "删除 Decision 连接",
+    "deleteMessage": "删除“{{name}}”？此操作无法撤销。",
+    "deleteConfirm": "删除"
   }
 }

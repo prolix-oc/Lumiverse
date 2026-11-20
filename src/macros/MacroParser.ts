@@ -174,6 +174,8 @@ function parseMacroExpr(ctx: ParseContext): MacroNode {
   if (ctx.at(TokenType.MACRO_CLOSE)) {
     closeTok = ctx.advance();
   }
+  // The lexer also synthesizes this token when the source lacks the braces.
+  const closed = closeTok.type === TokenType.MACRO_CLOSE && ctx.source.startsWith("}}", closeTok.offset);
 
   const endOffset = closeTok.offset + closeTok.value.length;
   const raw = ctx.source.slice(startOffset, endOffset);
@@ -185,6 +187,7 @@ function parseMacroExpr(ctx: ParseContext): MacroNode {
     flags,
     raw,
     offset: startOffset,
+    ...(closed ? {} : { unterminated: true }),
   };
 }
 

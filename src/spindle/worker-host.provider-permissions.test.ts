@@ -7,6 +7,7 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { runMigrations } from "../db/migrate";
 import { WorkerHost } from "./worker-host";
 import { providerRegistry } from "./provider-registry";
+import { listProviders } from "../services/decision-connections.service";
 
 const DB_DIR = join(tmpdir(), "lumiverse-worker-host-provider-perms-test-");
 const DB_PATH = join(DB_DIR, "test.db");
@@ -241,10 +242,10 @@ describe("worker-host Decision permission enforcement", () => {
     handle(host, { type: "decisions_providers", requestId: "expired", rpcPermissionScopeId: "missing" });
     handle(host, { type: "decisions_providers", requestId: "delegated", rpcPermissionScopeId: "delegated" });
     await Promise.resolve();
-    expect(posted.find((m) => m.requestId === "allowed")?.result).toHaveLength(2);
+    expect(posted.find((m) => m.requestId === "allowed")?.result).toEqual(listProviders());
     expect(posted.find((m) => m.requestId === "limited")?.error).toContain("decisions");
     expect(posted.find((m) => m.requestId === "expired")?.error).toContain("decisions");
-    expect(posted.find((m) => m.requestId === "delegated")?.result).toHaveLength(2);
+    expect(posted.find((m) => m.requestId === "delegated")?.result).toEqual(listProviders());
     getDb().run("DELETE FROM extension_grants");
     handle(host, { type: "decisions_providers", requestId: "revoked", rpcPermissionScopeId: "delegated" });
     await Promise.resolve();
@@ -259,6 +260,6 @@ describe("worker-host Decision permission enforcement", () => {
     handle(host, { type: "decisions_providers", requestId: "with-user", userId: "alice" });
     await Promise.resolve();
     expect(posted.find((m) => m.requestId === "missing-user")?.error).toContain("userId is required");
-    expect(posted.find((m) => m.requestId === "with-user")?.result).toHaveLength(2);
+    expect(posted.find((m) => m.requestId === "with-user")?.result).toEqual(listProviders());
   });
 });

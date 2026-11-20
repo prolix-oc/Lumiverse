@@ -4,6 +4,17 @@ export type RegexTarget = 'prompt' | 'response' | 'display'
 export type RegexMacroMode = 'none' | 'find' | 'raw' | 'escaped' | 'after'
 export type RegexActionType = 'send' | 'append' | 'effects'
 
+export interface MessagePresetContext {
+  preset_id: string
+  variables?: Partial<{
+    local: Record<string, string>
+    global: Record<string, string>
+    chat: Record<string, string>
+    prompt_selections: Record<string, string[]>
+    prompt_defaults: Record<string, string>
+  }>
+}
+
 export interface RegexPromptActivation {
   source: 'user_input' | 'ai_output'
   lifetime: 'latest' | 'chat'

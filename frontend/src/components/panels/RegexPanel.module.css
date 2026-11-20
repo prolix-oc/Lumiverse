@@ -140,6 +140,19 @@
   gap: 2px;
 }
 
+.folderTools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.folderSearchEmpty {
+  margin: 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
 .scriptRow {
   display: flex;
   align-items: center;

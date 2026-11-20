@@ -1,7 +1,9 @@
 import type {
+  SpindleComposerAPI,
   SpindleDockPanelOptions as PublishedSpindleDockPanelOptions,
   SpindleFloatWidgetOptions as PublishedSpindleFloatWidgetOptions,
   SpindleSTTAPI,
+  SpindleTTSAPI,
   SpindleSystemAudioAPI,
 } from 'lumiverse-spindle-types'
 import type {
@@ -151,7 +153,9 @@ export interface FrontendContextAdditions {
   messages: FrontendMessagesAPI
   tokens: FrontendTokensAPI
   stt: SpindleSTTAPI
+  tts?: SpindleTTSAPI
   systemAudio: SpindleSystemAudioAPI
+  composer: SpindleComposerAPI
   onTeardown(handler: () => void): () => void
 }
 
@@ -161,7 +165,9 @@ export interface FrontendContextFactoryDependencies<Base extends object> {
   domain: FrontendDomainAPI
   geometry?: SpindleGeometryAPI
   stt?: SpindleSTTAPI
+  tts?: SpindleTTSAPI
   systemAudio?: SpindleSystemAudioAPI
+  composer?: SpindleComposerAPI
   onTeardown(handler: () => void): () => void
 }
 
@@ -196,7 +202,9 @@ export function createFrontendExtensionContext<Base extends {
     },
     tokens: domain.tokens,
     stt: dependencies.stt,
+    tts: dependencies.tts,
     systemAudio: dependencies.systemAudio,
+    composer: dependencies.composer,
     onTeardown: dependencies.onTeardown,
   } as Base & FrontendContextAdditions
 }

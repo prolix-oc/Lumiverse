@@ -103,6 +103,9 @@ async function build(): Promise<void> {
   };
   delete env.RUSTFLAGS;
   delete env.CARGO_ENCODED_RUSTFLAGS;
+  // The 0.41.0 tag retains beta workspace versions in Cargo.lock. Refresh only
+  // workspace packages, keeping third-party dependencies pinned for --locked.
+  await run(["cargo", `+${INTEL_LANCEDB.rustToolchain}`, "update", "--workspace"], source, env);
   console.log(`[lancedb-macos] Building ${INTEL_LANCEDB.target} for macOS ${INTEL_LANCEDB.minimumMacOS}, CPU ${INTEL_LANCEDB.cpu}...`);
   await run(["cargo", `+${INTEL_LANCEDB.rustToolchain}`, "build", "--manifest-path", join(source, "nodejs/Cargo.toml"), "--locked", "--release", "--target", INTEL_LANCEDB.target], source, env);
   mkdirSync(outputDirectory, { recursive: true });

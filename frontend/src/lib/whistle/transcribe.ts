@@ -1,5 +1,5 @@
 import { AudioWindowBuffer, PcmResampler, TranscriptAssembler } from './audio'
-import { WHISTLE_SAMPLE_RATE } from './config'
+import { WHISTLE_SAMPLE_RATE, type WhistleWord } from './config'
 import type { WhistleClient } from './client'
 import type { SpindleSTTPcmAudio } from 'lumiverse-spindle-types'
 
@@ -30,7 +30,8 @@ export async function transcribeWhistleAudio(
   language: string | undefined,
   client: Pick<WhistleClient, 'retain' | 'prepare' | 'transcribe'>,
   signal?: AbortSignal,
-): Promise<{ text: string; language?: string }> {
+  keywords?: readonly string[],
+): Promise<{ text: string; language?: string; words: WhistleWord[] }> {
   checkAbort(signal)
   let channels: Float32Array[]
   let sampleRate: number
@@ -58,7 +59,7 @@ export async function transcribeWhistleAudio(
     let detectedLanguage = language
     const infer = async (window: { pcm: Float32Array; offset: number }) => {
       checkAbort(signal)
-      const result = await client.transcribe(window.pcm, language, signal)
+      const result = await client.transcribe(window.pcm, language, signal, keywords)
       checkAbort(signal)
       transcript.append(result, window.offset)
       if (result.language) detectedLanguage = result.language
@@ -84,6 +85,6 @@ export async function transcribeWhistleAudio(
     const tail = windows.finish()
     if (tail) pending.push(tail)
     for (const window of pending) await infer(window)
-    return { text: transcript.text(), language: detectedLanguage }
+    return { text: transcript.text(), language: detectedLanguage, words: transcript.wordList() }
   } finally { release() }
 }

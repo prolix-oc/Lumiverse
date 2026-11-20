@@ -1,8 +1,8 @@
-import { useState, useCallback, useMemo, useEffect, useRef, type ReactNode } from 'react'
+import { useState, useCallback, useMemo, useEffect, type ReactNode } from 'react'
 import { usePersonaBrowser } from '@/hooks/usePersonaBrowser'
 import { useFolders } from '@/hooks/useFolders'
 import { useStore } from '@/store'
-import { Check, ChevronRight, History, Pencil, Trash2, X } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { triggerBlobDownload } from '@/lib/downloads'
 import { includeEmptyPersonaFolders } from '@/lib/personaBrowser'
@@ -21,6 +21,7 @@ import PersonaBulkBar, { type PersonaBulkAction } from './persona-browser/Person
 import PersonaEditor from './persona-browser/PersonaEditor'
 import CreatePersonaForm from './persona-browser/CreatePersonaForm'
 import Pagination from '@/components/shared/Pagination'
+import FolderSection, { FolderNameEditor } from '@/components/shared/FolderSection'
 import { useTranslation } from 'react-i18next'
 import type { Persona, WorldBook } from '@/types/api'
 import styles from './PersonaManager.module.css'
@@ -45,7 +46,6 @@ export default function PersonaManager() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [worldBooks, setWorldBooks] = useState<WorldBook[]>([])
   const [selectedPlacement, setSelectedPlacement] = useState<'recent' | 'folders'>('folders')
-  const renameInputRef = useRef<HTMLInputElement>(null)
   // Collapsed folders — start with all named folders collapsed, uncategorized open
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set())
   const [initializedFolders, setInitializedFolders] = useState(false)
@@ -79,12 +79,6 @@ export default function PersonaManager() {
       return next
     })
   }, [])
-
-  useEffect(() => {
-    if (!renamingFolder || !renameInputRef.current) return
-    renameInputRef.current.focus()
-    renameInputRef.current.select()
-  }, [renamingFolder])
 
   useEffect(() => {
     if (!batchMode || worldBooks.length > 0) return
@@ -287,7 +281,7 @@ export default function PersonaManager() {
         exported_at: new Date().toISOString(),
         personas: selected,
       }
-      triggerBlobDownload(
+      await triggerBlobDownload(
         new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
         `lumiverse-personas-${new Date().toISOString().slice(0, 10)}.json`,
       )
@@ -442,14 +436,9 @@ export default function PersonaManager() {
       ) : (
         <>
           {browser.recentPersonas.length > 0 && (
-            <div className={styles.folderGroup}>
-              <div className={styles.recentHeader}>
-                <History size={12} />
-                <span className={styles.folderName}>{t('personaManager.recentlyUsed')}</span>
-                <span className={styles.folderCount}>{browser.recentPersonas.length}</span>
-              </div>
+            <FolderSection recent label={t('personaManager.recentlyUsed')} count={browser.recentPersonas.length}>
               {renderPersonaCards(browser.recentPersonas, 'recent')}
-            </div>
+            </FolderSection>
           )}
           {groupedPersonas.map((group) => {
           const folderKey = group.folder || '__uncategorized'
@@ -458,97 +447,49 @@ export default function PersonaManager() {
           const isRenaming = group.folder && renamingFolder === group.folder
 
           return (
-            <div key={folderKey} className={styles.folderGroup}>
-              {hasFolders && (
-                <div className={styles.folderHeaderRow}>
-                  {isRenaming ? (
-                    <div className={styles.folderRenameRow} onClick={(e) => e.stopPropagation()}>
-                      <input
-                        ref={renameInputRef}
-                        type="text"
-                        className={styles.folderRenameInput}
-                        value={renamingValue}
-                        onChange={(e) => setRenamingValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void handleSubmitRenameFolder()
-                          if (e.key === 'Escape') handleCancelRenameFolder()
-                        }}
-                        disabled={renameBusy}
-                        placeholder={t('personaManager.folderName')}
-                      />
-                      <button
-                        type="button"
-                        className={styles.folderActionBtn}
-                        onClick={() => void handleSubmitRenameFolder()}
-                        disabled={renameBusy || !renamingValue.trim()}
-                        title={t('personaManager.confirmRename')}
-                        aria-label={t('personaManager.confirmRename')}
-                      >
-                        <Check size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.folderActionBtn}
-                        onClick={handleCancelRenameFolder}
-                        disabled={renameBusy}
-                        title={t('personaManager.cancelRename')}
-                        aria-label={t('personaManager.cancelRename')}
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className={styles.folderHeader}
-                        onClick={() => toggleFolder(folderKey)}
-                      >
-                        <ChevronRight
-                          size={12}
-                          className={`${styles.folderChevron} ${!isCollapsed ? styles.folderChevronOpen : ''}`}
-                        />
-                        <span className={styles.folderName}>{group.folder || t('personaManager.uncategorized')}</span>
-                        <span className={styles.folderCount}>{group.personas.length}</span>
-                      </button>
-                      {group.folder && (
-                        <>
-                          <button
-                            type="button"
-                            className={styles.folderActionBtn}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleStartRenameFolder(group.folder)
-                            }}
-                            disabled={deletingFolder === group.folder}
-                            title={t('personaManager.renameFolder', { name: group.folder })}
-                            aria-label={t('personaManager.renameFolder', { name: group.folder })}
-                          >
-                            <Pencil size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            className={`${styles.folderActionBtn} ${styles.folderDeleteBtn}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void handleDeleteFolder(group.folder)
-                            }}
-                            disabled={deletingFolder === group.folder}
-                            title={t('personaManager.deleteFolder', { name: group.folder })}
-                            aria-label={t('personaManager.deleteFolder', { name: group.folder })}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-              {!isCollapsed && (
-                renderPersonaCards(group.personas)
-              )}
-            </div>
+            <FolderSection
+              key={folderKey}
+              label={group.folder || t('personaManager.uncategorized')}
+              count={group.personas.length}
+              hideHeader={!hasFolders}
+              collapsed={isCollapsed}
+              onToggle={() => toggleFolder(folderKey)}
+              header={isRenaming ? (
+                <FolderNameEditor value={renamingValue} onChange={setRenamingValue}
+                  onSubmit={() => void handleSubmitRenameFolder()} onCancel={handleCancelRenameFolder}
+                  disabled={renameBusy} placeholder={t('personaManager.folderName')} />
+              ) : undefined}
+              actions={group.folder ? <>
+                <button
+                  type="button"
+                  className={styles.folderActionBtn}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleStartRenameFolder(group.folder)
+                  }}
+                  disabled={deletingFolder === group.folder}
+                  title={t('personaManager.renameFolder', { name: group.folder })}
+                  aria-label={t('personaManager.renameFolder', { name: group.folder })}
+                >
+                  <Pencil size={12} />
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.folderActionBtn} ${styles.folderDeleteBtn}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleDeleteFolder(group.folder)
+                  }}
+                  disabled={deletingFolder === group.folder}
+                  title={t('personaManager.deleteFolder', { name: group.folder })}
+                  aria-label={t('personaManager.deleteFolder', { name: group.folder })}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </> : undefined}
+            >
+              {renderPersonaCards(group.personas)}
+            </FolderSection>
           )
           })}
         </>

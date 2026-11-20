@@ -9,7 +9,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-const PUBLIC_KEY: &str = env!("LUMIVERSE_UPDATER_PUBLIC_KEY");
 const FEEDS: &str = "https://github.com/prolix-oc/Lumiverse/releases/download/desktop-updates";
 const RESUME_FILE: &str = "desktop-update-resume.json";
 
@@ -63,6 +62,15 @@ fn require_tray(window: &WebviewWindow) -> Result<(), String> {
     }
     Ok(())
 }
+fn configured_public_key(config: &tauri::Config) -> Option<&str> {
+    config
+        .plugins
+        .0
+        .get("updater")?
+        .get("pubkey")?
+        .as_str()
+        .filter(|key| !key.trim().is_empty())
+}
 fn unavailable_reason(app: &AppHandle) -> Option<&'static str> {
     if cfg!(debug_assertions) || app.state::<crate::profile::DesktopProfile>().isolated {
         return Some("Updates are disabled for debug builds and isolated profiles.");
@@ -70,7 +78,7 @@ fn unavailable_reason(app: &AppHandle) -> Option<&'static str> {
     if crate::bundled_server::binary().is_none() {
         return Some("This desktop build does not include the bundled server.");
     }
-    if PUBLIC_KEY.is_empty() {
+    if configured_public_key(app.config()).is_none() {
         return Some("This build has no updater signing public key.");
     }
     #[cfg(target_os = "linux")]
@@ -111,7 +119,8 @@ pub async fn desktop_update_check(
         .map_err(|error| format!("Invalid update endpoint: {error}"))?;
     let mut update = app
         .updater_builder()
-        .pubkey(PUBLIC_KEY)
+        // Inherit the key from the embedded plugin config on every platform.
+        // Private builders supply it via --config, without a key environment variable.
         .endpoints(vec![endpoint])
         .map_err(|error| error.to_string())?
         .timeout(Duration::from_secs(30))
@@ -287,6 +296,30 @@ pub async fn desktop_update_install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_builder_key_is_available_from_the_embedded_plugin_config() {
+        let mut config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(configured_public_key(&config).is_none());
+        // Private Linux and Windows builders configure the plugin this way;
+        // LUMIVERSE_UPDATER_PUBLIC_KEY is deliberately absent from compilation.
+        config
+            .plugins
+            .0
+            .insert("updater".into(), json!({ "pubkey": "release-public-key" }));
+        assert_eq!(configured_public_key(&config), Some("release-public-key"));
+        let updater: tauri_plugin_updater::Config =
+            serde_json::from_value(config.plugins.0["updater"].clone()).unwrap();
+        assert_eq!(
+            Some(updater.pubkey.as_str()),
+            configured_public_key(&config)
+        );
+        config
+            .plugins
+            .0
+            .insert("updater".into(), json!({ "pubkey": " \n\t" }));
+        assert!(configured_public_key(&config).is_none());
+    }
     #[test]
     fn unsigned_development_config_initializes_the_updater_plugin() {
         let config: serde_json::Value =

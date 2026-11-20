@@ -107,89 +107,6 @@ mock.module('@/components/panels/LoomBuilder', () => ({
 mock.module('@/components/panels/connection-manager/ModelCombobox', () => ({
   default: () => null,
 }))
-mock.module('lucide-react', () => {
-  const Icon = () => <span aria-hidden="true" />
-  return {
-    AlertCircle: Icon,
-    AlertTriangle: Icon,
-    ArrowDown: Icon,
-    ArrowLeft: Icon,
-    ArrowUp: Icon,
-    ArrowUpDown: Icon,
-    BookOpen: Icon,
-    Bot: Icon,
-    Braces: Icon,
-    Camera: Icon,
-    Check: Icon,
-    CheckCircle: Icon,
-    ChevronDown: Icon,
-    ChevronLeft: Icon,
-    ChevronRight: Icon,
-    ChevronUp: Icon,
-    Copy: Icon,
-    Dice1: Icon,
-    Download: Icon,
-    Edit2: Icon,
-    Edit3: Icon,
-    Eye: Icon,
-    EyeOff: Icon,
-    FileText: Icon,
-    FolderOpen: Icon,
-    GripVertical: Icon,
-    Hash: Icon,
-    Image: Icon,
-    Info: Icon,
-    Layers: Icon,
-    Link: Icon,
-    Link2: Icon,
-    Loader2: Icon,
-    Lock: Icon,
-    Maximize2: Icon,
-    MessageSquare: Icon,
-    Mic: Icon,
-    Minimize2: Icon,
-    Minus: Icon,
-    MoreVertical: Icon,
-    Pencil: Icon,
-    Pin: Icon,
-    PinOff: Icon,
-    Plus: Icon,
-    RefreshCw: Icon,
-    Replace: Icon,
-    RotateCcw: Icon,
-    Search: Icon,
-    Settings: Icon,
-    Settings2: Icon,
-    ArrowBigDown: Icon,
-    ArrowBigUp: Icon,
-    BetweenHorizontalEnd: Icon,
-    BetweenHorizontalStart: Icon,
-    CheckSquare: Icon,
-    Globe: Icon,
-    MapPin: Icon,
-    MoveRight: Icon,
-    Plug: Icon,
-    Sliders: Icon,
-    Tag: Icon,
-    User: Icon,
-    UserRound: Icon,
-    Users: Icon,
-    Shield: Icon,
-    Square: Icon,
-    Star: Icon,
-    StopCircle: Icon,
-    Trash2: Icon,
-    Unlink: Icon,
-    Upload: Icon,
-    Volume2: Icon,
-    Wifi: Icon,
-    WifiOff: Icon,
-    Wrench: Icon,
-    X: Icon,
-    XCircle: Icon,
-    Zap: Icon,
-  }
-})
 
 const dom = new JSDOM('<!doctype html><html lang="en"><body></body></html>', {
   url: 'http://localhost/',
@@ -405,7 +322,10 @@ async function mountSurface(surfaceId: string, props: HostSurfaceProps) {
     async () => ({ categories: [] }),
     1,
   )
-  const handle = helper.mountHostSurface(host, surfaceId, props)
+  let handle!: ReturnType<typeof helper.mountHostSurface>
+  await act(async () => {
+    handle = helper.mountHostSurface(host, surfaceId, props)
+  })
   await flush()
   return { host, handle }
 }
@@ -417,9 +337,11 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
-  destroyAllComponentsForExtension(EXTENSION_ID)
-  for (const unregister of unregisterRoots.splice(0)) unregister()
-  clearLiveRootsForExtension(EXTENSION_ID)
+  await act(async () => {
+    destroyAllComponentsForExtension(EXTENSION_ID)
+    for (const unregister of unregisterRoots.splice(0)) unregister()
+    clearLiveRootsForExtension(EXTENSION_ID)
+  })
   document.body.replaceChildren()
   getCharacter.mockReset()
   listSummaries.mockReset()
@@ -484,7 +406,7 @@ describe('character host surface renderers', () => {
     const first = await mountSurface('character_card', { characterId: 'card-loading' })
     expect(first.host.querySelector('[role="status"]')).not.toBeNull()
 
-    first.handle.destroy()
+    act(() => first.handle.destroy())
     await settle(loading, character('card-loading'))
     expect(first.host.querySelector('[data-testid="native-character-card"]')).toBeNull()
 
@@ -543,7 +465,7 @@ describe('character host surface renderers', () => {
       expect(() => JSON.stringify(payload)).not.toThrow()
     }
     listSummaries.mockResolvedValueOnce({ data: [browserSummary('grid-2', 'Grid two')], total: 1 })
-    handle.update({
+    await act(async () => handle.update({
       scope: 'mine',
       chatId: 'chat-2',
       filterTab: 'characters',
@@ -553,7 +475,7 @@ describe('character host surface renderers', () => {
       search: 'next',
       excludeTags: [],
       selectedCharacterId: 'grid-2',
-    })
+    }))
     await flush()
     expect(host.querySelector('[data-testid="native-character-grid"]')?.getAttribute('data-selected-character-id')).toBe('grid-2')
     for (const unsubscribe of off) unsubscribe()
@@ -575,10 +497,10 @@ describe('character host surface renderers', () => {
       expect.objectContaining({ id: 'participant-2' }),
     ])
 
-    mounted.handle.update({
+    await act(async () => mounted.handle.update({
       characters: [browserSummary('participant-3', 'Participant three')],
       selectedCharacterId: 'participant-3',
-    })
+    }))
     await flush()
     expect(listSummaries).not.toHaveBeenCalled()
     expect(mounted.host.querySelector('[data-character-id="participant-1"]')).toBeNull()
@@ -681,7 +603,7 @@ describe('character host surface renderers', () => {
     listCharacterChats.mockReturnValueOnce(chats.promise)
     const mounted = await mountSurface('character_preview_panel', { characterId: 'preview-loading' })
     expect(mounted.host.querySelector('[role="status"]')).not.toBeNull()
-    mounted.handle.destroy()
+    act(() => mounted.handle.destroy())
     await settle(loading, character('preview-loading'))
     await settle(chats, [])
     expect(mounted.host.querySelector('[aria-label="Open chat"]')).toBeNull()

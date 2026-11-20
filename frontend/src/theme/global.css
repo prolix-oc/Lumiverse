@@ -97,6 +97,10 @@ select option:checked {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  img[data-image-decoded] {
+    transition-duration: 0s !important;
+  }
+
   .lumiverse-panel-enter {
     animation: none;
   }
@@ -110,6 +114,162 @@ html[data-rendering-mode='efficiency'] *::before,
 html[data-rendering-mode='efficiency'] *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* ── Liquid Glass material ──
+   The opt-in "liquid glass" look turns an opted-in surface into a refracting
+   pane, layered on top of the frosted `data-glass` treatment. Modelled on
+   dashersw/liquid-glass-js, the reference the Appearance panel cites, where the
+   pane is the element itself:
+
+     surface { backdrop-filter: blur() saturate() [url(#filter)] }
+     surface::after { inset specular rim }
+
+   The displacement is `#liquid-glass-lens`, whose normal map is the library's
+   own coverage field and falloffs, generated in `lib/liquidGlass.ts` from the
+   ten Liquid Glass controls. It must ride inside `backdrop-filter` and not in
+   `filter`: only `backdrop-filter` reaches what is behind the element, while
+   `filter` would displace the surface's own text and leave the backdrop still.
+
+   Surfaces opt in by carrying `data-liquid-glass-surface`. Everything is gated
+   on `html[data-liquid-glass]`, which the theme applicator only sets when the
+   effect is genuinely active (glass on, not efficiency mode, motion allowed),
+   so no rule here can run on its own.
+
+   The pane has to sit on the surface element rather than a pseudo-element: a
+   pseudo painted behind the surface would be hidden by the surface's own
+   background, and putting it in front would cover the content. That also means
+   the surface must be translucent for the refraction to read, so the material
+   replaces the surface background with the accent-tinted glass wash. The
+   `::after` sheen is safe to add: none of the opted-in surfaces use one. */
+html[data-liquid-glass] {
+  --lcs-liquid-lens: url(#liquid-glass-lens);
+}
+
+html[data-liquid-glass] [data-liquid-glass-surface] {
+  /* The pane has to replace the surface's own paint, not sit behind it: an
+     opaque background (or a 0.98-alpha gradient, as the modals use) would
+     hide the refraction entirely. So the material owns the surface's fill. */
+  background-image: none;
+  background-color: var(--lcs-liquid-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35);
+  -webkit-backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35);
+}
+
+/* Engines disagree on whether an SVG filter may appear inside backdrop-filter:
+   Chromium renders the displacement, others reject the function or accept it
+   without rendering (Chromium reports no support for the `-webkit-` form).
+   Keeping it in its own rule means an engine that cannot do it drops only this
+   declaration and still keeps the frosted pane above. */
+@supports (backdrop-filter: url(#liquid-glass-lens)) {
+  html[data-liquid-glass] [data-liquid-glass-surface] {
+    backdrop-filter: blur(var(--lcs-liquid-blur, 10px)) saturate(1.35) var(--lcs-liquid-filter);
+  }
+
+  /* Every other glass surface in the app refracts too. Each of them already
+     ends its `backdrop-filter` with `var(--lcs-liquid-filter, )`, which is
+     empty until this rule fills it, so one declaration here upgrades all ~50
+     frosted surfaces at once without editing 37 stylesheets. The fill lives
+     inside the `@supports` probe, not in the ungated rule above, so an engine
+     that cannot displace a backdrop drops only this declaration and keeps its
+     plain blur instead of losing the whole `backdrop-filter`. */
+  html[data-liquid-glass] {
+    --lcs-liquid-filter: url(#liquid-glass-lens);
+  }
+}
+
+html[data-liquid-glass] [data-liquid-glass-surface]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Rim and specular only: a full-area tint here would wash over the surface's
+     content, so the tint lives on the element background instead. The two-part
+     highlight (a hard 1px lip plus a soft inner glow) is what the reference
+     glass uses to sell the curved edge. */
+  box-shadow:
+    inset 1px 1px 0 -1px var(--lcs-liquid-specular, transparent),
+    inset 0 0 5px 0 var(--lcs-liquid-specular, transparent),
+    inset 0 0 3px 1px var(--lcs-liquid-rim, transparent);
+}
+
+/* The shared SVG defs host.
+   It must have a real box. Chromium clips an SVG filter's output to its host
+   viewport, so a 0x0 host makes `feImage` produce nothing — `feDisplacementMap`
+   then reads an all-zero normal map, which is not "no refraction" but a uniform
+   half-scale translation of the entire backdrop. That is the shift-everything
+   artefact this rule exists to prevent. A full-viewport, non-interactive host
+   keeps the map intact at every element size. */
+.lumiverse-liquid-glass-defs {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* ── Liquid Glass sliders ──
+   Every range input becomes a bead of glass on a rounded bar, following the
+   "Slider Button Liquid Glass" study: the thumb carries a radial lens filter
+   over its own backdrop blur plus a specular rim, so it reads as glass sliding
+   along the track. The track keeps the theme's own paint, so the accent still
+   marks progress — only the material changes.
+
+   Doing this on the native control rather than a rebuilt slider is what makes
+   it apply everywhere at once. It works because Chromium does apply
+   `backdrop-filter` to `::-webkit-slider-thumb` (verified), and because the
+   lens keys off `filter:` while the blur keys off `backdrop-filter:`, so the
+   two compose instead of competing for the single displacement slot. */
+html[data-liquid-glass] input[type='range'] {
+  --lcs-slider-thumb-w: 30px;
+  --lcs-slider-thumb-h: 18px;
+  --lcs-slider-track-h: 8px;
+}
+
+html[data-liquid-glass] input[type='range']::-webkit-slider-runnable-track {
+  height: var(--lcs-slider-track-h);
+  border-radius: 999px;
+}
+
+html[data-liquid-glass] input[type='range']::-moz-range-track {
+  height: var(--lcs-slider-track-h);
+  border-radius: 999px;
+}
+
+html[data-liquid-glass] input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--lcs-slider-thumb-w);
+  height: var(--lcs-slider-thumb-h);
+  border: none;
+  border-radius: 999px;
+  margin-top: calc((var(--lcs-slider-track-h) - var(--lcs-slider-thumb-h)) / 2);
+  background-color: var(--lcs-liquid-thumb-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  -webkit-backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  filter: var(--lcs-liquid-lens, none);
+  box-shadow:
+    inset 1px 1px 0 var(--lcs-liquid-thumb-specular, transparent),
+    inset -1px -1px 0 var(--lcs-liquid-rim, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+html[data-liquid-glass] input[type='range']::-moz-range-thumb {
+  width: var(--lcs-slider-thumb-w);
+  height: var(--lcs-slider-thumb-h);
+  border: none;
+  border-radius: 999px;
+  background-color: var(--lcs-liquid-thumb-tint, transparent);
+  backdrop-filter: blur(var(--lcs-liquid-thumb-blur, 0.6px));
+  filter: var(--lcs-liquid-lens, none);
+  box-shadow:
+    inset 1px 1px 0 var(--lcs-liquid-thumb-specular, transparent),
+    inset -1px -1px 0 var(--lcs-liquid-rim, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
 }
 
 /* Focus styles — subtle ring for interactive elements only */
@@ -172,7 +332,7 @@ select:focus-visible,
    viewport-fit=cover). iOS PWAs rely on the base styles in reset.css
    (height:100%, overflow:hidden) instead. */
 @media (display-mode: standalone), (display-mode: window-controls-overlay) {
-  html:not([data-ios-pwa]) {
+  html:not([data-ios-pwa]):not([data-tauri-mobile='ios']) {
     position: fixed;
     inset: 0;
     overflow: hidden;
@@ -195,6 +355,15 @@ select:focus-visible,
 
 }
 
+/* Native Android resizes the WebView for the IME. Lock its document to those
+   bounds just as the standalone PWA does, so focus cannot pan the shell. */
+html[data-tauri-mobile='android'] {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* ── iOS PWA viewport compensation ──
    With viewport-fit=cover + black-translucent status bar, content renders
    behind the status bar (starts at y=0), but height:100% on <html> still
@@ -210,4 +379,12 @@ html[data-ios-pwa] {
   height: var(--ios-screen-height, 100%);
   --ios-viewport-offset: env(safe-area-inset-top, 0px);
   --app-shell-height: var(--ios-screen-height, 100dvh);
+}
+
+/* Native iOS owns the full scene geometry. Older WebKit viewport units can
+   exclude safe areas or shrink under CSS zoom, leaving a composer gap.
+   Keep safe-area padding inside the individual controls, not the shell. */
+html[data-tauri-mobile='ios'] {
+  --app-shell-height: var(--ios-native-viewport-height, 100dvh);
+  height: var(--app-shell-height);
 }

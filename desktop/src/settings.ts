@@ -25,6 +25,8 @@ export interface TraySettings {
   discordRpcEnabled: boolean;
   /** Let extensions the user has granted `system_audio` analyse what this computer plays (levels and spectrum only). */
   systemAudioEnabled: boolean;
+  /** Capture remains enabled for this selected instance until explicitly turned off. */
+  desktopCaptureOrigin: string | null;
   /** Last frontend window position/size; null = center 1200x800. */
   frontendBounds: {
     x: number;
@@ -49,6 +51,7 @@ const DEFAULTS: TraySettings = {
   autoStartServer: true,
   discordRpcEnabled: false,
   systemAudioEnabled: false,
+  desktopCaptureOrigin: null,
   frontendBounds: null,
   instanceConnection: LOCAL_INSTANCE_CONNECTION,
   instanceConnectionConfigured: false,

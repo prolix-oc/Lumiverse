@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { eventBus } from "../ws/bus";
 
@@ -7,10 +8,15 @@ const db = new Database(":memory:");
 db.exec(await Bun.file(new URL("../db/migrations/035_push_subscriptions.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/117_desktop_notification_destinations.sql", import.meta.url)).text());
 db.exec(await Bun.file(new URL("../db/migrations/127_ios_push_destinations.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/130_android_push_destinations.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/133_android_notification_relay.sql", import.meta.url)).text());
 db.exec(`
   CREATE TABLE chats (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, character_id TEXT);
   CREATE TABLE characters (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL);
 `);
+db.exec(await Bun.file(new URL("../db/migrations/128_ios_live_activities.sql", import.meta.url)).text());
+db.exec(await Bun.file(new URL("../db/migrations/131_ios_notification_delivery.sql", import.meta.url)).text());
+mock.module("../crypto/init", () => ({ getEncryptionKeyBytes: () => new Uint8Array(32).fill(41) }));
 let pushNotificationPreferences: Record<string, unknown> | null = null;
 const builtPayloads: Array<Record<string, unknown>> = [];
 mock.module("../db/connection", () => ({ getDb: () => db }));
@@ -32,9 +38,10 @@ mock.module("@pushforge/builder", () => ({
 const validateHost = mock(async (_hostname: string) => {});
 mock.module("../utils/safe-fetch", () => ({ validateHost, SSRFError: class extends Error {} }));
 let apnsConfigured = true;
+let apnsDelivery: "direct" | "relay" = "direct";
 const sendAPNsNotification = mock(async (_destination: unknown, _payload: unknown): Promise<{ sent: boolean; invalidatedAt?: number }> => ({ sent: true }));
 mock.module("./apns.service", () => ({
-  getAPNsInfo: () => ({ configured: apnsConfigured, bundleId: "chat.lumiverse.ios", reason: apnsConfigured ? null : "APNs key missing" }),
+  getAPNsInfo: () => ({ configured: apnsConfigured, bundleId: "chat.lumiverse.ios", delivery: apnsDelivery, reason: apnsConfigured ? null : "APNs key missing" }),
   sendAPNsNotification,
 }));
 
@@ -65,6 +72,7 @@ app.route("/push", pushRoutes);
 app.route("/desktop-notifications", desktopNotificationTransportRoutes);
 
 beforeEach(() => {
+  db.exec("DELETE FROM ios_live_activities");
   db.exec("DELETE FROM push_subscriptions");
   db.exec("DELETE FROM desktop_notification_destinations");
   db.exec("DELETE FROM ios_push_destinations");
@@ -73,6 +81,7 @@ beforeEach(() => {
   fetchMock.mockClear();
   builtPayloads.length = 0;
   apnsConfigured = true;
+  apnsDelivery = "direct";
   sendAPNsNotification.mockReset();
   sendAPNsNotification.mockImplementation(async () => ({ sent: true }));
   pushNotificationPreferences = null;
@@ -96,6 +105,67 @@ afterAll(() => {
 describe("push presence suppression", () => {
   const iosInput = { deviceId: "iphone-install-123456", deviceToken: "ab".repeat(32), bundleId: "chat.lumiverse.ios",
     environment: "development" as const, serverOrigin: "https://lumiverse.example.com" };
+
+  test("relay enrollment requires device proof credentials and stores secrets encrypted without exposing them", () => {
+    apnsDelivery = "relay";
+    expect(() => createIOSDestination(userId, iosInput)).toThrow("complete relay verification");
+    const key = Buffer.alloc(32, 23), encryption = { key: key.toString("base64"), keyId: createHash("sha256").update(key).digest("hex").slice(0, 32) };
+    const relayCredential = "lvr_" + "a".repeat(43);
+    expect(() => createIOSDestination(userId, { ...iosInput, encryption, relayCredential: "invalid" })).toThrow();
+    expect(() => createIOSDestination(userId, { ...iosInput, encryption, relayCredential, delivery: "direct" })).toThrow("route changed");
+    const destination = createIOSDestination(userId, { ...iosInput, encryption, relayCredential, delivery: "relay" });
+    expect(destination.delivery_mode).toBe("relay");
+    const listed = JSON.stringify(listNotificationDestinations(userId));
+    expect(listed).not.toContain(relayCredential); expect(listed).not.toContain(encryption.key);
+    const stored = db.query("SELECT relay_credential, encryption_key FROM ios_push_destinations WHERE id = ?").get(destination.id) as any;
+    expect(stored.relay_credential).toStartWith("lvns1:"); expect(stored.encryption_key).toStartWith("lvns1:");
+    expect(JSON.stringify(stored)).not.toContain(relayCredential); expect(JSON.stringify(stored)).not.toContain(encryption.key);
+  });
+
+  function enrollActivity(overrides: Record<string, unknown> = {}) {
+    const row = { id: crypto.randomUUID(), user_id: userId, chat_id: "chat-1", generation_id: "gen-1",
+      device_id: iosInput.deviceId, bundle_id: iosInput.bundleId, environment: iosInput.environment, server_origin: iosInput.serverOrigin,
+      credential_hash: "hash", expires_at: Date.now() + 60_000, desired_phase: "streaming",
+      activity_id: "activity-1", push_token: "aa".repeat(32), ended_at: null, ...overrides };
+    db.query(`INSERT INTO ios_live_activities (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`)
+      .run(...Object.values(row) as any[]);
+  }
+
+  test("an enrolled Live Activity replaces only its own iPhone's generation alert", async () => {
+    createIOSDestination(userId, iosInput);
+    const second = createIOSDestination(userId, { ...iosInput, deviceId: "second-iphone-123456", deviceToken: "cd".repeat(32) });
+    enrollActivity();
+    for (const outcome of [{ content: "Ready" }, { error: "Provider unavailable" }]) {
+      sendAPNsNotification.mockClear();
+      expect(await dispatchGenerationEndedPush(userId, { generationId: "gen-1", chatId: "chat-1", ...outcome })).toEqual({ sent: 3 });
+      expect(sendAPNsNotification).toHaveBeenCalledTimes(1);
+      expect(sendAPNsNotification.mock.calls[0]![0]).toMatchObject({ id: second.id });
+    }
+    // The terminal sender may already have marked the activity ended.
+    db.query("UPDATE ios_live_activities SET ended_at = ?, desired_phase = 'completed', delivered_phase = 'completed'").run(Date.now());
+    sendAPNsNotification.mockClear();
+    expect(await dispatchGenerationEndedPush(userId, { generationId: "gen-1", content: "Ready" })).toEqual({ sent: 3 });
+    expect(sendAPNsNotification).toHaveBeenCalledTimes(1);
+  });
+
+  test("missing, hidden, expired, unstarted and unrelated activities keep standard push delivery", async () => {
+    const destination = createIOSDestination(userId, iosInput);
+    const dispatch = () => dispatchGenerationEndedPush(userId, { generationId: "gen-1", content: "Ready" }, { destinationId: destination.id });
+    expect(await dispatch()).toEqual({ sent: 1 });
+    for (const overrides of [{ activity_id: null, push_token: null }, { push_token: null }, { expires_at: 1 },
+      { generation_id: "gen-older" }, { user_id: "another-user" }, { device_id: "other-phone-12345" },
+      { bundle_id: "chat.other.ios" }, { environment: "production" }, { server_origin: "https://other.example.com" },
+      { ended_at: Date.now() - 121_000 }]) {
+      db.exec("DELETE FROM ios_live_activities");
+      enrollActivity(overrides);
+      expect(await dispatch()).toEqual({ sent: 1 });
+    }
+    db.exec("DELETE FROM ios_live_activities"); // Hide/revoke removes the enrollment.
+    expect(await dispatch()).toEqual({ sent: 1 });
+    enrollActivity();
+    expect(await dispatchGenerationEndedPush(userId, { content: "Test" }, { destinationId: destination.id, bypassPresence: true }))
+      .toEqual({ sent: 1 });
+  });
 
   test("registers native iOS destinations without leaking tokens and rotates them in place", () => {
     const first = createIOSDestination(userId, iosInput);

@@ -298,11 +298,19 @@ function resolveConsolidationSidecarOptions(
 
 // ─── Consolidation Pipeline ────────────────────────────────────
 
-/**
- * Check if consolidation is needed and run it if so.
- * Called after chunk creation, runs synchronously for extractive mode.
- */
-export async function maybeConsolidate(
+const consolidatingChats = new Set<string>();
+
+/** Run one due scene batch. All entry points share a per-chat guard because
+ * provider calls release the JS thread while summaries are in progress. */
+export async function maybeConsolidate(...args: Parameters<typeof consolidateNext>): Promise<boolean> {
+  const chatId = args[1];
+  if (consolidatingChats.has(chatId)) return false;
+  consolidatingChats.add(chatId);
+  try { return await consolidateNext(...args); }
+  finally { consolidatingChats.delete(chatId); }
+}
+
+async function consolidateNext(
   userId: string,
   chatId: string,
   config: ConsolidationConfig,
@@ -467,7 +475,7 @@ async function maybeConsolidateArcs(
   samplingParameters?: Record<string, unknown>,
   extraScaffoldTags?: string[],
   sidecarOptions?: ConsolidationSidecarOptions,
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
 
   // Check threshold with COUNT first, then fetch only the batch we need.
@@ -483,7 +491,7 @@ async function maybeConsolidateArcs(
     )
     .get(chatId, chatId) as { count: number } | null;
 
-  if (!countRow || countRow.count < config.arcThreshold) return;
+  if (config.arcThreshold < 1 || !countRow || countRow.count < config.arcThreshold) return false;
 
   const batch = db
     .query(
@@ -503,7 +511,7 @@ async function maybeConsolidateArcs(
   let arcSummary: string;
   let arcTitle: string | null = null;
 
-  if (sidecarOptions?.signal?.aborted) return;
+  if (sidecarOptions?.signal?.aborted) return false;
   sidecarOptions?.onProgress?.("arc");
 
   if (config.useSidecar && generateRawFn) {
@@ -523,7 +531,7 @@ async function maybeConsolidateArcs(
       } else {
         console.warn("[memory-cortex] Arc consolidation sidecar exhausted, skip persist");
       }
-      return;
+      return false;
     }
 
     if (decision.result && !decision.useExtractive) {
@@ -576,6 +584,7 @@ async function maybeConsolidateArcs(
   console.info(
     `[memory-cortex] Created arc consolidation ${arcId} from ${batch.length} tier-1 consolidations`,
   );
+  return true;
 }
 
 // ─── Extractive Consolidation ──────────────────────────────────
@@ -932,9 +941,9 @@ export function getSummaryQualityIssue(
 }
 
 /**
- * Drain an existing chunk backlog after a rebuild. Rebuild ingestion uses
- * pre-computed extraction responses, so consolidation must run separately
- * with the real sidecar adapter after all chunks have been persisted.
+ * Drain due scene batches and pending arcs after live ingestion or a rebuild.
+ * Rebuild ingestion uses pre-computed extraction responses, so its summaries
+ * run separately with the real sidecar adapter after all chunks are persisted.
  */
 export async function consolidateBacklog(
   userId: string,
@@ -948,20 +957,27 @@ export async function consolidateBacklog(
   sidecarOptions?: ConsolidationSidecarOptions,
 ): Promise<number> {
   let created = 0;
-  if (sidecarOptions?.signal?.aborted) return created;
-  while (await maybeConsolidate(
-    userId,
-    chatId,
-    config,
-    generateRawFn,
-    sidecarConnectionId,
-    sidecarTimeoutMs,
-    samplingParameters,
-    extraScaffoldTags,
-    sidecarOptions,
-  )) {
-    created++;
-    if (sidecarOptions?.signal?.aborted) break;
+  if (!config.enabled || sidecarOptions?.signal?.aborted || consolidatingChats.has(chatId)) return created;
+  consolidatingChats.add(chatId);
+  try {
+    const resolvedSidecar = resolveConsolidationSidecarOptions(userId, sidecarConnectionId, sidecarTimeoutMs, sidecarOptions);
+    while (await consolidateNext(
+      userId, chatId, config, generateRawFn, sidecarConnectionId, sidecarTimeoutMs,
+      samplingParameters, extraScaffoldTags, resolvedSidecar,
+    )) {
+      created++;
+      if (resolvedSidecar.signal?.aborted) return created;
+    }
+    // A previous arc request may have failed after its scene summaries were
+    // saved. Retry that backlog even when no new scene batch is due.
+    while (await maybeConsolidateArcs(
+      userId, chatId, config, generateRawFn, sidecarConnectionId, sidecarTimeoutMs,
+      samplingParameters, extraScaffoldTags, resolvedSidecar,
+    )) {
+      if (resolvedSidecar.signal?.aborted) break;
+    }
+    return created;
+  } finally {
+    consolidatingChats.delete(chatId);
   }
-  return created;
 }

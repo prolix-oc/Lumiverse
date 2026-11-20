@@ -2,6 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { isLargeUploadBodyLimitExemptPath } from "./body-limit-exempt";
 
 describe("isLargeUploadBodyLimitExemptPath", () => {
+  test("lets only native capture response POSTs use the broker's larger authenticated limit", () => {
+    const path = "/api/desktop/v1/capture/devices/device-a/responses";
+    expect(isLargeUploadBodyLimitExemptPath(path, "POST")).toBe(true);
+    for (const method of ["GET", "PUT", undefined]) expect(isLargeUploadBodyLimitExemptPath(path, method)).toBe(false);
+    for (const suffix of ["/extra", "-other"]) expect(isLargeUploadBodyLimitExemptPath(path + suffix, "POST")).toBe(false);
+    expect(isLargeUploadBodyLimitExemptPath("/api/desktop/v1/capture/devices", "POST")).toBe(false);
+  });
+
   test("allows the wallpaper upload endpoint through the global 10MB guard", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/wallpapers")).toBe(true);
   });

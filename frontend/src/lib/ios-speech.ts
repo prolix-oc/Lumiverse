@@ -1,4 +1,5 @@
 import { iosNativeRequest } from './ios-native'
+import { uuidv4 } from './uuid'
 import type { STTAudioFrame, STTConfig, STTEngine, STTEngineStatus, STTResult } from './sttEngine'
 
 export class IOSSpeechEngine implements STTEngine {
@@ -28,7 +29,7 @@ export class IOSSpeechEngine implements STTEngine {
 
   async start(): Promise<void> {
     if (this.id) return
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     this.id = id; this.stopping = false
     window.addEventListener('lumiverse:ios-speech', this.event)
     window.addEventListener('pagehide', this.pagehide)

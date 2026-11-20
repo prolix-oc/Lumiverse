@@ -1,3 +1,5 @@
+import { connectionOrganizationApi } from '@/api/connection-organization'
+import { CONNECTION_ORGANIZATION_CAPABILITIES } from '../../../../src/shared/connection-organization'
 import { activeTab } from '@/lib/active-tab'
 import { CLIENT_HOST_CAPABILITIES, createFrontendClientAPI, type SpindleClientAPI } from './client-api'
 import { downloadExtensionFile } from './file-downloads'
@@ -24,6 +26,8 @@ import type {
   Message,
   PaginatedResult,
   RecentChat,
+  SttConnectionProfile,
+  TtsConnectionProfile,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
@@ -32,6 +36,8 @@ import type { SpindleCharacterEditorUI } from './character-editor-types'
 import type { SpindleConnectionEditorUI } from './connection-editor-types'
 import type { SpindlePresetEditorUI } from './preset-editor-types'
 import { isKnownMountPoint, type WidenedMountPoint } from './mount-points'
+import { clearExtensionMountPoints, recordExtensionMountPoint } from './extension-mount-points'
+export { hasExtensionMountPoint, subscribeExtensionMountPoints, getExtensionMountPointsVersion } from './extension-mount-points'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
 import { registerDisplayResolver, unregisterDisplayResolver, revokeInlineCardWrappingOptOut } from './display-resolver-registry'
@@ -80,6 +86,7 @@ import {
   destroyComponentsForExtensionPermission,
 } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
+import { createFrontendUUIDAPI, SPINDLE_FRONTEND_UUID_HOST_CAPABILITIES, type SpindleFrontendUUIDAPI } from './uuid-api'
 import { installSpindleNavigationGuards } from './navigation-guards'
 import { DRAWER_TABS, ensureRegistryRoot } from '@/lib/drawer-tab-registry'
 import { resolveCouncilTabId } from '@/lib/council-navigation'
@@ -94,6 +101,9 @@ import { spindleApi } from '@/api/spindle'
 import { charactersApi } from '@/api/characters'
 import * as chatsApiModule from '@/api/chats'
 import * as connectionsApiModule from '@/api/connections'
+import * as embeddingsApiModule from '@/api/embeddings'
+import * as ttsConnectionsApiModule from '@/api/tts-connections'
+import * as sttConnectionsApiModule from '@/api/stt-connections'
 import * as worldBooksApiModule from '@/api/world-books'
 import * as tokenizersApiModule from '@/api/tokenizers'
 import { settingsApi } from '@/api/settings'
@@ -142,6 +152,7 @@ import {
   type SpindleSettingsAPI,
 } from './settings-bridge'
 import { createFrontendDomainApi } from './frontend-domain-api'
+import { SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import { createStateSelectors, type StateSelectors } from './state-selectors'
 import {
   canonicalFrontendAuthorityResolver,
@@ -173,7 +184,11 @@ import {
 } from './dom-decorator-service'
 import { registerHostIntentHandler, type HostIntentHandler, type JsonValue } from './host-intent-registry'
 import { createNativeSTTAPI } from './stt-native'
+import { createNativeTTSAPI } from './tts-native'
+import { SPINDLE_TTS_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import { createNativeSystemAudioAPI } from './system-audio-native'
+import { SPINDLE_COMPOSER_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
+import { createFrontendComposerAPI } from './composer-api'
 
 declare const __APP_VERSION__: string
 
@@ -335,10 +350,12 @@ type FrontendExtensionHost = {
   surfaces: HostSurfaceAPI
 }
 
-type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'dom'> & {
+type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'messages' | 'dom' | 'components'> & {
+  components: ReturnType<typeof createComponentsHelper>
   readonly frontendSessionId: string
   host: FrontendExtensionHost
   readonly client: SpindleClientAPI
+  readonly uuid: SpindleFrontendUUIDAPI
   theme: SpindleThemeAuthoringAPI
   dom: FrontendExtensionDOM
   ready(): void
@@ -424,42 +441,13 @@ const MAX_PENDING_STARTUP_ITEMS = 100
 const FRONTEND_READY_TIMEOUT_MS = 10_000
 const FRONTEND_BUNDLE_TIMEOUT_MS = 15_000
 const FRONTEND_MODULE_IMPORT_TIMEOUT_MS = 10_000
-const extensionMountPoints = new Map<string, Set<WidenedMountPoint>>()
-const extensionMountPointListeners = new Set<() => void>()
-let extensionMountPointsVersion = 0
 const warnedUnknownMountPoints = new Set<WidenedMountPoint>()
-
-function notifyExtensionMountPointListeners(): void {
-  extensionMountPointsVersion += 1
-  for (const listener of extensionMountPointListeners) {
-    try {
-      listener()
-    } catch (err) {
-      console.error('[Spindle] Extension mount-point listener error:', err)
-    }
-  }
-}
-
-function recordExtensionMountPoint(extensionId: string, point: WidenedMountPoint): void {
-  const existing = extensionMountPoints.get(extensionId)
-  if (existing?.has(point)) return
-
-  const next = existing ? new Set(existing) : new Set<WidenedMountPoint>()
-  next.add(point)
-  extensionMountPoints.set(extensionId, next)
-  notifyExtensionMountPointListeners()
-}
 
 function warnUnknownMountPoint(point: WidenedMountPoint): void {
   if (!import.meta.env.DEV || isKnownMountPoint(point) || warnedUnknownMountPoints.has(point)) return
 
   warnedUnknownMountPoints.add(point)
   console.warn(`[Spindle] Mount point "${point}" is not in the host mount-point catalog`)
-}
-
-function clearExtensionMountPoints(extensionId: string): void {
-  if (!extensionMountPoints.delete(extensionId)) return
-  notifyExtensionMountPointListeners()
 }
 
 function deliverBackendMessage(loaded: LoadedExtension, payload: unknown): void {
@@ -705,6 +693,7 @@ async function doLoadFrontendExtension(
   }
   let stateSelectors: StateSelectors | undefined
   let speech: ReturnType<typeof createNativeSTTAPI> | undefined
+  let textToSpeech: ReturnType<typeof createNativeTTSAPI> | undefined
   let systemAudio: ReturnType<typeof createNativeSystemAudioAPI> | undefined
   let cachedGrantedPermissions: string[] = []
   const settingsBridge = createSettingsBridge({
@@ -837,6 +826,7 @@ async function doLoadFrontendExtension(
     stateSelectors?.revokePermissions(revokedPermissions)
     if (revokedPermissions.includes('media')) speech?.revoke()
     if (revokedPermissions.includes('system_audio')) systemAudio?.revoke()
+    if (revokedPermissions.includes('media')) textToSpeech?.revoke()
     if (revokedPermissions.includes('app_manipulation')) revokeInlineCardWrappingOptOut(manifest.identifier)
     if (previous.includes('world_books') && !next.includes('world_books')) {
       destroyComponentsForExtensionPermission(extensionId, 'world_books', generation)
@@ -1248,6 +1238,17 @@ async function doLoadFrontendExtension(
         ?? (async (_id: string): Promise<ConnectionModelsResult> => ({ models: [], provider: '' })),
       update: connectionsApiModule.connectionsApi?.update
         ?? (async (_id: string, _input: UpdateConnectionProfileInput): Promise<ConnectionProfile> => ({ } as ConnectionProfile)),
+      embeddingConfig: embeddingsApiModule.embeddingsApi?.getConfig
+        ?? (async () => ({ connectionProfiles: [], primaryProfileId: null })),
+      async speechProfiles(kind: 'tts' | 'stt') {
+        const api = kind === 'tts' ? ttsConnectionsApiModule.ttsConnectionsApi : sttConnectionsApiModule.sttConnectionsApi
+        const profiles: Array<TtsConnectionProfile | SttConnectionProfile> = []
+        while (true) {
+          const page = await api.list({ limit: 100, offset: profiles.length })
+          profiles.push(...page.data)
+          if (!page.data.length || profiles.length >= page.total) return profiles
+        }
+      },
     }
     const runtimeWorldBooksApi = {
       list: worldBooksApiModule.worldBooksApi?.list
@@ -1291,6 +1292,11 @@ async function doLoadFrontendExtension(
       requirePermission: assertCanonicalPermission,
       onTeardown,
     })
+    textToSpeech = createNativeTTSAPI({
+      assertActive: assertFrontendActive,
+      requirePermission: assertCanonicalPermission,
+      onTeardown,
+    })
     systemAudio = createNativeSystemAudioAPI({
       assertActive: assertFrontendActive,
       requirePermission: assertCanonicalPermission,
@@ -1309,8 +1315,11 @@ async function doLoadFrontendExtension(
       },
       onTeardown,
       connections: {
+        organization: connectionOrganizationApi,
         models: runtimeConnectionsApi.models,
         update: runtimeConnectionsApi.update,
+        embeddingConfig: runtimeConnectionsApi.embeddingConfig,
+        speechProfiles: runtimeConnectionsApi.speechProfiles,
       },
       chats: {
         listForCharacter: runtimeChatsApi.listCharacterChats,
@@ -1339,19 +1348,12 @@ async function doLoadFrontendExtension(
     const pendingConfirmCleanups = new Set<() => void>()
 
     let mountSyncActive = true
-    let mountRetryTimer: ReturnType<typeof setTimeout> | null = null
     const registeredDecoratorAnchors = new Set<Element>()
     const attachMountRoots = () => {
       if (!mountSyncActive) return
-      if (document.body.hasAttribute('data-chat-chrome-entering')) {
-        if (mountRetryTimer === null) {
-          mountRetryTimer = setTimeout(() => {
-            mountRetryTimer = null
-            attachMountRoots()
-          }, 50)
-        }
-        return
-      }
+      // Prepare roots and decorator anchors during the hidden chat load.
+      // Waiting for the entrance flag to clear would move their mount/layout
+      // work into the composer and message-list animation itself.
       for (const [point, root] of mountRoots) {
         const selector = `[data-spindle-mount="${point}"]`
         const target = document.querySelector(selector)
@@ -1394,10 +1396,6 @@ async function doLoadFrontendExtension(
 
     const cleanupMountInfra = () => {
       mountSyncActive = false
-      if (mountRetryTimer !== null) {
-        clearTimeout(mountRetryTimer)
-        mountRetryTimer = null
-      }
       mountObserver.disconnect()
       unloadDomDecorators()
       registeredDecoratorAnchors.clear()
@@ -1422,8 +1420,15 @@ async function doLoadFrontendExtension(
       descriptorVersion: 1 as const,
       lumiverseVersion: LUMIVERSE_VERSION,
       capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES, ...THEME_AUTHORING_HOST_CAPABILITIES, ...SPINDLE_STT_HOST_CAPABILITIES, ...SPINDLE_SYSTEM_AUDIO_HOST_CAPABILITIES,
+        'desktop-keybindings-editor-v1': 1,
+        'shared-select-pagination-v1': 1,
+        "message-preset-context-v1": 1,
+        ...SPINDLE_CONNECTION_KINDS_HOST_CAPABILITIES, ...CONNECTION_ORGANIZATION_CAPABILITIES,
         ...CLIENT_HOST_CAPABILITIES,
+        ...SPINDLE_FRONTEND_UUID_HOST_CAPABILITIES,
+        ...SPINDLE_TTS_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
+        ...SPINDLE_COMPOSER_HOST_CAPABILITIES,
       }),
       extensionInstallationId: extensionId,
       surfaces: createHostSurfaceAPI({
@@ -1465,6 +1470,7 @@ async function doLoadFrontendExtension(
     const baseContext: FrontendExtensionContextBase = {
       host,
       client: createFrontendClientAPI(assertFrontendActive),
+      uuid: createFrontendUUIDAPI(assertFrontendActive),
       theme: createNativeThemeAuthoringAPI(
         assertFrontendActive,
         (member) => assertCanonicalPermission('app_manipulation', member),
@@ -1760,12 +1766,17 @@ async function doLoadFrontendExtension(
           const backdrop = document.createElement('div')
           Object.assign(backdrop.style, {
             position: 'fixed', inset: '0', zIndex: '10003',
+            width: 'var(--app-scaled-viewport-width)', height: 'var(--app-scaled-viewport-height)',
             background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           })
 
           const container = document.createElement('div')
           const geometry = resolveCurrentSpindleModalGeometry(options)
+          const syncGeometry = () => {
+            const current = resolveCurrentSpindleModalGeometry(options)
+            Object.assign(container.style, { width: `${current.width}px`, maxHeight: `${current.maxHeight}px` })
+          }
           Object.assign(container.style, {
             width: `${geometry.width}px`, maxHeight: `${geometry.maxHeight}px`,
             background: 'var(--lumiverse-bg)', borderRadius: '12px',
@@ -1809,6 +1820,10 @@ async function doLoadFrontendExtension(
           }
 
           document.body.appendChild(backdrop)
+          const geometryObserver = new MutationObserver(syncGeometry)
+          geometryObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+          window.addEventListener('resize', syncGeometry)
+          window.visualViewport?.addEventListener('resize', syncGeometry)
 
           const handle = {
             root,
@@ -1820,6 +1835,9 @@ async function doLoadFrontendExtension(
               unregisterRoot()
               destroyComponentsForTarget(root)
               backdrop.remove()
+              geometryObserver.disconnect()
+              window.removeEventListener('resize', syncGeometry)
+              window.visualViewport?.removeEventListener('resize', syncGeometry)
               modalDisposers.delete(handle.dismiss)
               for (const h of dismissHandlers) { try { h() } catch {} }
               dismissHandlers.clear()
@@ -2180,7 +2198,13 @@ async function doLoadFrontendExtension(
       domain,
       geometry: createFrontendGeometryAPI(),
       stt: speech.api,
+      tts: textToSpeech.api,
       systemAudio: systemAudio.api,
+      composer: createFrontendComposerAPI({
+        assertActive: assertFrontendActive,
+        requirePermission: assertCanonicalPermission,
+        onTeardown,
+      }),
       onTeardown,
     })
 
@@ -2759,21 +2783,6 @@ export function routeFrontendProcessEvent(extensionId: string, payload: Frontend
 
 export function getLoadedExtensions(): Map<string, LoadedExtension> {
   return loadedExtensions
-}
-
-export function hasExtensionMountPoint(extensionId: string, point: SpindleMountPoint): boolean {
-  return extensionMountPoints.get(extensionId)?.has(point) ?? false
-}
-
-export function subscribeExtensionMountPoints(listener: () => void): () => void {
-  extensionMountPointListeners.add(listener)
-  return () => {
-    extensionMountPointListeners.delete(listener)
-  }
-}
-
-export function getExtensionMountPointsVersion(): number {
-  return extensionMountPointsVersion
 }
 
 export async function unloadAllFrontendExtensions(): Promise<void> {

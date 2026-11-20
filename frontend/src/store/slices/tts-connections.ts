@@ -1,10 +1,9 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, TtsConnectionsSlice } from '@/types/store'
 import type { TtsConnectionProfile } from '@/types/api'
-import { persistKey } from './settings'
 import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
-export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnectionsSlice> = (set) => ({
+export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnectionsSlice> = (set, get) => ({
   ttsProfiles: [],
   ttsProviders: [],
 
@@ -26,10 +25,9 @@ export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnec
         ttsProfiles: existingIndex === -1
           ? [profile, ...state.ttsProfiles]
           : state.ttsProfiles.map((candidate, index) => index === existingIndex ? profile : candidate),
-        connectionsOrder: nextConnectionsOrder,
       }
     })
-    if (orderToPersist) persistKey('connectionsOrder', orderToPersist, 'state-sync')
+    if (orderToPersist) get().setSetting('connectionsOrder', orderToPersist, 'state-sync')
   },
 
   updateTtsProfile: (id, updates) =>

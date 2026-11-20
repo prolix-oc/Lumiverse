@@ -10,6 +10,7 @@ import common from '@/i18n/locales/en/common.json'
 const chats = [{ id: 'harbor', name: 'Harbor', message_count: 12, created_at: 1, updated_at: 2, last_message_preview: 'A ship arrives.' }]
 const onSelect = mock(() => {})
 const store = { closeModal: mock(() => {}), characters: [], modalProps: { characterId: 'character', characterName: 'Captain' }, activeChatId: null }
+mock.module('@/hooks/useCharacterCatalog', () => ({ useCharacterCatalog: () => store.characters }))
 mock.module('@/store', () => ({ useStore: (select: (state: typeof store) => unknown) => select(store) }))
 mock.module('react-router', () => ({ useNavigate: () => () => {} }))
 mock.module('@/api/client', () => ({ get: async () => chats }))

@@ -3,7 +3,11 @@ name: SQLite execution regression tests
 on:
   pull_request:
     paths:
+      - 'src/auth/**'
       - 'src/db/**'
+      - 'src/utils/bun-cmd.ts'
+      - 'src/utils/subprocess-messages.ts'
+      - 'src/runtime/bun-runtime.ts'
       - 'src/services/**'
       - 'src/routes/**'
       - 'src/app.ts'
@@ -33,12 +37,14 @@ jobs:
       - name: Test contention, responsiveness, interruption, and cleanup
         run: >-
           bun test --isolate
+          src/auth/startup.test.ts
           src/db/connection.test.ts
           src/db/execution.test.ts
           src/db/execution-transport.test.ts
           src/db/checkpoint-diagnostics.test.ts
           src/db/image-reference-index.test.ts
           src/db/migrate.baseline-sync.test.ts
+          src/db/migrate.test.ts
           src/db/maintenance.test.ts
           src/db/maintenance-scheduler.test.ts
           src/services/database-execution.test.ts

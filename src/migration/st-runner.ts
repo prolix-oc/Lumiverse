@@ -21,6 +21,7 @@ import {
   importWorldBooks,
 } from "./st-importer";
 import { importSTConnections } from "./st-connections";
+import { importGalleryContent } from "./st-gallery-import";
 import { scanSTData, type MigrationLogger } from "./st-reader";
 import type { MigrationResults, MigrationScope } from "./st-types";
 export interface RunStMigrationHooks {
@@ -215,6 +216,30 @@ async function runStMigrationPipelineInner(
     logger.info(`Group chats: ${gcResult.imported} imported (${gcResult.totalMessages} messages), ${gcResult.failed} failed`);
     if (gcResult.skipped > 0) {
       logger.warn(`${gcResult.skipped} group(s) skipped — no members found`);
+    }
+  }
+
+  // Gallery runs last: it rewrites character text and already-imported chats,
+  // so those rows must exist first.
+  if (scope.gallery && counts.characters > 0 && !phaseDone("gallery")) {
+    setPhase("gallery");
+    logger.info("Importing character galleries...");
+    const galleryResult = await importGalleryContent(targetUserId, dataDir, filenameToId, logger, fs);
+    results.gallery = {
+      imported: galleryResult.imported,
+      skipped: galleryResult.skipped,
+      failed: galleryResult.failed,
+      characters_with_gallery: galleryResult.charactersWithGallery,
+      rewrites: galleryResult.rewrites,
+      contested_characters: galleryResult.contestedCharacters,
+    };
+    finishPhase("gallery");
+    logger.info(
+      `Gallery: ${galleryResult.imported} images imported, ${galleryResult.skipped} reused, ${galleryResult.failed} failed, ` +
+      `${galleryResult.charactersWithGallery} character(s) updated, ${galleryResult.rewrites} reference rewrite(s)`,
+    );
+    if (galleryResult.contestedCharacters > 0) {
+      logger.warn(`${galleryResult.contestedCharacters} character(s) skipped — their gallery folder is shared with another character`);
     }
   }
 

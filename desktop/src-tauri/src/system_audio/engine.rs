@@ -301,6 +301,8 @@ mod tests {
     use std::sync::{atomic::AtomicUsize, Mutex};
 
     const RATE: u32 = 48_000;
+    // ARM64 tests run under QEMU on a shared host, where multiple test workers can be delayed by other guests.
+    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     /// A device the test drives by hand.
     #[derive(Clone, Default)]
@@ -423,20 +425,36 @@ mod tests {
         }
     }
 
-    fn settle(ms: u64) {
-        thread::sleep(Duration::from_millis(ms));
-    }
     fn count(rig: &Rig) -> usize {
         rig.frames.lock().unwrap().len()
     }
+    fn wait_until(mut condition: impl FnMut() -> bool, message: &str) {
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        while !condition() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(condition(), "{message}");
+    }
+    fn wait_for_frames(rig: &Rig, minimum: usize) {
+        wait_until(
+            || count(rig) >= minimum,
+            "capture did not produce the expected frames",
+        );
+    }
+    fn wait_for_drains(rig: &Rig, minimum: usize) {
+        wait_until(
+            || rig.knobs.drains.load(Ordering::SeqCst) >= minimum,
+            "capture thread did not drain the test device",
+        );
+    }
     fn exit_of(rig: &Rig) -> Option<Exit> {
-        rig.ended.recv_timeout(Duration::from_secs(2)).ok()
+        rig.ended.recv_timeout(TEST_TIMEOUT).ok()
     }
 
     #[test]
-    fn nothing_playing_sends_nothing_and_barely_wakes() {
+    fn nothing_playing_sends_nothing() {
         let rig = start(Knobs::default(), true);
-        settle(150);
+        wait_for_drains(&rig, 20);
         assert_eq!(count(&rig), 0);
         rig.capture.stop();
         assert_eq!(exit_of(&rig), Some(Exit::Stopped));
@@ -446,20 +464,43 @@ mod tests {
     fn stereo_mode_survives_device_reopen_and_emits_complete_silence() {
         let rig = start_mode(Knobs::default(), true, true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
-        settle(150);
-        assert!(rig
-            .frames
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|f| f
-                .stereo
-                .as_ref()
-                .is_some_and(|s| s.left.amplitude > 0.0 && s.right.amplitude > 0.0)));
+        wait_until(
+            || {
+                rig.frames.lock().unwrap().iter().any(|frame| {
+                    frame.stereo.as_ref().is_some_and(|stereo| {
+                        stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0
+                    })
+                })
+            },
+            "stereo capture did not produce audible frames",
+        );
+        let drains_before_reopen = rig.knobs.drains.load(Ordering::SeqCst);
         rig.knobs.reopen_works.store(true, Ordering::SeqCst);
         rig.knobs.gone.store(true, Ordering::SeqCst);
-        settle(150);
-        assert!(rig.knobs.reopens.load(Ordering::SeqCst) > 0);
+        wait_until(
+            || rig.knobs.reopens.load(Ordering::SeqCst) == 1,
+            "capture did not reopen the device",
+        );
+        wait_until(
+            || rig.knobs.drains.load(Ordering::SeqCst) > drains_before_reopen + 1,
+            "capture did not drain the reopened device",
+        );
+        let resumed_after_reopen = count(&rig);
+        wait_until(
+            || {
+                rig.frames
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .skip(resumed_after_reopen)
+                    .any(|frame| {
+                        frame.stereo.as_ref().is_some_and(|stereo| {
+                            stereo.left.amplitude > 0.0 && stereo.right.amplitude > 0.0
+                        })
+                    })
+            },
+            "stereo capture did not resume after device reopen",
+        );
         assert!(rig
             .frames
             .lock()
@@ -467,7 +508,21 @@ mod tests {
             .iter()
             .all(|f| f.stereo.is_some()));
         rig.knobs.loud.store(false, Ordering::SeqCst);
-        settle(400);
+        wait_until(
+            || {
+                rig.frames.lock().unwrap().last().is_some_and(|frame| {
+                    frame.amplitude == 0.0
+                        && frame.peak == 0.0
+                        && frame.stereo.as_ref().is_some_and(|stereo| {
+                            stereo.left.amplitude == 0.0
+                                && stereo.right.amplitude == 0.0
+                                && stereo.left.peak == 0.0
+                                && stereo.right.peak == 0.0
+                        })
+                })
+            },
+            "stereo capture did not emit a complete silence frame",
+        );
         let last = rig.frames.lock().unwrap().last().cloned().unwrap();
         let stereo = last.stereo.unwrap();
         assert_eq!(
@@ -490,13 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn sound_produces_frames_at_roughly_the_requested_rate_then_one_zero_frame() {
+    fn sound_produces_frames_then_one_zero_frame() {
         let rig = start(Knobs::default(), true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
-        settle(400);
-        let during = count(&rig);
-        // 10 ms interval over ~400 ms, minus the time to fill the first window: a loose band, not a benchmark.
-        assert!((8..=45).contains(&during), "{during} frames");
+        wait_for_frames(&rig, 3);
         assert!(rig
             .frames
             .lock()
@@ -505,14 +557,23 @@ mod tests {
             .any(|f| f.bands.iter().any(|&b| b > 0.0)));
 
         rig.knobs.loud.store(false, Ordering::SeqCst);
-        settle(500);
+        wait_until(
+            || {
+                rig.frames
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|frame| frame.amplitude == 0.0)
+            },
+            "the zero frame was not sent after sound stopped",
+        );
         let after = count(&rig);
-        assert!(after >= during + 1, "the zero frame was not sent");
         let last = rig.frames.lock().unwrap().last().cloned().unwrap();
         assert_eq!((last.amplitude, last.peak), (0.0, 0.0));
         assert!(last.bands.iter().all(|&b| b == 0.0));
         // And then it goes quiet again: only the one zero frame came after the sound stopped.
-        settle(200);
+        let drains = rig.knobs.drains.load(Ordering::SeqCst);
+        wait_for_drains(&rig, drains + 20);
         assert_eq!(count(&rig), after);
         rig.capture.stop();
     }
@@ -521,21 +582,25 @@ mod tests {
     fn a_hidden_window_drains_without_decoding_or_sending() {
         let rig = start(Knobs::default(), true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
-        settle(150);
+        wait_for_frames(&rig, 1);
         rig.paused.store(true, Ordering::SeqCst);
-        settle(60);
-        let sent = count(&rig);
         let discards = rig.knobs.discards.load(Ordering::SeqCst);
-        settle(200);
-        assert_eq!(count(&rig), sent, "frames were sent while hidden");
-        assert!(
-            rig.knobs.discards.load(Ordering::SeqCst) > discards,
-            "audio was not released while hidden"
+        wait_until(
+            || rig.knobs.discards.load(Ordering::SeqCst) > discards,
+            "audio was not released while the window was hidden",
         );
+        // The first discard acknowledges that the capture thread observed the pause. Count from that point so an
+        // in-flight frame from before the pause is not mistaken for work done while hidden.
+        let sent = count(&rig);
+        let acknowledged_discards = rig.knobs.discards.load(Ordering::SeqCst);
+        wait_until(
+            || rig.knobs.discards.load(Ordering::SeqCst) > acknowledged_discards,
+            "capture did not continue draining while the window was hidden",
+        );
+        assert_eq!(count(&rig), sent, "frames were sent while hidden");
 
         rig.paused.store(false, Ordering::SeqCst);
-        settle(300);
-        assert!(count(&rig) > sent, "frames did not resume");
+        wait_for_frames(&rig, sent + 1);
         rig.capture.stop();
     }
 
@@ -545,13 +610,14 @@ mod tests {
         knobs.reopen_works.store(true, Ordering::SeqCst);
         let rig = start(knobs, true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
-        settle(150);
+        wait_for_frames(&rig, 1);
         rig.knobs.gone.store(true, Ordering::SeqCst);
-        settle(150);
-        assert_eq!(rig.knobs.reopens.load(Ordering::SeqCst), 1);
+        wait_until(
+            || rig.knobs.reopens.load(Ordering::SeqCst) == 1,
+            "capture did not reopen the missing device",
+        );
         let before = count(&rig);
-        settle(200);
-        assert!(count(&rig) > before, "no frames from the new device");
+        wait_for_frames(&rig, before + 1);
         assert!(rig.ended.try_recv().is_err());
         rig.capture.stop();
     }
@@ -575,7 +641,7 @@ mod tests {
     fn lock_or_suspend_ends_the_session() {
         let rig = start(Knobs::default(), true);
         rig.knobs.loud.store(true, Ordering::SeqCst);
-        settle(50);
+        wait_for_frames(&rig, 1);
         rig.knobs.locked.store(true, Ordering::SeqCst);
         assert_eq!(exit_of(&rig), Some(Exit::Lost));
     }

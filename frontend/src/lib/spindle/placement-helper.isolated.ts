@@ -874,7 +874,7 @@ describe('preset placement lifecycle', () => {
     let created = false
     let registrationRejected = false
     const unsubscribe = placementStore.subscribe((state, previousState) => {
-      if (created || previousState.extensionCommands.length === 0 || state.extensionCommands.length !== 0) return
+      if (created || previousState.presetEditorTabs.length === 0 || state.presetEditorTabs.length !== 0) return
       created = true
       try {
         createPresetEditorToolbarItemHandle(extensionId, {
@@ -886,11 +886,7 @@ describe('preset placement lifecycle', () => {
       }
     })
     placementStore.setState({
-      extensionCommands: [{
-        extensionId,
-        extensionName: 'Final drain',
-        commands: [],
-      }],
+      presetEditorTabs: [{ id: 'cleanup-trigger', extensionId, title: 'Final drain', root: document.createElement('div') }],
     })
 
     destroyAllPlacementsForExtension(extensionId)
@@ -899,7 +895,7 @@ describe('preset placement lifecycle', () => {
     expect(created).toBe(true)
     expect(registrationRejected).toBe(true)
     expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(0)
-    expect(placementStore.getState().extensionCommands).toHaveLength(0)
+    expect(placementStore.getState().presetEditorTabs).toHaveLength(0)
   })
 
 })

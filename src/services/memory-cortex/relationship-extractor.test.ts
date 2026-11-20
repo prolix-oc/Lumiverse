@@ -2,6 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
 
 describe("extractRelationshipsHeuristic", () => {
+  test("hierarchical verbs point from the subordinate to the superior", () => {
+    const relationships = extractRelationshipsHeuristic("Alice commanded Bob. Bob obeyed Alice.", ["Alice", "Bob"]);
+    expect(relationships.filter((rel) => rel.type === "serves")).toEqual([
+      expect.objectContaining({ source: "Bob", target: "Alice", type: "serves", label: "serves" }),
+    ]);
+  });
+
+  test("professional roles keep their direction and do not become family relationships", () => {
+    for (const content of ["Bob is Alice's apprentice.", "Bob is an apprentice of Alice."]) {
+      const relationships = extractRelationshipsHeuristic(content, ["Alice", "Bob"]);
+      expect(relationships).toContainEqual(expect.objectContaining({ source: "Alice", target: "Bob", type: "mentor" }));
+      expect(relationships.some((rel) => rel.type === "child")).toBe(false);
+    }
+    expect(extractRelationshipsHeuristic("Bob is Alice's commander.", ["Alice", "Bob"]))
+      .toContainEqual(expect.objectContaining({ source: "Alice", target: "Bob", type: "serves" }));
+    expect(extractRelationshipsHeuristic("Bob is Alice's father.", ["Alice", "Bob"]))
+      .toContainEqual(expect.objectContaining({ source: "Bob", target: "Alice", type: "parent" }));
+  });
+
   test("keeps extracting directed relationships when many unrelated entity names are present", () => {
     const fillerNames = Array.from({ length: 40 }, (_, i) => `Extra${i}`);
     const relationships = extractRelationshipsHeuristic(

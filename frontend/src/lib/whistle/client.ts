@@ -140,11 +140,11 @@ export class WhistleClient {
     return this.preparation
   }
 
-  async transcribe(pcm: Float32Array, language?: string, signal?: AbortSignal): Promise<WhistleTranscript> {
+  async transcribe(pcm: Float32Array, language?: string, signal?: AbortSignal, keywords?: readonly string[]): Promise<WhistleTranscript> {
     await this.prepare()
     if (signal?.aborted) throw new DOMException('Recording cancelled', 'AbortError')
     try {
-      const result = await this.request({ type: 'transcribe', id: this.nextId++, pcm, language }, signal)
+      const result = await this.request({ type: 'transcribe', id: this.nextId++, pcm, language, ...(keywords?.length ? { keywords } : {}) }, signal)
       if (!result) throw new Error('Whistle returned no transcription result.')
       return result
     } catch (error) {

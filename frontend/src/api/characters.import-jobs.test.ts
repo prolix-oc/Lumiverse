@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 const get = mock()
 const post = mock()
 const uploadRaw = mock()
+const getBlob = mock()
+const download = mock()
 
 mock.module('./client', () => ({
   BASE_URL: '/api/v1',
@@ -13,10 +15,10 @@ mock.module('./client', () => ({
   upload: mock(),
   uploadRaw,
   uploadWithProgress: mock(),
-  getBlob: mock(),
+  getBlob,
 }))
 
-mock.module('@/lib/downloads', () => ({ triggerBlobDownload: mock() }))
+mock.module('@/lib/downloads', () => ({ triggerBlobDownload: download, triggerUrlDownload: mock() }))
 
 const { charactersApi } = await import('./characters')
 
@@ -24,9 +26,24 @@ beforeEach(() => {
   get.mockReset()
   post.mockReset()
   uploadRaw.mockReset()
+  getBlob.mockReset()
+  download.mockReset()
 })
 
 describe('charactersApi raw import jobs', () => {
+  test('character export stays pending and propagates a native storage failure', async () => {
+    let fail!: (error: Error) => void
+    getBlob.mockResolvedValue(new Blob(['card']))
+    download.mockReturnValue(new Promise<void>((_, reject) => { fail = reject }))
+    let succeeded = false
+    const result = charactersApi.exportCharacter('card-1', 'png', 'Card').then(() => { succeeded = true }).catch(error => error)
+    await Bun.sleep(0)
+    expect(succeeded).toBe(false)
+    expect(download).toHaveBeenCalledWith(expect.any(Blob), 'Card.png')
+    fail(new Error('Permission denied'))
+    expect((await result).message).toContain('Permission denied')
+    expect(succeeded).toBe(false)
+  })
   test('creates a job and uploads the original File as a raw body', async () => {
     post.mockResolvedValueOnce({ jobId: 'job-1', status: 'accepting' })
     uploadRaw.mockResolvedValueOnce({ jobId: 'job-1', status: 'accepting', uploaded: 1 })

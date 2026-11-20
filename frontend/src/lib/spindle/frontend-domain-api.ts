@@ -7,11 +7,20 @@ import type {
   Message,
   PaginatedResult,
   RecentChat,
+  SttConnectionProfile,
+  TtsConnectionProfile,
   UpdateConnectionProfileInput,
   WorldBook,
   WorldBookEntry,
 } from '@/types/api'
 import type { ActiveProfileSwitchReason, AppStore } from '@/types/store'
+import type { EmbeddingConfigWithProfiles } from '@/api/embeddings'
+import { resolveTtsConnectionId } from '@/lib/voiceResolution'
+import type { ConnectionOrganizationAPI } from '../../../../src/shared/connection-organization'
+import type {
+  SpindleConnectionProfileKind as ConnectionKind,
+  SpindleConnectionProfileSummary as ConnectionSummary,
+} from 'lumiverse-spindle-types'
 
 export type { ActiveProfileSwitchReason }
 
@@ -27,8 +36,11 @@ export interface ConnectionActiveState {
 }
 
 export interface FrontendConnectionsAPI {
+  organization: ConnectionOrganizationAPI
   list(): ConnectionProfile[]
+  list(options: { kind: ConnectionKind }): Promise<ConnectionSummary[]>
   getActive(): ConnectionActiveState
+  getActive(kind: ConnectionKind): Promise<ConnectionActiveState>
   subscribe(handler: (value: ConnectionActiveState) => void): () => void
   models(id: string): Promise<ConnectionModelsResult>
   setActive(id: string | null): void
@@ -105,12 +117,17 @@ export interface FrontendDomainDependencies {
   requirePermission(permission: string, member: string): void
   onTeardown(handler: () => void): () => void
   connections: {
+    organization?: ConnectionOrganizationAPI
     models(id: string): Promise<ConnectionModelsResult>
     update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
     acknowledgeActive?(request: {
       id: string | null
       reason: ActiveProfileSwitchReason
     }): Promise<void>
+    /** Embedding profiles are not in the store; they come from GET /embeddings/config. */
+    embeddingConfig(): Promise<Pick<EmbeddingConfigWithProfiles, 'connectionProfiles' | 'primaryProfileId'>>
+    /** Load speech profiles on demand; isolated widget stores are not prehydrated. */
+    speechProfiles(kind: 'tts' | 'stt'): Promise<Array<TtsConnectionProfile | SttConnectionProfile>>
   }
   chats: {
     listForCharacter(characterId: string): Promise<ChatSummary[]>
@@ -146,6 +163,44 @@ function activeConnection(state: AppStore): ConnectionActiveState {
     activeProfileId: state.activeProfileId,
     provider: profile?.provider ?? null,
     model: profile?.model ?? null,
+  }
+}
+
+interface SummarySource {
+  id: string
+  name?: string
+  provider: string
+  model?: string
+  voice?: string
+}
+
+function summarize(kind: ConnectionKind, rows: readonly SummarySource[], activeId: string | null): ConnectionSummary[] {
+  return rows.map((row) => ({
+    id: row.id,
+    kind,
+    name: row.name || row.provider,
+    provider: row.provider,
+    model: row.model ?? '',
+    ...(kind === 'tts' ? { voice: row.voice ?? '' } : {}),
+    active: row.id === activeId,
+  }))
+}
+
+/** `active` marks the profile the host itself uses for the kind when no connection id is given. */
+async function listConnectionsOfKind(
+  kind: ConnectionKind,
+  dependencies: FrontendDomainDependencies,
+): Promise<ConnectionSummary[]> {
+  const state = dependencies.store.getState()
+  switch (kind) {
+    case 'llm': return summarize(kind, state.profiles, state.activeProfileId)
+    case 'image': return summarize(kind, state.imageGenProfiles, state.activeImageGenConnectionId)
+    case 'decision': return summarize(kind, state.decisionProfiles, state.decisionProfiles.find((profile) => profile.is_default)?.id ?? null)
+    case 'embedding': {
+      const config = await dependencies.connections.embeddingConfig()
+      return summarize(kind, config.connectionProfiles ?? [], config.primaryProfileId ?? null)
+    }
+    default: throw new Error(`CONNECTION_KIND_INVALID: ${String(kind)}`)
   }
 }
 
@@ -272,6 +327,7 @@ export function createFrontendDomainApi(
   }
 
   const subscribers = new Set<(value: ConnectionActiveState) => void>()
+  const organizationWatches = new Set<() => void>()
   let storeUnsubscribe: (() => void) | undefined
   let lastActive = activeConnection(dependencies.store.getState())
 
@@ -297,16 +353,67 @@ export function createFrontendDomainApi(
     })
   }
 
-  const connections: FrontendConnectionsAPI = {
-    list() {
+  const listOfKind = async (kind: ConnectionKind) => {
+    assertUsable()
+    if (kind === 'tts' || kind === 'stt') {
+      const profiles = await dependencies.connections.speechProfiles(kind)
       assertUsable()
-      return clone(dependencies.store.getState().profiles.map(safeConnectionProfile))
-    },
+      const state = dependencies.store.getState()
+      // Playback also resolves profiles from this window's store. Hydrate it
+      // only after confirming this extension/account is still active.
+      if (kind === 'tts') state.setTtsProfiles(profiles as TtsConnectionProfile[])
+      else state.setSttProfiles(profiles as SttConnectionProfile[])
+      return summarize(kind, profiles, kind === 'tts' ? resolveTtsConnectionId(state.voiceSettings, profiles) : state.voiceSettings.sttConnectionId)
+    }
+    const rows = await listConnectionsOfKind(kind, dependencies)
+    assertUsable()
+    return rows
+  }
 
-    getActive() {
-      assertUsable()
-      return clone(activeConnection(dependencies.store.getState()))
+  function list(): ConnectionProfile[]
+  function list(options: { kind: ConnectionKind }): Promise<ConnectionSummary[]>
+  function list(options?: { kind: ConnectionKind }): ConnectionProfile[] | Promise<ConnectionSummary[]> {
+    if (options !== undefined) return listOfKind(options.kind)
+    assertUsable()
+    return clone(dependencies.store.getState().profiles.map(safeConnectionProfile))
+  }
+
+  function getActive(): ConnectionActiveState
+  function getActive(kind: ConnectionKind): Promise<ConnectionActiveState>
+  function getActive(kind?: ConnectionKind): ConnectionActiveState | Promise<ConnectionActiveState> {
+    if (kind !== undefined) {
+      return listOfKind(kind).then((rows) => {
+        const active = rows.find((row) => row.active)
+        return { activeProfileId: active?.id ?? null, provider: active?.provider ?? null, model: active?.model ?? null }
+      })
+    }
+    assertUsable()
+    return clone(activeConnection(dependencies.store.getState()))
+  }
+
+  const connections: FrontendConnectionsAPI = {
+    organization: {
+      async get(options) {
+        assertUsable()
+        if (!dependencies.connections.organization) throw new Error('Connection organization unavailable')
+        const snapshot = await dependencies.connections.organization.get(options)
+        assertUsable()
+        return clone(snapshot)
+      },
+      watch(options, handler, onError) {
+        assertUsable()
+        if (!dependencies.connections.organization) throw new Error('Connection organization unavailable')
+        const stop = dependencies.connections.organization.watch(options, snapshot => {
+          assertUsable()
+          handler(clone(snapshot))
+        }, error => { if (!disposed) { if (onError) onError(error); else console.error('[connection-organization]', error) } })
+        const unsubscribe = () => { stop(); organizationWatches.delete(unsubscribe) }
+        organizationWatches.add(unsubscribe)
+        return unsubscribe
+      },
     },
+    list,
+    getActive,
 
     subscribe(handler) {
       assertUsable()
@@ -479,6 +586,7 @@ export function createFrontendDomainApi(
     if (disposed) return
     disposed = true
     subscribers.clear()
+    for (const stop of organizationWatches) stop()
     stopConnectionSubscription()
   }
   dependencies.onTeardown(dispose)

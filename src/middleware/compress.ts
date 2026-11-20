@@ -29,27 +29,28 @@ const MIN_SIZE = 1024;
 function negotiate(
   header: string,
 ): Encoding | null {
-  let best: Encoding | null = null;
-  let bestScore = -1;
-  const PRIO: Record<string, number> = { br: 3, gzip: 2, deflate: 1 };
-
+  const qualities = new Map<string, number>();
   for (const part of header.split(",")) {
     const [raw, ...params] = part.trim().split(";");
     const name = raw?.trim().toLowerCase();
-    if (!name || !(name in PRIO)) continue;
+    if (!name) continue;
     let q = 1;
     for (const p of params) {
-      const m = p.trim().match(/^q=([\d.]+)$/);
-      if (m) q = parseFloat(m[1]!);
+      if (!/^q\s*=/i.test(p.trim())) continue;
+      const m = p.trim().match(/^q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/i);
+      q = m ? Number(m[1]) : 0;
     }
-    if (q <= 0) continue;
+    qualities.set(name, q);
+  }
 
-    // Quality dominates; priority breaks ties
-    const score = q * 10 + PRIO[name]!;
-    if (score > bestScore) {
-      bestScore = score;
-      best = name as Encoding;
-    }
+  let best: Encoding | null = null;
+  let bestQuality = qualities.get("identity") ?? 0;
+  // Iterate in preference order, replacing only for a strictly higher q.
+  for (const name of ["br", "gzip", "deflate"] as const) {
+    const q = qualities.get(name) ?? qualities.get("*") ?? 0;
+    if (q <= bestQuality) continue;
+    bestQuality = q;
+    best = name;
   }
   return best;
 }
@@ -86,10 +87,11 @@ export function compress() {
 
     const res = c.res;
 
-    // Skip: no body, HEAD, already encoded, 204/304
-    if (!res.body || c.req.method === "HEAD") return;
+    // Preserve encoded and partial representations, including byte ranges.
     if (res.headers.get("Content-Encoding")) return;
-    if (res.status === 204 || res.status === 304) return;
+    if (res.status === 204 || res.status === 206 || res.status === 304) return;
+    if (res.headers.has("Content-Range")) return;
+    if (res.headers.get("Cache-Control")?.split(",").some((directive) => directive.trim().toLowerCase() === "no-transform")) return;
 
     // Skip non-compressible content types
     const ct = res.headers.get("Content-Type");
@@ -98,6 +100,11 @@ export function compress() {
     // Skip small known-size responses (streaming responses have no Content-Length)
     const cl = res.headers.get("Content-Length");
     if (cl && parseInt(cl, 10) < MIN_SIZE) return;
+
+    // Identity responses are variants too: a shared cache must not reuse an
+    // uncompressed response for clients with different encoding preferences.
+    appendVary(res.headers, "Accept-Encoding");
+    if (!res.body || c.req.method === "HEAD") return;
 
     // Negotiate encoding from client's Accept-Encoding
     const accept = c.req.header("Accept-Encoding");
@@ -108,6 +115,5 @@ export function compress() {
     c.res = new Response(compressStream(res.body, encoding), res);
     c.res.headers.set("Content-Encoding", encoding);
     c.res.headers.delete("Content-Length");
-    appendVary(c.res.headers, "Accept-Encoding");
   });
 }

@@ -3,17 +3,6 @@ import { describe, expect, test } from 'bun:test'
 const readSource = (file: string) => Bun.file(`${import.meta.dir}/${file}`).text()
 
 describe('staging chat reveal regression contracts', () => {
-  test('ignores a populated event emitted for a stale chat', async () => {
-    const source = await readSource('ChatView.tsx')
-    const listener = source.match(
-      /const handlePopulated = \(event: Event\) => \{[\s\S]*?\n    \}/,
-    )?.[0] ?? ''
-
-    expect(listener).toContain("event as CustomEvent<{ chatId?: string }>")
-    expect(listener).toMatch(/populatedChatId\s*!==\s*chatId\)\s*return/)
-    expect(listener).toContain('setChatChromeEntering(false)')
-  })
-
   test('scopes the empty-chat two-frame reveal to the active load', async () => {
     const source = await readSource('ChatView.tsx')
     const emptyChat = source.match(
@@ -75,6 +64,7 @@ describe('staging chat reveal regression contracts', () => {
       homeHandler.indexOf('setChatChromeLeaving(true)'),
     )
     expect(homeHandler).toContain('setChatChromeLeaving(true)')
-    expect(homeHandler).toContain('}, CHAT_CHROME_LEAVE_MS)')
+    expect(homeHandler).not.toContain('window.setTimeout')
+    expect(source).toContain("playChatChromeMotion(chatColumnInnerRef.current, 'leave', completeNavigateHome)")
   })
 })

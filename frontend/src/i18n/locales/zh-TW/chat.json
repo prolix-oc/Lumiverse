@@ -39,6 +39,15 @@
     "assistant": "助手"
   },
   "input": {
+    "formatting": {
+      "label": "訊息格式",
+      "bold": "粗體",
+      "italic": "斜體",
+      "underline": "底線",
+      "quotes": "引號",
+      "singleQuotes": "單引號",
+      "parentheses": "圓括號"
+    },
     "placeholder": "輸入消息…",
     "backHome": "返回主頁",
     "regenerate": "重新生成",
@@ -251,6 +260,22 @@
     "showFewer": "顯示更少"
   },
   "chatView": {
+    "cortexFailedBatches": "失敗批次：{{count}}",
+    "cortexBatchProgress": "{{current}}/{{total}} 批次 · {{queued}} 個排隊中",
+    "cortexElapsed": "已用 {{seconds}} 秒",
+    "cortexBatchActivity": "批次 {{batch}} · {{phase}}",
+    "cortexBatchChunks": "區塊數：{{count}}",
+    "cortexActiveBatches": "處理中的記憶批次",
+    "cortexActivity": {
+      "queued": "排隊中",
+      "waiting": "等待供應商回應",
+      "thinking": "思考中",
+      "responding": "回應中",
+      "reviewing": "審核中",
+      "preparing": "準備中",
+      "saving": "儲存中",
+      "consolidating": "整合中"
+    },
     "togglePortraitPanel": "切換肖像面板",
     "exitSelectionMode": "退出選擇模式",
     "selectMessages": "選擇消息",

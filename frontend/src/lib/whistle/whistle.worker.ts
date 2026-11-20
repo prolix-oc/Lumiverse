@@ -18,7 +18,7 @@ worker.onmessage = ({ data: request }) => {
         runtime = await WhistleRuntime.load(assets.wasm, assets.model)
       }
       if (request.type === 'prepare') worker.postMessage({ type: 'ready', id: request.id })
-      else worker.postMessage({ type: 'result', id: request.id, result: runtime.transcribe(request.pcm, request.language) })
+      else worker.postMessage({ type: 'result', id: request.id, result: runtime.transcribe(request.pcm, request.language, request.keywords) })
     } catch (error) {
       worker.postMessage({ type: 'error', id: request.id, error: error instanceof Error ? error.message : String(error) })
     }

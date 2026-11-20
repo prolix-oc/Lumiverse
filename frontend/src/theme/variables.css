@@ -146,6 +146,24 @@
   --lcs-glass-blur: 8px;
   --lcs-glass-soft-blur: 6px;
   --lcs-glass-strong-blur: 12px;
+
+  /* Liquid Glass material — refraction layer over the frosted glass tokens.
+     Inert until `html[data-liquid-glass]` is set by the theme applicator. */
+  --lcs-liquid-tint: transparent;
+  --lcs-liquid-specular: transparent;
+  --lcs-liquid-rim: transparent;
+  --lcs-liquid-blur: 0px;
+  /* `--lcs-liquid-filter` (the displacement filter appended to every glass
+     surface's `backdrop-filter`) is deliberately not declared here: it is
+     filled only inside the `@supports` probe in global.css, so an engine that
+     cannot displace a backdrop keeps a plain blur instead of dropping the
+     whole declaration. See the sweep comment there. */
+  /* Slider thumbs get their own bead-of-glass treatment: a lens filter, a
+     lighter wash than a pane, and a stronger specular so the small shape still
+     reads as glass. */
+  --lcs-liquid-thumb-tint: transparent;
+  --lcs-liquid-thumb-specular: transparent;
+  --lcs-liquid-thumb-blur: 0px;
   --lcs-radius: 14px;
   --lcs-radius-sm: 8px;
   --lcs-radius-xs: 5px;

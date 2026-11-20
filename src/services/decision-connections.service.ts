@@ -32,7 +32,7 @@ export function getDefaultConnection(userId: string): DecisionConnectionProfile 
   const row = getDb().query("SELECT * FROM decision_connections WHERE user_id = ? AND is_default = 1").get(userId);
   return row ? rowToProfile(row) : null;
 }
-function validateInput(input: unknown, existing?: DecisionConnectionProfile): asserts input is CreateDecisionConnectionInput {
+export function validateConnectionInput(input: unknown, existing?: DecisionConnectionProfile): asserts input is CreateDecisionConnectionInput {
   if (!isRecord(input)) throw new DecisionValidationError("Connection input must be an object");
   for (const field of ["name", "provider", "api_url", "model", "api_key"]) if (input[field] !== undefined && typeof input[field] !== "string") throw new DecisionValidationError(`${field} must be a string`);
   if (!existing && (typeof input.name !== "string" || !input.name.trim() || typeof input.provider !== "string")) throw new DecisionValidationError("name and provider are required");
@@ -52,7 +52,7 @@ async function publish(userId: string, id: string): Promise<DecisionConnectionPr
   return profile;
 }
 export async function createConnection(userId: string, input: CreateDecisionConnectionInput): Promise<DecisionConnectionProfile> {
-  validateInput(input);
+  validateConnectionInput(input);
   const id = crypto.randomUUID();
   const created = now();
   const apiKey = input.api_key?.trim();
@@ -80,7 +80,7 @@ export async function updateConnection(userId: string, id: string, input: Update
       default_parameters: input.default_parameters === undefined ? {} : input.default_parameters,
     };
   }
-  validateInput(input, existing);
+  validateConnectionInput(input, existing);
   let hasApiKey = existing.has_api_key;
   // A provider/endpoint change must not forward the previous provider's credential.
   const endpointChanged = input.provider !== undefined && input.provider !== existing.provider
@@ -142,7 +142,12 @@ export async function listConnectionModels(userId: string, id: string): Promise<
 }
 export async function testConnection(userId: string, id: string): Promise<{ success: boolean; message: string; provider: string }> {
   const result = await listConnectionModels(userId, id);
-  return { success: !result.error, message: result.error || "API key and model catalog access verified. No decision was run.", provider: result.provider };
+  // Some catalogs (NanoGPT) are public, so this only proves catalog access, not the credential.
+  return {
+    success: !result.error,
+    message: result.error || "Model catalog access verified. No decision was run.",
+    provider: result.provider,
+  };
 }
 export async function runSampleDecision(userId: string, id: string): Promise<{ success: boolean; message: string; provider: string }> {
   const profile = getConnection(userId, id);

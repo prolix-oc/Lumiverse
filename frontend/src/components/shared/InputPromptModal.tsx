@@ -75,6 +75,7 @@ export function InputPromptModal({
 
   return (
     <ModalShell
+      mobilePresentation="dialog"
       isOpen={isOpen}
       onClose={onCancel}
       maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"

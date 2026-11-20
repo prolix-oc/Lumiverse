@@ -64,6 +64,15 @@
     "assistant": "어시스턴트"
   },
   "input": {
+    "formatting": {
+      "label": "메시지 서식",
+      "bold": "굵게",
+      "italic": "기울임꼴",
+      "underline": "밑줄",
+      "quotes": "따옴표",
+      "singleQuotes": "작은따옴표",
+      "parentheses": "소괄호"
+    },
     "placeholder": "메시지 입력…",
     "backHome": "홈으로 돌아가기",
     "regenerate": "재생성",
@@ -276,7 +285,9 @@
     "failedSaveChatPersona": "이 채팅의 페르소나 저장에 실패했습니다",
     "noPresetForPromptVariables": "프롬프트 변수를 변경하기 전에 프리셋을 선택하십시오",
     "failedLoadPromptVariables": "프롬프트 변수 불러오기에 실패했습니다",
-    "failedSavePromptVariables": "프롬프트 변수 저장에 실패했습니다"
+    "failedSavePromptVariables": "프롬프트 변수 저장에 실패했습니다",
+    "roomMessageUnconfirmed": "채팅방에서 메시지를 확인하지 못했습니다. 초안은 보관되어 있습니다. 다시 시도하기 전에 채팅을 확인하세요.",
+    "messageDraftKept": "메시지를 확인하지 못했습니다 — 초안은 보관되어 있습니다"
   },
   "addGroupMember": {
     "title": "그룹 멤버 추가",
@@ -309,6 +320,22 @@
     "showFewer": "접기"
   },
   "chatView": {
+    "cortexFailedBatches": "실패한 배치: {{count}}",
+    "cortexBatchProgress": "배치 {{current}}/{{total}} · {{queued}}개 대기 중",
+    "cortexElapsed": "{{seconds}}초 경과",
+    "cortexBatchActivity": "배치 {{batch}} · {{phase}}",
+    "cortexBatchChunks": "청크 수: {{count}}",
+    "cortexActiveBatches": "진행 중인 메모리 배치",
+    "cortexActivity": {
+      "queued": "대기 중",
+      "waiting": "공급자 응답 대기 중",
+      "thinking": "생각 중",
+      "responding": "응답 중",
+      "reviewing": "검토 중",
+      "preparing": "준비 중",
+      "saving": "저장 중",
+      "consolidating": "통합 중"
+    },
     "togglePortraitPanel": "초상화 패널 전환",
     "exitSelectionMode": "선택 모드 종료",
     "selectMessages": "메시지 선택",

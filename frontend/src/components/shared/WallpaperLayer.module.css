@@ -9,7 +9,9 @@
 
 .fixed {
   position: fixed;
-  height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
+  /* The wallpaper covers the shell, including the area behind the keyboard.
+     A visual-viewport height can shrink independently and expose a blank band. */
+  height: calc(var(--app-shell-height, 100dvh) / var(--lumiverse-ui-scale, 1));
   width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
 }
 

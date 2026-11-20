@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   CORTEX_SIDECAR_CIRCUIT_FAILURE_THRESHOLD,
   decideCortexSidecarFallback,
@@ -260,5 +260,43 @@ describe("runQueryGenerationSidecar", () => {
     expect(isTransientCortexSidecarError(Object.assign(new Error("timed out"), { name: "AbortError" }), false)).toBe(true);
     expect(isTransientCortexSidecarError(Object.assign(new Error("Aborted"), { name: "AbortError" }), true)).toBe(false);
     expect(CORTEX_SIDECAR_CIRCUIT_FAILURE_THRESHOLD).toBeGreaterThan(0);
+  });
+
+  test("fallback diagnostics keep the original error and identify the failed target", async () => {
+    const error = new Error("fetch failed", { cause: new Error("ECONNRESET") });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const decision = await runQueryGenerationSidecar({
+        userId: "user-1",
+        config: configWith(),
+        extract: async (target) => {
+          if (target.role === "primary") throw error;
+          return { ok: true };
+        },
+      });
+      expect(decision.status).toBe("ok");
+      expect(decision.role).toBe("secondary");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain("connection=primary-conn model=primary-model attempt=1 elapsed=");
+      expect(warn.mock.calls[0]?.[1]).toBe(error);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("timeout diagnostics name the target and configured timeout", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const decision = await runQueryGenerationSidecar({
+        userId: "user-1",
+        config: configWith({ sidecarTimeoutMs: 5, queryGeneration: {
+          primary: { connectionProfileId: "primary-conn", model: "primary-model" }, secondary: null,
+        } }),
+        extract: async ({ signal }) => new Promise<null>((_resolve, reject) => {
+          signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        }),
+      });
+      expect(decision.status).toBe("timeout");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain("timed out after 5ms (connection=primary-conn model=primary-model)");
+    } finally { warn.mockRestore(); }
   });
 });

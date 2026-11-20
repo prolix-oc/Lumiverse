@@ -43,6 +43,7 @@ import type { ExtensionInfo, SpindlePermission } from 'lumiverse-spindle-types'
 import SpindleUIControlPanel from '@/components/spindle/SpindleUIControlPanel'
 import SpindleSettings from './SpindleSettings'
 import SystemAudioConsentControl from '@/components/spindle/SystemAudioConsentControl'
+import DesktopCaptureControl from '@/components/spindle/DesktopCaptureControl'
 import { Spinner } from '@/components/shared/Spinner'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { getSafeHttpsUrl } from '@/lib/navigationSafety'
@@ -51,7 +52,7 @@ import {
   getExtensionMountPointsVersion,
   hasExtensionMountPoint,
   subscribeExtensionMountPoints,
-} from '@/lib/spindle/loader'
+} from '@/lib/spindle/extension-mount-points'
 import { toast } from '@/lib/toast'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
@@ -1049,6 +1050,7 @@ export default function SpindlePanel() {
                                 })}
                               </div>
                             )}
+                            {(allPerms.includes('screen_capture') || allPerms.includes('screen_recording')) && <DesktopCaptureControl />}
                             {allPerms.includes('system_audio') && (
                               <SystemAudioConsentControl extensionId={ext.id} granted={ext.granted_permissions.includes('system_audio')} />
                             )}

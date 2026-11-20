@@ -86,6 +86,25 @@ describe("built-in tokenizer defaults", () => {
     expect(getTokenizerIdForModel("deepseek-v4-1-flash")).toBe("deepseek-v4-1-flash");
   });
 
+  test("resolves the unversioned deepseek-flash API id to the current Flash tokenizer", () => {
+    for (const modelId of [
+      "deepseek-flash",
+      "deepseek-ai/deepseek-flash",
+      "openrouter/deepseek/deepseek-flash",
+      "publisher:deepseek-flash",
+      "deepseek.deepseek-flash-1017",
+    ]) {
+      expect(getTokenizerIdForModel(modelId)).toBe("deepseek-v4-1-flash");
+    }
+    expect(getConfig("deepseek-v4-1-flash")?.is_built_in).toBe(true);
+  });
+
+  test("keeps versioned and unrelated DeepSeek ids off the unversioned Flash match", () => {
+    expect(getTokenizerIdForModel("deepseek-v4-flash")).toBe("deepseek-v4-flash");
+    expect(getTokenizerIdForModel("deepseek-v4.1-flash")).toBe("deepseek-v4-1-flash");
+    expect(getTokenizerIdForModel("notdeepseek-flash")).toBe("approximate-4");
+  });
+
   test("resolves Kimi K3 and GLM 5.3 to their dedicated current tokenizers", () => {
     expect(getConfig("kimi-k3")?.config.url).toBe(
       "https://huggingface.co/moonshotai/Kimi-K3/resolve/main/tiktoken.model",

@@ -202,10 +202,9 @@ function rewriteChatBindings(userId: string, sourceId: string, targetId: string)
     if (!Array.isArray(ids) || !ids.includes(sourceId)) continue;
     const filtered = ids.filter((id) => typeof id === "string" && id !== sourceId);
     const next = filtered.includes(targetId) ? filtered : [...filtered, targetId];
-    const updatedMeta = { ...meta, chat_databank_ids: next };
     db.run(
-      `UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?`,
-      [JSON.stringify(updatedMeta), row.id, userId],
+      `UPDATE chats SET metadata = json_set(metadata, '$.chat_databank_ids', json(?)) WHERE id = ? AND user_id = ?`,
+      [JSON.stringify(next), row.id, userId],
     );
   }
 }

@@ -10,6 +10,7 @@ import { FormField, Select, EditorSection } from '@/components/shared/FormCompon
 import { Toggle } from '@/components/shared/Toggle'
 import { flushSettingsNow } from '@/store/slices/settings'
 import { getChatMobileWallpaper } from '@/lib/wallpaper'
+import { uuidv4 } from '@/lib/uuid'
 import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import WallpaperLibraryModal from './WallpaperLibraryModal'
 import styles from './WallpaperPanel.module.css'
@@ -60,9 +61,7 @@ function detectWallpaperFileKind(file: File): 'image' | 'video' | null {
 
 function createWallpaperUploadId(): string {
   try {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID()
-    }
+    return uuidv4()
   } catch {
     // Fall through to a timestamp-based id when Web Crypto is unavailable.
   }

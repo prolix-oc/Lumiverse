@@ -8,6 +8,7 @@ const { resolve } = require('path');
 
 const PLATFORM_BINDINGS = {
   'android-arm64': [
+    '@oxc-transform-react/binding-android-arm64',
     '@rolldown/binding-android-arm64',
     'lightningcss-android-arm64',
   ],

@@ -18,6 +18,7 @@ import { EventType } from "../ws/events";
 export type PoolStatus = "assembling" | "council" | "waiting" | "reasoning" | "streaming" | "completed" | "stopped" | "error";
 
 export interface PooledTokensEntry {
+  renderMode?: "persisted-message";
   frontendSessionId?: string;
   generationId: string;
   userId: string;
@@ -30,6 +31,7 @@ export interface PooledTokensEntry {
   /** Index of the swipe being streamed into, so recovering clients can gate the
    *  streaming buffer to the right swipe even after navigating away. */
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
   characterName: string;
   characterId?: string;
   model: string;
@@ -107,6 +109,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // 60 seconds
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 
 export function createPoolEntry(opts: {
+  renderMode?: "persisted-message";
   frontendSessionId?: string;
   generationId: string;
   userId: string;
@@ -118,8 +121,10 @@ export function createPoolEntry(opts: {
   connectionName?: string;
   targetMessageId?: string;
   targetSwipeId?: number;
+  backgroundSwipe?: boolean;
 }): void {
   const entry: PooledTokensEntry = {
+    renderMode: opts.renderMode,
     frontendSessionId: opts.frontendSessionId,
     generationId: opts.generationId,
     userId: opts.userId,
@@ -130,6 +135,7 @@ export function createPoolEntry(opts: {
     generationType: opts.generationType,
     targetMessageId: opts.targetMessageId,
     targetSwipeId: opts.targetSwipeId,
+    backgroundSwipe: opts.backgroundSwipe,
     characterName: opts.characterName,
     characterId: opts.characterId,
     model: opts.model,

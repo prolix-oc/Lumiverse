@@ -32,6 +32,8 @@ export interface CharacterPerspectiveLayer {
   intensity: number;
 }
 
+export type CharacterIndexItem = Pick<Character, 'id' | 'name' | 'avatar_path' | 'image_id' | 'creator' | 'folder' | 'library_scope' | 'tags' | 'created_at' | 'updated_at'> & { avatar_crop_image_id?: string | null };
+
 export interface CreateCharacterInput {
   name: string;
   description?: string;
@@ -618,6 +620,32 @@ export interface TtsConnectionVoicesResult {
   error?: string;
 }
 
+export interface TtsLibraryVoice extends TtsVoice {
+  accent?: string;
+  age?: string;
+  useCase?: string;
+  rate?: number;
+  noticePeriod?: number;
+  liveModeration?: boolean;
+}
+
+export interface TtsVoiceLibraryOptions {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  language?: string;
+  gender?: 'male' | 'female' | 'neutral';
+  sort?: 'trending' | 'created_date' | 'cloned_by_count' | 'usage_character_count_1y';
+}
+
+export interface TtsVoiceLibraryResult {
+  voices: TtsLibraryVoice[];
+  has_more: boolean;
+  total_count?: number;
+  provider: string;
+  error?: string;
+}
+
 export interface TtsConnectionVoicesPreviewInput {
   connection_id?: string;
   provider: string;
@@ -691,6 +719,7 @@ export interface TtsProviderCapabilities {
   apiKeyRequired: boolean;
   voiceListStyle: 'static' | 'dynamic';
   staticVoices?: TtsVoice[];
+  supportsVoiceLibrary?: boolean;
   modelListStyle: 'static' | 'dynamic';
   staticModels?: Array<{ id: string; label: string }>;
   supportsStreaming: boolean;
@@ -822,6 +851,7 @@ export type UpdatePresetInput = Partial<CreatePresetInput> & {
 };
 
 export interface PresetRegistryItem {
+  cache_revision?: number;
   id: string;
   name: string;
   provider: string;

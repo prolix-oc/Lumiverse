@@ -5,7 +5,7 @@ import type { LoomPreset } from './types'
 import { activeTab } from '@/lib/active-tab'
 
 const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
-const PENDING_LOOM_PRESET_ENVELOPE_KEY = '__lumiverse_pending_loom_preset_v2'
+const PENDING_LOOM_PRESET_ENVELOPE_KEY = '__lumiverse_pending_loom_preset_v3'
 const MAX_REVISION_CONFLICT_RETRIES = 3
 
 const DRAFT_FIELDS = [
@@ -35,9 +35,12 @@ interface DirtyPresetPaths {
   passthroughKeys: string[]
 }
 
+type PendingPresetDraft = Pick<LoomPreset, 'id' | 'passthroughMetadata'>
+  & Partial<Pick<LoomPreset, DraftField>>
+
 interface PendingLoomPresetEnvelope {
-  [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 2
-  preset: LoomPreset
+  [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 3
+  preset: PendingPresetDraft
   dirty: DirtyPresetPaths
   revision: number
 }
@@ -416,7 +419,7 @@ function preserveResponseState(
 
 function rebaseDirtyPaths(
   persisted: LoomPreset,
-  draft: LoomPreset,
+  draft: PendingPresetDraft,
   dirty: DirtyPresetPaths,
 ): LoomPreset {
   const rebased = clone(persisted)
@@ -504,22 +507,45 @@ function legacyDirtyPaths(includePromptVariables: boolean): DirtyPresetPaths {
   if (includePromptVariables) fields.push('promptVariables')
   return { fields, passthroughKeys: [] }
 }
+
+function createPendingEnvelope(
+  preset: Partial<LoomPreset> & Pick<LoomPreset, 'id'>,
+  dirty: DirtyPresetPaths,
+  revision: number,
+): PendingLoomPresetEnvelope {
+  const metadata = preset.passthroughMetadata ?? {}
+  return {
+    [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 3,
+    // Untouched fields come from the next persisted read. In particular, large
+    // imported extension blobs must not consume recovery space for a rename.
+    preset: {
+      id: preset.id,
+      ...Object.fromEntries(dirty.fields.map((field) => [field, preset[field]])),
+      passthroughMetadata: Object.fromEntries(dirty.passthroughKeys
+        .filter((key) => Object.hasOwn(metadata, key))
+        .map((key) => [key, metadata[key]])),
+    },
+    dirty,
+    revision,
+  }
+}
+
 function readPendingEnvelope(presetId: string, scope: string | null): PendingLoomPresetEnvelope | null {
   const entry = readPendingEntries(scope)[presetId]
   if (!isRecord(entry)) return null
 
-  if (entry[PENDING_LOOM_PRESET_ENVELOPE_KEY] === 2) {
-    if (!looksLikeLoomPresetData(entry.preset) || entry.preset.id !== presetId) return null
+  if (entry[PENDING_LOOM_PRESET_ENVELOPE_KEY] === 3 || entry.__lumiverse_pending_loom_preset_v2 === 2) {
+    const preset = entry.preset
+    if (!isRecord(preset) || preset.id !== presetId) return null
+    if (entry[PENDING_LOOM_PRESET_ENVELOPE_KEY] === 3) {
+      if (!isRecord(preset.passthroughMetadata)) return null
+    } else if (!looksLikeLoomPresetData(preset)) return null
     const dirty = normalizeDirtyPaths(entry.dirty)
     if (!dirty || !isDirty(dirty) || typeof entry.revision !== 'number' || !Number.isSafeInteger(entry.revision)) {
       return null
     }
-    return {
-      [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 2,
-      preset: entry.preset,
-      dirty,
-      revision: entry.revision,
-    }
+    if (dirty.fields.includes('blocks') && !Array.isArray(preset.blocks)) return null
+    return createPendingEnvelope(preset as PendingPresetDraft, dirty, entry.revision)
   }
 
   // v1 envelopes tracked prompt ownership but did not track individual fields.
@@ -528,28 +554,22 @@ function readPendingEnvelope(presetId: string, scope: string | null): PendingLoo
     if (!looksLikeLoomPresetData(entry.preset) || entry.preset.id !== presetId) return null
     const includeEditorContent = entry.includeEditorContent !== false
     const includePromptVariables = entry.includePromptVariables === true
-    return {
-      [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 2,
-      preset: entry.preset,
-      dirty: includeEditorContent
+    return createPendingEnvelope(
+      entry.preset,
+      includeEditorContent
         ? legacyDirtyPaths(includePromptVariables)
         : { fields: includePromptVariables ? ['promptVariables'] : [], passthroughKeys: [] },
-      revision: typeof entry.revision === 'number' && Number.isSafeInteger(entry.revision)
+      typeof entry.revision === 'number' && Number.isSafeInteger(entry.revision)
         ? entry.revision
         : 0,
-    }
+    )
   }
 
   // The original Loom editor stored a raw full snapshot. It cannot identify a
   // prompt-variable or extension owner, so recovery deliberately replays only
   // ordinary editor fields over the fresh persisted row.
   if (!looksLikeLoomPresetData(entry) || entry.id !== presetId) return null
-  return {
-    [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 2,
-    preset: entry,
-    dirty: legacyDirtyPaths(false),
-    revision: 0,
-  }
+  return createPendingEnvelope(entry, legacyDirtyPaths(false), 0)
 }
 function migrateLegacyPendingEnvelope(presetId: string, scope: string | null): void {
   if (!scope || readPendingEnvelope(presetId, scope)) return
@@ -578,13 +598,7 @@ function writePendingEnvelope(
     return
   }
 
-  const envelope: PendingLoomPresetEnvelope = {
-    [PENDING_LOOM_PRESET_ENVELOPE_KEY]: 2,
-    preset: entry.draft,
-    dirty: entry.dirty,
-    revision: entry.revision,
-  }
-  all[presetId] = envelope
+  all[presetId] = createPendingEnvelope(entry.draft, entry.dirty, entry.revision)
   writePendingEntries(scope, all)
 }
 

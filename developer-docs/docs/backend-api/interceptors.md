@@ -4,6 +4,8 @@
 
 Interceptors run after prompt assembly but before the messages reach the LLM provider. They can modify, add, or remove messages, optionally inject generation parameters, and mark injected messages as first-class Prompt Breakdown entries.
 
+The preset's **Collapse into single user message** option is applied after interceptors. Handlers receive structured messages with their history identities intact; their edits are included in the final collapsed request. Dry Run uses the same ordering.
+
 ```ts
 spindle.registerInterceptor(async (messages, context) => {
   // `messages` is an array of { role, content, name? }
@@ -146,6 +148,8 @@ type LlmMessagePartDTO =
 `content` accepts a plain string or an array of typed parts. Tool calls and tool results are first-class parts — see [Generation › Tool calling](generation.md#tool-calling).
 
 `__isChatHistory` is set on interceptor input messages that originate from stored chat turns. When present, `sourceMessageId` and `sourceIndexInChat` identify the source chat message where available.
+
+Preserve these fields when editing or forwarding an existing message, including through a frontend round trip. For example, return `{ ...message, content: editedContent }` so later extensions can still identify the source turn. Newly inserted messages should not inherit another message's history identity.
 
 `__isWorldInfoEntry` is set on interceptor input messages that are standalone World Info / world-book entries in the assembled prompt. World Info inserted inline through marker macros is part of the surrounding prompt block and is not flagged as a separate message.
 

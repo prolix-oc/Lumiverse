@@ -31,6 +31,14 @@ test("architecture build IDs produce valid diagnostic versions, including numeri
   expect(() => diagnosticVersion("0.3.1", "malformed-build-id")).toThrow();
 });
 
+test("native cross-compilation is opt-in and requires the ARM64 target", () => {
+  expect(parseOptions(["server"]).cross).toBe(false);
+  expect(parseOptions(["server", "--arch", "arm64", "--cross"]).cross).toBe(true);
+  expect(parseOptions(["--local", "--cross", "--arch", "arm64"]).cross).toBe(true);
+  expect(() => parseOptions(["server", "--cross"])).toThrow("--arch arm64");
+  expect(() => parseOptions(["--local", "--arch", "x64", "--cross"])).toThrow("--arch arm64");
+});
+
 test("headless builds can publish to a server share without downloading or GUI smoke", () => {
   const options = parseOptions(["builder@build-host.example", "--remote-output", "/srv/build-output", "--no-download"]);
   expect(options.remoteOutput).toBe("/srv/build-output");
