@@ -83,10 +83,12 @@ function SidebarDragItem({
 }) {
   const draggable = useDraggable({ id, disabled: !enabled })
   const droppable = useDroppable({ id, disabled: !enabled })
+  const { setNodeRef: setDraggableRef } = draggable
+  const { setNodeRef: setDroppableRef } = droppable
   const setNodeRef = useCallback((node: HTMLDivElement | null) => {
-    draggable.setNodeRef(node)
-    droppable.setNodeRef(node)
-  }, [draggable.setNodeRef, droppable.setNodeRef])
+    setDraggableRef(node)
+    setDroppableRef(node)
+  }, [setDraggableRef, setDroppableRef])
   const canDrag = enabled || Boolean(mobileDrag)
   const transform = draggable.transform
   const scale = transform ? getUiScale() : 1
