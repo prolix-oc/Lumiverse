@@ -44,7 +44,18 @@ public static class NativePipeHost {
             };
             process.Start();
             Task.Run(() => {
-                try { Console.OpenStandardInput().CopyTo(process.StandardInput.BaseStream); }
+                try {
+                    var input = Console.OpenStandardInput();
+                    var destination = process.StandardInput.BaseStream;
+                    var buffer = new byte[4096];
+                    int count;
+                    while ((count = input.Read(buffer, 0, buffer.Length)) != 0) {
+                        destination.Write(buffer, 0, count);
+                        // .NET Framework buffers this FileStream. Deliver each
+                        // command before waiting for more input from its parent.
+                        destination.Flush();
+                    }
+                }
                 catch (IOException) { }
                 finally { try { process.StandardInput.Close(); } catch (InvalidOperationException) { } }
             });

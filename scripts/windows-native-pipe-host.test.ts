@@ -3,17 +3,26 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-test.skipIf(process.platform !== "win32")("Windows PowerShell 5.1 launches the native smoke command and forwards its pipes", async () => {
+test.skipIf(process.platform !== "win32")("Windows PowerShell 5.1 forwards native commands before stdin closes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "lumiverse-native-pipe-"));
   const fixture = join(directory, "child with spaces.ts");
   const system = join(process.env.SystemRoot || process.env.SYSTEMROOT || process.env.WINDIR || "C:\\Windows", "System32");
   const args = ["--desktop", "", "C:\\data folder\\", 'embedded "quotes" and \\"', "Lumiverse 🌌"];
-  const input = '\x1e{"id":"setup","payload":"Unicode 🌌"}\r\n';
+  const inputs = ['{"id":"defaults"}\n', '{"id":"setup","payload":"Unicode 🌌"}\r\n'];
   const token = "native-pipe-regression-token";
   let child: Bun.Subprocess | undefined;
   writeFileSync(fixture, `
-    const input = await new Response(Bun.stdin.stream()).text();
-    await Bun.write(Bun.stdout, "\\x1e" + JSON.stringify({ args: process.argv.slice(2), input, token: process.env.LUMIVERSE_DESKTOP_CHANNEL_TOKEN }) + "\\n");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for await (const bytes of Bun.stdin.stream()) {
+      buffer += decoder.decode(bytes, { stream: true });
+      let end;
+      while ((end = buffer.indexOf("\\n")) !== -1) {
+        const input = buffer.slice(0, end + 1);
+        buffer = buffer.slice(end + 1);
+        await Bun.write(Bun.stdout, "\\x1e" + JSON.stringify({ args: process.argv.slice(2), input, token: process.env.LUMIVERSE_DESKTOP_CHANNEL_TOKEN }) + "\\n");
+      }
+    }
     await Bun.write(Bun.stderr, new Uint8Array([0, 255, 128, 13, 10]));
     process.exit(37);
   `);
@@ -36,16 +45,30 @@ test.skipIf(process.platform !== "win32")("Windows PowerShell 5.1 launches the n
     child = launched;
     const timer = setTimeout(() => launched.kill(), 15_000);
     try {
-      launched.stdin.write(input);
+      const reader = launched.stdout.getReader();
+      const decoder = new TextDecoder();
+      const stderr = new Response(launched.stderr).bytes();
+      let output = "";
+      for (const input of inputs) {
+        launched.stdin.write(input);
+        await launched.stdin.flush();
+        // Closing stdin here would flush .NET's buffer and hide the deadlock.
+        while (!output.includes("\n")) {
+          const { value, done } = await reader.read();
+          expect(done).toBe(false);
+          if (done) throw new Error("Native pipe host exited before replying");
+          output += decoder.decode(value, { stream: true });
+        }
+        const end = output.indexOf("\n");
+        expect(output.slice(0, end + 1)).toBe("\x1e" + JSON.stringify({ args, input, token }) + "\n");
+        output = output.slice(end + 1);
+        expect(launched.exitCode).toBeNull();
+      }
       launched.stdin.end();
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(launched.stdout).text(), new Response(launched.stderr).bytes(), launched.exited,
-      ]);
-      expect({ exitCode, stdout }).toEqual({
-        exitCode: 37,
-        stdout: "\x1e" + JSON.stringify({ args, input, token }) + "\n",
-      });
-      expect(stderr).toEqual(new Uint8Array([0, 255, 128, 13, 10]));
+      expect((await reader.read()).done).toBe(true);
+      expect(output).toBe("");
+      expect(await launched.exited).toBe(37);
+      expect(await stderr).toEqual(new Uint8Array([0, 255, 128, 13, 10]));
     } finally { clearTimeout(timer); }
   } finally {
     if (child && child.exitCode === null) { child.kill(); await child.exited; }
