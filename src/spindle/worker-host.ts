@@ -1384,6 +1384,7 @@ export class WorkerHost {
           "uuid-v1": 1,
           ...CONNECTION_ORGANIZATION_CAPABILITIES,
           "character-search-v1": 1,
+          "character-system-filter-v1": 1,
           "message-preset-context-v1": 1,
           "chat-swipe-variables-v1": 1,
           "generation-message-sessions-v1": 1,
@@ -2171,7 +2172,14 @@ export class WorkerHost {
         break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
-        this.contentApi.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId, (msg as typeof msg & { search?: string }).search);
+        this.contentApi.handleCharactersList(
+          msg.requestId,
+          msg.limit,
+          msg.offset,
+          msg.userId,
+          msg.search,
+          msg.includeSystem,
+        );
         break;
       case "characters_get":
         this.contentApi.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);

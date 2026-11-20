@@ -9,7 +9,7 @@ test("character picker search and thumbnails cross the worker RPC boundary", asy
   const entry = join(directory, "backend.mjs");
   await Bun.write(entry, `
     spindle.onFrontendMessage(async () => {
-      const result = await spindle.characters.list({ search: 'Mira', limit: 50, offset: 100, userId: 'alice' });
+      const result = await spindle.characters.list({ search: 'Mira', limit: 50, offset: 100, userId: 'alice', includeSystem: true });
       spindle.sendToFrontend({ pickerTest: 'done', result });
     });
   `);
@@ -39,7 +39,7 @@ test("character picker search and thumbnails cross the worker RPC boundary", asy
     worker.send({ type: "init", manifest: { identifier: "picker-test", entry_backend: pathToFileURL(entry).href, permissions: ["characters"] }, storagePath: directory });
     await waitFor(message => message.message === "__worker_ready__");
     worker.send({ type: "frontend_message", userId: "alice", payload: {} });
-    expect(await waitFor(message => message.type === "characters_list")).toMatchObject({ search: "Mira", limit: 50, offset: 100, userId: "alice" });
+    expect(await waitFor(message => message.type === "characters_list")).toMatchObject({ search: "Mira", limit: 50, offset: 100, userId: "alice", includeSystem: true });
     expect((await waitFor(message => message.payload?.pickerTest === "done")).payload.result).toEqual({ data: [{ id: "mira", avatar_url: "/thumbnail.png" }], total: 101 });
   } finally {
     worker.kill(); await worker.exited;

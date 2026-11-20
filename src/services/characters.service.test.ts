@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getCharactersByIdsAsync, listCharacterIndex, listCharacterSummaries } from "./characters.service";
+import {
+  LUMIVERSE_LIBRARY_HIDDEN_KEY,
+  MULTIPLAYER_ROOMS_CHARACTER_NAME,
+} from "../types/character";
+import { getCharactersByIdsAsync, listCharacterIndex, listCharacterSummaries, listCharacters } from "./characters.service";
 
 function initCharactersTestDb(): void {
   closeDatabase();
@@ -202,5 +206,66 @@ describe("character most-chats sorting", () => {
     const summaries = listCharacterSummaries("u1", { limit: 10, offset: 0 }, { sort: "most_chats" });
 
     expect(summaries.data.map((item) => item.id)).toEqual([character, otherCharacter]);
+  });
+});
+
+describe("library-hidden / Multiplayer Rooms visibility", () => {
+  test("a user card with the multiplayer container name remains visible", () => {
+    const id = seedCharacter(49, "User", 1_000);
+    getDb().run("UPDATE characters SET name = ? WHERE id = ?", [MULTIPLAYER_ROOMS_CHARACTER_NAME, id]);
+    expect(listCharacters("u1", { limit: 50, offset: 0 }, { includeSystem: false }).data.map(c => c.id)).toEqual([id]);
+  });
+
+  test("listCharacters keeps system cards by default and excludes them when includeSystem is false", () => {
+    const normal = seedCharacter(50, "Normal", 1_000);
+    const flaggedId = makeUuid(51);
+    getDb()
+      .query(
+        `INSERT INTO characters (
+          id, user_id, name, creator, tags, image_id, alternate_greetings, extensions, created_at, updated_at
+        ) VALUES (?, ?, ?, '', '[]', NULL, '[]', ?, ?, ?)`,
+      )
+      .run(flaggedId, "u1", "System Flagged", JSON.stringify({ [LUMIVERSE_LIBRARY_HIDDEN_KEY]: true }), 2_000, 2_000);
+    const legacyId = makeUuid(52);
+    getDb()
+      .query(
+        `INSERT INTO characters (
+          id, user_id, name, creator, tags, image_id, alternate_greetings, extensions, created_at, updated_at
+        ) VALUES (?, ?, ?, '', '[]', NULL, '[]', '{}', ?, ?)`,
+      )
+      .run(legacyId, "u1", MULTIPLAYER_ROOMS_CHARACTER_NAME, 3_000, 3_000);
+    seedChat("legacy-shadow", legacyId, 3_000, JSON.stringify({ multiplayer: true, joined_room: { roomId: "room" } }));
+
+    const hostDefault = listCharacters("u1", { limit: 50, offset: 0 });
+    expect(hostDefault.total).toBe(3);
+    expect(hostDefault.data.map((c) => c.id).sort()).toEqual([normal, flaggedId, legacyId].sort());
+
+    const spindleDefault = listCharacters("u1", { limit: 50, offset: 0 }, { includeSystem: false });
+    expect(spindleDefault.total).toBe(1);
+    expect(spindleDefault.data.map((c) => c.id)).toEqual([normal]);
+
+    const summaries = listCharacterSummaries("u1", { limit: 50, offset: 0 }, { includeSystem: false });
+    expect(summaries.total).toBe(1);
+    expect(summaries.data.map((c) => c.id)).toEqual([normal]);
+  });
+
+  test("filtering preserves search, pagination totals and owner boundaries across summary sorts", () => {
+    const ordinary = seedCharacter(60, "Multiplayer Rooms", 1_000);
+    const legacy = seedCharacter(61, "Legacy", 2_000);
+    const foreignShadow = seedCharacter(62, "Other owner shadow", 3_000);
+    getDb().run("UPDATE characters SET name = ?", [MULTIPLAYER_ROOMS_CHARACTER_NAME]);
+    seedChat("owned-shadow", legacy, 2_000, JSON.stringify({ multiplayer: true, joined_room: {} }));
+    seedChat("foreign-shadow", foreignShadow, 3_000, JSON.stringify({ multiplayer: true, joined_room: {} }), "u2");
+    getDb().run("INSERT INTO characters_fts(characters_fts) VALUES('rebuild')");
+
+    for (const search of ["", "Ro", "Rooms"]) {
+      for (const sort of ["recent", "name", "discover"] as const) {
+        const page = listCharacterSummaries("u1", { limit: 1, offset: 1 }, { includeSystem: false, search, sort });
+        expect(page.total).toBe(2);
+        expect(page.data).toHaveLength(1);
+        expect([ordinary, foreignShadow]).toContain(page.data[0].id);
+        expect(listCharacterSummaries("u1", { limit: 1, offset: 3 }, { includeSystem: true, search, sort }).total).toBe(3);
+      }
+    }
   });
 });

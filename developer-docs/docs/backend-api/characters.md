@@ -8,9 +8,22 @@ Reading gallery image bytes with `spindle.images.readBinary()` also requires the
 
 ## Usage
 
+Hosts advertising `character-system-filter-v1` change the default list result: internal
+container cards are excluded from both results and totals, including searches. Extensions
+that previously relied on these cards should pass `includeSystem: true` (types 0.6.81+).
+Ordinary cards named "Multiplayer Rooms" remain visible; legacy containers are identified
+by their joined-room chats. The host library and direct `characters.get(id)` keep their
+existing behavior.
+
 ```ts
 // List characters (paginated)
 const { data, total } = await spindle.characters.list({ limit: 20, offset: 0 })
+
+// Host-internal container cards (e.g. "Multiplayer Rooms") are omitted by default.
+// Pass includeSystem: true only when an extension intentionally needs them.
+if (spindle.host.capabilities['character-system-filter-v1'] >= 1) {
+  const { data: withSystem } = await spindle.characters.list({ limit: 20, includeSystem: true })
+}
 
 // Search the full library on supporting hosts, with the same limit/offset pagination.
 if (spindle.host.capabilities['character-search-v1'] >= 1) {
@@ -73,8 +86,8 @@ const deleted = await spindle.characters.delete(newChar.id)
 
 | Method | Returns | Description |
 |---|---|---|
-| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset?, search?, userId? }`. Search is capped at 200 characters and requires `character-search-v1`. Defaults: limit 50, max 200. |
-| `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. |
+| `list(options?)` | `Promise<{ data: CharacterDTO[], total: number }>` | List characters. Options: `{ limit?, offset?, search?, userId?, includeSystem? }`. Search is capped at 200 characters and requires `character-search-v1`. Defaults: limit 50, max 200. On hosts advertising `character-system-filter-v1`, host-internal system/container cards are omitted unless `includeSystem: true`; this also applies to search results and totals. Older hosts include them and ignore this option. |
+| `get(characterId)` | `Promise<CharacterDTO \| null>` | Get a character by ID. Returns `null` if not found. Direct ID lookup still returns system/container cards. |
 | `getGallery(characterId)` | `Promise<CharacterGalleryItemDTO[]>` | List the character's gallery images in gallery order without changing saved character data. Returns `[]` if the character has no gallery or is not found. Optional on older hosts; check support before calling. |
 | `create(input)` | `Promise<CharacterDTO>` | Create a new character. `name` is required. |
 | `update(characterId, input)` | `Promise<CharacterDTO>` | Update a character. All fields are optional. |

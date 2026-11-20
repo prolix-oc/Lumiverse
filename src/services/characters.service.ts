@@ -12,6 +12,7 @@ export { InvalidCharacterLibraryScopeError, normalizeCharacterLibraryScope } fro
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Character, CharacterLibraryScope, CharacterPreview, CharacterSummary, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
+import { libraryHiddenCharacterSqlPredicate } from "./character-library-visibility";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as filesSvc from "./files.service";
@@ -101,8 +102,12 @@ export interface SummaryQueryOptions {
   seed?: number;
   scope?: CharacterLibraryScope;
   chatId?: string;
+  includeSystem?: boolean;
 }
 
+export interface ListCharactersOptions {
+  includeSystem?: boolean;
+}
 const UUID_HEX_SQL = "LOWER(REPLACE(c.id, '-', ''))";
 
 function normalizeShuffleSeed(seed?: number): number {
@@ -201,6 +206,11 @@ export function listCharacterSummaries(
   if (options.chatId) {
     whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
     whereParams.push(options.chatId, userId);
+  }
+  if (options.includeSystem === false) {
+    const exclusion = libraryHiddenCharacterSqlPredicate("c");
+    whereClauses.push(`NOT ${exclusion.sql}`);
+    whereParams.push(...exclusion.params);
   }
 
   // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
@@ -378,6 +388,11 @@ function listCharacterSummariesDiscover(
   if (options.chatId) {
     whereClauses.push(`EXISTS (SELECT 1 FROM chats chat_filter WHERE chat_filter.id = ? AND chat_filter.user_id = ? AND (chat_filter.character_id = c.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(chat_filter.metadata, '$.character_ids'), '[]')) participant WHERE participant.value = c.id)))`);
     whereParams.push(options.chatId, userId);
+  }
+  if (options.includeSystem === false) {
+    const exclusion = libraryHiddenCharacterSqlPredicate("c");
+    whereClauses.push(`NOT ${exclusion.sql}`);
+    whereParams.push(...exclusion.params);
   }
 
   let extraJoin = "";
@@ -725,11 +740,23 @@ export function listCharacterExtensions(userId: string): Array<{ id: string; nam
   });
 }
 
-export function listCharacters(userId: string, pagination: PaginationParams): PaginatedResult<Character> {
+export function listCharacters(
+  userId: string,
+  pagination: PaginationParams,
+  options: ListCharactersOptions = {},
+): PaginatedResult<Character> {
+  const whereClauses = ["user_id = ?", "deleting = 0"];
+  const whereParams: unknown[] = [userId];
+  if (options.includeSystem === false) {
+    const exclusion = libraryHiddenCharacterSqlPredicate();
+    whereClauses.push(`NOT ${exclusion.sql}`);
+    whereParams.push(...exclusion.params);
+  }
+  const whereStr = whereClauses.join(" AND ");
   return paginatedQuery(
-    "SELECT * FROM characters WHERE user_id = ? AND deleting = 0 ORDER BY updated_at DESC",
-    "SELECT COUNT(*) as count FROM characters WHERE user_id = ? AND deleting = 0",
-    [userId],
+    `SELECT * FROM characters WHERE ${whereStr} ORDER BY updated_at DESC`,
+    `SELECT COUNT(*) as count FROM characters WHERE ${whereStr}`,
+    whereParams,
     pagination,
     rowToCharacter
   );

@@ -48,6 +48,12 @@ export type UpdateCharacterInput = Partial<CreateCharacterInput>;
 /** Sentinel id for the synthetic character backing character-less chats. */
 export const ASSISTANT_CHARACTER_ID = "__assistant__";
 
+/** Per-user container card that multiplayer shadow chats group under. */
+export const MULTIPLAYER_ROOMS_CHARACTER_NAME = "Multiplayer Rooms";
+
+/** Extensions flag marking host-internal characters excluded from Spindle lists by default. */
+export const LUMIVERSE_LIBRARY_HIDDEN_KEY = "_lumiverse_library_hidden";
+
 /**
  * Synthetic stand-in for temporary character-less chats so prompt assembly,
  * macros, and attribution run unchanged. Never persisted; the sentinel id
