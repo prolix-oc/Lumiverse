@@ -32,6 +32,8 @@ import {
 import { initMacros } from "../macros";
 import { createActivationInputSnapshot } from "../utils/regex-activation-inputs";
 import type { RegexScript } from "../types/regex-script";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const USER_ID = "u1";
 
@@ -800,6 +802,73 @@ describe("preset-bound regex activation", () => {
     expect(mustGetScript(presetOneEnabledId).disabled).toBe(true);
     expect(mustGetScript(presetOneDisabledId).disabled).toBe(true);
     expect(mustGetScript(presetTwoEnabledId).disabled).toBe(true);
+  });
+
+  function createEnabledPresetOneScripts(finds: string[]): string[] {
+    return finds.map((find) => {
+      const created = createRegexScript(USER_ID, {
+        name: `Preset One ${find}`,
+        find_regex: find,
+        preset_id: "preset-1",
+        disabled: false,
+      }, { activePresetId: "preset-1" });
+      expect(typeof created).not.toBe("string");
+      return (created as Exclude<typeof created, string>).id;
+    });
+  }
+
+  test("a repeated switch from a stale client keeps the previous preset's saved enabled set", () => {
+    // Two clients (say a phone and a PC) both have preset-1 open. One switches to
+    // preset-2; the other catches up later and sends the same switch with its
+    // stale previous preset. The second switch must not save preset-1's
+    // now-disabled rows as its restore list.
+    const ids = createEnabledPresetOneScripts(["one", "two"]);
+
+    activatePresetBoundRegexScripts(USER_ID, "preset-1");
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
+    expect(new Set(readPresetRestoreList("preset-1") as string[])).toEqual(new Set(ids));
+
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-2", presetId: "preset-1" });
+    for (const id of ids) expect(mustGetScript(id).disabled).toBe(false);
+  });
+
+  test("a stale client's bulk disable of already-off scripts still updates the restore list", async () => {
+    // The stale client still shows preset-1 and disables one of its scripts in
+    // bulk. The switch already turned that row off, so the row doesn't change,
+    // but switching back must leave it off and restore the rest.
+    const [one, two] = createEnabledPresetOneScripts(["one", "two"]);
+
+    activatePresetBoundRegexScripts(USER_ID, "preset-1");
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
+
+    // Other clients refresh preset regexes on this event, once per dropped row.
+    const changedIds: string[] = [];
+    const unsubscribe = eventBus.on(EventType.REGEX_SCRIPT_CHANGED, (event) => changedIds.push(event.payload.id));
+    try {
+      toggleRegexScriptsByIds(USER_ID, [one], true, { activePresetId: "preset-1" });
+      toggleRegexScriptsByIds(USER_ID, [one], true, { activePresetId: "preset-1" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      unsubscribe();
+    }
+    expect(changedIds).toEqual([one]);
+
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
+    expect(readPresetRestoreList("preset-1")).toEqual([two]);
+
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-2", presetId: "preset-1" });
+    expect(mustGetScript(one).disabled).toBe(true);
+    expect(mustGetScript(two).disabled).toBe(false);
+  });
+
+  test("a bulk disable of already-off scripts doesn't create a restore list", () => {
+    const [one] = createEnabledPresetOneScripts(["one"]);
+    toggleRegexScriptsByIds(USER_ID, [one], true, { activePresetId: "preset-1" });
+    getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run("presetRegexEnabled:preset-1", USER_ID);
+
+    toggleRegexScriptsByIds(USER_ID, [one], true, { activePresetId: "preset-1" });
+    expect(readPresetRestoreList("preset-1")).toBeNull();
   });
 
   test("inactive preset toggles do not rewrite that preset's restore list", () => {

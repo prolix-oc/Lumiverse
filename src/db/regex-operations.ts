@@ -859,6 +859,7 @@ function toggleRegexScriptRows(db: Database, events: RegexDatabaseEvent[],
   const changedIds: string[] = [];
   const skippedIds: string[] = [];
   const targets: Array<{ id: string; preset_id: string | null }> = [];
+  const alreadyDisabledPresetRowIds: string[] = [];
 
   for (const row of rows) {
     const presetActivationManaged = row.owner_extension_identifier == null;
@@ -867,10 +868,13 @@ function toggleRegexScriptRows(db: Database, events: RegexDatabaseEvent[],
       continue;
     }
     if (row.disabled === (disabled ? 1 : 0)) {
+      if (disabled && presetActivationManaged && row.preset_id) alreadyDisabledPresetRowIds.push(row.id);
       continue;
     }
     targets.push({ id: row.id, preset_id: presetActivationManaged ? row.preset_id ?? null : null });
   }
+
+  dropAlreadyDisabledRowsFromRestoreList(db, events, userId, activePresetId, alreadyDisabledPresetRowIds);
 
   if (targets.length === 0) {
     return { changedIds, skippedIds };
@@ -897,6 +901,27 @@ function toggleRegexScriptRows(db: Database, events: RegexDatabaseEvent[],
   }
 
   return { changedIds, skippedIds };
+}
+
+// A stale client can disable rows that a preset switch already turned off. The
+// rows don't change, but the preset's existing restore list must drop them, or
+// switching back would turn them on again. The event tells other clients.
+function dropAlreadyDisabledRowsFromRestoreList(db: Database, events: RegexDatabaseEvent[],
+  userId: string,
+  presetId: string | null,
+  ids: string[],
+): void {
+  if (!presetId || ids.length === 0) return;
+  const stored = readStoredPresetRegexIdsRecord(db, userId, presetId).ids;
+  const disabledIds = new Set(ids);
+  const dropped = new Set(stored.filter((id) => disabledIds.has(id)));
+  if (dropped.size === 0) return;
+
+  writeStoredPresetRegexIdsWithDb(db, userId, presetId, stored.filter((id) => !dropped.has(id)));
+  for (const id of dropped) {
+    const script = getRegexScript(db, userId, id);
+    if (script) events.push({ type: EventType.REGEX_SCRIPT_CHANGED, payload: { id, script } });
+  }
 }
 
 function toggleRegexScriptsByFolder(db: Database, events: RegexDatabaseEvent[],

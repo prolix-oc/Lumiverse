@@ -2565,7 +2565,15 @@ export function switchPresetBoundRegexScripts(
           "SELECT id FROM regex_scripts WHERE user_id = ? AND preset_id = ? AND disabled = 0 AND owner_extension_identifier IS NULL ORDER BY sort_order ASC, created_at ASC",
         )
         .all(userId, previousPresetId) as Array<{ id: string }>;
-      writeStoredPresetRegexIdsWithDb(db, userId, previousPresetId, enabledRows.map((row) => row.id));
+      // A client whose view is stale (another tab or device already switched
+      // away) sends the same switch again. By then every row of the previous
+      // preset is disabled, so snapshotting them would wipe its restore list.
+      // Toggles keep an existing list current, so it is safe to keep it.
+      const keepStoredList = enabledRows.length === 0
+        && readStoredPresetRegexIdsRecord(userId, previousPresetId).exists;
+      if (!keepStoredList) {
+        writeStoredPresetRegexIdsWithDb(db, userId, previousPresetId, enabledRows.map((row) => row.id));
+      }
     }
 
     return applyPresetBoundActivationWithDb(db, userId, targetPresetId);
