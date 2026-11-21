@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Memory Cortex — Entity graph CRUD operations.
  *
@@ -709,7 +710,7 @@ export function upsertEntity(
   }
 
   // Create new entity
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const initialAliases = extracted.aliases
     .map((alias) => sanitizeAlias(alias))
     .filter((alias): alias is string => !!alias && isPlausibleAlias(alias, extracted.name));
@@ -1508,7 +1509,7 @@ export function upsertMention(
        role = excluded.role,
        excerpt = excluded.excerpt,
        sentiment = excluded.sentiment`,
-  ).run(crypto.randomUUID(), entityId, chunkId, chatId, role, excerpt, sentiment, now);
+  ).run(uuidv4(), entityId, chunkId, chatId, role, excerpt, sentiment, now);
 }
 
 /** Get all mentions for an entity */
@@ -1705,7 +1706,7 @@ export function upsertRelation(
               contradiction_flag = 'temporal',
               superseded_by = ?
              WHERE id = ?`,
-          ).run(crypto.randomUUID(), opposing.id); // Will be updated with the new edge's ID below
+          ).run(uuidv4(), opposing.id); // Will be updated with the new edge's ID below
           contradictionFlag = "none"; // The new edge is canonical
         } else if (resolution.action === "mark_complex") {
           contradictionFlag = "complex";
@@ -1734,7 +1735,7 @@ export function upsertRelation(
     const initialDecayRate = computeEdgeDecayRate(initialStrength);
     const initialEdgeSalience = computeEdgeSalience(initialStrength, initialDecayRate, now);
 
-    const newEdgeId = crypto.randomUUID();
+    const newEdgeId = uuidv4();
 
     db.query(
       `INSERT INTO memory_relations

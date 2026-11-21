@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 
 export type ImageProcessingJobKind = "process" | "rebuild";
@@ -60,7 +61,7 @@ export function recordImageProcessingJob(
   kind: ImageProcessingJobKind,
 ): ImageProcessingQueueJob {
   ensureImageProcessingQueueTable();
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const createdAt = Date.now();
   getDb()
     .query(

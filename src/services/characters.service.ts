@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
 import { readDatabaseRow, readDatabaseRows } from "../db/queries";
@@ -575,7 +576,7 @@ export function normalizeLandingPerspectiveLayers(value: unknown): LandingPerspe
       const imageId = typeof entry.image_id === "string" ? entry.image_id : null;
       if (!imageId || seen.has(imageId)) continue;
       seen.add(imageId);
-      const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID();
+      const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : uuidv4();
       const label = typeof entry.label === "string" && entry.label.trim() ? entry.label.trim().slice(0, 80) : undefined;
       layers.push({ id, image_id: imageId, label, intensity: clampPerspectiveIntensity(entry.intensity) });
       if (layers.length >= MAX_LANDING_PERSPECTIVE_LAYERS) break;
@@ -915,7 +916,7 @@ export function createCharacter(
   input: CreateCharacterInput,
   options: CreateCharacterOptions = {},
 ): Character {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
   const libraryScope = explicitCharacterInputScope(input) ?? "mine";
@@ -1222,7 +1223,7 @@ export async function addCharacterPerspectiveLayer(
   extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = [
     ...currentLayers,
     {
-      id: input.id?.trim() || crypto.randomUUID(),
+      id: input.id?.trim() || uuidv4(),
       image_id: image.id,
       label,
       intensity: clampPerspectiveIntensity(input.intensity),
@@ -1305,7 +1306,7 @@ export function duplicateCharacter(userId: string, id: string): Character | null
   const existing = getCharacter(userId, id);
   if (!existing) return null;
 
-  const newId = crypto.randomUUID();
+  const newId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   getDb()

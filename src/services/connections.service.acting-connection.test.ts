@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Task 3.16 — focused unit tests for the surfaces the Edit-and-Send 401 fix
  * adds:
@@ -180,7 +181,7 @@ function seedMessage(id: string, chatId: string, index: number, isUser: boolean)
 }
 
 function insertOutbox(overrides: Record<string, string | number | null> = {}): string {
-  const id = typeof overrides.id === "string" ? overrides.id : crypto.randomUUID();
+  const id = typeof overrides.id === "string" ? overrides.id : uuidv4();
   const requestId = overrides.request_id ?? "req-1";
   const generationId = overrides.generation_id ?? `gen-${id}`;
   const now = Date.now();

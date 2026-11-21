@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import {
@@ -611,7 +612,7 @@ export class WorkerHostStorageApi {
       if (sizeBytes > extensionAvailable) throw new Error(`Requested block exceeds extension available pool (${sizeBytes}/${Math.max(0, extensionAvailable)} bytes)`);
       if (sizeBytes > globalAvailable) throw new Error(`Requested block exceeds global available pool (${sizeBytes}/${Math.max(0, globalAvailable)} bytes)`);
       const expiresAt = new Date(Date.now() + (ttlMs && ttlMs > 0 ? ttlMs : config.reservationTtlMs)).toISOString();
-      const reservationId = crypto.randomUUID();
+      const reservationId = uuidv4();
       this.writeReservations([...this.readReservations(), { id: reservationId, sizeBytes, consumedBytes: 0, createdAt: new Date().toISOString(), expiresAt, reason }]);
       this.respond(requestId, { reservationId, sizeBytes, expiresAt });
     } catch (error) { this.fail(requestId, error); }

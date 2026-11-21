@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { ZipArchive, type ArchiverError } from "archiver";
 import { Writable } from "stream";
 import type { Preset, PromptBlock } from "../types/preset";
@@ -202,7 +203,7 @@ function rememberPreparedExport(userId: string, presetIds: string[]): PreparedPr
     if (now - entry.createdAt > PREPARE_TTL_MS) preparedExports.delete(id);
   }
 
-  const downloadId = crypto.randomUUID();
+  const downloadId = uuidv4();
   const filename = `loom-presets-${exportTimestamp()}.zip`;
   preparedExports.set(downloadId, { userId, presetIds, filename, createdAt: now });
   return {

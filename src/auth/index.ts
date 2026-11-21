@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { betterAuth } from "better-auth";
 import { username, admin, bearer, genericOAuth, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -39,7 +40,7 @@ export function allowCreation(): string {
     const oldest = [...outstandingNonces.entries()].sort((a, b) => a[1] - b[1])[0];
     if (oldest) outstandingNonces.delete(oldest[0]);
   }
-  const nonce = crypto.randomUUID();
+  const nonce = uuidv4();
   outstandingNonces.set(nonce, now + CREATION_NONCE_TTL_MS);
   return nonce;
 }

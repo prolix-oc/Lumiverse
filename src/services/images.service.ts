@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { readDatabaseRow, readDatabaseRows, runDatabaseStatement } from "../db/queries";
 import { isImageReferenced as isImageReferencedWithDb, findReferencedImageIds as findReferencedImageIdsWithDb } from "../db/image-reference-operations";
 import { executeDatabaseOperation } from "../db/execution";
@@ -474,7 +475,7 @@ async function ensureThumbnail(
 }
 
 export async function uploadImage(userId: string, file: File, options?: ImageOwnershipOptions): Promise<Image> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const dir = getImagesDir();
 
   const originalMimeType = inferUploadMimeType(file);
@@ -658,7 +659,7 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
 }
 
 export async function uploadOptimizedWebpImage(userId: string, file: File, options?: ImageOwnershipOptions): Promise<Image> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const filename = `${id}.webp`;
   const dir = getImagesDir();
   const filepath = join(dir, filename);
@@ -742,7 +743,7 @@ export async function saveImageFromDataUrl(
   const base64 = match[2];
   const ext = Object.entries(MIME_BY_EXT).find(([, mime]) => mime === mimeType)?.[0] ?? ".bin";
   const buffer = Buffer.from(base64, "base64");
-  const filename = originalFilename || `image-gen-${crypto.randomUUID()}${ext}`;
+  const filename = originalFilename || `image-gen-${uuidv4()}${ext}`;
   return uploadImageDeferred(userId, new File([buffer], filename, { type: mimeType }), options);
 }
 
@@ -796,7 +797,7 @@ export async function uploadImages(
         if (!(item.data instanceof Uint8Array) || item.data.byteLength === 0) {
           throw new Error("Image data must be a non-empty Uint8Array");
         }
-        const id = crypto.randomUUID();
+        const id = uuidv4();
         // Active content (HTML/XHTML) is stored inert: strip the executable
         // extension and demote the mime so no serving path can render it
         // inline. This is the single choke point for every image upload path

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Round-trip test for the user-data export/import pipeline.
  *
@@ -179,7 +180,7 @@ describe("user-data export ZIP64 round-trip", () => {
   });
 
   test("fast verifier scans a multi-page central directory without loading it whole", async () => {
-    const archiveId = crypto.randomUUID();
+    const archiveId = uuidv4();
     const entries: Record<string, Uint8Array> = {};
     const empty = new Uint8Array(0);
     // Put the manifest last and make the directory comfortably larger than
@@ -199,7 +200,7 @@ describe("user-data export ZIP64 round-trip", () => {
   });
 
   test("compatibility verifier finds a trailing manifest without reading leading data", async () => {
-    const archiveId = crypto.randomUUID();
+    const archiveId = uuidv4();
     const leadingData = new Uint8Array(8 * 1024 * 1024);
     const bytes = zipSync(
       {
@@ -216,7 +217,7 @@ describe("user-data export ZIP64 round-trip", () => {
   });
 
   test("fast verifier caps manifest inflation even when ZIP metadata lies", async () => {
-    const archiveId = crypto.randomUUID();
+    const archiveId = uuidv4();
     const oversized = {
       ...testManifest(archiveId),
       padding: "x".repeat(17 * 1024 * 1024),

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import type {
   Pack, PackWithItems,
@@ -58,7 +59,7 @@ export function getPack(userId: string, id: string): Pack | null {
 }
 
 export function createPack(userId: string, input: CreatePackInput): Pack {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(
@@ -206,7 +207,7 @@ export function createLumiaItem(userId: string, packId: string, input: CreateLum
   const pack = getPack(userId, packId);
   if (!pack) return null;
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(
@@ -281,7 +282,7 @@ export function createLoomItem(userId: string, packId: string, input: CreateLoom
   const pack = getPack(userId, packId);
   if (!pack) return null;
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(
@@ -350,7 +351,7 @@ export function createLoomTool(userId: string, packId: string, input: CreateLoom
   const pack = getPack(userId, packId);
   if (!pack) return null;
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(
@@ -615,7 +616,7 @@ function normalizePackPayload(raw: any): PackImportPayload {
 export function importPack(userId: string, rawPayload: PackImportPayload): PackWithItems {
   const payload = normalizePackPayload(rawPayload);
   const db = getDb();
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   db.transaction(() => {
@@ -640,7 +641,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         `INSERT INTO lumia_items (id, pack_id, name, avatar_url, author_name, definition, personality, behavior, gender_identity, version, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
-        crypto.randomUUID(), id,
+        uuidv4(), id,
         item.name,
         item.avatarUrl || null,
         item.authorName || "",
@@ -660,7 +661,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         `INSERT INTO loom_items (id, pack_id, name, content, category, author_name, version, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
-        crypto.randomUUID(), id,
+        uuidv4(), id,
         item.name,
         item.content || "",
         item.category || "narrative_style",
@@ -677,7 +678,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         `INSERT INTO loom_tools (id, pack_id, tool_name, display_name, description, prompt, input_schema, result_variable, store_in_deliberation, author_name, version, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
-        crypto.randomUUID(), id,
+        uuidv4(), id,
         tool.toolName,
         tool.displayName || "",
         tool.description || "",

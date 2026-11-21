@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../src/utils/uuid";
 import { existsSync } from "fs";
 import { join } from "path";
 import { PROJECT_ROOT, ENTRY, STOP_SIGTERM_GRACE_MS } from "./lib/constants.js";
@@ -202,7 +203,7 @@ export async function startServer(isDev: boolean): Promise<void> {
   // both output channels, preserving ordering when a launch transport inherits
   // the runner's stderr instead of using owned output pipes.
   onLogSessionStart?.({
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     startedAt: new Date().toISOString(),
   });
 

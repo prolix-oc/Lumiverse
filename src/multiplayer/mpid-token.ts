@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Host-side mint/verify for Identity-Server-format tokens (HS256, the same
  * wire format as the MPIdentity server's crypto/tokens.ts). Used to:
@@ -40,7 +41,7 @@ async function hmac(key: Uint8Array, msg: string): Promise<Uint8Array> {
 export async function mintHostToken(roomId: string, secret: Uint8Array, aud: string, ttlSeconds = 300): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "mpid" };
-  const payload: MpidClaims = { typ: "host", aud, rid: roomId, iat: now, exp: now + ttlSeconds, jti: crypto.randomUUID() };
+  const payload: MpidClaims = { typ: "host", aud, rid: roomId, iat: now, exp: now + ttlSeconds, jti: uuidv4() };
   const signingInput = `${Buffer.from(JSON.stringify(header)).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   const sig = await hmac(secret, signingInput);
   return `${signingInput}.${Buffer.from(sig).toString("base64url")}`;

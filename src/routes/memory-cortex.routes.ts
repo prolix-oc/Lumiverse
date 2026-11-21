@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Memory Cortex API routes.
  *
@@ -1834,7 +1835,7 @@ app.post("/chats/:chatId/relations", async (c) => {
     return c.json({ error: "Relation already exists; PUT to edit it.", existingId: existing.id }, 409);
   }
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const relationLabel = typeof body.relationLabel === "string" ? body.relationLabel : null;
   const strength = typeof body.strength === "number" ? Math.max(0, Math.min(1, body.strength)) : 0.5;

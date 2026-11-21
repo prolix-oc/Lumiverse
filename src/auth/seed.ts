@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hashPassword } from "../crypto/password";
@@ -54,8 +55,8 @@ export function getFirstUserId(): string | null {
  * only the pre-hashed value from the credentials file is used.
  */
 function seedOwnerDirectly(db: ReturnType<typeof getDb>, username: string, passwordHash: string): string {
-  const userId = crypto.randomUUID();
-  const accountId = crypto.randomUUID();
+  const userId = uuidv4();
+  const accountId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const normalizedUsername = username.toLowerCase();
   const email = `${normalizedUsername}@lumiverse.local`;

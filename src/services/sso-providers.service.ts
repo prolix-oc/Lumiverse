@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
 import { getEncryptionKeyBytes } from "../crypto/init";
@@ -307,7 +308,7 @@ export function createSsoProvider(input: any): SsoProviderPublic {
   const secret = typeof input?.client_secret === "string" ? input.client_secret : typeof input?.clientSecret === "string" ? input.clientSecret : "";
   if (!secret || secret.length > MAX_SECRET_LENGTH) throw new InvalidSsoProviderError("client_secret is required and must be 1-4096 chars");
   const encrypted = encryptSecret(secret);
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = nowSec();
   const scopes = JSON.stringify(sanitizeScopes(input?.scopes));
   const metadata = normalizeMetadata(input);

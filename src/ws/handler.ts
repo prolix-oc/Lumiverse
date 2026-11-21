@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { upgradeWebSocket } from "@hono/bun";
 import { Buffer } from "node:buffer";
 import { eventBus } from "./bus";
@@ -143,7 +144,7 @@ export const wsHandler = upgradeWebSocket((c) => {
             .query('SELECT id, role FROM "user" WHERE id = ?')
             .get(ticketUserId) as { id: string; role: string } | null;
           userRole = row?.role || "user";
-          sessionId = `ticket-${crypto.randomUUID()}`;
+          sessionId = `ticket-${uuidv4()}`;
         } else {
           // Auth path 2: cookie-based session (original path)
           const request = approvedAuthRequest(c.req.raw, isConnectionFromExplicitTrustedProxy(c));

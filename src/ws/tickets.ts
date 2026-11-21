@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Single-use, short-lived WebSocket tickets.
  *
@@ -50,7 +51,7 @@ function ensureSweepTimer(): void {
 /** Issue a new single-use ticket for the given user. */
 export function issueTicket(userId: string): string {
   ensureSweepTimer();
-  const ticket = crypto.randomUUID();
+  const ticket = uuidv4();
   tickets.set(ticket, { userId, expires: Date.now() + TICKET_TTL_MS });
   return ticket;
 }
@@ -73,7 +74,7 @@ export function issueDesktopNotificationTicket(
   destinationId: string,
 ): string {
   ensureSweepTimer();
-  const ticket = crypto.randomUUID();
+  const ticket = uuidv4();
   desktopNotificationTickets.set(ticket, {
     userId,
     destinationId,

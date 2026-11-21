@@ -1,8 +1,9 @@
+import { uuidv4 } from "./uuid";
 import { expect, mock, test } from 'bun:test'
 import { completeGalleryRemoval } from './gallery-removal'
 import { isGalleryItemRemoved, isImageDeleted, notifyGalleryItemRemoved, onGalleryItemRemoved, type GalleryItemRemoved } from './deletion-events'
 
-const item = (): GalleryItemRemoved => ({ id: crypto.randomUUID(), characterId: crypto.randomUUID(), imageId: crypto.randomUUID(), status: 'completed' })
+const item = (): GalleryItemRemoved => ({ id: uuidv4(), characterId: uuidv4(), imageId: uuidv4(), status: 'completed' })
 
 test('a committed gallery event resolves before slow HTTP cleanup and leaves shared images visible', async () => {
   const removed = item()

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,7 +41,7 @@ export class TokenizerResourceCache {
   private owner: string;
 
   constructor(private options: CacheOptions) {
-    this.owner = options.owner ?? crypto.randomUUID();
+    this.owner = options.owner ?? uuidv4();
   }
 
   async read(url: string, fingerprint: string, format: ResourceFormat = "text"): Promise<TokenizerResource> {
@@ -130,7 +131,7 @@ export class TokenizerResourceCache {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
     }
-    const temporary = `${path}.${this.owner}.${crypto.randomUUID()}.tmp`;
+    const temporary = `${path}.${this.owner}.${uuidv4()}.tmp`;
     try {
       try { await lock.writeFile(this.owner); }
       catch { return this.download(url, headers, format); }
@@ -180,7 +181,7 @@ export class TokenizerResourceCache {
 }
 
 let cache: TokenizerResourceCache | undefined;
-let resourceOwner = `main-${crypto.randomUUID()}`;
+let resourceOwner = `main-${uuidv4()}`;
 
 export function setTokenizerResourceOwner(owner: string): void {
   if (owner !== resourceOwner) { resourceOwner = owner; cache = undefined; }

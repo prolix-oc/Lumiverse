@@ -1,3 +1,4 @@
+import { uuidv4 } from "./uuid";
 import type { RegexAction } from "../types/regex-script";
 import type { SandboxCaptureReplacement } from "./regex-sandbox";
 
@@ -69,7 +70,7 @@ export function buildRegexActionCaptureTemplate(actions: RegexAction[]): {
   template: string;
   unpack: (replacement: string, scriptId: string, instanceId: string) => ResolvedRegexAction[];
 } {
-  const nonce = `\u0002LRA:${crypto.randomUUID()}:`;
+  const nonce = `\u0002LRA:${uuidv4()}:`;
   const fieldCount = actions.reduce((count, action) => (
     count + 5 + (action.effects ?? []).filter((effect) => effect.type !== "fork").length
   ), 0);

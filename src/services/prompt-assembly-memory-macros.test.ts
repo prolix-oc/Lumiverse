@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
 import { join } from "node:path";
@@ -30,7 +31,7 @@ let message: ReturnType<typeof createMessage>;
 
 function block(content: string, overrides: Partial<PromptBlock> = {}): PromptBlock {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name: "Context",
     enabled: true,
     role: "system",
@@ -191,7 +192,7 @@ async function enableBasicRecall() {
     "INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, ?, 'User', ?)",
   );
   for (let i = 0; i < 7; i++) {
-    insertMessage.run(crypto.randomUUID(), chat.id, i + 1, i % 2 === 0 ? 1 : 0, `Recent turn ${i}`);
+    insertMessage.run(uuidv4(), chat.id, i + 1, i % 2 === 0 ? 1 : 0, `Recent turn ${i}`);
   }
   getDb().query(`INSERT INTO chat_chunks
     (id, chat_id, start_message_id, end_message_id, message_ids, content, token_count, message_count, created_at, updated_at)

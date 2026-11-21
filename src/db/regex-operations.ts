@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Database } from "bun:sqlite";
 
 export interface RegexDeletionContext {
@@ -144,7 +145,7 @@ function createRegexScript(db: Database, events: RegexDatabaseEvent[],
   const regexErr = validateRegex(nextInput.find_regex, nextInput.flags ?? "gi", nextInput.substitute_macros ?? "none", !!readPromptActivation(nextInput.metadata));
   if (regexErr) return regexErr;
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const disabled = resolveCreateDisabledState(nextInput, activePresetId, !extensionIdentifier);
@@ -759,7 +760,7 @@ function duplicateRegexScript(db: Database, events: RegexDatabaseEvent[], userId
   const existing = getRegexScript(db, userId, id);
   if (!existing) return null;
 
-  const newId = crypto.randomUUID();
+  const newId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const metadata = { ...existing.metadata };
   delete metadata.prompt_activation; // Duplicates are unbound.

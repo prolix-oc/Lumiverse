@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import type { LlmMessage } from "../llm/types";
 import type { PromptBlock } from "../types/preset";
@@ -31,7 +32,7 @@ afterEach(() => interceptorPipeline.unregisterByExtension(extensionId));
 afterAll(() => { workerSpy.mockRestore(); stopGenerationSweep(); closeDatabase(); });
 
 function block(overrides: Partial<PromptBlock>): PromptBlock {
-  return { id: crypto.randomUUID(), name: "Block", content: "", role: "system", enabled: true,
+  return { id: uuidv4(), name: "Block", content: "", role: "system", enabled: true,
     position: "pre_history", depth: 0, marker: null, isLocked: false, color: null,
     injectionTrigger: [], group: null, ...overrides };
 }

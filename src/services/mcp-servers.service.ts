@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -101,7 +102,7 @@ export async function createServer(
   userId: string,
   input: CreateMcpServerInput
 ): Promise<McpServerProfile> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   let hasHeaders = 0;

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { describe, test, expect, beforeAll, spyOn } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
 import { parse } from "./MacroParser";
@@ -641,7 +642,7 @@ describe("Chat-scoped persisted variables", () => {
 
 describe("Macro execution mode", () => {
   test("custom macro sees committing execution by default", async () => {
-    const name = `test_commit_${crypto.randomUUID()}`;
+    const name = `test_commit_${uuidv4()}`;
     registry.registerMacro({
       name,
       category: "Test",
@@ -658,7 +659,7 @@ describe("Macro execution mode", () => {
   });
 
   test("custom macro sees dry execution when env.commit is false", async () => {
-    const name = `test_dry_${crypto.randomUUID()}`;
+    const name = `test_dry_${uuidv4()}`;
     registry.registerMacro({
       name,
       category: "Test",

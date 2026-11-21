@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { shieldMessageLiterals } from "../macros/message-literals";
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "./embeddings.service";
@@ -323,7 +324,7 @@ function upsertCacheRow(
          updated_at = excluded.updated_at`,
     )
     .run(
-      crypto.randomUUID(),
+      uuidv4(),
       userId,
       chatId,
       settingsKey,

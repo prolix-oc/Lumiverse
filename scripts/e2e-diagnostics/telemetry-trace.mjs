@@ -1,5 +1,5 @@
+import { uuidv4 } from "../../src/utils/uuid.ts";
 import { open, readFile, rename } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
 
 export function traceBytes(scalar) {
   if (scalar?.units !== 'bytes' || scalar.type !== 'scalar') return null;
@@ -62,7 +62,7 @@ export async function startMemoryTrace(session, filePath, { maxBytes = 128 * 102
   return {
     async checkpoint(label) {
       const start = performance.now();
-      const marker = `lumiverse-memory-${randomUUID()}`;
+      const marker = `lumiverse-memory-${uuidv4()}`;
       const clockSync = { start: `${marker}-start`, end: `${marker}-end` };
       try {
         await send('Tracing.recordClockSyncMarker', { syncId: clockSync.start });

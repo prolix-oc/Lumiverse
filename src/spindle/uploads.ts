@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, createWriteStream, rmSync, statSync } from "node:fs";
 import { Readable, Transform } from "node:stream";
@@ -38,7 +39,7 @@ export function createUpload(input: {
   fileName: string;
   declaredSize: number;
 }): SpindleUploadRecord {
-  const uploadId = crypto.randomUUID();
+  const uploadId = uuidv4();
   const dir = dirFor(input.ownerUserId, uploadId);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "blob");

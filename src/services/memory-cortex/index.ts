@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Memory Cortex — Public API surface.
  *
@@ -2018,7 +2019,7 @@ async function processChunkImpl(
              scored_by = excluded.scored_by,
              scored_at = excluded.scored_at`,
         ).run(
-          crypto.randomUUID(), data.chunkId, data.chatId,
+          uuidv4(), data.chunkId, data.chatId,
           salienceResult.score, salienceResult.source,
           JSON.stringify(salienceResult.emotionalTags),
           JSON.stringify(salienceResult.statusChanges),

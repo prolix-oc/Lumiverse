@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,14 +30,14 @@ test("replaying a vector import preserves committed rows and isolates the accoun
     const vector_b64 = Buffer.from(new Float32Array([1, 2, 3]).buffer).toString("base64");
     const encode = (value: unknown) => Buffer.from(JSON.stringify(value));
     const archive = zipSync({
-      "manifest.json": encode({ schemaVersion: 1, producer: "lumiverse", archiveId: crypto.randomUUID(), exportedAt: 0,
+      "manifest.json": encode({ schemaVersion: 1, producer: "lumiverse", archiveId: uuidv4(), exportedAt: 0,
         includeVectors: true, embeddingConfig: config, counts: {}, missingFiles: [] }),
       "lancedb/chat_vectors.ndjson": Buffer.from(["existing", "new"].map(id => JSON.stringify({ id, vector_b64 })).join("\n") + "\n"),
     });
     for (let replay = 0; replay < 2; replay++) {
       const archivePath = join(directory, `replay-${replay}.lvbak`);
       writeFileSync(archivePath, archive);
-      const job = startImport({ userId: "vector-owner", jobId: crypto.randomUUID(), archivePath, resuming: true });
+      const job = startImport({ userId: "vector-owner", jobId: uuidv4(), archivePath, resuming: true });
       const deadline = Date.now() + 10_000;
       while (job.status === "running" && Date.now() < deadline) await Bun.sleep(5);
       expect(job.error).toBeNull();

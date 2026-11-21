@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import { resolve, dirname } from "path";
 import { homedir } from "os";
@@ -411,7 +412,7 @@ app.post("/execute", async (c) => {
   const permissionError = await ensureMigrationTargetAccess(c, targetUserId);
   if (permissionError) return permissionError;
 
-  const migrationId = crypto.randomUUID();
+  const migrationId = uuidv4();
   const migrationScope = {
     characters: !!scope.characters,
     worldBooks: !!scope.worldBooks,

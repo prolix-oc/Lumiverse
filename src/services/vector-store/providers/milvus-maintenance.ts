@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { uuidv4 } from "../../../utils/uuid";
+import { createHash } from "node:crypto";
 import { DataType, FunctionType, MilvusClient } from "@zilliz/milvus2-sdk-node";
 import type { MilvusConnectionConfig } from "../../vector-store-config.service";
 import type { CollectionName, VectorRow } from "../types";
@@ -175,7 +176,7 @@ export class MilvusMaintenance {
     const expected = await this.fingerprint(source, true);
     const dim = this.dimension(schema);
     if (original.rows > 0 && (original.dimension !== dim || expected.dimension !== dim)) throw new Error("Stored vector rows do not match the declared dimension.");
-    const id = randomUUID().replaceAll("-", "");
+    const id = uuidv4().replaceAll("-", "");
     return { version: 1, id, identity: this.identity, kind: "text", collection, source, target: `lumiverse_migration_${id}_${collection}`,
       phase: "planned", sourceFingerprint: original.hash, targetFingerprint: expected.hash, rowCount: original.rows,
       dimension: dim, repairDigest: this.repairDigest(), copied: 0 };
@@ -282,7 +283,7 @@ export class MilvusMaintenance {
     if (schema.schema.fields.some((field: any) => field.name === "sparse")) throw new Error("Sparse field already exists without the expected BM25 function; manual schema repair required.");
     await ok(this.client.loadCollection({ collection_name: source }));
     const fingerprint = await this.fingerprint(source);
-    return { version: 1, id: randomUUID(), identity: this.identity, kind: "bm25", collection, source, target: source, phase: "planned",
+    return { version: 1, id: uuidv4(), identity: this.identity, kind: "bm25", collection, source, target: source, phase: "planned",
       sourceFingerprint: fingerprint.hash, targetFingerprint: fingerprint.hash, rowCount: fingerprint.rows,
       dimension: this.dimension(schema), repairDigest: this.repairDigest(), copied: 0 };
   }

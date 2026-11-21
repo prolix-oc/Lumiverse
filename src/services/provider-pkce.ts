@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 export type PkceProvider = "openrouter" | "nanogpt";
 
 const providers = {
@@ -8,7 +9,7 @@ const providers = {
 /** Shared by text and decision connections. The verifier stays on the server. */
 export async function createProviderPkce(provider: PkceProvider, callbackUrl: string) {
   const codeVerifier = Buffer.from(crypto.getRandomValues(new Uint8Array(48))).toString("base64url");
-  const sessionToken = crypto.randomUUID();
+  const sessionToken = uuidv4();
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier));
   const callback = new URL(callbackUrl);
   // Carry state in the callback itself as well as the authorization request so

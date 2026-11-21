@@ -186,7 +186,7 @@ For video, use `kind: 'video'`, `mode: 'record' | 'replay'`, and `durationSecond
 Treat `durationSeconds` as the maximum length. If the host advertises `desktop-capture-finish-v1` and the chosen device has `recordingControlSupported: true`, supply a unique caller-generated `requestKey` to `capture.request()`. Calling `capture.finish(requestKey, { userId })` finalizes that pending record-mode video; the original promise resolves with its actual shorter duration. The extension can use a second invocation of its existing share action to call this method. No additional command or keybinding is necessary.
 
 ```ts
-const requestKey = crypto.randomUUID()
+const requestKey = await spindle.uuid.v4()
 const pending = spindle.desktop.capture.request({
   deviceId, connectionId, requestKey, kind: 'video', mode: 'record',
   durationSeconds: 30, purpose: 'React to this clip', userId,

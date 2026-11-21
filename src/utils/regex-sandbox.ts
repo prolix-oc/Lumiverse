@@ -1,3 +1,4 @@
+import { uuidv4 } from "./uuid";
 /**
  * Worker-backed regex sandbox.
  *
@@ -94,7 +95,7 @@ function defaultWorkerPoolDeps(): RegexWorkerPoolDeps {
     ),
     scheduleTimer: (fn, ms) => setTimeout(fn, ms),
     cancelTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-    createRequestId: () => crypto.randomUUID(),
+    createRequestId: () => uuidv4(),
     startupTimeoutMs: REGEX_WORKER_START_TIMEOUT_MS,
   };
 }

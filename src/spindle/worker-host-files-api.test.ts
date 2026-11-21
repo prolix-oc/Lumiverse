@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { mkdtemp, open, readdir, rm, stat, truncate } from "node:fs/promises";
@@ -51,7 +52,7 @@ function client(extensionId = "extension-a", userId = "alice", operator = false)
   });
   apis.push(api);
   const start = (message: Record<string, unknown>) => {
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const response = Promise.withResolvers<any>();
     pending.set(requestId, response);
     api.dispatch({ ...message, type: message.type as string, requestId });

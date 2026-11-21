@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { describeGenerationStop } from "../generation-stop";
 import { omitDisabledPenalties } from "../generation-parameters";
 import { incompleteStream, readProviderSse, throwIfProviderError } from "../provider-sse";
@@ -175,7 +176,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       ? rawToolCalls.map((tc: any) => ({
           name: tc.function?.name || tc.name || "",
           args: typeof tc.function?.arguments === "string" ? JSON.parse(tc.function.arguments) : (tc.function?.arguments ?? {}),
-          call_id: tc.id || crypto.randomUUID(),
+          call_id: tc.id || uuidv4(),
         }))
       : undefined;
 
@@ -291,7 +292,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     // failure instead of throwing a JSON parse error or reporting tool_calls.
     const toolCalls = !failed && toolCallBuffer.length > 0
       ? toolCallBuffer.filter(Boolean).map(tc => ({
-          name: tc.name, args: JSON.parse(tc.argsJson || "{}"), call_id: tc.id || crypto.randomUUID(),
+          name: tc.name, args: JSON.parse(tc.argsJson || "{}"), call_id: tc.id || uuidv4(),
         }))
       : undefined;
     yield {

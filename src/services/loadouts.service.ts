@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import * as settingsSvc from "./settings.service";
 import * as chatsSvc from "./chats.service";
 import type { Loadout, LoadoutSnapshot, LoadoutBinding, ResolvedLoadout } from "../types/loadout";
@@ -47,7 +48,7 @@ export function createLoadout(userId: string, name: string, snapshot?: LoadoutSn
   const finalSnapshot = snapshot ?? captureSnapshot(userId);
   const now = Math.floor(Date.now() / 1000);
   const loadout: Loadout = {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name,
     snapshot: finalSnapshot,
     created_at: now,

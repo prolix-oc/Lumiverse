@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Dropbox OAuth routes — PKCE code-pairing flow (no redirect URI needed).
  *
@@ -97,7 +98,7 @@ app.get("/auth", async (c) => {
 
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await computeCodeChallenge(codeVerifier);
-  const sessionToken = crypto.randomUUID();
+  const sessionToken = uuidv4();
 
   pendingSessions.set(sessionToken, {
     userId,

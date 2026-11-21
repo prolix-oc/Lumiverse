@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,12 +54,12 @@ test("bounds vector batches by source bytes and restores a larger record on its 
   const archivePath = join(directory, "vectors.lvbak");
   writeFileSync(archivePath, zipSync({
     "manifest.json": strToU8(JSON.stringify({
-      schemaVersion: 1, producer: "lumiverse", archiveId: crypto.randomUUID(), exportedAt: 0,
+      schemaVersion: 1, producer: "lumiverse", archiveId: uuidv4(), exportedAt: 0,
       includeVectors: true, embeddingConfig: config, counts: {}, missingFiles: [],
     })),
     "lancedb/chat_vectors.ndjson": strToU8(rows.map(row => JSON.stringify(row)).join("\n") + "\n"),
   }));
-  const job = startImport({ userId: "vector-import-user", archivePath, jobId: crypto.randomUUID() });
+  const job = startImport({ userId: "vector-import-user", archivePath, jobId: uuidv4() });
   const deadline = Date.now() + 5000;
   while (job.status === "running" && Date.now() < deadline) await Bun.sleep(5);
   expect(job.error).toBeNull();
@@ -73,7 +74,7 @@ for (const provider of ["milvus", "qdrant"] as const) {
     const archivePath = join(directory, "external-provider.lvbak");
     writeFileSync(archivePath, zipSync({
       "manifest.json": strToU8(JSON.stringify({
-        schemaVersion: 1, producer: "lumiverse", archiveId: crypto.randomUUID(), exportedAt: 0,
+        schemaVersion: 1, producer: "lumiverse", archiveId: uuidv4(), exportedAt: 0,
         includeVectors: true, embeddingConfig: config, counts: {}, missingFiles: [],
       })),
       "database/chats.ndjson": strToU8(JSON.stringify({ id: "chat", user_id: "vector-import-user" }) + "\n"),
@@ -86,7 +87,7 @@ for (const provider of ["milvus", "qdrant"] as const) {
         id: "vector", vector_b64: Buffer.from(new Float32Array([1, 2, 3]).buffer).toString("base64"),
       }) + "\n"),
     }));
-    const job = startImport({ userId: "vector-import-user", archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: "vector-import-user", archivePath, jobId: uuidv4() });
     const deadline = Date.now() + 5000;
     while (job.status === "running" && Date.now() < deadline) await Bun.sleep(5);
     expect(job.error).toBeNull();

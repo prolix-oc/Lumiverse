@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { bunCmd } from "../utils/bun-cmd";
@@ -110,7 +111,7 @@ export class DatabaseExecutor {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new RangeError("Database timeout must be positive"));
     return new Promise<T>((resolve, reject) => {
       const item: PendingOperation = {
-        requestId: crypto.randomUUID(), operation, deadline: Date.now() + timeoutMs,
+        requestId: uuidv4(), operation, deadline: Date.now() + timeoutMs,
         resolve: resolve as (result: unknown) => void, reject, attempts: 0, dispatched: false,
         timer: setTimeout(() => this.expire(item), timeoutMs),
         interactiveRead: options.priority === "interactive" && isReorderableRead(operation),

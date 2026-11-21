@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { eventBus } from '../ws/bus';
 import { EventType } from '../ws/events';
@@ -169,7 +170,7 @@ export function isUsableProfileId(id: unknown): id is string {
 }
 
 function ensureProfileId(id: unknown): string {
-  return isUsableProfileId(id) ? id : crypto.randomUUID();
+  return isUsableProfileId(id) ? id : uuidv4();
 }
 
 async function readEmbeddingSecret(
@@ -2939,7 +2940,7 @@ export function cacheQueryVector(
          last_used_at = excluded.last_used_at,
          expires_at = excluded.expires_at`
     ).run(
-      crypto.randomUUID(),
+      uuidv4(),
       chatId,
       hash,
       queryText,

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,7 +57,7 @@ async function waitFor(job: ImportJob, status: ImportJob["status"]) {
 }
 
 function contend() {
-  const signalFile = join(directory, `writer-${crypto.randomUUID()}.locked`);
+  const signalFile = join(directory, `writer-${uuidv4()}.locked`);
   const writer = Bun.spawn({
     cmd: bunCmd(join(import.meta.dir, "test-fixtures/import-lock-holder.ts"), join(directory, "lumiverse.db"), signalFile),
     stdout: "ignore",
@@ -72,7 +73,7 @@ function contend() {
 }
 
 async function archive(withSecrets: boolean) {
-  const archiveId = crypto.randomUUID();
+  const archiveId = uuidv4();
   const key = "connection_restored-connection_api_key";
   const ticket = await createTicket(archiveId, [key]);
   const manifest = createManifest({ archiveId, includeVectors: false, embeddingConfig: { provider: null, model: null, dimension: null },
@@ -116,7 +117,7 @@ test("restores original and cropped avatars, legacy avatar files, and wallpapers
     }
     emit(event, payload, userId, options);
   });
-  const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
+  const job = startImport({ userId: USER, archivePath, jobId: uuidv4() });
   try { await waitFor(job, "complete"); }
   finally { publishing.mockRestore(); }
   expect(publishedWithFiles).toBe(true);
@@ -154,7 +155,7 @@ test("round-trips referenced image backup filenames without renaming or dropping
   getDb().run("DELETE FROM images WHERE id = ?", [imageId]);
   rmSync(join(imagesDir, filename));
 
-  const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
+  const job = startImport({ userId: USER, archivePath, jobId: uuidv4() });
   await waitFor(job, "complete");
   expect(job.fileSummary.images).toBe(1);
   expect(getDb().query("SELECT filename FROM images WHERE id = ?").get(imageId)).toEqual({ filename });
@@ -170,7 +171,7 @@ test("round-trips referenced image backup filenames without renaming or dropping
 test("waits for a competing writer instead of abandoning table restoration", async () => {
   const { archivePath } = await archive(false);
   const writer = contend();
-  const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
+  const job = startImport({ userId: USER, archivePath, jobId: uuidv4() });
   await waitFor(job, "complete");
   expect(await writer.exited).toBe(0);
   expect(job.fileSummary.images).toBe(3);
@@ -178,7 +179,7 @@ test("waits for a competing writer instead of abandoning table restoration", asy
 
 test("accepts a ticket and restores its secrets while another process writes", async () => {
   const { archivePath, ticket, key } = await archive(true);
-  const job = startImport({ userId: USER, archivePath, jobId: crypto.randomUUID() });
+  const job = startImport({ userId: USER, archivePath, jobId: uuidv4() });
   await waitFor(job, "awaiting_ticket");
   const ticketWriter = contend();
   let secretWriter: ReturnType<typeof Bun.spawn> | undefined;

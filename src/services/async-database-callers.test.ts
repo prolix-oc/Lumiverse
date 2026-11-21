@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,7 +83,7 @@ describe("async database callers with a real subprocess", () => {
       expect((await chats.getChatAsync("user", "chat"))?.metadata.example).toBe(42);
       const saved = await audio.saveAudio("user", { data: new Uint8Array([1]), mime_type: "audio/wav" });
       expect(await audio.deleteAudioAsync("user", saved.id)).toBe(true);
-      expect(await images.findReferencedImageIdsAsync("user", new Set([crypto.randomUUID()]))).toEqual(new Set());
+      expect(await images.findReferencedImageIdsAsync("user", new Set([uuidv4()]))).toEqual(new Set());
       expect(query).not.toHaveBeenCalled();
     } finally { query.mockRestore(); }
   });

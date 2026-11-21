@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Platform-managed OAuth state nonces for extension OAuth flows.
  *
@@ -34,7 +35,7 @@ export function createOAuthState(extensionIdentifier: string): string {
   while (stateMap.size >= MAX_STATE_ENTRIES) {
     evictOldestStateEntry();
   }
-  const state = crypto.randomUUID();
+  const state = uuidv4();
   stateMap.set(state, {
     extensionIdentifier,
     expiresAt: Date.now() + STATE_TTL_MS,

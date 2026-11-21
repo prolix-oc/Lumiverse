@@ -50,6 +50,29 @@ test("manual recompilation announces the click and clears its notice when only L
   expect(events.at(-1).status).toBe("skipped");
 });
 
+test("manual Cortex actions work on HTTP origins without the native UUID API", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
+  Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
+  try {
+    const events = collectEvents();
+    const rebuild = memoryCortexApi.rebuild("chat-1");
+    resolvePost({ status: "started", chatId: "chat-1" });
+    await rebuild;
+    const warm = memoryCortexApi.warm("chat-1", { force: true });
+    resolvePost({ status: "complete", cortex: { status: "complete" } });
+    await warm;
+    const requested = events.filter((event) => event.status === "requested");
+    expect(requested).toHaveLength(2);
+    expect(new Set(requested.map((event) => event.id)).size).toBe(2);
+    for (const event of requested) {
+      expect(event.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+  } finally {
+    if (descriptor) Object.defineProperty(crypto, "randomUUID", descriptor);
+    else Reflect.deleteProperty(crypto, "randomUUID");
+  }
+});
+
 test("passive warmup does not synthesize a user request or a Cortex notice", async () => {
   const events = collectEvents();
   const pending = memoryCortexApi.warm("chat-1");

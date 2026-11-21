@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
@@ -101,7 +102,7 @@ export class RunwareImageProvider implements ImageProvider {
     const model = request.model || "runware:100@1";
     const base = trimBaseUrl(apiUrl || this.capabilities.defaultUrl);
 
-    const taskUUID = crypto.randomUUID();
+    const taskUUID = uuidv4();
     const task: Record<string, any> = {
       taskType: "imageInference",
       taskUUID,

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import * as managerSvc from "./manager.service";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -590,7 +591,7 @@ export class WorkerHostProcessApi {
       if (!kind) throw new Error("kind is required");
 
       const userId = this.resolveFrontendProcessUserId(options?.userId);
-      const processId = crypto.randomUUID();
+      const processId = uuidv4();
       const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
       const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
       const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));
@@ -763,7 +764,7 @@ export class WorkerHostProcessApi {
       const entry = typeof options?.entry === "string" ? options.entry.trim().replace(/\\/g, "/") : "";
       const kind = typeof options?.kind === "string" && options.kind.trim() ? options.kind.trim() : entry;
       const userId = this.resolveFrontendProcessUserId(options?.userId);
-      const processId = crypto.randomUUID();
+      const processId = uuidv4();
       const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
       const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
       const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));

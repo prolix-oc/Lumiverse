@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../../utils/uuid";
 import type {
   WeaverVisualJob,
   WeaverVisualJobProgress,
@@ -30,7 +31,7 @@ function requireVisualJob(jobId: string, userId: string): WeaverVisualJob {
 export function createVisualJob(input: CreateVisualJobInput): WeaverVisualJob {
   const timestamp = now();
   const job: WeaverVisualJob = {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     userId: input.userId,
     sessionId: input.sessionId,
     characterId: input.characterId,

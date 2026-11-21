@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { ZipArchive, type ZipEntryData } from "archiver";
 import { writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -28,7 +29,7 @@ export interface WorkerHostFilesApiOptions {
 
 /** Owns all resources created by one worker lifetime, including cancellation. */
 export class WorkerHostFilesApi {
-  private readonly sessionId = crypto.randomUUID();
+  private readonly sessionId = uuidv4();
   private readonly operations = new Map<string, AbortController>();
   private readonly tasks = new Set<Promise<void>>();
   private disposed = false;

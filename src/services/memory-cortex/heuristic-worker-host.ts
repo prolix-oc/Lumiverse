@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import type {
   HeuristicAnalysisInput,
   HeuristicAnalysisOutput,
@@ -63,7 +64,7 @@ class HeuristicWorkerHost {
   }
 
   run(payload: HeuristicAnalysisInput): Promise<HeuristicAnalysisOutput> {
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const worker = this.ensureWorker();
     const request: HeuristicWorkerRequest = { type: "run", requestId, payload };
 

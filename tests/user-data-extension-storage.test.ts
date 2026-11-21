@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -85,15 +86,15 @@ async function wait(job: ImportJob, state: ImportJob["status"]) {
 }
 
 async function importBytes(bytes: Uint8Array) {
-  const archivePath = join(directory, crypto.randomUUID(), "archive.lvbak");
+  const archivePath = join(directory, uuidv4(), "archive.lvbak");
   write(archivePath, bytes);
-  return startImport({ userId: TARGET, archivePath, jobId: crypto.randomUUID() });
+  return startImport({ userId: TARGET, archivePath, jobId: uuidv4() });
 }
 
 function fileFixture(inner: string, schemaVersion = ARCHIVE_SCHEMA_VERSION, included = true) {
   return zipSync({
     "manifest.json": strToU8(JSON.stringify({ ...createManifest({
-      archiveId: crypto.randomUUID(), includeVectors: false, includeExtensionData: included,
+      archiveId: uuidv4(), includeVectors: false, includeExtensionData: included,
       embeddingConfig: { provider: null, model: null, dimension: null }, producerVersion: "test", counts: {}, missingFiles: [],
     }), schemaVersion })),
     [`files/extension-storage/${inner}`]: strToU8("restored"),
@@ -224,9 +225,9 @@ describe("optional extension files", () => {
     mkdirSync(root, { recursive: true });
     if (kind === "directory") symlinkSync(outside, join(root, "nested"));
     if (kind === "file") symlinkSync(join(outside, "config.json"), join(root, "config.json"));
-    const jobId = crypto.randomUUID();
+    const jobId = uuidv4();
     if (kind === "temporary") symlinkSync(join(outside, "config.json"), join(root, `.lv-restore-${jobId}.tmp`));
-    const archivePath = join(directory, crypto.randomUUID(), "archive.lvbak");
+    const archivePath = join(directory, uuidv4(), "archive.lvbak");
     write(archivePath, fileFixture(kind === "directory" ? "private_addon/nested/config.json" : "private_addon/config.json"));
     const job = startImport({ userId: TARGET, archivePath, jobId });
     const deadline = Date.now() + 5000;

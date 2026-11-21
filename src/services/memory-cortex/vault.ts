@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Memory Cortex — Vault & Interlink service.
  *
@@ -298,7 +299,7 @@ export function createVault(
   description?: string,
 ): Vault {
   const db = getDb();
-  const vaultId = crypto.randomUUID();
+  const vaultId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   const snapshot = snapshotVaultContents(userId, chatId, vaultId, name, description, now);
@@ -377,7 +378,7 @@ function snapshotVaultContents(
     );
     for (const e of entityRows) {
       insertEntity.run(
-        crypto.randomUUID(), vaultId,
+        uuidv4(), vaultId,
         e.name, e.entity_type, e.aliases, e.description,
         e.status, e.facts, e.emotional_valence, e.salience_avg,
       );
@@ -407,7 +408,7 @@ function snapshotVaultContents(
       const targetName = entityNameMap.get(r.target_entity_id);
       if (!sourceName || !targetName) continue;
       insertRelation.run(
-        crypto.randomUUID(), vaultId,
+        uuidv4(), vaultId,
         sourceName, targetName, r.relation_type, r.relation_label,
         r.strength, r.sentiment, r.status,
       );
@@ -441,7 +442,7 @@ function snapshotVaultContents(
 
     const chunkIdMap = new Map<string, string>();
     for (const cc of chunkRows) {
-      const vaultChunkId = crypto.randomUUID();
+      const vaultChunkId = uuidv4();
       chunkIdMap.set(cc.id, vaultChunkId);
 
       // Resolve entity ids → names using the vault-local name map
@@ -709,7 +710,7 @@ export function attachLink(
 
   db.transaction(() => {
     // Primary link
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     db.query(
       `INSERT INTO cortex_chat_links (id, user_id, chat_id, link_type, vault_id, target_chat_id, label, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -723,7 +724,7 @@ export function attachLink(
       ).get(opts.targetChatId, chatId);
 
       if (!reverseExisting) {
-        const reverseId = crypto.randomUUID();
+        const reverseId = uuidv4();
         db.query(
           `INSERT INTO cortex_chat_links (id, user_id, chat_id, link_type, vault_id, target_chat_id, label, created_at)
            VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`,

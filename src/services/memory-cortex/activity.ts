@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
@@ -54,7 +55,7 @@ export class CortexActivityTracker {
   constructor(private readonly userId: string, chatId: string, kind: CortexActivity["kind"],
     timing?: Pick<CortexActivity, "requestedAt" | "clientRequestedAt" | "clientRequestId">) {
     const now = Date.now();
-    this.state = { id: crypto.randomUUID(), chatId, kind, status: "processing", phase: "queued",
+    this.state = { id: uuidv4(), chatId, kind, status: "processing", phase: "queued",
       requestedAt: now, updatedAt: now, completedChunks: 0, totalChunks: 0,
       completedBatches: 0, failedBatches: 0, totalBatches: 0, activeBatches: [], requests: [], ...timing };
     const runs = chats.get(chatId) ?? new Map();
@@ -149,7 +150,7 @@ export async function withCortexBatch<T>(batch: number, chunks: number, work: ()
 export function trackCortexRequest(purpose: string, model?: string) {
   const ctx = context.getStore();
   const now = Date.now();
-  const request: CortexRequestActivity = { id: crypto.randomUUID(), batch: ctx?.batch ?? null,
+  const request: CortexRequestActivity = { id: uuidv4(), batch: ctx?.batch ?? null,
     chunks: ctx?.chunks ?? 1, purpose, model, phase: "queued", queuedAt: now, updatedAt: now };
   ctx?.tracker.state.requests.push(request);
   ctx?.tracker.patch({});

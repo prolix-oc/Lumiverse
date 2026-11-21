@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -43,7 +44,7 @@ beforeEach(async () => {
   const second = await connections.createConnection(userId, { provider: "comfyui", name: "Chosen", model: "", api_url: "http://127.0.0.1:1", metadata: { comfyui_workflows: [{ id: "chosen", name: "Video", config }] } });
   selectedConnection = second.id;
   const character = characters.createCharacter(userId, { name: "QuickGen character" });
-  chatId = crypto.randomUUID();
+  chatId = uuidv4();
   getDb().query("INSERT INTO chats (id,user_id,character_id,name,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
     .run(chatId, userId, character.id, "QuickGen", "{}", 1, 1);
   settings.putSetting(userId, "imageGeneration", {

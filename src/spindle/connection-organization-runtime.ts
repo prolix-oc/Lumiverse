@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { assertOrganizationKind, organizationError, type ConnectionOrganizationError } from '../shared/connection-organization';
 import type { BackendOrganizationAPI, OrganizationHostMessage, OrganizationWorkerMessage } from './connection-organization-contract';
 
@@ -9,19 +10,19 @@ export function createOrganizationRuntime(transport: {
   const api: BackendOrganizationAPI = {
     async get(options) {
       assertOrganizationKind(options?.kind);
-      try { return await transport.request({ type: 'connection_organization_get', requestId: crypto.randomUUID(), options }) as Awaited<ReturnType<BackendOrganizationAPI['get']>>; }
+      try { return await transport.request({ type: 'connection_organization_get', requestId: uuidv4(), options }) as Awaited<ReturnType<BackendOrganizationAPI['get']>>; }
       catch (error) { throw organizationError(error); }
     },
     watch(options, handler, onError = error => console.error('[connection-organization]', error)) {
       assertOrganizationKind(options?.kind);
       if (typeof handler !== 'function') throw new TypeError('A watch handler is required');
-      const subscriptionId = crypto.randomUUID();
+      const subscriptionId = uuidv4();
       const stop = () => {
         if (!listeners.delete(subscriptionId)) return;
         transport.send({ type: 'connection_organization_unwatch', subscriptionId });
       };
       listeners.set(subscriptionId, { handler, onError });
-      void transport.request({ type: 'connection_organization_watch', requestId: crypto.randomUUID(), subscriptionId, options })
+      void transport.request({ type: 'connection_organization_watch', requestId: uuidv4(), subscriptionId, options })
         .catch(error => {
           if (!listeners.has(subscriptionId)) return;
           stop();

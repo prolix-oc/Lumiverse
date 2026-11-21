@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { isDeepStrictEqual } from "node:util";
 import { mutateChatWithDb, rowToChat, parseMetadataObject, type ChatUpdateResult, type ChatMetadataMergeOptions } from "../db/chat-operations";
 import { executeDatabaseOperation, type DatabaseExecutionOptions } from "../db/execution";
@@ -1214,7 +1215,7 @@ export function getChat(userId: string, id: string): Chat | null {
 }
 
 export function createChat(userId: string, input: CreateChatInput): Chat {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const requestedGreetingIndex = input.greeting_index
     ?? input.metadata?.activeGreetingIndex;
@@ -2637,7 +2638,7 @@ export function claimAssociativeRegexAction(
 }
 
 export function createMessage(chatId: string, input: CreateMessageInput, userId: string, messageId?: string, beforeId?: string, authored = false): Message {
-  const id = messageId ?? crypto.randomUUID();
+  const id = messageId ?? uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   const maxIndex = getDb()
@@ -3505,8 +3506,8 @@ interface CreatedChatBranch {
 
 /** Insert a branch while participating in the caller's current transaction. */
 function createChatBranchRows(userId: string, chat: Chat, msg: Message, requestedName?: string): CreatedChatBranch {
-  const branchId = crypto.randomUUID();
-  const newChatId = crypto.randomUUID();
+  const branchId = uuidv4();
+  const newChatId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   const customName = requestedName?.trim();
@@ -3542,7 +3543,7 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
   const idMap = new Map<string, string>();
 
   for (const m of messages) {
-    const newMsgId = crypto.randomUUID();
+    const newMsgId = uuidv4();
     idMap.set(m.id, newMsgId);
     const parentId = m.parent_message_id ? (idMap.get(m.parent_message_id) || null) : null;
 
@@ -3835,7 +3836,7 @@ export function editAndSend(
     );
 
     editedCopy = getMessage(userId, editedMessageId);
-    const generationId = crypto.randomUUID();
+    const generationId = uuidv4();
     // Branch copies start at revision 1; read the written revision instead of
     // deriving it from the source message's expectedVersion.
     const committedRevision = readMessageRevision(editedCopy);
@@ -3860,7 +3861,7 @@ export function editAndSend(
         editAndSendContext,
       },
     };
-    const requestRowId = crypto.randomUUID();
+    const requestRowId = uuidv4();
     const cursorJson = JSON.stringify(payload.generationCursor);
     const responseJson = JSON.stringify(payload);
 
@@ -3922,7 +3923,7 @@ export function editAndSend(
         mode, status, attempt_count, created_at, updated_at, connection_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
     ).run(
-      crypto.randomUUID(),
+      uuidv4(),
       input.requestId,
       userId,
       chatId,
@@ -4074,7 +4075,7 @@ export function getChatTree(userId: string, chatId: string): ChatTreeNode | null
 // --- Migration helpers ---
 
 export function createChatRaw(userId: string, input: { character_id: string; name?: string; metadata?: Record<string, any>; created_at?: number; updated_at?: number }): Chat {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const createdAt = input.created_at ?? now;
   const updatedAt = input.updated_at ?? createdAt;
@@ -4124,7 +4125,7 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[],
         : swipes.map(() => sendDate);
 
       insert.run(
-        crypto.randomUUID(),
+        uuidv4(),
         chatId,
         i,
         m.is_user ? 1 : 0,
@@ -4347,7 +4348,7 @@ export function buildMacroEnvForChat(userId: string, chatId: string): MacroEnv |
 
 function createChatChunk(chatId: string, messages: Message[], sanitizedContents: string[]): ChatChunk {
   const now = Math.floor(Date.now() / 1000);
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const content = messages.map((m, i) =>
     `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitizedContents[i] ?? ""}`
   ).join("\n");
@@ -4498,7 +4499,7 @@ function restoreSalienceForRebuiltChunk(chatId: string, chunk: ChatChunk, salien
          scored_at, scored_by, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      crypto.randomUUID(), chunk.id, chatId,
+      uuidv4(), chunk.id, chatId,
       salience.score, salience.score_source,
       salience.emotional_tags ?? "[]",
       salience.status_changes ?? "[]",

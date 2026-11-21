@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { existsSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { env } from "../env";
@@ -165,7 +166,7 @@ export async function stageStBackupArchive(options: {
     throw new StBackupUploadError("busy", "another SillyTavern backup is currently being processed");
   }
 
-  const uploadId = crypto.randomUUID();
+  const uploadId = uuidv4();
   activeUploadId = uploadId;
   let rootDir = join(env.dataDir, "imports", options.callerUserId, uploadId);
   try {

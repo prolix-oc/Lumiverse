@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Task 2 — preservation property tests for the Edit-and-Send 401 fix.
  *
@@ -667,7 +668,7 @@ const MAX_ATTEMPTS = 8;
 
 
 function insertOutbox(overrides: Record<string, string | number | null> = {}): string {
-  const id = typeof overrides.id === "string" ? overrides.id : crypto.randomUUID();
+  const id = typeof overrides.id === "string" ? overrides.id : uuidv4();
   const now = Date.now();
   getDb().query(
     `INSERT INTO generation_outbox (
@@ -745,7 +746,7 @@ function insertRequestCursor(overrides: {
       response, cursor, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    crypto.randomUUID(),
+    uuidv4(),
     userId,
     chatId,
     overrides.request_id,

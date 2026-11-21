@@ -1,3 +1,4 @@
+import { uuidv4 } from "../lib/uuid";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { act, createElement, useEffect } from 'react'
@@ -131,7 +132,7 @@ beforeEach(() => {
   created.length = 0
   registryGate = null
   getError = null
-  presetSaveCoordinator.setScope(crypto.randomUUID())
+  presetSaveCoordinator.setScope(uuidv4())
   configurePresetSelectionCoordinator({
     getActivePresetId: () => useStoreMock.getState().activeLoomPresetId,
     setActivePresetId: (id) => useStoreMock.getState().setActiveLoomPreset(id),

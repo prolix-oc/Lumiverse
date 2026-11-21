@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Database } from "bun:sqlite";
 import type { GlobalAddon, CreateGlobalAddonInput, UpdateGlobalAddonInput } from "../types/persona";
 export type GlobalAddonEvent = { type: "addon-changed" | "addon-deleted" | "persona-changed"; id: string; addon?: GlobalAddon | null };
@@ -15,7 +16,7 @@ function getGlobalAddon(db: Database, userId: string, id: string): GlobalAddon |
 }
 
 function createGlobalAddon(db: Database, events: GlobalAddonEvent[], userId: string, input: CreateGlobalAddonInput): GlobalAddon {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   db
@@ -74,7 +75,7 @@ function duplicateGlobalAddon(db: Database, events: GlobalAddonEvent[], userId: 
   const existing = getGlobalAddon(db, userId, id);
   if (!existing) return null;
 
-  const newId = crypto.randomUUID();
+  const newId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   db

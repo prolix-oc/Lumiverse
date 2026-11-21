@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { closeDatabase, getDb, initDatabase } from "./connection";
@@ -19,7 +20,7 @@ function initSchedulerDb(): void {
 }
 
 function insertOutbox(overrides: Record<string, string | number | null> = {}): string {
-  const id = typeof overrides.id === "string" ? overrides.id : crypto.randomUUID();
+  const id = typeof overrides.id === "string" ? overrides.id : uuidv4();
   const now = Date.now();
   getDb().query(
     `INSERT INTO generation_outbox (

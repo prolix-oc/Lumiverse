@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Shared CHARX post-extraction processing.
  *
@@ -211,7 +212,7 @@ export async function applyCharxModulesAndAssets(
           for (const variant of variants) {
             const key = String(variant?.content ?? "").trim();
             if (variant && !seen.has(key)) {
-              const id = variant.id && !ids.has(variant.id) ? variant.id : crypto.randomUUID();
+              const id = variant.id && !ids.has(variant.id) ? variant.id : uuidv4();
               kept.push({ ...variant, id });
               seen.add(key);
               ids.add(id);
@@ -275,7 +276,7 @@ export async function applyCharxModulesAndAssets(
         if (!assetFile) continue;
         const img = await images.uploadOptimizedWebpImage(userId, assetFile, { owner_character_id: character.id });
         landingLayers.push({
-          id: typeof layer.id === "string" && layer.id ? layer.id : crypto.randomUUID(),
+          id: typeof layer.id === "string" && layer.id ? layer.id : uuidv4(),
           image_id: img.id,
           ...(typeof layer.label === "string" && layer.label ? { label: layer.label } : {}),
           intensity: typeof layer.intensity === "number" && Number.isFinite(layer.intensity)

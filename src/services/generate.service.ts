@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { processResponseText, type PreparedResponseContext } from "./generation/response-processing";
 import { readVariableValues } from "../utils/variable-checkpoint";
 import { getActiveFrontendSession } from "../spindle/frontend-session";
@@ -1477,7 +1478,7 @@ async function runPromptPipeline(opts: {
 
 function resolveStartGenerationId(input: GenerateInput): string {
   const requested = typeof input.generationId === "string" ? input.generationId.trim() : "";
-  return requested || crypto.randomUUID();
+  return requested || uuidv4();
 }
 
 function reusableStagedSwipeIndex(message: Message): number | undefined {
@@ -4808,7 +4809,7 @@ export async function summarizeGenerate(
   // One generationId per summary invocation — tracked in summarize-pool so the
   // WS completion/failure events can be correlated by the frontend even when
   // multiple tabs kick off summaries for the same chat.
-  const generationId = crypto.randomUUID();
+  const generationId = uuidv4();
 
   if (chatId) {
     summarizePool.startSummarizePool({ generationId, userId, chatId });
@@ -5133,7 +5134,7 @@ export async function rebuildSummary(
   },
 ): Promise<RebuildSummaryResult> {
   const chatId = input.chat_id;
-  const generationId = crypto.randomUUID();
+  const generationId = uuidv4();
   const batchSize = Math.max(1, input.batch_size);
 
   // Resolve connection
@@ -5223,7 +5224,7 @@ export async function startRebuildSummary(
   },
 ): Promise<void> {
   const chatId = input.chat_id;
-  const generationId = crypto.randomUUID();
+  const generationId = uuidv4();
   const batchSize = Math.max(1, input.batch_size);
 
   // Resolve connection

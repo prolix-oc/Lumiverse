@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,7 +52,7 @@ function seedRegisterGrant(
     db.run(
       `INSERT OR IGNORE INTO extension_grants (id, extension_id, permission, scope)
        VALUES (?, (SELECT id FROM extensions WHERE identifier = ?), ?, ?)`,
-      [crypto.randomUUID(), identifier, `providers.${kind}.register`, effectiveScope],
+      [uuidv4(), identifier, `providers.${kind}.register`, effectiveScope],
     );
   }
 }

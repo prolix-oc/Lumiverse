@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { closeDatabase, initDatabase } from "../db/connection";
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 afterEach(closeDatabase);
 function block(content: string, marker: string | null = null): PromptBlock {
-  return { id: crypto.randomUUID(), name: "History", content, marker, enabled: true, role: "system", position: "pre_history",
+  return { id: uuidv4(), name: "History", content, marker, enabled: true, role: "system", position: "pre_history",
     depth: 0, isLocked: false, color: null, injectionTrigger: [], group: null };
 }
 function setup() {

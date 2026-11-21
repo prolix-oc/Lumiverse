@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -88,7 +89,7 @@ beforeEach(async () => {
   getDb().query("INSERT INTO images (id, filename, mime_type, user_id) VALUES (?, ?, ?, ?)")
     .run(IMAGE_ID, "avatar.png", "image/png", USER_ID);
   getDb().query("UPDATE characters SET image_id = ? WHERE id = ?").run(IMAGE_ID, characterId);
-  chatId = crypto.randomUUID();
+  chatId = uuidv4();
   getDb().query("INSERT INTO chats (id,user_id,character_id,name,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
     .run(chatId, USER_ID, characterId, "Avatar test", "{}", 1, 1);
   settings.putSetting(USER_ID, "imageGeneration", {

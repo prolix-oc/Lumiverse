@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import os from "node:os";
 import type {
   ParsedWebPage,
@@ -152,7 +153,7 @@ function drain(): void {
 export function parseWebPageInWorker(html: string, url: string): Promise<ParsedWebPage> {
   return new Promise((resolve, reject) => {
     waiting.push({
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       html,
       url,
       resolve,

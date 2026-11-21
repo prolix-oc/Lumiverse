@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../src/utils/uuid";
 // Disposable loopback fixture: real SQLite, routes, worker runtime and host dispatcher.
 import { Hono } from "hono";
 import { join } from "node:path";
@@ -66,7 +67,7 @@ app.get("/fixture", c => c.json({ ordinary: ordinary.id, mira: mira.id, flagged:
 app.post("/permission", async c => { granted = (await c.req.json()).granted === true; return c.json({ granted }); });
 app.post("/rpc", async c => {
   const input = await c.req.json();
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   return new Promise<Response>(resolve => {
     const timer = setTimeout(() => { pending.delete(id); resolve(c.json({ error: "Worker RPC timed out" }, 504)); }, 5_000);
     pending.set(id, value => { clearTimeout(timer); pending.delete(id); resolve(c.json(value)); });

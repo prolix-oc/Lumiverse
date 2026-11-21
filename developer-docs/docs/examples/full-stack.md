@@ -95,7 +95,7 @@ export function setup(ctx: SpindleFrontendContext) {
         ctx.sendToBackend({
           type: 'fetch_external',
           url: input.value.trim(),
-          requestId: crypto.randomUUID(),
+          requestId: ctx.uuid.v4(),
         })
         if (result) result.textContent = 'Loading...'
       }

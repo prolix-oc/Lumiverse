@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -123,7 +124,7 @@ describe("push presence suppression", () => {
   });
 
   function enrollActivity(overrides: Record<string, unknown> = {}) {
-    const row = { id: crypto.randomUUID(), user_id: userId, chat_id: "chat-1", generation_id: "gen-1",
+    const row = { id: uuidv4(), user_id: userId, chat_id: "chat-1", generation_id: "gen-1",
       device_id: iosInput.deviceId, bundle_id: iosInput.bundleId, environment: iosInput.environment, server_origin: iosInput.serverOrigin,
       credential_hash: "hash", expires_at: Date.now() + 60_000, desired_phase: "streaming",
       activity_id: "activity-1", push_token: "aa".repeat(32), ended_at: null, ...overrides };

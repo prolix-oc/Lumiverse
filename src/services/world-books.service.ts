@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { readDatabaseRows } from "../db/queries";
 import { executeDatabaseOperation, type DatabaseExecutionError } from "../db/execution";
 import { getDb } from "../db/connection";
@@ -835,11 +836,11 @@ export function materializeCharacterBookEntriesForRuntime(
     const wiMarker = normalizeEntryWiMarker(input.wi_marker);
     const wiMarkerSide = normalizeEntryWiMarkerSide(input.wi_marker_side);
     return {
-      id: typeof raw.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
+      id: typeof raw.id === "string" && raw.id ? raw.id : uuidv4(),
       world_book_id: worldBookId,
       folder: "",
       tags: [],
-      uid: typeof raw.uid === "string" && raw.uid ? raw.uid : crypto.randomUUID(),
+      uid: typeof raw.uid === "string" && raw.uid ? raw.uid : uuidv4(),
       outlet_name: outletName,
       wi_marker: wiMarker,
       wi_marker_side: wiMarkerSide,
@@ -1103,7 +1104,7 @@ export function createWorldBook(
   input: CreateWorldBookInput,
   options: CreateWorldBookOptions = {},
 ): WorldBook {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query("INSERT INTO world_books (id, user_id, name, description, folder, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
@@ -1753,8 +1754,8 @@ export function createEntry(
   if (!book) return null;
 
   validateOrganizationInput(input);
-  const id = crypto.randomUUID();
-  const uid = crypto.randomUUID();
+  const id = uuidv4();
+  const uid = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const vectorized = !!input.vectorized;
   const vectorIndexState = getPendingVectorIndexState({
@@ -2580,8 +2581,8 @@ function bulkInsertEntries(
     const tx = db.transaction(() => {
       for (let i = start; i < end; i++) {
         const input = inputs[i];
-        const id = crypto.randomUUID();
-        const uid = crypto.randomUUID();
+        const id = uuidv4();
+        const uid = uuidv4();
         const vectorized = options.forceVectorizedOff ? false : !!input.vectorized;
         const vectorIndexState = getPendingVectorIndexState({
           vectorized,

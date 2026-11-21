@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,7 +44,7 @@ function host(id: string, scope: "user" | "operator") {
     },
     grant() {
       getDb().query("INSERT INTO extension_grants (id, extension_id, permission, scope) VALUES (?, ?, 'push_notification', ?)")
-        .run(crypto.randomUUID(), id, scope + ":owner");
+        .run(uuidv4(), id, scope + ":owner");
     },
   };
 }

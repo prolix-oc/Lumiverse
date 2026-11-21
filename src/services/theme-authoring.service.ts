@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { DEFAULT_THEME, normalizeTheme } from '../utils/theme-config';
 import { THEME_AUTHORING_ACCESS, validateThemeRequest } from './theme-authoring-requests';
 import { createHash } from 'node:crypto';
@@ -73,7 +74,7 @@ function assertRevision(expected: unknown, current: State): void {
 function createSavedPack(pack: ThemePack, state?: State): SavedPack {
   const saved: SavedPack = {
     kind: 'pack',
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name: pack.name,
     createdAt: Math.floor(Date.now() / 1000),
     pack,
@@ -233,7 +234,7 @@ function validateArchiveData(value: any): ThemePack {
 }
 
 async function createPackAssets(userId: string, pack: ThemePack, authorize: () => void) {
-  const bundleId = crypto.randomUUID(),
+  const bundleId = uuidv4(),
     uploaded: ThemeAsset[] = [];
   const cleanup = () => {
     for (const asset of uploaded) assets.deleteThemeAsset(userId, asset.id);
@@ -301,7 +302,7 @@ export async function runThemeAuthoring(
     throw new Error('Unknown theme operation.');
   validateThemeRequest(operation, args);
   const draft = args.draft as SpindleThemeDraft;
-  if (operation === 'asset_create_bundle') return { bundleId: crypto.randomUUID() };
+  if (operation === 'asset_create_bundle') return { bundleId: uuidv4() };
   if (operation === 'asset_list') {
     const bundleId = args.bundleId ?? readState(userId).customCSS.bundleId;
     return bundleId === null

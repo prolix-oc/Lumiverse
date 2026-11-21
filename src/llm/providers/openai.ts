@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { describeGenerationStop } from "../generation-stop";
 import { omitDisabledPenalties } from "../generation-parameters";
 import { incompleteStream, readProviderSse, throwIfProviderError } from "../provider-sse";
@@ -273,7 +274,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
           fnCalls.push({
             name: item.name || "",
             args: typeof item.arguments === "string" ? JSON.parse(item.arguments) : (item.arguments ?? {}),
-            call_id: item.call_id || item.id || crypto.randomUUID(),
+            call_id: item.call_id || item.id || uuidv4(),
           });
         }
       }
@@ -358,7 +359,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
           const item = parsed.item;
           if (item?.type === "function_call") fnCallBuffer.set(item.id || parsed.output_index?.toString() || String(fnCallBuffer.size), {
             name: item.name || "", argsJson: item.arguments || "",
-            callId: item.call_id || item.id || crypto.randomUUID(),
+            callId: item.call_id || item.id || uuidv4(),
           });
           break;
         }
@@ -377,7 +378,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
           const failed = describeGenerationStop(outcome.finish_reason, outcome.stop_details);
           const calls = fnCallBuffer.size ? [...fnCallBuffer.values()]
             : (resp.output || []).filter((item: any) => item.type === "function_call").map((item: any) => ({
-                name: item.name, argsJson: item.arguments, callId: item.call_id || item.id || crypto.randomUUID(),
+                name: item.name, argsJson: item.arguments, callId: item.call_id || item.id || uuidv4(),
               }));
           const toolCalls: ToolCallResult[] | undefined = !failed && calls.length
             ? calls.map((tc: { name: string; argsJson: string; callId: string }) => ({

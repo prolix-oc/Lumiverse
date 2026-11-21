@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -103,7 +104,7 @@ export async function createConnection(
   userId: string,
   input: CreateTtsConnectionInput
 ): Promise<TtsConnectionProfile> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   if (input.is_default) {
@@ -199,7 +200,7 @@ export async function duplicateConnection(userId: string, id: string): Promise<T
   const existing = getConnection(userId, id);
   if (!existing) return null;
 
-  const newId = crypto.randomUUID();
+  const newId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   let hasApiKey = 0;

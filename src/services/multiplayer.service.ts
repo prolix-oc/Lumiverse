@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Multiplayer rooms service — the host-authoritative core.
  *
@@ -448,7 +449,7 @@ export function createRoom(
     .get(chatId) as { id: string } | null;
   if (existing) return { error: "already_exists" };
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const turnStrategy: TurnStrategy = opts.turnStrategy === "freeform" ? "freeform" : "round_robin";
   const settings = normalizeSettings({
@@ -457,7 +458,7 @@ export function createRoom(
   });
 
   // Seed a host participant. The host's turn slot is first in the order.
-  const hostParticipantId = crypto.randomUUID();
+  const hostParticipantId = uuidv4();
 
   getDb().transaction(() => {
     getDb()
@@ -654,7 +655,7 @@ function upsertParticipant(
     if (activePeers.c >= room.settings.maxPeers) return { ok: false, reason: "full" };
   }
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   getDb()
     .query(
       `INSERT INTO multiplayer_participants
@@ -1494,7 +1495,7 @@ export function hostBan(hostUserId: string, roomId: string, participantId: strin
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      crypto.randomUUID(),
+      uuidv4(),
       roomId,
       participant.identity_kind,
       participant.identity_ref,

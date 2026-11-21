@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import type {
@@ -856,7 +857,7 @@ function insertExtensionFromManifest(manifest: SpindleManifest): void {
     .get(manifest.identifier) as { id: string } | null;
   if (existing) return;
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   db.run(
     `INSERT INTO extensions (id, identifier, name, version, author, description, github, homepage, permissions, enabled, metadata)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '{}')`,
@@ -1485,7 +1486,7 @@ async function installCheckout(
   applyStorageSeeds(manifest.identifier, manifest);
 
   // Insert into DB
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   db.run(
     `INSERT INTO extensions (
       id, identifier, name, version, author, description, github, homepage,
@@ -1823,14 +1824,14 @@ export function grantPermission(
   if (extensionGrantsHaveScopeColumn()) {
     db.run(
       `INSERT OR IGNORE INTO extension_grants (id, extension_id, permission, scope) VALUES (?, ?, ?, ?)`,
-      [crypto.randomUUID(), ext.id, permission, grantScope],
+      [uuidv4(), ext.id, permission, grantScope],
     );
     return;
   }
 
   db.run(
     `INSERT OR IGNORE INTO extension_grants (id, extension_id, permission) VALUES (?, ?, ?)`,
-    [crypto.randomUUID(), ext.id, permission]
+    [uuidv4(), ext.id, permission]
   );
 }
 

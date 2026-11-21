@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { join } from "node:path";
 import { bunCmd } from "../utils/bun-cmd";
 import {
@@ -367,7 +368,7 @@ export function processChatChunkVectorizationBatchInSubprocess(
     };
 
     const item: PendingBatch = {
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       tasks,
       resolve: (result) => finish(() => resolve(result)),
       reject: (err) => finish(() => reject(err)),

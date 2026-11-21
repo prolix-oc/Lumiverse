@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 export type ChatPipelineTaskKind =
   | "chunk_rebuild"
   | "chunk_finalize"
@@ -259,7 +260,7 @@ export function enqueueChatPipelineTask<T>(
   options: EnqueueChatPipelineTaskOptions<T>,
 ): Promise<ChatPipelineTaskResult<T>> {
   const lane = getOrCreateLane(options.chatId);
-  const taskId = crypto.randomUUID();
+  const taskId = uuidv4();
 
   return new Promise<ChatPipelineTaskResult<T>>((resolve, reject) => {
     const task: QueueTask<T> = {

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -53,7 +54,7 @@ async function publish(userId: string, id: string): Promise<DecisionConnectionPr
 }
 export async function createConnection(userId: string, input: CreateDecisionConnectionInput): Promise<DecisionConnectionProfile> {
   validateConnectionInput(input);
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const created = now();
   const apiKey = input.api_key?.trim();
   if (apiKey) await secrets.putSecret(userId, decisionConnectionSecretKey(id), apiKey);

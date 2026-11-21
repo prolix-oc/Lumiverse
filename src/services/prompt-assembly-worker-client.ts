@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import os from "node:os";
 import type { AssemblyContext, AssemblyResult } from "../llm/types";
 import { registry } from "../macros";
@@ -110,7 +111,7 @@ function spawnWorker(): PoolWorker {
   const worker = new Worker(new URL("./prompt-assembly-worker.ts", import.meta.url), {
     type: "module",
   });
-  const pw: PoolWorker = { worker, job: null, lastChatId: null, idleTimer: null, tokenizerIds: [], warming: null, resourceOwner: crypto.randomUUID() };
+  const pw: PoolWorker = { worker, job: null, lastChatId: null, idleTimer: null, tokenizerIds: [], warming: null, resourceOwner: uuidv4() };
   worker.onmessage = (event: MessageEvent<AssemblyWorkerResponse>) => onMessage(pw, event.data);
   worker.onerror = (event) => onError(pw, event.message || "Prompt assembly worker crashed");
   pool.push(pw);
@@ -260,7 +261,7 @@ export function assemblePromptInWorker(ctx: AssemblyContext): Promise<AssemblyRe
     }
 
     const job: Job = {
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       ctx: workerCtx,
       chatId: workerCtx.chatId ?? null,
       tokenizerId: getTokenizerIdForModel(resolveConnection(ctx.userId, ctx.connectionId)?.model ?? ""),
@@ -289,7 +290,7 @@ export function warmPromptAssemblyTokenizer(modelId: string, chatId: string | nu
   const pw = pickIdleWorker(chatId, tokenizerId) ?? (pool.length === 0 ? spawnWorker() : null);
   if (!pw || pw.warming) return;
   if (pw.idleTimer) { clearTimeout(pw.idleTimer); pw.idleTimer = null; }
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
   pw.warming = { requestId, tokenizerId };
   pw.worker.postMessage({ type: "warm-tokenizer", requestId, modelId, tokenizerRevision, resourceOwner: pw.resourceOwner } satisfies AssemblyWorkerRequest);
 }

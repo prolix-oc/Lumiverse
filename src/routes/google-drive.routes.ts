@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Google Drive OAuth routes — PKCE flow for Desktop app credentials.
  *
@@ -118,7 +119,7 @@ app.get("/auth", async (c) => {
 
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await computeCodeChallenge(codeVerifier);
-  const sessionToken = crypto.randomUUID();
+  const sessionToken = uuidv4();
 
   // The redirect URI is the frontend's origin + our landing path.
   // This must match what's registered in the Google Cloud Console.

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import {
   basename,
   join,
@@ -139,7 +140,7 @@ export class CharacterImportJobManager {
       throw new CharacterImportJobError(409, "job_in_progress", "A character import is already in progress");
     }
 
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     // The staging path contains only a server-generated UUID. User ids remain
     // authorization metadata and never participate in filesystem resolution.
     const directory = join(this.options.rootDir, id);

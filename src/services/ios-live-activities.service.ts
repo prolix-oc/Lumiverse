@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
@@ -57,7 +58,7 @@ export function prepareLiveActivity(userId: string, input: Record<string, unknow
     input.deviceId as string, info.bundleId, input.environment as string, origin.origin))
     throw new Error("Enable notifications on this iPhone before starting relay Live Activities.");
   const now = Date.now(), expiresAt = now + 8 * 60 * 60 * 1000;
-  const credential = randomBytes(32).toString("base64url"), id = crypto.randomUUID();
+  const credential = randomBytes(32).toString("base64url"), id = uuidv4();
   const phase = poolActivityPhase(entry);
   getDb().transaction(() => {
     getDb().query("DELETE FROM ios_live_activities WHERE expires_at <= ?").run(now);

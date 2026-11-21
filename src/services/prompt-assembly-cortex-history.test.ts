@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -18,7 +19,7 @@ const userId = "cortex-history";
 let chat: ReturnType<typeof createChat>;
 let workerState: boolean | undefined;
 const globalState = globalThis as { __LUMIVERSE_ASSEMBLY_WORKER?: boolean };
-const block = (marker: string | null, content = ""): PromptBlock => ({ id: crypto.randomUUID(), name: "Probe", marker,
+const block = (marker: string | null, content = ""): PromptBlock => ({ id: uuidv4(), name: "Probe", marker,
   content, role: "system", position: "pre_history", depth: 0, enabled: true, isLocked: false,
   color: null, injectionTrigger: [], group: null });
 

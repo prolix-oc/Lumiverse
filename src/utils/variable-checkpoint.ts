@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-
+import { uuidv4 } from "./uuid";
 export interface VariableValues { global: Record<string, string>; chat: Record<string, string> }
 export interface VariableEffect { scope: "global" | "chat"; key: string; before: string | null; after: string | null }
 export interface VariableCheckpointEntry extends VariableEffect { epoch: string }
@@ -23,7 +22,7 @@ export function variableEffects(before: VariableValues, after: VariableValues): 
     .map(key => ({ scope, key, before: value(before, scope, key), after: value(after, scope, key) })));
 }
 
-export function advanceVariableCheckpoint(checkpoint: VariableCheckpoint, effects: VariableEffect[], epoch: string = randomUUID()): VariableCheckpoint {
+export function advanceVariableCheckpoint(checkpoint: VariableCheckpoint, effects: VariableEffect[], epoch: string = uuidv4()): VariableCheckpoint {
   const entries = new Map(checkpoint.map(entry => [identity(entry), entry]));
   for (const effect of effects) {
     const prior = entries.get(identity(effect));
@@ -37,7 +36,7 @@ export function advanceVariableCheckpoint(checkpoint: VariableCheckpoint, effect
 /** External writes start an epoch so later undo cannot cross that edit, including an ABA change. */
 export function observeVariableChanges(checkpoint: VariableCheckpoint, before: VariableValues, after: VariableValues): VariableCheckpoint {
   const entries = new Map(checkpoint.map(entry => [identity(entry), entry]));
-  const epoch = randomUUID();
+  const epoch = uuidv4();
   for (const effect of variableEffects(before, after)) {
     entries.set(identity(effect), { ...effect, epoch, before: effect.after });
   }
@@ -55,10 +54,10 @@ export function restoreVariableCheckpoint(current: VariableValues, head: Variabl
     const sample = prior ?? next!;
     const actual = value(current, sample.scope, sample.key);
     // Direct database writers may not have passed through the metadata API.
-    if (prior && actual !== prior.after) prior = { ...prior, epoch: randomUUID(), before: actual, after: actual };
+    if (prior && actual !== prior.after) prior = { ...prior, epoch: uuidv4(), before: actual, after: actual };
     let entry: VariableCheckpointEntry;
     if (prior) entry = next?.epoch === prior.epoch ? next : { ...prior, after: prior.before };
-    else entry = actual === next!.before || actual === next!.after ? next! : { ...next!, epoch: randomUUID(), before: actual, after: actual };
+    else entry = actual === next!.before || actual === next!.after ? next! : { ...next!, epoch: uuidv4(), before: actual, after: actual };
     if (entry.after === null) maps[entry.scope].delete(entry.key); else maps[entry.scope].set(entry.key, entry.after);
     result.push(entry);
   }

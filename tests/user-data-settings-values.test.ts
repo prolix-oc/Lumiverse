@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -38,7 +39,7 @@ afterEach(() => {
 
 function manifest(schemaVersion = 3) {
   return { ...createManifest({
-    archiveId: crypto.randomUUID(), includeVectors: false,
+    archiveId: uuidv4(), includeVectors: false,
     embeddingConfig: { provider: null, model: null, dimension: null },
     producerVersion: "test", counts: {}, missingFiles: [],
   }), schemaVersion };
@@ -73,7 +74,7 @@ function fixture(
 async function restore(bytes: Uint8Array) {
   const archivePath = join(directory, "input.lvbak");
   writeFileSync(archivePath, bytes);
-  return finish(startImport({ userId: TARGET, archivePath, jobId: crypto.randomUUID() }));
+  return finish(startImport({ userId: TARGET, archivePath, jobId: uuidv4() }));
 }
 
 describe("large settings backup values", () => {
@@ -105,14 +106,14 @@ describe("large settings backup values", () => {
     const settingCount = (getDb().query("SELECT COUNT(*) AS n FROM settings WHERE user_id = ?").get(SOURCE) as { n: number }).n;
     copyFileSync(archivePath, secondPath);
 
-    const job = await finish(startImport({ userId: TARGET, archivePath, jobId: crypto.randomUUID() }));
+    const job = await finish(startImport({ userId: TARGET, archivePath, jobId: uuidv4() }));
     expect(job.error).toBeNull();
     expect(job.status).toBe("complete");
     expect(hash(valueFor(TARGET)!)).toBe(expected);
     expect(valueFor(TARGET, "smallSetting")).toBe('{"enabled":true}');
     expect(job.summary.settings).toEqual({ imported: settingCount, skipped: 0 });
 
-    const repeated = await finish(startImport({ userId: TARGET, archivePath: secondPath, jobId: crypto.randomUUID() }));
+    const repeated = await finish(startImport({ userId: TARGET, archivePath: secondPath, jobId: uuidv4() }));
     expect(repeated.error).toBeNull();
     expect(repeated.status).toBe("complete");
     expect(repeated.summary.settings).toEqual({ imported: 0, skipped: settingCount });

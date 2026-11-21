@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -94,7 +95,7 @@ describe("active ComfyUI workflow selection", () => {
     });
 
     const character = charactersSvc.createCharacter(USER_ID, { name: "Workflow test character" });
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     getDb()
       .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -169,7 +170,7 @@ describe("active ComfyUI workflow selection", () => {
     });
 
     const character = charactersSvc.createCharacter(USER_ID, { name: "Character" });
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     getDb()
       .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")

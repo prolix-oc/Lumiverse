@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ describe("tokenizer resource cache", () => {
 
   test("a terminated worker's lease is released immediately for the next runtime", async () => {
     const path = await directory();
-    const owner = crypto.randomUUID();
+    const owner = uuidv4();
     const worker = new Worker(new URL("./test-fixtures/tokenizer-cache-worker.ts", import.meta.url));
     try {
       await new Promise<void>((resolve, reject) => {

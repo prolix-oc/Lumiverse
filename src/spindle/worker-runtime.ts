@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createThemeAuthoringRuntime } from './theme-authoring-runtime';
 import { createThemeReferencesRuntime } from './theme-references-runtime';
 import { createOrganizationRuntime } from './connection-organization-runtime';
@@ -1235,7 +1236,7 @@ function createFrontendProcessHandle(info: FrontendProcessInfo): {
       post({ type: "frontend_process_send", processId: info.processId, payload });
     },
     async stop(options?: { userId?: string; reason?: string }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "frontend_process_stop",
         requestId,
@@ -1244,7 +1245,7 @@ function createFrontendProcessHandle(info: FrontendProcessInfo): {
       });
     },
     async refresh() {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "frontend_process_get", requestId, processId: info.processId });
       return result as FrontendProcessInfo | null;
     },
@@ -1271,7 +1272,7 @@ function createBackendProcessHandle(info: BackendProcessInfo): {
       post({ type: "backend_process_send", processId: info.processId, payload });
     },
     async stop(options?: { userId?: string; reason?: string }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "backend_process_stop",
         requestId,
@@ -1280,7 +1281,7 @@ function createBackendProcessHandle(info: BackendProcessInfo): {
       });
     },
     async refresh() {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "backend_process_get", requestId, processId: info.processId });
       return result as BackendProcessInfo | null;
     },
@@ -1327,7 +1328,7 @@ function requestGeneration(input: any): Promise<unknown> {
     return Promise.reject(makeAbortError((signal.reason as any)?.message));
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
 
   return new Promise((resolve, reject) => {
     const onAbort = () => {
@@ -1366,7 +1367,7 @@ function requestAssembly(input: AssembleRequest, userId?: string): Promise<Assem
     return Promise.reject(makeAbortError((signal.reason as any)?.message ?? "Assembly aborted"));
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
   return new Promise((resolve, reject) => {
     const onAbort = () => post({ type: "cancel_generation", requestId });
     pendingResponses.set(requestId, {
@@ -1397,7 +1398,7 @@ function requestBoundGeneration<T>(
     return Promise.reject(makeAbortError((signal.reason as Error | undefined)?.message));
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => post({ type: "cancel_generation", requestId });
     pendingResponses.set(requestId, {
@@ -1437,7 +1438,7 @@ function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, voi
     })();
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
 
   type QueueItem =
     | { kind: "chunk"; chunk: StreamChunkDTO }
@@ -1523,7 +1524,7 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
     })();
   }
 
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
   type QueueItem =
     | { kind: "event"; event: ImageGenStreamEvent }
     | { kind: "error"; error: unknown };
@@ -1589,7 +1590,7 @@ async function getChatMessages(
   chatId: string,
   options?: ChatGetMessagesOptionsDTO,
 ): Promise<Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>> {
-  const requestId = crypto.randomUUID();
+  const requestId = uuidv4();
   const result = await request({ type: "chat_get_messages", requestId, chatId, options });
   return result as Array<ChatGetMessagesResultDTO<ChatGetMessagesOptionsDTO | undefined>>;
 }
@@ -1599,29 +1600,29 @@ const organizationRuntime = createOrganizationRuntime({ request, send: post });
 const spindleApi: RuntimeSpindleAPI = {
   uuid: {
     async v4(): Promise<string> {
-      return await request({ type: "uuid_generate", requestId: crypto.randomUUID(), version: 4 }) as string;
+      return await request({ type: "uuid_generate", requestId: uuidv4(), version: 4 }) as string;
     },
     async v7(): Promise<string> {
-      return await request({ type: "uuid_generate", requestId: crypto.randomUUID(), version: 7 }) as string;
+      return await request({ type: "uuid_generate", requestId: uuidv4(), version: 7 }) as string;
     },
   },
   decisions: {
     async listProviders(options) {
-      return await request({ type: "decisions_providers", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listProviders"]>>;
+      return await request({ type: "decisions_providers", requestId: uuidv4(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listProviders"]>>;
     },
     async listConnections(options) {
-      return await request({ type: "decisions_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listConnections"]>>;
+      return await request({ type: "decisions_connections_list", requestId: uuidv4(), userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["listConnections"]>>;
     },
     async getConnection(connectionId, options) {
-      return await request({ type: "decisions_connection_get", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getConnection"]>>;
+      return await request({ type: "decisions_connection_get", requestId: uuidv4(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getConnection"]>>;
     },
     async getModels(connectionId, options) {
-      return await request({ type: "decisions_models", requestId: crypto.randomUUID(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getModels"]>>;
+      return await request({ type: "decisions_models", requestId: uuidv4(), connectionId, userId: options?.userId }) as Awaited<ReturnType<SpindleDecisionsAPI["getModels"]>>;
     },
     async evaluate(input, options) {
       assertMutationAllowed("spindle.decisions.evaluate()");
       options?.signal?.throwIfAborted();
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const cancel = () => post({ type: "decisions_cancel", requestId });
       const result = request({ type: "decisions_evaluate", requestId, input });
       options?.signal?.addEventListener("abort", cancel, { once: true });
@@ -1632,12 +1633,12 @@ const spindleApi: RuntimeSpindleAPI = {
   },
   embeddings: {
     async listConnections(options) {
-      return await request({ type: "embeddings_connections_list", requestId: crypto.randomUUID(), userId: options?.userId }) as Awaited<ReturnType<SpindleEmbeddingsAPI["listConnections"]>>;
+      return await request({ type: "embeddings_connections_list", requestId: uuidv4(), userId: options?.userId }) as Awaited<ReturnType<SpindleEmbeddingsAPI["listConnections"]>>;
     },
     async embed(input, options) {
       assertMutationAllowed("spindle.embeddings.embed()");
       options?.signal?.throwIfAborted();
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const cancel = () => post({ type: "embeddings_cancel", requestId });
       const result = request({ type: "embeddings_embed", requestId, input });
       options?.signal?.addEventListener("abort", cancel, { once: true });
@@ -1649,68 +1650,68 @@ const spindleApi: RuntimeSpindleAPI = {
   files: {
     fetch(url, options = {}) {
       const { signal: _signal, ...wireOptions } = options;
-      return fileOperation({ type: "files_fetch", requestId: crypto.randomUUID(), url, options: wireOptions }, options);
+      return fileOperation({ type: "files_fetch", requestId: uuidv4(), url, options: wireOptions }, options);
     },
     create(input) {
-      return fileOperation({ type: "files_create", requestId: crypto.randomUUID(), input });
+      return fileOperation({ type: "files_create", requestId: uuidv4(), input });
     },
     writeChunk(fileId, offset, data, userId) {
-      return fileOperation({ type: "files_write_chunk", requestId: crypto.randomUUID(), fileId, offset, data, userId });
+      return fileOperation({ type: "files_write_chunk", requestId: uuidv4(), fileId, offset, data, userId });
     },
     finish(fileId, userId) {
-      return fileOperation({ type: "files_finish", requestId: crypto.randomUUID(), fileId, userId });
+      return fileOperation({ type: "files_finish", requestId: uuidv4(), fileId, userId });
     },
     readChunk(source, offset, userId) {
-      return fileOperation({ type: "files_read_chunk", requestId: crypto.randomUUID(), source, offset, userId });
+      return fileOperation({ type: "files_read_chunk", requestId: uuidv4(), source, offset, userId });
     },
     delete(fileId, userId) {
-      return fileOperation({ type: "files_delete", requestId: crypto.randomUUID(), fileId, userId });
+      return fileOperation({ type: "files_delete", requestId: uuidv4(), fileId, userId });
     },
     getDownloadUrl(fileId, userId) {
-      return fileOperation({ type: "files_download_url", requestId: crypto.randomUUID(), fileId, userId });
+      return fileOperation({ type: "files_download_url", requestId: uuidv4(), fileId, userId });
     },
   },
   archives: {
     create(entries, options = {}) {
       const { signal: _signal, ...wireOptions } = options;
-      return fileOperation({ type: "archives_create", requestId: crypto.randomUUID(), entries, options: wireOptions }, options);
+      return fileOperation({ type: "archives_create", requestId: uuidv4(), entries, options: wireOptions }, options);
     },
     extract(source, options = {}) {
       const { signal: _signal, ...wireOptions } = options;
-      return fileOperation({ type: "archives_extract", requestId: crypto.randomUUID(), source, options: wireOptions }, options);
+      return fileOperation({ type: "archives_extract", requestId: uuidv4(), source, options: wireOptions }, options);
     },
   },
   desktop: {
     capture: {
       async listDevices(options) {
-        return await request({ type: "desktop_capture_devices", requestId: crypto.randomUUID(), userId: options?.userId }) as DesktopCaptureDevice[];
+        return await request({ type: "desktop_capture_devices", requestId: uuidv4(), userId: options?.userId }) as DesktopCaptureDevice[];
       },
       async getApprovalStatus(input) {
-        return await request({ type: "desktop_capture_approval_status", requestId: crypto.randomUUID(), input }) as DesktopCaptureApprovalStatus;
+        return await request({ type: "desktop_capture_approval_status", requestId: uuidv4(), input }) as DesktopCaptureApprovalStatus;
       },
       async request(input) {
         assertMutationAllowed("spindle.desktop.capture.request()");
-        return await request({ type: "desktop_capture_request", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
+        return await request({ type: "desktop_capture_request", requestId: uuidv4(), input }) as CapturedMediaRef;
       },
       async optimize(input) {
         assertMutationAllowed("spindle.desktop.capture.optimize()");
-        return await request({ type: "desktop_capture_optimize", requestId: crypto.randomUUID(), input }) as CapturedMediaRef;
+        return await request({ type: "desktop_capture_optimize", requestId: uuidv4(), input }) as CapturedMediaRef;
       },
       async release(assetId, options) {
         assertMutationAllowed("spindle.desktop.capture.release()");
-        await request({ type: "desktop_capture_release", requestId: crypto.randomUUID(), assetId, userId: options?.userId });
+        await request({ type: "desktop_capture_release", requestId: uuidv4(), assetId, userId: options?.userId });
       },
       async finish(requestKey, options) {
         assertMutationAllowed("spindle.desktop.capture.finish()");
-        return await request({ type: "desktop_capture_finish", requestId: crypto.randomUUID(), requestKey, userId: options?.userId }) as boolean;
+        return await request({ type: "desktop_capture_finish", requestId: uuidv4(), requestKey, userId: options?.userId }) as boolean;
       },
     },
   },
   runtimeState: {
-    read(chatId, characterId, userId) { return request({ type: 'runtime_state_read', requestId: crypto.randomUUID(), chatId, characterId, userId }); },
+    read(chatId, characterId, userId) { return request({ type: 'runtime_state_read', requestId: uuidv4(), chatId, characterId, userId }); },
     write(chatId, command, userId, mutationId) {
       assertMutationAllowed('spindle.runtimeState.write()');
-      return request({ type: 'runtime_state_write', requestId: crypto.randomUUID(), chatId, command, userId, mutationId });
+      return request({ type: 'runtime_state_write', requestId: uuidv4(), chatId, command, userId, mutationId });
     },
   },
   get host(): SpindleHostDescriptorV1 {
@@ -1816,7 +1817,7 @@ const spindleApi: RuntimeSpindleAPI = {
     options?: InterceptorRegistrationMatchOptions & { required?: boolean },
   ): InterceptorDisposer {
     assertMutationAllowed("spindle.registerInterceptor()");
-    const registrationId = crypto.randomUUID();
+    const registrationId = uuidv4();
     const priority = typeof priorityOrOptions === "number"
       ? priorityOrOptions
       : priorityOrOptions?.priority;
@@ -1844,7 +1845,7 @@ const spindleApi: RuntimeSpindleAPI = {
     options?: { expected_revisions?: Record<string, number>; userId?: string },
   ): Promise<SpindleBatchResult[]> {
     assertMutationAllowed("spindle.batch()");
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const { userId, ...batchOptions } = options || {};
     const result = await request({ type: "spindle_batch", requestId, ops, options: batchOptions, userId });
     return result as SpindleBatchResult[];
@@ -1902,15 +1903,15 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async beginMessage(input) {
       assertMutationAllowed("generate.beginMessage");
-      return await request({ type: "message_generation_begin", requestId: crypto.randomUUID(), input }) as { id: string };
+      return await request({ type: "message_generation_begin", requestId: uuidv4(), input }) as { id: string };
     },
     async finishMessage(sessionId) {
       assertMutationAllowed("generate.finishMessage");
-      return await request({ type: "message_generation_finish", requestId: crypto.randomUUID(), sessionId }) as import("./message-generation").MessageGenerationResult;
+      return await request({ type: "message_generation_finish", requestId: uuidv4(), sessionId }) as import("./message-generation").MessageGenerationResult;
     },
     async abortMessage(sessionId) {
       assertMutationAllowed("generate.abortMessage");
-      await request({ type: "message_generation_abort", requestId: crypto.randomUUID(), sessionId });
+      await request({ type: "message_generation_abort", requestId: uuidv4(), sessionId });
     },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
@@ -1930,13 +1931,13 @@ const spindleApi: RuntimeSpindleAPI = {
     async getBreakdown(messageId: string, userId?: string) {
       return await request({
         type: "generate_get_breakdown",
-        requestId: crypto.randomUUID(),
+        requestId: uuidv4(),
         messageId,
         userId,
       }) as SavedBreakdownDTO | null;
     },
     async dryRun(input, userId?: string) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "generate_dry_run",
         requestId,
@@ -2019,7 +2020,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   storage: {
     async read(path: string): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "storage_read",
         requestId,
@@ -2029,11 +2030,11 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async write(path: string, data: string): Promise<void> {
       assertMutationAllowed("spindle.storage.write()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "storage_write", requestId, path, data });
     },
     async readBinary(path: string): Promise<Uint8Array> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "storage_read_binary",
         requestId,
@@ -2043,16 +2044,16 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async writeBinary(path: string, data: Uint8Array): Promise<void> {
       assertMutationAllowed("spindle.storage.writeBinary()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "storage_write_binary", requestId, path, data });
     },
     async delete(path: string): Promise<void> {
       assertMutationAllowed("spindle.storage.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "storage_delete", requestId, path });
     },
     async list(prefix?: string): Promise<string[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "storage_list",
         requestId,
@@ -2061,18 +2062,18 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as string[];
     },
     async exists(path: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "storage_exists", requestId, path });
       return result as boolean;
     },
     async mkdir(path: string): Promise<void> {
       assertMutationAllowed("spindle.storage.mkdir()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "storage_mkdir", requestId, path });
     },
     async move(from: string, to: string): Promise<void> {
       assertMutationAllowed("spindle.storage.move()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "storage_move", requestId, from, to });
     },
     async stat(path: string): Promise<{
@@ -2082,7 +2083,7 @@ const spindleApi: RuntimeSpindleAPI = {
       sizeBytes: number;
       modifiedAt: string;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "storage_stat", requestId, path });
       return result as {
         exists: boolean;
@@ -2119,7 +2120,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   userStorage: {
     async read(path: string, userId?: string): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "user_storage_read",
         requestId,
@@ -2130,11 +2131,11 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async write(path: string, data: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.write()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "user_storage_write", requestId, path, data, userId });
     },
     async readBinary(path: string, userId?: string): Promise<Uint8Array> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "user_storage_read_binary",
         requestId,
@@ -2145,16 +2146,16 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async writeBinary(path: string, data: Uint8Array, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.writeBinary()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "user_storage_write_binary", requestId, path, data, userId });
     },
     async delete(path: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "user_storage_delete", requestId, path, userId });
     },
     async list(prefix?: string, userId?: string): Promise<string[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "user_storage_list",
         requestId,
@@ -2164,18 +2165,18 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as string[];
     },
     async exists(path: string, userId?: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "user_storage_exists", requestId, path, userId });
       return result as boolean;
     },
     async mkdir(path: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.mkdir()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "user_storage_mkdir", requestId, path, userId });
     },
     async move(from: string, to: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.userStorage.move()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "user_storage_move", requestId, from, to, userId });
     },
     async stat(path: string, userId?: string): Promise<{
@@ -2185,7 +2186,7 @@ const spindleApi: RuntimeSpindleAPI = {
       sizeBytes: number;
       modifiedAt: string;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "user_storage_stat", requestId, path, userId });
       return result as {
         exists: boolean;
@@ -2227,27 +2228,27 @@ const spindleApi: RuntimeSpindleAPI = {
   enclave: {
     async put(key: string, value: string, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.enclave.put()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "enclave_put", requestId, key, value, userId });
     },
     async get(key: string, userId?: string): Promise<string | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "enclave_get", requestId, key, userId });
       return result as string | null;
     },
     async delete(key: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.enclave.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "enclave_delete", requestId, key, userId });
       return result as boolean;
     },
     async has(key: string, userId?: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "enclave_has", requestId, key, userId });
       return result as boolean;
     },
     async list(userId?: string): Promise<string[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "enclave_list", requestId, userId });
       return result as string[];
     },
@@ -2255,7 +2256,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   ephemeral: {
     async read(path: string): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ephemeral_read", requestId, path });
       return result as string;
     },
@@ -2265,7 +2266,7 @@ const spindleApi: RuntimeSpindleAPI = {
       options?: { ttlMs?: number; reservationId?: string }
     ): Promise<void> {
       assertMutationAllowed("spindle.ephemeral.write()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "ephemeral_write",
         requestId,
@@ -2276,7 +2277,7 @@ const spindleApi: RuntimeSpindleAPI = {
       });
     },
     async readBinary(path: string): Promise<Uint8Array> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "ephemeral_read_binary",
         requestId,
@@ -2290,7 +2291,7 @@ const spindleApi: RuntimeSpindleAPI = {
       options?: { ttlMs?: number; reservationId?: string }
     ): Promise<void> {
       assertMutationAllowed("spindle.ephemeral.writeBinary()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "ephemeral_write_binary",
         requestId,
@@ -2302,11 +2303,11 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async delete(path: string): Promise<void> {
       assertMutationAllowed("spindle.ephemeral.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ephemeral_delete", requestId, path });
     },
     async list(prefix?: string): Promise<string[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "ephemeral_list",
         requestId,
@@ -2319,13 +2320,13 @@ const spindleApi: RuntimeSpindleAPI = {
       createdAt: string;
       expiresAt?: string;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ephemeral_stat", requestId, path });
       return result as { sizeBytes: number; createdAt: string; expiresAt?: string };
     },
     async clearExpired(): Promise<number> {
       assertMutationAllowed("spindle.ephemeral.clearExpired()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ephemeral_clear_expired", requestId });
       return result as number;
     },
@@ -2341,7 +2342,7 @@ const spindleApi: RuntimeSpindleAPI = {
       fileCount: number;
       fileCountMax: number;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ephemeral_pool_status", requestId });
       return result as {
         globalMaxBytes: number;
@@ -2365,7 +2366,7 @@ const spindleApi: RuntimeSpindleAPI = {
       expiresAt: string;
     }> {
       assertMutationAllowed("spindle.ephemeral.requestBlock()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "ephemeral_request_block",
         requestId,
@@ -2381,7 +2382,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async releaseBlock(reservationId: string): Promise<void> {
       assertMutationAllowed("spindle.ephemeral.releaseBlock()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "ephemeral_release_block",
         requestId,
@@ -2393,12 +2394,12 @@ const spindleApi: RuntimeSpindleAPI = {
   chat: {
     async setSwipeVariables(chatId: string, messageId: string, input: import("../db/swipe-variable-state").SetSwipeVariablesInput): Promise<boolean> {
       assertMutationAllowed("spindle.chat.setSwipeVariables()");
-      return await request({ type: "chat_set_swipe_variables", requestId: crypto.randomUUID(), chatId, messageId, input }) as boolean;
+      return await request({ type: "chat_set_swipe_variables", requestId: uuidv4(), chatId, messageId, input }) as boolean;
     },
     getMessages: getChatMessages,
     async appendMessage(chatId: string, message: ChatAppendMessageDTO, options?: ChatAppendMessageOptionsDTO) {
       assertMutationAllowed("spindle.chat.appendMessage()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "chat_append_message",
         requestId,
@@ -2410,7 +2411,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async updateMessage(chatId: string, messageId: string, patch): Promise<void> {
       assertMutationAllowed("spindle.chat.updateMessage()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "chat_update_message",
         requestId,
@@ -2421,7 +2422,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async deleteMessage(chatId: string, messageId: string): Promise<void> {
       assertMutationAllowed("spindle.chat.deleteMessage()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "chat_delete_message",
         requestId,
@@ -2431,7 +2432,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async setMessageHidden(chatId: string, messageId: string, hidden: boolean): Promise<void> {
       assertMutationAllowed("spindle.chat.setMessageHidden()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "chat_set_message_hidden",
         requestId,
@@ -2442,7 +2443,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async setMessagesHidden(chatId: string, messageIds: string[], hidden: boolean): Promise<void> {
       assertMutationAllowed("spindle.chat.setMessagesHidden()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "chat_set_messages_hidden",
         requestId,
@@ -2452,7 +2453,7 @@ const spindleApi: RuntimeSpindleAPI = {
       });
     },
     async isMessageHidden(chatId: string, messageId: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "chat_is_message_hidden",
         requestId,
@@ -2463,7 +2464,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async setStyleMode(chatId: string, mode: "bounded" | "extension-relaxed", userId?: string): Promise<void> {
       assertMutationAllowed("spindle.chat.setStyleMode()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "chat_set_style_mode",
         requestId,
@@ -2477,7 +2478,7 @@ const spindleApi: RuntimeSpindleAPI = {
   events: {
     async track(eventName, payload, options): Promise<void> {
       assertMutationAllowed("spindle.events.track()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "events_track",
         requestId,
@@ -2487,7 +2488,7 @@ const spindleApi: RuntimeSpindleAPI = {
       });
     },
     async query(filter) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "events_query", requestId, filter });
       return result as Array<{
         id: string;
@@ -2499,7 +2500,7 @@ const spindleApi: RuntimeSpindleAPI = {
       }>;
     },
     async replay(filter) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "events_replay", requestId, filter });
       return result as Array<{
         id: string;
@@ -2511,7 +2512,7 @@ const spindleApi: RuntimeSpindleAPI = {
       }>;
     },
     async getLatestState(keys: string[]): Promise<Record<string, unknown>> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "events_get_latest_state",
         requestId,
@@ -2524,22 +2525,22 @@ const spindleApi: RuntimeSpindleAPI = {
   connections: {
     organization: organizationRuntime.api,
     async list(userId?: string): Promise<ConnectionProfileDTO[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "connections_list", requestId, userId });
       return result as ConnectionProfileDTO[];
     },
     async get(connectionId: string, userId?: string): Promise<ConnectionProfileDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
     },
     async getModels(connectionId: string, userId?: string): Promise<ConnectionModelDTO[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "connections_models", requestId, connectionId, userId });
       return result as ConnectionModelDTO[];
     },
     async resolveDispatch(connectionId: string): Promise<ConnectionDispatchDescriptorDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "connections_resolve_dispatch", requestId, connectionId });
       return result as ConnectionDispatchDescriptorDTO | null;
     },
@@ -2547,7 +2548,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   uploads: {
     async get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return (await request({ type: "uploads_get", requestId, uploadId, userId })) as
         | { fileName: string; size: number; data: Uint8Array }
         | null;
@@ -2559,7 +2560,7 @@ const spindleApi: RuntimeSpindleAPI = {
       data: Uint8Array;
       eof: boolean;
     } | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return (await request({ type: "uploads_read_chunk", requestId, uploadId, offset, userId })) as {
         fileName: string;
         size: number;
@@ -2569,14 +2570,14 @@ const spindleApi: RuntimeSpindleAPI = {
       } | null;
     },
     async delete(uploadId: string, userId?: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return (await request({ type: "uploads_delete", requestId, uploadId, userId })) as boolean;
     },
   },
 
   tokens: {
     async countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "tokens_count_text",
         requestId,
@@ -2591,7 +2592,7 @@ const spindleApi: RuntimeSpindleAPI = {
       texts: string[],
       options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
     ): Promise<TokenCountBatchResult[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "tokens_count_text_batch",
         requestId,
@@ -2606,7 +2607,7 @@ const spindleApi: RuntimeSpindleAPI = {
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
       options?: { model?: string; modelSource?: TokenModelSource; userId?: string }
     ): Promise<TokenCountResult> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "tokens_count_messages",
         requestId,
@@ -2618,7 +2619,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as TokenCountResult;
     },
     async countChat(chatId: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "tokens_count_chat",
         requestId,
@@ -2633,38 +2634,38 @@ const spindleApi: RuntimeSpindleAPI = {
 
   imageGen: {
     async getPromptPresets(userId?: string): Promise<ImageGenPromptPresetsResultDTO> {
-      return await request({ type: "image_gen_prompt_presets", requestId: crypto.randomUUID(), userId }) as ImageGenPromptPresetsResultDTO;
+      return await request({ type: "image_gen_prompt_presets", requestId: uuidv4(), userId }) as ImageGenPromptPresetsResultDTO;
     },
     async cancelNative(jobId: string, userId?: string) {
-      return await request({ type: "image_gen_cancel_native", requestId: crypto.randomUUID(), jobId, userId }) as boolean;
+      return await request({ type: "image_gen_cancel_native", requestId: uuidv4(), jobId, userId }) as boolean;
     },
     async generate(input: any): Promise<any> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return request({ type: "image_gen_generate", requestId, input });
     },
     async generateNative(input: ImageGenNativeRequestDTO): Promise<ImageGenNativeResultDTO> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return await request({ type: "image_gen_generate_native", requestId, input }) as ImageGenNativeResultDTO;
     },
     generateStream(input: ImageGenStreamInput): AsyncGenerator<ImageGenStreamEvent, void, void> {
       return requestImageGenStream(input);
     },
     async getProviders(userId?: string): Promise<any[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "image_gen_providers", requestId, userId });
       return result as any[];
     },
     async listConnections(userId?: string): Promise<any[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "image_gen_connections_list", requestId, userId });
       return result as any[];
     },
     async getConnection(connectionId: string, userId?: string): Promise<any> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return request({ type: "image_gen_connections_get", requestId, connectionId, userId });
     },
     async getModels(connectionId: string, userId?: string): Promise<Array<{ id: string; label: string }>> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "image_gen_models", requestId, connectionId, userId });
       return result as Array<{ id: string; label: string }>;
     },
@@ -2675,17 +2676,17 @@ const spindleApi: RuntimeSpindleAPI = {
     references: createThemeReferencesRuntime(request),
     async apply(overrides: { variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } }, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.apply()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "theme_apply", requestId, overrides, userId });
     },
     async applyPalette(palette, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.applyPalette()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "theme_apply_palette", requestId, palette, userId });
     },
     async clear(userId?: string): Promise<void> {
       assertMutationAllowed("spindle.theme.clear()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "theme_clear", requestId, userId });
     },
     async getCurrent(userId?: string): Promise<{
@@ -2693,12 +2694,12 @@ const spindleApi: RuntimeSpindleAPI = {
       accent: { h: number; s: number; l: number };
       enableGlass: boolean; radiusScale: number; fontScale: number; uiScale: number; characterAware: boolean;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "theme_get_current", requestId, userId });
       return result as any;
     },
     async extractColors(imageId: string, userId?: string): Promise<any> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "color_extract", requestId, imageId, userId });
       return result;
     },
@@ -2737,7 +2738,7 @@ const spindleApi: RuntimeSpindleAPI = {
         warning?: string;
       };
     }): Promise<Record<string, string>> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "theme_generate_variables", requestId, config });
       return result as Record<string, string>;
     },
@@ -2745,11 +2746,11 @@ const spindleApi: RuntimeSpindleAPI = {
 
   images: {
     async readBinary(imageId: string, userId?: string): Promise<Uint8Array> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return await request({ type: "images_read_binary", requestId, imageId, userId }) as Uint8Array;
     },
     async list(options?: ImageListOptionsDTO): Promise<{ data: ImageDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "images_list",
         requestId,
@@ -2767,7 +2768,7 @@ const spindleApi: RuntimeSpindleAPI = {
       const options = typeof optionsOrUserId === "string"
         ? { userId: optionsOrUserId }
         : optionsOrUserId;
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "images_get",
         requestId,
@@ -2782,7 +2783,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async upload(input: ImageUploadDTO, userId?: string): Promise<ImageDTO> {
       assertMutationAllowed("spindle.images.upload()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "images_upload", requestId, input, userId });
       return result as ImageDTO;
     },
@@ -2791,7 +2792,7 @@ const spindleApi: RuntimeSpindleAPI = {
       options?: { userId?: string; concurrency?: number },
     ): Promise<Array<{ id?: string; error?: string }>> {
       assertMutationAllowed("spindle.images.uploadMany()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "images_upload_many",
         requestId,
@@ -2815,7 +2816,7 @@ const spindleApi: RuntimeSpindleAPI = {
         : originalFilenameOrOptions) as ImageUploadFromDataUrlOptionsDTO & {
           skip_thumbnail_processing?: boolean;
         };
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "images_upload_from_data_url",
         requestId,
@@ -2830,13 +2831,13 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async delete(imageId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.images.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "images_delete", requestId, imageId, userId });
       return result as boolean;
     },
     async deleteMany(imageIds: string[], options?: { userId?: string }): Promise<number> {
       assertMutationAllowed("spindle.images.deleteMany()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "images_delete_many",
         requestId,
@@ -2850,37 +2851,37 @@ const spindleApi: RuntimeSpindleAPI = {
   media: {
     async convertAudio(input: MediaConvertAudioRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.convertAudio()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_audio_convert", requestId, input });
       return result as MediaTransformResultDTO;
     },
     async convertVideo(input: MediaConvertVideoRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.convertVideo()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_video_convert", requestId, input });
       return result as MediaTransformResultDTO;
     },
     async transcodeVideo(input: MediaTranscodeVideoRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.transcodeVideo()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_video_transcode", requestId, input });
       return result as MediaTransformResultDTO;
     },
     async removeAudioFromVideo(input: MediaRemoveAudioFromVideoRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.removeAudioFromVideo()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_video_remove_audio", requestId, input });
       return result as MediaTransformResultDTO;
     },
     async addAudioToVideo(input: MediaAddAudioToVideoRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.addAudioToVideo()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_video_add_audio", requestId, input });
       return result as MediaTransformResultDTO;
     },
     async createVideoFromImageAndAudio(input: MediaCreateVideoFromImageAndAudioRequestDTO): Promise<MediaTransformResultDTO> {
       assertMutationAllowed("spindle.media.createVideoFromImageAndAudio()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "media_video_from_image_audio", requestId, input });
       return result as MediaTransformResultDTO;
     },
@@ -2889,81 +2890,81 @@ const spindleApi: RuntimeSpindleAPI = {
   variables: {
     local: {
       async get(chatId: string, key: string): Promise<string> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_get_local", requestId, chatId, key });
         return result as string;
       },
       async set(chatId: string, key: string, value: string): Promise<void> {
         assertMutationAllowed("spindle.variables.local.set()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_set_local", requestId, chatId, key, value });
       },
       async delete(chatId: string, key: string): Promise<void> {
         assertMutationAllowed("spindle.variables.local.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_delete_local", requestId, chatId, key });
       },
       async list(chatId: string): Promise<Record<string, string>> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_list_local", requestId, chatId });
         return result as Record<string, string>;
       },
       async has(chatId: string, key: string): Promise<boolean> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_has_local", requestId, chatId, key });
         return result as boolean;
       },
     },
     global: {
       async get(key: string, userId?: string): Promise<string> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_get_global", requestId, key, userId });
         return result as string;
       },
       async set(key: string, value: string, userId?: string): Promise<void> {
         assertMutationAllowed("spindle.variables.global.set()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_set_global", requestId, key, value, userId });
       },
       async delete(key: string, userId?: string): Promise<void> {
         assertMutationAllowed("spindle.variables.global.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_delete_global", requestId, key, userId });
       },
       async list(userId?: string): Promise<Record<string, string>> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_list_global", requestId, userId });
         return result as Record<string, string>;
       },
       async has(key: string, userId?: string): Promise<boolean> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_has_global", requestId, key, userId });
         return result as boolean;
       },
     },
     chat: {
       async get(chatId: string, key: string): Promise<string> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_get_chat", requestId, chatId, key });
         return result as string;
       },
       async set(chatId: string, key: string, value: string): Promise<void> {
         assertMutationAllowed("spindle.variables.chat.set()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_set_chat", requestId, chatId, key, value });
       },
       async delete(chatId: string, key: string): Promise<void> {
         assertMutationAllowed("spindle.variables.chat.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "vars_delete_chat", requestId, chatId, key });
       },
       async list(chatId: string): Promise<Record<string, string>> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_list_chat", requestId, chatId });
         return result as Record<string, string>;
       },
       async has(chatId: string, key: string): Promise<boolean> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "vars_has_chat", requestId, chatId, key });
         return result as boolean;
       },
@@ -2972,7 +2973,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   presets: {
     async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: Preset[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "presets_list",
         requestId,
@@ -2983,47 +2984,47 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: Preset[]; total: number };
     },
     async get(presetId: string, userId?: string): Promise<Preset | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "presets_get", requestId, presetId, userId });
       return result as Preset | null;
     },
     async getActive(chatId?: string, userId?: string): Promise<ActivePresetDTO> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "presets_get_active", requestId, chatId, userId });
       return result as ActivePresetDTO;
     },
     async create(input: CreatePresetInput, userId?: string): Promise<Preset> {
       assertMutationAllowed("spindle.presets.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "presets_create", requestId, input, userId });
       return result as Preset;
     },
     async update(presetId: string, input: UpdatePresetInput, userId?: string): Promise<Preset> {
       assertMutationAllowed("spindle.presets.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "presets_update", requestId, presetId, input, userId });
       return result as Preset;
     },
     async delete(presetId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.presets.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "presets_delete", requestId, presetId, userId });
       return result as boolean;
     },
     blocks: {
       async list(presetId: string, userId?: string): Promise<PromptBlock[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "preset_blocks_list", requestId, presetId, userId });
         return result as PromptBlock[];
       },
       async get(presetId: string, blockId: string, userId?: string): Promise<PromptBlock | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "preset_blocks_get", requestId, presetId, blockId, userId });
         return result as PromptBlock | null;
       },
       async create(presetId: string, input: Partial<PromptBlock>, options?: { index?: number; userId?: string }): Promise<PromptBlock> {
         assertMutationAllowed("spindle.presets.blocks.create()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "preset_blocks_create",
           requestId,
@@ -3036,20 +3037,20 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async update(presetId: string, blockId: string, input: Partial<Omit<PromptBlock, "id">>, userId?: string): Promise<PromptBlock> {
         assertMutationAllowed("spindle.presets.blocks.update()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "preset_blocks_update", requestId, presetId, blockId, input, userId });
         return result as PromptBlock;
       },
       async delete(presetId: string, blockId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.presets.blocks.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "preset_blocks_delete", requestId, presetId, blockId, userId });
         return result as boolean;
       },
     },
     categories: {
       async list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroup[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "preset_categories_list", requestId, presetId, userId });
         return result as PromptBlockCategoryGroup[];
       },
@@ -3058,7 +3059,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   characters: {
     async list(options?: Parameters<SpindleAPI["characters"]["list"]>[0]): Promise<{ data: CharacterDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "characters_list",
         requestId,
@@ -3071,36 +3072,36 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: CharacterDTO[]; total: number };
     },
     async get(characterId: string, userId?: string): Promise<CharacterDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_get", requestId, characterId, userId });
       return result as CharacterDTO | null;
     },
     async getGallery(characterId: string, userId?: string): Promise<CharacterGalleryItemDTO[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_get_gallery", requestId, characterId, userId });
       return result as CharacterGalleryItemDTO[];
     },
     async create(input: CharacterCreateDTO, userId?: string): Promise<CharacterDTO> {
       assertMutationAllowed("spindle.characters.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_create", requestId, input, userId });
       return result as CharacterDTO;
     },
     async setAvatar(characterId: string, avatar: CharacterAvatarUploadDTO, userId?: string): Promise<CharacterDTO> {
       assertMutationAllowed("spindle.characters.setAvatar()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_set_avatar", requestId, characterId, avatar, userId });
       return result as CharacterDTO;
     },
     async update(characterId: string, input: CharacterUpdateDTO, userId?: string): Promise<CharacterDTO> {
       assertMutationAllowed("spindle.characters.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_update", requestId, characterId, input, userId });
       return result as CharacterDTO;
     },
     async delete(characterId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.characters.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "characters_delete", requestId, characterId, userId });
       return result as boolean;
     },
@@ -3108,7 +3109,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   chats: {
     async list(options?: { characterId?: string; limit?: number; offset?: number; userId?: string }): Promise<{ data: ChatDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "chats_list",
         requestId,
@@ -3120,34 +3121,34 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: ChatDTO[]; total: number };
     },
     async get(chatId: string, userId?: string): Promise<ChatDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "chats_get", requestId, chatId, userId });
       return result as ChatDTO | null;
     },
     async getActive(userId?: string): Promise<ChatDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "chats_get_active", requestId, userId });
       return result as ChatDTO | null;
     },
     async update(chatId: string, input: ChatUpdateDTO, userId?: string): Promise<ChatDTO> {
       assertMutationAllowed("spindle.chats.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "chats_update", requestId, chatId, input, userId });
       return result as ChatDTO;
     },
     async compareAndSetMetadata(chatId: string, input: import("../types/chat").ConditionalChatMetadataInput, userId?: string): Promise<ChatDTO | null> {
       assertMutationAllowed("spindle.chats.compareAndSetMetadata()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return await request({ type: "chats_compare_metadata", requestId, chatId, input, userId }) as ChatDTO | null;
     },
     async delete(chatId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.chats.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "chats_delete", requestId, chatId, userId });
       return result as boolean;
     },
     async getMemories(chatId: string, options?: { topK?: number; userId?: string }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "chats_get_memories",
         requestId,
@@ -3161,7 +3162,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   world_books: {
     async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: WorldBookDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "world_books_list",
         requestId,
@@ -3172,31 +3173,31 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: WorldBookDTO[]; total: number };
     },
     async get(worldBookId: string, userId?: string): Promise<WorldBookDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_get", requestId, worldBookId, userId });
       return result as WorldBookDTO | null;
     },
     async create(input: WorldBookCreateDTO, userId?: string): Promise<WorldBookDTO> {
       assertMutationAllowed("spindle.world_books.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_create", requestId, input, userId });
       return result as WorldBookDTO;
     },
     async update(worldBookId: string, input: WorldBookUpdateDTO, userId?: string): Promise<WorldBookDTO> {
       assertMutationAllowed("spindle.world_books.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_update", requestId, worldBookId, input, userId });
       return result as WorldBookDTO;
     },
     async delete(worldBookId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.world_books.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_delete", requestId, worldBookId, userId });
       return result as boolean;
     },
     entries: {
       async list(worldBookId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: RuntimeWorldBookEntryDTO[]; total: number }> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "world_book_entries_list",
           requestId,
@@ -3208,19 +3209,19 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as { data: RuntimeWorldBookEntryDTO[]; total: number };
       },
       async get(entryId: string, userId?: string): Promise<RuntimeWorldBookEntryDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "world_book_entries_get", requestId, entryId, userId });
         return result as RuntimeWorldBookEntryDTO | null;
       },
       async create(worldBookId: string, input: WorldBookEntryCreateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO> {
         assertMutationAllowed("spindle.world_books.entries.create()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "world_book_entries_create", requestId, worldBookId, input, userId });
         return result as RuntimeWorldBookEntryDTO;
       },
       async update(entryId: string, input: RuntimeWorldBookEntryUpdateDTO, userId?: string): Promise<RuntimeWorldBookEntryDTO> {
         assertMutationAllowed("spindle.world_books.entries.update()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "world_book_entries_update", requestId, entryId, input, userId });
         return result as RuntimeWorldBookEntryDTO;
       },
@@ -3231,7 +3232,7 @@ const spindleApi: RuntimeSpindleAPI = {
         userId?: string,
       ): Promise<SpindleBatchJsonValue> {
         assertMutationAllowed("spindle.world_books.entries.setExtension()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "world_books_entry_set_extension",
           requestId,
@@ -3245,17 +3246,17 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async delete(entryId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.world_books.entries.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "world_book_entries_delete", requestId, entryId, userId });
         return result as boolean;
       },
     },
     async resolveForChat(chatId, options) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return await request({ type: "world_books_resolve_for_chat", requestId, chatId, ...options }) as ResolvedWorldInfoEntryDTO[];
     },
     async getActivated(chatId: string, userId?: string) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "world_books_get_activated",
         requestId,
@@ -3265,25 +3266,25 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as import("lumiverse-spindle-types").ActivatedWorldInfoEntryDTO[];
     },
     async getGlobal(userId?: string): Promise<string[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_get_global", requestId, userId });
       return result as string[];
     },
     async setGlobal(worldBookIds: string[], userId?: string): Promise<string[]> {
       assertMutationAllowed("spindle.world_books.setGlobal()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_set_global", requestId, worldBookIds, userId });
       return result as string[];
     },
     async activateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
       assertMutationAllowed("spindle.world_books.activateGlobal()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_activate_global", requestId, worldBookId, userId });
       return result as string[];
     },
     async deactivateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
       assertMutationAllowed("spindle.world_books.deactivateGlobal()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "world_books_deactivate_global", requestId, worldBookId, userId });
       return result as string[];
     },
@@ -3298,7 +3299,7 @@ const spindleApi: RuntimeSpindleAPI = {
       userId?: string,
     ): Promise<SpindleBatchJsonValue> {
       assertMutationAllowed("spindle.entityExtensions.setNamespace()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "world_books_entry_set_extension",
         requestId,
@@ -3314,11 +3315,11 @@ const spindleApi: RuntimeSpindleAPI = {
 
   regex_scripts: {
     async prepareActivationPatterns(options: ActivationPatternsOptions): Promise<ActivationPatternsResult> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return await request({ type: "regex_scripts_prepare_activation_patterns", requestId, options }) as ActivationPatternsResult;
     },
     async list(options?: RegexScriptListOptionsDTO): Promise<{ data: RegexScriptDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "regex_scripts_list",
         requestId,
@@ -3332,30 +3333,30 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: RegexScriptDTO[]; total: number };
     },
     async get(scriptId: string, userId?: string): Promise<RegexScriptDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "regex_scripts_get", requestId, scriptId, userId });
       return result as RegexScriptDTO | null;
     },
     async create(input: RegexScriptCreateDTO, userId?: string): Promise<RegexScriptDTO> {
       assertMutationAllowed("spindle.regex_scripts.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "regex_scripts_create", requestId, input, userId });
       return result as RegexScriptDTO;
     },
     async update(scriptId: string, input: RegexScriptUpdateDTO, userId?: string): Promise<RegexScriptDTO> {
       assertMutationAllowed("spindle.regex_scripts.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "regex_scripts_update", requestId, scriptId, input, userId });
       return result as RegexScriptDTO;
     },
     async delete(scriptId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.regex_scripts.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "regex_scripts_delete", requestId, scriptId, userId });
       return result as boolean;
     },
     async getActive(options: RegexScriptActiveOptionsDTO): Promise<RegexScriptDTO[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "regex_scripts_get_active",
         requestId,
@@ -3376,7 +3377,7 @@ const spindleApi: RuntimeSpindleAPI = {
       scopeId?: string | null;
       userId?: string;
     }): Promise<{ data: DatabankDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "databanks_list",
         requestId,
@@ -3389,31 +3390,31 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: DatabankDTO[]; total: number };
     },
     async get(databankId: string, userId?: string): Promise<DatabankDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "databanks_get", requestId, databankId, userId });
       return result as DatabankDTO | null;
     },
     async create(input: DatabankCreateDTO, userId?: string): Promise<DatabankDTO> {
       assertMutationAllowed("spindle.databanks.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "databanks_create", requestId, input, userId });
       return result as DatabankDTO;
     },
     async update(databankId: string, input: DatabankUpdateDTO, userId?: string): Promise<DatabankDTO> {
       assertMutationAllowed("spindle.databanks.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "databanks_update", requestId, databankId, input, userId });
       return result as DatabankDTO;
     },
     async delete(databankId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.databanks.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "databanks_delete", requestId, databankId, userId });
       return result as boolean;
     },
     documents: {
       async list(databankId: string, options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: DatabankDocumentDTO[]; total: number }> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "databank_documents_list",
           requestId,
@@ -3425,36 +3426,36 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as { data: DatabankDocumentDTO[]; total: number };
       },
       async get(documentId: string, userId?: string): Promise<DatabankDocumentDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_get", requestId, documentId, userId });
         return result as DatabankDocumentDTO | null;
       },
       async create(databankId: string, input: DatabankDocumentCreateDTO, userId?: string): Promise<DatabankDocumentDTO> {
         assertMutationAllowed("spindle.databanks.documents.create()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_create", requestId, databankId, input, userId });
         return result as DatabankDocumentDTO;
       },
       async update(documentId: string, input: DatabankDocumentUpdateDTO, userId?: string): Promise<DatabankDocumentDTO> {
         assertMutationAllowed("spindle.databanks.documents.update()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_update", requestId, documentId, input, userId });
         return result as DatabankDocumentDTO;
       },
       async delete(documentId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.databanks.documents.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_delete", requestId, documentId, userId });
         return result as boolean;
       },
       async getContent(documentId: string, userId?: string): Promise<{ content: string } | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_get_content", requestId, documentId, userId });
         return result as { content: string } | null;
       },
       async reprocess(documentId: string, userId?: string): Promise<{ success: true; status: "processing" }> {
         assertMutationAllowed("spindle.databanks.documents.reprocess()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "databank_documents_reprocess", requestId, documentId, userId });
         return result as { success: true; status: "processing" };
       },
@@ -3464,23 +3465,23 @@ const spindleApi: RuntimeSpindleAPI = {
   memories: {
     cortex: {
       async getConfig(userId?: string): Promise<MemoryCortexConfigDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_config_get", requestId, userId });
         return result as MemoryCortexConfigDTO;
       },
       async putConfig(patch: Partial<MemoryCortexConfigDTO>, userId?: string): Promise<MemoryCortexConfigDTO> {
         assertMutationAllowed("spindle.memories.cortex.putConfig()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_config_put", requestId, patch, userId });
         return result as MemoryCortexConfigDTO;
       },
       async query(query: CortexQueryDTO): Promise<CortexResultDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_query_cortex", requestId, query });
         return result as CortexResultDTO;
       },
       async getCached(chatId: string): Promise<CortexResultDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_get_cached", requestId, chatId });
         return result as CortexResultDTO | null;
       },
@@ -3488,7 +3489,7 @@ const spindleApi: RuntimeSpindleAPI = {
         chatId: string,
         options?: { queryText?: string; userId?: string },
       ): Promise<LinkedCortexResultDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_query_linked",
           requestId,
@@ -3499,18 +3500,18 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as LinkedCortexResultDTO;
       },
       async getCachedLinked(chatId: string): Promise<LinkedCortexResultDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_get_cached_linked", requestId, chatId });
         return result as LinkedCortexResultDTO | null;
       },
       async invalidateCache(chatId: string): Promise<void> {
         assertMutationAllowed("spindle.memories.cortex.invalidateCache()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "memories_invalidate_cache", requestId, chatId });
       },
       async invalidateLinkedCache(chatId: string): Promise<void> {
         assertMutationAllowed("spindle.memories.cortex.invalidateLinkedCache()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "memories_invalidate_linked_cache", requestId, chatId });
       },
     },
@@ -3520,7 +3521,7 @@ const spindleApi: RuntimeSpindleAPI = {
         chatId: string,
         options?: { activeOnly?: boolean; limit?: number; userId?: string },
       ): Promise<MemoryEntityDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_list",
           requestId,
@@ -3532,12 +3533,12 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as MemoryEntityDTO[];
       },
       async get(entityId: string, userId?: string): Promise<MemoryEntityDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_entities_get", requestId, entityId, userId });
         return result as MemoryEntityDTO | null;
       },
       async findByName(chatId: string, name: string, userId?: string): Promise<MemoryEntityDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_find_by_name",
           requestId,
@@ -3553,7 +3554,7 @@ const spindleApi: RuntimeSpindleAPI = {
         options?: { chunkId?: string | null; createdAt?: number; userId?: string },
       ): Promise<MemoryEntityDTO> {
         assertMutationAllowed("spindle.memories.entities.upsert()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_upsert",
           requestId,
@@ -3571,7 +3572,7 @@ const spindleApi: RuntimeSpindleAPI = {
         userId?: string,
       ): Promise<MemoryEntityDTO> {
         assertMutationAllowed("spindle.memories.entities.updateStatus()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_update_status",
           requestId,
@@ -3583,7 +3584,7 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async addFacts(entityId: string, facts: string[], userId?: string): Promise<MemoryEntityDTO> {
         assertMutationAllowed("spindle.memories.entities.addFacts()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_add_facts",
           requestId,
@@ -3594,7 +3595,7 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as MemoryEntityDTO;
       },
       async getFacts(entityId: string, userId?: string): Promise<string[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_entities_get_facts", requestId, entityId, userId });
         return result as string[];
       },
@@ -3604,7 +3605,7 @@ const spindleApi: RuntimeSpindleAPI = {
         userId?: string,
       ): Promise<MemoryEntityDTO> {
         assertMutationAllowed("spindle.memories.entities.updateEmotionalValence()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_entities_update_emotional_valence",
           requestId,
@@ -3618,17 +3619,17 @@ const spindleApi: RuntimeSpindleAPI = {
 
     relations: {
       async list(chatId: string, userId?: string): Promise<MemoryRelationDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_relations_list", requestId, chatId, userId });
         return result as MemoryRelationDTO[];
       },
       async listAll(chatId: string, userId?: string): Promise<MemoryRelationDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_relations_list_all", requestId, chatId, userId });
         return result as MemoryRelationDTO[];
       },
       async forEntity(chatId: string, entityId: string, userId?: string): Promise<MemoryRelationDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_relations_for_entity",
           requestId,
@@ -3643,7 +3644,7 @@ const spindleApi: RuntimeSpindleAPI = {
         entityIds: string[],
         options?: { limit?: number; userId?: string },
       ): Promise<MemoryRelationDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_relations_for_entities",
           requestId,
@@ -3660,7 +3661,7 @@ const spindleApi: RuntimeSpindleAPI = {
         options?: { chunkId?: string | null; userId?: string },
       ): Promise<MemoryRelationDTO | null> {
         assertMutationAllowed("spindle.memories.relations.upsert()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_relations_upsert",
           requestId,
@@ -3678,7 +3679,7 @@ const spindleApi: RuntimeSpindleAPI = {
         chatId: string,
         options?: { tier?: number; userId?: string },
       ): Promise<MemoryConsolidationDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_consolidations_list",
           requestId,
@@ -3689,7 +3690,7 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as MemoryConsolidationDTO[];
       },
       async latestArc(chatId: string, userId?: string): Promise<MemoryConsolidationDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_consolidations_latest_arc",
           requestId,
@@ -3700,7 +3701,7 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async run(chatId: string, userId?: string): Promise<void> {
         assertMutationAllowed("spindle.memories.consolidations.run()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "memories_consolidations_run", requestId, chatId, userId });
       },
     },
@@ -3710,7 +3711,7 @@ const spindleApi: RuntimeSpindleAPI = {
         chatId: string,
         options?: { limit?: number; offset?: number; userId?: string },
       ): Promise<MemorySalienceDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_salience_get",
           requestId,
@@ -3725,41 +3726,41 @@ const spindleApi: RuntimeSpindleAPI = {
 
     vaults: {
       async list(userId?: string): Promise<VaultDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_list", requestId, userId });
         return result as VaultDTO[];
       },
       async get(vaultId: string, userId?: string): Promise<VaultWithContentsDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_get", requestId, vaultId, userId });
         return result as VaultWithContentsDTO | null;
       },
       async getChunks(vaultId: string, userId?: string): Promise<VaultChunkDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_get_chunks", requestId, vaultId, userId });
         return result as VaultChunkDTO[];
       },
       async create(input: VaultCreateDTO, userId?: string): Promise<VaultDTO> {
         assertMutationAllowed("spindle.memories.vaults.create()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_create", requestId, input, userId });
         return result as VaultDTO;
       },
       async rename(vaultId: string, name: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.memories.vaults.rename()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_rename", requestId, vaultId, name, userId });
         return result as boolean;
       },
       async delete(vaultId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.memories.vaults.delete()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_delete", requestId, vaultId, userId });
         return result as boolean;
       },
       async reindex(vaultId: string, userId?: string): Promise<VaultReindexResultDTO> {
         assertMutationAllowed("spindle.memories.vaults.reindex()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_vaults_reindex", requestId, vaultId, userId });
         return result as VaultReindexResultDTO;
       },
@@ -3767,19 +3768,19 @@ const spindleApi: RuntimeSpindleAPI = {
 
     links: {
       async list(chatId: string, userId?: string): Promise<ChatLinkDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_links_list", requestId, chatId, userId });
         return result as ChatLinkDTO[];
       },
       async attach(input: ChatLinkAttachDTO, userId?: string): Promise<ChatLinkDTO[]> {
         assertMutationAllowed("spindle.memories.links.attach()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_links_attach", requestId, input, userId });
         return result as ChatLinkDTO[];
       },
       async remove(chatId: string, linkId: string, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.memories.links.remove()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_links_remove",
           requestId,
@@ -3791,7 +3792,7 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async toggle(chatId: string, linkId: string, enabled: boolean, userId?: string): Promise<boolean> {
         assertMutationAllowed("spindle.memories.links.toggle()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_links_toggle",
           requestId,
@@ -3806,7 +3807,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
     chatMemory: {
       async listChunks(chatId: string, userId?: string): Promise<ChatChunkDTO[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_chat_chunks_list", requestId, chatId, userId });
         return result as ChatChunkDTO[];
       },
@@ -3814,7 +3815,7 @@ const spindleApi: RuntimeSpindleAPI = {
         chatId: string,
         options?: { topK?: number; userId?: string },
       ): Promise<ChatMemoryResultDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_chat_memory_get",
           requestId,
@@ -3829,7 +3830,7 @@ const spindleApi: RuntimeSpindleAPI = {
         options?: { force?: boolean; userId?: string },
       ): Promise<ChatMemoryWarmupResultDTO> {
         assertMutationAllowed("spindle.memories.chatMemory.warm()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_chat_memory_warm",
           requestId,
@@ -3841,19 +3842,19 @@ const spindleApi: RuntimeSpindleAPI = {
       },
       async invalidate(chatId: string, userId?: string): Promise<void> {
         assertMutationAllowed("spindle.memories.chatMemory.invalidate()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         await request({ type: "memories_chat_memory_invalidate", requestId, chatId, userId });
       },
     },
 
     stats: {
       async usage(chatId: string, userId?: string): Promise<CortexUsageStatsDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({ type: "memories_stats_usage", requestId, chatId, userId });
         return result as CortexUsageStatsDTO;
       },
       async ingestionStatus(chatId: string, userId?: string): Promise<CortexIngestionStatusDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_stats_ingestion_status",
           requestId,
@@ -3863,7 +3864,7 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as CortexIngestionStatusDTO | null;
       },
       async ingestionTelemetry(chatId: string, userId?: string): Promise<CortexIngestionTelemetryDTO> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "memories_stats_ingestion_telemetry",
           requestId,
@@ -3877,7 +3878,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   personas: {
     async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: PersonaDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "personas_list",
         requestId,
@@ -3888,45 +3889,45 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as { data: PersonaDTO[]; total: number };
     },
     async get(personaId: string, userId?: string): Promise<PersonaDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_get", requestId, personaId, userId });
       return result as PersonaDTO | null;
     },
     async getDefault(userId?: string): Promise<PersonaDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_get_default", requestId, userId });
       return result as PersonaDTO | null;
     },
     async getActive(userId?: string): Promise<PersonaDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_get_active", requestId, userId });
       return result as PersonaDTO | null;
     },
     async create(input: PersonaCreateDTO, userId?: string): Promise<PersonaDTO> {
       assertMutationAllowed("spindle.personas.create()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_create", requestId, input, userId });
       return result as PersonaDTO;
     },
     async update(personaId: string, input: PersonaUpdateDTO, userId?: string): Promise<PersonaDTO> {
       assertMutationAllowed("spindle.personas.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_update", requestId, personaId, input, userId });
       return result as PersonaDTO;
     },
     async delete(personaId: string, userId?: string): Promise<boolean> {
       assertMutationAllowed("spindle.personas.delete()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_delete", requestId, personaId, userId });
       return result as boolean;
     },
     async switchActive(personaId: string | null, userId?: string): Promise<void> {
       assertMutationAllowed("spindle.personas.switchActive()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "personas_switch", requestId, personaId, userId });
     },
     async getWorldBook(personaId: string, userId?: string): Promise<WorldBookDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "personas_get_world_book", requestId, personaId, userId });
       return result as WorldBookDTO | null;
     },
@@ -3934,18 +3935,18 @@ const spindleApi: RuntimeSpindleAPI = {
 
   global_addons: {
     async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: GlobalAddonDTO[]; total: number }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "global_addons_list", requestId, limit: options?.limit, offset: options?.offset, userId: options?.userId });
       return result as { data: GlobalAddonDTO[]; total: number };
     },
     async get(addonId: string, userId?: string): Promise<GlobalAddonDTO | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "global_addons_get", requestId, addonId, userId });
       return result as GlobalAddonDTO | null;
     },
     async update(addonId: string, input: GlobalAddonUpdateDTO, userId?: string): Promise<GlobalAddonDTO> {
       assertMutationAllowed("spindle.global_addons.update()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "global_addons_update", requestId, addonId, input, userId });
       return result as GlobalAddonDTO;
     },
@@ -3953,17 +3954,17 @@ const spindleApi: RuntimeSpindleAPI = {
 
   council: {
     async getSettings(options?: { userId?: string }): Promise<CouncilSettings> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "council_get_settings", requestId, userId: options?.userId });
       return result as CouncilSettings;
     },
     async getMembers(options?: { userId?: string }): Promise<CouncilMemberContext[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "council_get_members", requestId, userId: options?.userId });
       return result as CouncilMemberContext[];
     },
     async getAvailableLumiaItems(options?: { userId?: string }): Promise<LumiaItemDTO[]> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "council_get_available_lumia_items", requestId, userId: options?.userId });
       return result as LumiaItemDTO[];
     },
@@ -3971,7 +3972,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   dlc: {
     async getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "dlc_get_catalog", requestId, userId: options?.userId });
       return result as LumiaDlcCatalog;
     },
@@ -3980,7 +3981,7 @@ const spindleApi: RuntimeSpindleAPI = {
   mcp: {
     servers: {
       async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: SpindleMcpServerDTO[]; total: number }> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         const result = await request({
           type: "mcp_servers_list",
           requestId,
@@ -3991,27 +3992,27 @@ const spindleApi: RuntimeSpindleAPI = {
         return result as { data: SpindleMcpServerDTO[]; total: number };
       },
       async get(serverId: string, userId?: string): Promise<SpindleMcpServerDTO | null> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({ type: "mcp_servers_get", requestId, serverId, userId }) as SpindleMcpServerDTO | null;
       },
       async create(input: SpindleMcpServerCreateDTO, userId?: string): Promise<SpindleMcpServerDTO> {
         assertMutationAllowed("spindle.mcp.servers.create()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({ type: "mcp_servers_create", requestId, input, userId }) as SpindleMcpServerDTO;
       },
       async connect(serverId: string, userId?: string): Promise<McpServerStatus> {
         assertMutationAllowed("spindle.mcp.servers.connect()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({ type: "mcp_servers_connect", requestId, serverId, userId }) as McpServerStatus;
       },
       async status(serverId: string, userId?: string): Promise<McpServerStatus> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({ type: "mcp_servers_status", requestId, serverId, userId }) as McpServerStatus;
       },
     },
     tools: {
       async list(serverId: string, userId?: string): Promise<McpDiscoveredTool[]> {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({ type: "mcp_tools_list", requestId, serverId, userId }) as McpDiscoveredTool[];
       },
       async call(
@@ -4021,7 +4022,7 @@ const spindleApi: RuntimeSpindleAPI = {
         options?: SpindleMcpToolCallOptionsDTO,
       ): Promise<string> {
         assertMutationAllowed("spindle.mcp.tools.call()");
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await request({
           type: "mcp_tools_call",
           requestId,
@@ -4040,7 +4041,7 @@ const spindleApi: RuntimeSpindleAPI = {
       const scope = sharedRpcPermissionScope.getStore();
       if (scope) return [...scope.effectivePermissions];
 
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "permissions_get_granted", requestId });
       // Sync local cache with authoritative host response
       const perms = result as string[];
@@ -4087,7 +4088,7 @@ const spindleApi: RuntimeSpindleAPI = {
     },
     async read<T = unknown>(endpoint: string): Promise<T> {
       const normalized = assertValidSharedRpcEndpoint(endpoint);
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "rpc_pool_read", requestId, endpoint: normalized });
       return result as T;
     },
@@ -4101,19 +4102,19 @@ const spindleApi: RuntimeSpindleAPI = {
 
   liveActivities: {
     async getStatus(userId) {
-      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "status", userId }) as import("./live-activities-contract").LiveActivityStatus;
+      return await request({ type: "live_activity", requestId: uuidv4(), operation: "status", userId }) as import("./live-activities-contract").LiveActivityStatus;
     },
     async start(input, userId) {
       assertMutationAllowed("spindle.liveActivities.start()");
-      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "start", input, userId }) as import("./live-activities-contract").LiveActivityResult;
+      return await request({ type: "live_activity", requestId: uuidv4(), operation: "start", input, userId }) as import("./live-activities-contract").LiveActivityResult;
     },
     async update(id, input, userId) {
       assertMutationAllowed("spindle.liveActivities.update()");
-      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "update", id, input, userId }) as import("./live-activities-contract").LiveActivityResult;
+      return await request({ type: "live_activity", requestId: uuidv4(), operation: "update", id, input, userId }) as import("./live-activities-contract").LiveActivityResult;
     },
     async end(id, userId) {
       assertMutationAllowed("spindle.liveActivities.end()");
-      return await request({ type: "live_activity", requestId: crypto.randomUUID(), operation: "end", id, userId }) as import("./live-activities-contract").LiveActivityResult;
+      return await request({ type: "live_activity", requestId: uuidv4(), operation: "end", id, userId }) as import("./live-activities-contract").LiveActivityResult;
     },
   },
 
@@ -4123,7 +4124,7 @@ const spindleApi: RuntimeSpindleAPI = {
       userId?: string,
     ): Promise<{ sent: number }> {
       assertMutationAllowed("spindle.push.send()");
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "push_send",
         requestId,
@@ -4142,7 +4143,7 @@ const spindleApi: RuntimeSpindleAPI = {
       available: boolean;
       subscriptionCount: number;
     }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "push_get_status",
         requestId,
@@ -4159,7 +4160,7 @@ const spindleApi: RuntimeSpindleAPI = {
       scrape?: boolean;
       userId?: string;
     }): Promise<import("lumiverse-spindle-types").WebSearchResponseDTO> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "web_search_query",
         requestId,
@@ -4171,7 +4172,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as import("lumiverse-spindle-types").WebSearchResponseDTO;
     },
     async getSettings(userId?: string): Promise<import("lumiverse-spindle-types").WebSearchSettingsDTO> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "web_search_get_settings",
         requestId,
@@ -4188,7 +4189,7 @@ const spindleApi: RuntimeSpindleAPI = {
       placeholder?: string;
       userId?: string;
     }): Promise<{ text: string; cancelled: boolean }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "text_editor_open",
         requestId,
@@ -4210,7 +4211,7 @@ const spindleApi: RuntimeSpindleAPI = {
       template: string,
       options?: { chatId?: string; characterId?: string; userId?: string; commit?: boolean },
     ): Promise<{ text: string; diagnostics: Array<{ message: string; offset: number; length: number }> }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const commit = options?.commit ?? getActiveMacroInvocation()?.commit ?? true;
       const result = await request({
         type: "macros_resolve",
@@ -4227,7 +4228,7 @@ const spindleApi: RuntimeSpindleAPI = {
 
   users: {
     async isVisible(userId?: string): Promise<boolean> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "user_is_visible",
         requestId,
@@ -4236,7 +4237,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as boolean;
     },
     async getRole(userId?: string): Promise<SpindleUserRole> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "user_get_role",
         requestId,
@@ -4259,7 +4260,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return `/api/spindle-oauth/${manifest.identifier}/callback`;
     },
     async createState(): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       return request({
         type: "create_oauth_state",
         requestId,
@@ -4268,7 +4269,7 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   async cors(url, options) {
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     return request({
       type: "cors_request",
       requestId,
@@ -4336,7 +4337,7 @@ const spindleApi: RuntimeSpindleAPI = {
       heartbeatTimeoutMs?: number;
       replaceExisting?: boolean;
     }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "frontend_process_spawn",
         requestId,
@@ -4345,7 +4346,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return createFrontendProcessHandle(result as FrontendProcessInfo);
     },
     async list(filter?: { userId?: string; kind?: string; key?: string; state?: FrontendProcessState }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "frontend_process_list",
         requestId,
@@ -4354,7 +4355,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as FrontendProcessInfo[];
     },
     async get(processId: string) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "frontend_process_get", requestId, processId });
       return result as FrontendProcessInfo | null;
     },
@@ -4362,7 +4363,7 @@ const spindleApi: RuntimeSpindleAPI = {
       post({ type: "frontend_process_send", processId, payload, userId });
     },
     async stop(processId: string, options?: { userId?: string; reason?: string }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "frontend_process_stop",
         requestId,
@@ -4396,7 +4397,7 @@ const spindleApi: RuntimeSpindleAPI = {
       heartbeatTimeoutMs?: number;
       replaceExisting?: boolean;
     }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "backend_process_spawn",
         requestId,
@@ -4405,7 +4406,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return createBackendProcessHandle(result as BackendProcessInfo);
     },
     async list(filter?: { userId?: string; kind?: string; key?: string; state?: BackendProcessState }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "backend_process_list",
         requestId,
@@ -4414,7 +4415,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as BackendProcessInfo[];
     },
     async get(processId: string) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "backend_process_get", requestId, processId });
       return result as BackendProcessInfo | null;
     },
@@ -4422,7 +4423,7 @@ const spindleApi: RuntimeSpindleAPI = {
       post({ type: "backend_process_send", processId, payload, userId });
     },
     async stop(processId: string, options?: { userId?: string; reason?: string }) {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "backend_process_stop",
         requestId,
@@ -4472,7 +4473,7 @@ const spindleApi: RuntimeSpindleAPI = {
       source: "builtin" | "extension";
       extensionId?: string;
     }>> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ui_get_drawer_tabs", requestId, userId: options?.userId });
       return result as Array<{
         id: string;
@@ -4492,7 +4493,7 @@ const spindleApi: RuntimeSpindleAPI = {
       keywords: string[];
       role?: "admin" | "owner";
     }>> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "ui_get_settings_tabs", requestId, userId: options?.userId });
       return result as Array<{
         id: string;
@@ -4504,27 +4505,27 @@ const spindleApi: RuntimeSpindleAPI = {
       }>;
     },
     async openDrawerTab(tabId: string, options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "open_drawer_tab", tabId, userId: options?.userId });
     },
     async closeDrawer(options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "close_drawer", userId: options?.userId });
     },
     async openSettings(viewId?: string, options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "open_settings", viewId, userId: options?.userId });
     },
     async closeSettings(options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "close_settings", userId: options?.userId });
     },
     async openCommandPalette(options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "open_command_palette", userId: options?.userId });
     },
     async closeCommandPalette(options?: { userId?: string }): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({ type: "ui_navigate", requestId, action: "close_command_palette", userId: options?.userId });
     },
   },
@@ -4554,7 +4555,7 @@ const spindleApi: RuntimeSpindleAPI = {
       modalRequestId?: string;
       userId?: string;
     }): Promise<{ openRequestId: string; dismissedBy: "user" | "extension" | "cleanup" }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const modalRequestId = options.modalRequestId ?? requestId;
       const result = await request({
         type: "modal_open",
@@ -4570,7 +4571,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return { openRequestId: modalRequestId, ...(result as { dismissedBy: "user" | "extension" | "cleanup" }) };
     },
     async close(openRequestId: string, userId?: string): Promise<void> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       await request({
         type: "modal_close",
         requestId,
@@ -4586,7 +4587,7 @@ const spindleApi: RuntimeSpindleAPI = {
       cancelLabel?: string;
       userId?: string;
     }): Promise<{ confirmed: boolean }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "confirm_open",
         requestId,
@@ -4612,7 +4613,7 @@ const spindleApi: RuntimeSpindleAPI = {
       multiline?: boolean;
       userId?: string;
     }): Promise<{ value: string | null; cancelled: boolean }> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({
         type: "input_prompt_open",
         requestId,
@@ -4648,27 +4649,27 @@ const spindleApi: RuntimeSpindleAPI = {
 
   version: {
     async getBackend(): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "version_get_backend", requestId });
       return result as string;
     },
     async getFrontend(): Promise<string> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "version_get_frontend", requestId });
       return result as string;
     },
     async getCommit(): Promise<string | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "version_get_commit", requestId });
       return result as string | null;
     },
     async getBranch(): Promise<string | null> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "version_get_branch", requestId });
       return result as string | null;
     },
     async getInfo(): Promise<RuntimeLumiverseVersionInfo> {
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       const result = await request({ type: "version_get_info", requestId });
       return result as RuntimeLumiverseVersionInfo;
     },

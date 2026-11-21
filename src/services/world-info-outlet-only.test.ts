@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Tests for world-info "Outlet Only" position (8).
  *
@@ -22,9 +23,9 @@ import { resolveWorldInfoOutlets } from "./prompt-assembly.service";
 function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
   return {
     folder: "", tags: [],
-    id: overrides.id ?? crypto.randomUUID(),
+    id: overrides.id ?? uuidv4(),
     world_book_id: "book-a",
-    uid: overrides.uid ?? crypto.randomUUID(),
+    uid: overrides.uid ?? uuidv4(),
     outlet_name: null,
     wi_marker: null,
     wi_marker_side: null,

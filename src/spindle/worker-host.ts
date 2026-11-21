@@ -1690,7 +1690,7 @@ export class WorkerHost {
     contextMessages?: LlmMessage[]
   ): Promise<string> {
     if (!userId) return Promise.reject(new Error("Extension tool invocation requires authenticated user context"));
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
 
     // Defensive strip: never trust authentication-shaped metadata from tool
     // args. Even if model-controlled input leaks `__userId` or similar, keep
@@ -1742,7 +1742,7 @@ export class WorkerHost {
   sendOAuthCallback(
     params: Record<string, string>
   ): Promise<{ html?: string; message?: string }> {
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
 
     this.postToWorker({
       type: "oauth_callback",
@@ -1774,8 +1774,8 @@ export class WorkerHost {
     requesterExtensionId: string,
     effectivePermissions: readonly string[],
   ): Promise<unknown> {
-    const requestId = crypto.randomUUID();
-    const rpcPermissionScopeId = crypto.randomUUID();
+    const requestId = uuidv4();
+    const rpcPermissionScopeId = uuidv4();
     this.sharedRpcPermissionScopes.set(rpcPermissionScopeId, new Set(effectivePermissions));
 
     this.postToWorker({
@@ -3029,7 +3029,7 @@ export class WorkerHost {
         if (cached !== undefined) return cached;
 
         // Pull model (legacy): RPC to the worker and await response
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         return await new Promise<string>((resolvePromise) => {
           // Set up a one-time listener for the response
           const timeout = setTimeout(() => {
@@ -3183,7 +3183,7 @@ export class WorkerHost {
       required,
       handler: async (messages, context, signal) => {
         signal?.throwIfAborted();
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
 
         // Expose assembly-source membership explicitly on the DTO so extensions
         // can distinguish real chat turns and standalone World Info blocks
@@ -4541,7 +4541,7 @@ export class WorkerHost {
 
       const events = this.readTrackedEvents();
       events.push({
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         ts: new Date(now).toISOString(),
         eventName,
         level: options?.level || "info",
@@ -4778,7 +4778,7 @@ export class WorkerHost {
       timeoutMs: budgetMs,
       required,
       handler: async (context, signal) => {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         signal?.throwIfAborted();
         return new Promise((resolve, reject) => {
           const abort = () => {
@@ -4828,7 +4828,7 @@ export class WorkerHost {
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (ctx: MessageContentProcessorCtx) => {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
 
         this.postToWorker({
           type: "message_content_processor_request",
@@ -4882,7 +4882,7 @@ export class WorkerHost {
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (ctx: MacroInterceptorCtx) => {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
 
         this.postToWorker({
           type: "macro_interceptor_request",
@@ -4933,7 +4933,7 @@ export class WorkerHost {
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
       handler: async (ctx: WorldInfoInterceptorCtxDTO) => {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
 
         this.postToWorker({
           type: "world_info_interceptor_request",

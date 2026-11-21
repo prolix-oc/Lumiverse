@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, copyFileSync, chmodSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pendingRemoteSnapshot } from "../src/remote-instance";
+import { uuidv4 } from "../../src/utils/uuid";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -25,7 +26,7 @@ const main = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
 const auth = main.slice(main.indexOf("function connectRemoteInstance():"), main.indexOf("async function disconnectRemoteInstance()"));
 const executable = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(auth);
 function authorization(options: { local?: boolean; menu?: () => Promise<void>; invoke?: (command: string, args: unknown) => Promise<unknown> } = {}) {
-  const factory = new Function("invoke", "pendingRemoteSnapshot", "updateMenu", "persistRemoteIdentity", "alert", `
+  const factory = new Function("uuidv4", "invoke", "pendingRemoteSnapshot", "updateMenu", "persistRemoteIdentity", "alert", `
     let instanceConnection = { mode: "remote", origin: "https://example.com" };
     let remoteSnapshot = null, remoteAuthorizationId = null, remoteAuthorizationLastId = null, remoteAuthorizationLastOrigin = null, remoteAuthorizationTask = null;
     const frontendUrl = () => "https://example.com";
@@ -34,7 +35,7 @@ function authorization(options: { local?: boolean; menu?: () => Promise<void>; i
     return { connect: connectRemoteInstance, authorize: connectDesktopAuthorization, cancel: cancelRemoteAuthorization,
       snapshot: () => remoteSnapshot, id: () => remoteAuthorizationId };
   `);
-  return factory(options.invoke ?? (async () => { throw new Error("native launch failed"); }), pendingRemoteSnapshot,
+  return factory(uuidv4, options.invoke ?? (async () => { throw new Error("native launch failed"); }), pendingRemoteSnapshot,
     options.menu ?? (async () => {}), async () => {}, async () => {}) as {
       connect(): Promise<void>; authorize(origin: string): Promise<void>; cancel(): Promise<void>; snapshot(): ReturnType<typeof pendingRemoteSnapshot> | null; id(): string | null;
     };

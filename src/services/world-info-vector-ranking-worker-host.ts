@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import {
   type VectorWorldInfoRankingInput,
   type VectorWorldInfoRankingResult,
@@ -23,7 +24,7 @@ export function rankVectorWorldInfoCandidatesInWorker(
       return;
     }
 
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const worker = new Worker(
       new URL("./world-info-vector-ranking-worker.ts", import.meta.url).href,
       { type: "module" },

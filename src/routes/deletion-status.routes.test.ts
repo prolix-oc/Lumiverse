@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { Hono } from 'hono';
 import { closeDatabase, getDb, initDatabase } from '../db/connection';
@@ -14,7 +15,7 @@ beforeEach(async () => {
   const db = initDatabase(':memory:');
   db.exec(await Bun.file(new URL('../db/baseline.sql', import.meta.url)).text());
   db.exec(`INSERT INTO "user" (id, name, email) VALUES ('owner', 'Owner', 'owner@test'), ('other', 'Other', 'other@test')`);
-  id = crypto.randomUUID();
+  id = uuidv4();
   db.query("INSERT INTO images (id, user_id, filename, original_filename) VALUES (?, 'owner', 'missing.png', 'missing.png')").run(id);
 });
 afterEach(() => closeDatabase());

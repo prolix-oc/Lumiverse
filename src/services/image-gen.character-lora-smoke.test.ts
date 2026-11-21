@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * End-to-end smoke test: drive generateSceneBackground with a fake "swarmui"
  * provider that captures the outgoing request, and verify the character's
@@ -134,7 +135,7 @@ describe("character LoRA pipeline splice (SwarmUI)", () => {
     // 4. Create a chat for that character. Inserted directly because the
     //    full createChat flow expects extra ambient state (personas, presets,
     //    settings rows) we don't need for this test.
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     getDb()
       .query(
@@ -217,7 +218,7 @@ describe("character LoRA pipeline splice (SwarmUI)", () => {
       addToGallery: false,
     });
 
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     getDb()
       .query(
@@ -320,7 +321,7 @@ describe("character LoRA pipeline splice (SwarmUI)", () => {
       addToGallery: false,
     });
 
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     getDb()
       .query(

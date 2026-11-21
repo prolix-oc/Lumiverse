@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Database } from "bun:sqlite";
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from "../types/persona";
 import type { BulkPersonaUpdateInput } from "../services/personas.service";
@@ -27,7 +28,7 @@ function getPersona(db: Database, userId: string, id: string): Persona | null {
 }
 
 function createPersona(db: Database, changed: Persona[], userId: string, input: CreatePersonaInput): Persona {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   db.transaction(() => {
@@ -237,7 +238,7 @@ function duplicatePersona(db: Database, changed: Persona[], userId: string, id: 
   const existing = getPersona(db, userId, id);
   if (!existing) return null;
 
-  const newId = crypto.randomUUID();
+  const newId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   db

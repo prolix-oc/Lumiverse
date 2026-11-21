@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { buildPushHTTPRequest } from "@pushforge/builder";
 import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
@@ -117,7 +118,7 @@ export function createIOSDestination(userId: string, input: CreateIOSPushDestina
     const existing = getDb().query(`SELECT id FROM ios_push_destinations
       WHERE user_id = ? AND device_id = ? AND bundle_id = ? AND environment = ?`)
       .get(userId, input.deviceId, input.bundleId, input.environment) as { id: string } | null;
-    const id = existing?.id || crypto.randomUUID();
+    const id = existing?.id || uuidv4();
     getDb().query(`INSERT INTO ios_push_destinations
       (id, user_id, device_id, device_token, bundle_id, environment, server_origin, label, user_agent, created_at, updated_at, registered_at,
         delivery_mode, relay_credential, encryption_key, encryption_key_id)
@@ -160,7 +161,7 @@ export function createDesktopDestination(
     SELECT id, created_at FROM desktop_notification_destinations
     WHERE user_id = ? AND device_id = ?
   `).get(userId, deviceId) as { id: string; created_at: number } | null;
-  const id = existing?.id ?? crypto.randomUUID();
+  const id = existing?.id ?? uuidv4();
   const label = input.label?.trim().slice(0, 100) || "Lumiverse Desktop";
   const platform = input.platform?.trim().slice(0, 80) || "";
   const userAgent = input.userAgent?.trim().slice(0, 500) || "";
@@ -233,7 +234,7 @@ export function createSubscription(
   userId: string,
   input: CreatePushSubscriptionInput
 ): PushSubscriptionRecord {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   getDb()

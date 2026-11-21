@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 // Streaming user-data import.
 //
 // Reads a .lvbak (ZIP) archive entry-by-entry, validates each entry, and
@@ -217,7 +218,7 @@ export function isUserImportRunning(userId: string): boolean {
  */
 export function reserveImportUpload(userId: string): string | null {
   if (isUserImportRunning(userId) || globalImportSlot !== null) return null;
-  const jobId = crypto.randomUUID();
+  const jobId = uuidv4();
   USER_UPLOAD_RESERVATIONS.set(userId, jobId);
   UPLOAD_ABORTS.set(jobId, new AbortController());
   globalImportSlot = jobId;
@@ -325,7 +326,7 @@ export async function persistUploadedArchive(
   userId: string,
   body: ReadableStream<Uint8Array>,
   declaredSize: number | null,
-  jobId: string = crypto.randomUUID(),
+  jobId: string = uuidv4(),
   signal?: AbortSignal,
 ): Promise<{ path: string; jobId: string }> {
   signal?.throwIfAborted();

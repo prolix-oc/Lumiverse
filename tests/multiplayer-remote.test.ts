@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Host-side remote attestation: the offline verification of an Identity-Server
  * "relay-direct" token. The server mints it signed with the room secret the
@@ -28,7 +29,7 @@ async function mintDirect(roomId: string, memberId: string, secret: Uint8Array, 
     mid: memberId,
     iat: now,
     exp: now + ttl,
-    jti: crypto.randomUUID(),
+    jti: uuidv4(),
   };
   const si = `${Buffer.from(JSON.stringify(header)).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   const k = await crypto.subtle.importKey("raw", secret as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -38,7 +39,7 @@ async function mintDirect(roomId: string, memberId: string, secret: Uint8Array, 
 
 describe("identity server attestation (host side)", () => {
   test("accepts a server-minted direct token for the room", async () => {
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const secret = await deriveRoomSecret(roomId); // == the secret the host registered
     const token = await mintDirect(roomId, "member-1", secret);
 
@@ -51,35 +52,35 @@ describe("identity server attestation (host side)", () => {
   });
 
   test("room-secret derivation is deterministic + room-scoped", async () => {
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const a = await deriveRoomSecret(roomId);
     const b = await deriveRoomSecret(roomId);
-    const other = await deriveRoomSecret(crypto.randomUUID());
+    const other = await deriveRoomSecret(uuidv4());
     expect(Buffer.from(a).toString("hex")).toBe(Buffer.from(b).toString("hex"));
     expect(Buffer.from(a).toString("hex")).not.toBe(Buffer.from(other).toString("hex"));
   });
 
   test("rejects a token signed with the wrong secret", async () => {
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const token = await mintDirect(roomId, "m", crypto.getRandomValues(new Uint8Array(32)));
     expect(await identityServerAttestationValidator.tryValidate({ roomToken: token }, roomId)).toBeNull();
   });
 
   test("rejects a token for a different room", async () => {
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const token = await mintDirect(roomId, "m", await deriveRoomSecret(roomId));
-    expect(await identityServerAttestationValidator.tryValidate({ roomToken: token }, crypto.randomUUID())).toBeNull();
+    expect(await identityServerAttestationValidator.tryValidate({ roomToken: token }, uuidv4())).toBeNull();
   });
 
   test("rejects an expired token", async () => {
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const token = await mintDirect(roomId, "m", await deriveRoomSecret(roomId), -5);
     expect(await identityServerAttestationValidator.tryValidate({ roomToken: token }, roomId)).toBeNull();
   });
 
   test("ignores a Phase-1 HMAC room token (different type)", async () => {
     // A non-direct token must not be accepted by the attestation validator.
-    const roomId = crypto.randomUUID();
+    const roomId = uuidv4();
     const secret = await deriveRoomSecret(roomId);
     // typ:"host" instead of relay-direct
     const now = Math.floor(Date.now() / 1000);

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -65,7 +66,7 @@ export async function stageClMigrationBundle(options: {
   if (options.sourceId !== undefined && !/^[A-Za-z0-9._:-]{1,200}$/.test(options.sourceId)) {
     throw new ClMigrationError(400, "invalid_source", "sourceId must contain 1 to 200 letters, numbers, dots, underscores, colons, or hyphens");
   }
-  const jobId = crypto.randomUUID();
+  const jobId = uuidv4();
   const root = rootFor(options.userId, jobId);
   activeUploads.add(options.userId);
   try {
@@ -424,7 +425,7 @@ async function importBook(userId: string, payload: any, options: Parameters<type
     AND NOT EXISTS (SELECT 1 FROM cl_migration_items i WHERE i.user_id = w.user_id AND i.destination_id = w.id)`)
     .all(userId, provenance.sourceId as string, provenance.sourceKey as string) as Array<{ id: string }>;
   for (const row of abandoned) await deleteWorldBook(userId, row.id);
-  const attemptId = crypto.randomUUID();
+  const attemptId = uuidv4();
   try {
     return await importWorldBookBulk(userId, payload, { ...options, metadata: { ...options?.metadata, character_library: { ...provenance, attemptId } } });
   } catch (error) {

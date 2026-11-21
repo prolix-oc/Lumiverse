@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Illarin linked-instance routes (authenticated; mounted at /api/v1/illarin).
  *
@@ -13,7 +14,6 @@
  */
 
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
 import { validateHost, SSRFError } from "../utils/safe-fetch";
 import * as svc from "../services/illarin-instance.service";
 import { buildDeclaration } from "../illarin/declaration";
@@ -147,7 +147,7 @@ illarinRoutes.post("/link/browser", async (c) => {
     return c.json({ error: err instanceof RangeError ? err.message : "invalid declaration" }, 400);
   }
 
-  const linkId = randomUUID();
+  const linkId = uuidv4();
   const session: PendingBrowserLink = {
     userId,
     status: "pending",

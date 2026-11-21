@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,12 +34,12 @@ afterEach(async () => {
 });
 
 test("recovers a killed process, scopes discovery to its owner, and resumes without another upload", async () => {
-  const jobId = crypto.randomUUID();
+  const jobId = uuidv4();
   const archiveDir = join(directory, "imports", userId, jobId);
   mkdirSync(archiveDir, { recursive: true });
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value) + "\n");
   writeFileSync(join(archiveDir, "archive.lvbak"), zipSync({
-    "manifest.json": encode({ schemaVersion: 1, producer: "lumiverse", archiveId: crypto.randomUUID(), exportedAt: 0,
+    "manifest.json": encode({ schemaVersion: 1, producer: "lumiverse", archiveId: uuidv4(), exportedAt: 0,
       includeVectors: false, embeddingConfig: { provider: null, model: null, dimension: null }, counts: {}, missingFiles: [] }),
     "database/characters.ndjson": encode({ id: "recovered-character", name: "Recovered", user_id: "source" }),
     "database/settings.ndjson": encode({ key: "recovered_setting", value: "true", user_id: "source" }),

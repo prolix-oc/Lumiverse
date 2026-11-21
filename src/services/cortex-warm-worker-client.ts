@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Host-side client for the cortex warm-cache worker.
  *
@@ -218,7 +219,7 @@ function runWorkerJob(job: CortexWarmJob, signal: AbortSignal): Promise<CortexWa
     };
 
     const item: QueueItem = {
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       chatId: job.chatId,
       job,
       resolve: (result) => finish(() => resolve(result)),

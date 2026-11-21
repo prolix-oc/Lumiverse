@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, timingSafeEqual } from "node:crypto";
 import sharp from "sharp";
 import type {
@@ -137,13 +138,13 @@ export class DesktopCaptureBroker {
     if (value.approvalStatus !== undefined && typeof value.approvalStatus !== "boolean") throw new DesktopCaptureError("INVALID_DEVICE");
     if (value.recordingControl !== undefined && typeof value.recordingControl !== "boolean") throw new DesktopCaptureError("INVALID_DEVICE");
     const hash = value.deviceKey ? createHash("sha256").update(JSON.stringify([userId, value.deviceKey])).digest("hex") : null;
-    const id = hash ? `${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}` : crypto.randomUUID();
+    const id = hash ? `${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}` : uuidv4();
     // Replacement rotates the secret lease and cancels old work; stable identity cannot revive it.
     if (this.devices.get(id)?.userId === userId) this.disconnect(id);
     if (this.devices.size >= 32 || [...this.devices.values()].filter((device) => device.userId === userId).length >= 4) {
       throw new DesktopCaptureError("DEVICE_LIMIT", 429);
     }
-    const token = crypto.randomUUID() + crypto.randomUUID();
+    const token = uuidv4() + uuidv4();
     const info: DesktopCaptureDevice = {
       id, name: value.name.trim(), platform: value.platform,
       ...(hash ? { stableIdentity: true } : {}),
@@ -204,7 +205,7 @@ export class DesktopCaptureBroker {
     this.requireDisplay(device, input.displayId);
     if (!device.info.approvalStatusSupported) return Promise.resolve({ deviceId: input.deviceId, kind: input.kind, approval: "unknown", source: "unknown", checkedAt: this.now() });
     if (this.inspections.size >= 32 || device.queue.length >= 16 || [...this.inspections.values()].some(query => query.owner.runtimeId === owner.runtimeId && query.owner.userId === owner.userId)) throw new DesktopCaptureError("CAPTURE_BUSY", 429);
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const command: DesktopCaptureCommand = { type: "approval_status", requestId,
       extension: { id: owner.extensionId, identifier: owner.identifier, name: owner.name, ...(owner.approvalRevision ? { approvalRevision: owner.approvalRevision } : {}) },
       kind: input.kind, ...(input.displayId ? { displayId: input.displayId } : {}), destination: { ...destination }, expiresAt: this.now() + 10_000 };
@@ -272,7 +273,7 @@ export class DesktopCaptureBroker {
       for (const [key, time] of this.lastRequest) if (this.now() - time >= DESKTOP_CAPTURE_LIMITS.cooldownMs) this.lastRequest.delete(key);
     }
     this.lastRequest.set(cooldownKey, this.now());
-    const requestId = crypto.randomUUID();
+    const requestId = uuidv4();
     const timeoutMs = this.options.requestTimeoutMs ?? DESKTOP_CAPTURE_LIMITS.requestTimeoutMs;
     const command: DesktopCaptureCommand = {
       type: "capture", requestId, extension: { id: owner.extensionId, identifier: owner.identifier, name: owner.name, ...(owner.approvalRevision ? { approvalRevision: owner.approvalRevision } : {}) },
@@ -384,7 +385,7 @@ export class DesktopCaptureBroker {
       }
       this.authenticate(userId, deviceId, token);
       if (this.retainedBytes + data.byteLength > DESKTOP_CAPTURE_LIMITS.totalBytes) throw new DesktopCaptureError("CAPTURE_MEMORY_LIMIT", 429);
-      const assetId = crypto.randomUUID();
+      const assetId = uuidv4();
       const ref: CapturedMediaRef = {
         assetId, kind: pending.input.kind, mimeType: media.mimeType, width: media.width, height: media.height,
         ...(pending.input.kind === "video" ? { durationSeconds: media.durationSeconds } : {}),

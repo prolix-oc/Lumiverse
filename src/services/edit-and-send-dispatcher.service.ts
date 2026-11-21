@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { EditAndSendContext } from "../llm/types";
@@ -103,7 +104,7 @@ const MAX_ATTEMPTS = 1;
 /** Slack (seconds) absorbing clock skew between outbox (ms) and
  *  messages.created_at (unixepoch seconds) during crash verification. */
 const RECOVERY_TIMESTAMP_SLACK_SECONDS = 5;
-const INSTANCE_ID = `eas-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+const INSTANCE_ID = `eas-${process.pid}-${uuidv4().slice(0, 8)}`;
 
 let startGenerationFn: StartEditAndSendGenerationFn | null = null;
 let stopGenerationFn: StopEditAndSendGenerationFn | null = null;

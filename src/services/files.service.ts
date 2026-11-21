@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { env } from "../env";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { unlink } from "node:fs/promises";
@@ -12,7 +13,7 @@ export async function saveUpload(file: File, userId: string, subdir: string = "u
   ensureDir(dir);
 
   const ext = extname(file.name) || ".bin";
-  const filename = `${crypto.randomUUID()}${ext}`;
+  const filename = `${uuidv4()}${ext}`;
   const filepath = join(dir, filename);
 
   await Bun.write(filepath, file);
@@ -25,7 +26,7 @@ export async function saveAvatar(file: File): Promise<string> {
   ensureDir(dir);
 
   const ext = extname(file.name) || ".bin";
-  const filename = `${crypto.randomUUID()}${ext}`;
+  const filename = `${uuidv4()}${ext}`;
   const filepath = join(dir, filename);
 
   await Bun.write(filepath, file);

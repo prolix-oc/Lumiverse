@@ -1,4 +1,5 @@
-import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
+import { uuidv4 } from "../utils/uuid";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -19,7 +20,7 @@ export function hasConfiguredOwner(dataDir: string): boolean {
 }
 
 export function writeBundleSettings(path: string, settings: BundledServerSettings): void {
-  const temporary = `${path}.${randomUUID()}.tmp`;
+  const temporary = `${path}.${uuidv4()}.tmp`;
   try {
     writeFileSync(temporary, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
     renameSync(temporary, path);

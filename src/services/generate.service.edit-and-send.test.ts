@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { Message } from "../types/message";
 import type { Chat } from "../types/chat";
@@ -686,7 +687,7 @@ describe("startGeneration edit-and-send async guards", () => {
       messageId: userMessageId,
       content: "Committed user text",
       expectedVersion: committedRevision,
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       branchChatOnEditAndSend: false,
     });
     if (committed.status !== "ok") throw new Error(committed.error);

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import {
   decodeThemePackArchive,
   encodeThemePackArchive,
@@ -32,7 +33,7 @@ export function createThemeAuthoringRuntime(
       } else wire = input;
       const result = await request({
         type: 'theme_authoring',
-        requestId: crypto.randomUUID(),
+        requestId: uuidv4(),
         input: wire,
         userId,
       });

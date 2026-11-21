@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { uuidv4 } from "../../../utils/uuid";
+import { createHash } from "node:crypto";
 import { DataType } from "@zilliz/milvus2-sdk-node";
 import { cosineSimilarity } from "../addressing";
 import type { VectorRow } from "../types";
@@ -72,7 +73,7 @@ export async function benchmarkMilvus(
   assert(rows.length > 0, "Benchmark corpus is empty.");
   const dimension = rows[0].vector.length;
   assert(dimension > 0 && rows.every((row) => row.vector.length === dimension && row.vector.every(Number.isFinite)), "Benchmark vectors have invalid dimensions/values.");
-  const name = `lumiverse_benchmark_${randomUUID().replaceAll("-", "")}`;
+  const name = `lumiverse_benchmark_${uuidv4().replaceAll("-", "")}`;
   const description = `Lumiverse isolated benchmark ${name}`;
   const request = milvusTextSchema(name, dimension, description, options.indexType, options.indexParams);
   if (!options.text) {

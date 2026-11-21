@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Lumiverse SQLite mmap_size Benchmark
  *
@@ -183,7 +184,7 @@ function runOnce(dbPath: string, mmapBytes: number): RunResult {
   db.run("BEGIN");
   const insChat = db.query("INSERT INTO chats (id, title, created_at) VALUES (?, ?, ?)");
   for (let i = 0; i < CHATS; i++) {
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     chatIds.push(id);
     insChat.run(id, `chat ${i}`, 1748000000 + i);
   }
@@ -204,7 +205,7 @@ function runOnce(dbPath: string, mmapBytes: number): RunResult {
       db.run("BEGIN");
       inTxn = true;
     }
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     if (i % stride === 0) sampleIds.push(id);
     insMsg.run(
       id,

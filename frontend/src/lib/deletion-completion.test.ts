@@ -1,8 +1,9 @@
+import { uuidv4 } from "./uuid";
 import { describe, expect, mock, test } from 'bun:test'
 import { completeDeletion, DeletionUnconfirmedError } from './deletion-completion'
 import { notifyDeletionOperation, notifyDeletionReconnect, notifyImageDeleted, onImageDeleted, type DeletionOperation } from './deletion-events'
 
-function operation(status: DeletionOperation['status'], id = crypto.randomUUID()): DeletionOperation {
+function operation(status: DeletionOperation['status'], id = uuidv4()): DeletionOperation {
   return { operationId: id, entity: 'character', entityId: 'character', status, createdAt: 1, updatedAt: 2 }
 }
 
@@ -67,7 +68,7 @@ describe('deletion confirmation', () => {
     const listener = mock(() => {})
     const stop = onImageDeleted(listener)
     try {
-      const id = crypto.randomUUID()
+      const id = uuidv4()
       notifyImageDeleted(id)
       notifyImageDeleted(id)
       expect(listener).toHaveBeenCalledTimes(1)

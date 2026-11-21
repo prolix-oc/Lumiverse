@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { findMatchingGreeting } from "../shared/greeting-match";
 import { applyCharxModulesAndAssets } from "./charx-import.service";
 import { readDatabaseRows } from "../db/queries";
@@ -474,7 +475,7 @@ function normalizeGreetingTitle(value: unknown): string | null {
 function generateGreetingId(usedIds: Set<string>): string {
   let candidate = "";
   do {
-    candidate = `g_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    candidate = `g_${uuidv4().replace(/-/g, "").slice(0, 12)}`;
   } while (usedIds.has(candidate));
   return candidate;
 }
@@ -955,7 +956,7 @@ export async function applySelectiveCardUpdate(
       ? [...latest.extensions.alternate_avatars]
       : [];
     currentAltAvatars.push({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       image_id: img.id,
       label: cardInput.name?.trim() ? `${cardInput.name.trim()} (Imported)` : "Imported",
     });

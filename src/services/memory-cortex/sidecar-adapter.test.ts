@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../../db/connection";
 import * as connections from "../connections.service";
@@ -82,7 +83,7 @@ function truncatedResponse(body: any): Response {
 
 describe("Cortex thinking responses", () => {
   test("surfaces thinking and streamed tool arguments before EOF while retaining the full result", async () => {
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const tracker = new CortexActivityTracker(userId, chatId, "rebuild");
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
@@ -121,7 +122,7 @@ describe("Cortex thinking responses", () => {
   });
 
   test("aborting streamed partial JSON rejects the result and clears request activity", async () => {
-    const chatId = crypto.randomUUID();
+    const chatId = uuidv4();
     const tracker = new CortexActivityTracker(userId, chatId, "ingestion");
     const abort = new AbortController();
     let fetched!: () => void;

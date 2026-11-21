@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../src/utils/uuid";
 /**
  * Lumiverse Desktop — experimental Tauri-powered integrated browser and tray.
  *
@@ -853,7 +854,7 @@ async function cancelRemoteAuthorization(): Promise<void> {
 }
 
 async function authorizeRemoteInstance(origin: string): Promise<void> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   remoteAuthorizationId = id;
   remoteAuthorizationLastId = id;
   remoteAuthorizationLastOrigin = origin;

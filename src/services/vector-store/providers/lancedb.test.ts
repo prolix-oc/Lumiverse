@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../../utils/uuid";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -85,7 +86,7 @@ describe("lancedb empty index directory cleanup", () => {
   });
 
   test("treats a missing index root as already clean", () => {
-    const root = join(tmpdir(), `lumiverse-lancedb-missing-index-sweep-${crypto.randomUUID()}`);
+    const root = join(tmpdir(), `lumiverse-lancedb-missing-index-sweep-${uuidv4()}`);
     expect(sweepEmptyIndexDirs(root, 0, Date.now())).toBe(0);
   });
 });

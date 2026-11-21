@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Host-issued room access tokens for multiplayer peers.
  *
@@ -125,7 +126,7 @@ export async function mintRoomToken(opts: {
     ...(opts.displayName ? { name: opts.displayName } : {}),
     iat: now,
     exp: now + ttl,
-    jti: crypto.randomUUID(),
+    jti: uuidv4(),
   };
 
   const signingInput = `${b64urlFromString(JSON.stringify(header))}.${b64urlFromString(JSON.stringify(payload))}`;

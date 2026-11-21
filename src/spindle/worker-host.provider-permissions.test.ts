@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,7 +88,7 @@ function seedExtension(
     db.run(
       `INSERT INTO extension_grants (id, extension_id, permission, scope)
        VALUES (?, (SELECT id FROM extensions WHERE identifier = ?), ?, ?)`,
-      [crypto.randomUUID(), identifier, grant.permission, grant.scope],
+      [uuidv4(), identifier, grant.permission, grant.scope],
     );
   }
 }

@@ -6,7 +6,7 @@
 const state = await spindle.runtimeState.read(chatId, characterId, userId)
 const result = await spindle.runtimeState.write(chatId, {
   kind: 'chat.variables', values: { score: '10' },
-}, userId, crypto.randomUUID())
+}, userId, await spindle.uuid.v4())
 ```
 
 Reads require `characters`, `chats`, `chat_mutation`, `personas`, and `world_books`. The host checks the authenticated extension scope and chat owner before accessing data. Operator extensions must supply a user; user installations default to their owner.

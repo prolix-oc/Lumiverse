@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Portable regression coverage for world-info activation and merge behavior.
  * Vector retrieval is represented with synthetic candidates so the suite has
@@ -33,9 +34,9 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
   const filler = `entry-${__counter} — ${"abcdefghij".repeat(__counter % 7 + 3)} ${__counter * 7919}`;
   return {
     folder: "", tags: [],
-    id: overrides.id ?? crypto.randomUUID(),
+    id: overrides.id ?? uuidv4(),
     world_book_id: "book-a",
-    uid: overrides.uid ?? crypto.randomUUID(),
+    uid: overrides.uid ?? uuidv4(),
     outlet_name: null,
     wi_marker: null,
     wi_marker_side: null,
@@ -83,7 +84,7 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
 
 function makeMessage(content: string): Message {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     chat_id: "chat-a",
     index_in_chat: 0,
     is_user: true,
@@ -132,7 +133,7 @@ function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActiv
 
 describe("world info RNG injection", () => {
   test("probability rolls use the injected random source", () => {
-    const prefix = crypto.randomUUID();
+    const prefix = uuidv4();
     const accepted = makeEntry({
       id: `${prefix}-accepted`,
       uid: `${prefix}-accepted`,
@@ -169,7 +170,7 @@ describe("world info RNG injection", () => {
   });
 
   test("injected activation neither advances global RNG nor pollutes its result cache", () => {
-    const prefix = crypto.randomUUID();
+    const prefix = uuidv4();
     const probabilistic = makeEntry({
       id: `${prefix}-entry`,
       uid: `${prefix}-entry`,
@@ -223,7 +224,7 @@ describe("world info RNG injection", () => {
   });
 
   test("raw activation and merge do not advance global RNG when given an isolated source", () => {
-    const prefix = crypto.randomUUID();
+    const prefix = uuidv4();
     const keyword = makeEntry({
       id: `${prefix}-keyword`,
       uid: `${prefix}-keyword`,
@@ -334,9 +335,9 @@ describe("finalizeActivatedWorldInfoEntries", () => {
 
 describe("activateWorldInfo recursion settings", () => {
   test("activation cache invalidates on same-length keyword and message content changes", () => {
-    const entryId = crypto.randomUUID();
-    const uid = crypto.randomUUID();
-    const messageId = crypto.randomUUID();
+    const entryId = uuidv4();
+    const uid = uuidv4();
+    const messageId = uuidv4();
 
     const first = makeEntry({
       id: entryId,
@@ -697,8 +698,8 @@ describe("mergeActivatedWorldInfoEntries — vector and keyword competition", ()
 describe("prompt-local world-info selection content", () => {
   test("filters a raw constant whose selection view is empty without caching the empty result", () => {
     const entry = makeEntry({
-      id: crypto.randomUUID(),
-      uid: crypto.randomUUID(),
+      id: uuidv4(),
+      uid: uuidv4(),
       constant: true,
       content: "{{runtime condition}}large hidden payload{{/runtime condition}}",
       vectorized: false,

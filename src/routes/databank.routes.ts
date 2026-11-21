@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import * as databank from "../services/databank";
 import { getChat, getChatAsync } from "../services/chats.service";
@@ -198,7 +199,7 @@ app.post("/:id/documents/scrape", async (c) => {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     const ext = scraped.sourceType === "wiki" ? ".md" : ".txt";
-    const filename = `${crypto.randomUUID()}${ext}`;
+    const filename = `${uuidv4()}${ext}`;
     const filepath = join(dir, filename);
 
     // Format with title header
@@ -314,7 +315,7 @@ app.put("/:id/documents/:docId/content", async (c) => {
   // content endpoint returns the parsed view, so edits are already plain text).
   const dir = join(env.dataDir, "databank", userId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const newFilename = `${crypto.randomUUID()}.md`;
+  const newFilename = `${uuidv4()}.md`;
   const newFilepath = join(dir, newFilename);
   await Bun.write(newFilepath, content);
 

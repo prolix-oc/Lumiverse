@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { extname, join, resolve, sep } from "path";
 import { env } from "../env";
@@ -270,7 +271,7 @@ export async function createThemeAsset(userId: string, input: CreateThemeAssetIn
   const storageType = resolveStorageType(mimeType);
   const desiredSlug = normalizeSlug(input.slug || input.file.name, input.file.name);
   const slug = nextAvailableSlug(userId, bundleId, desiredSlug);
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const tags = normalizeTags(input.tags);
   const metadata = input.metadata && typeof input.metadata === "object" ? input.metadata : {};

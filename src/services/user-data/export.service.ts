@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 // Streaming user-data export.
 //
 // Produces a single ZIP archive (.lvbak) that contains a manifest, an NDJSON
@@ -93,7 +94,7 @@ function externalizeSettingValue(
   if (Buffer.byteLength(value, "utf8") > MAX_SETTING_VALUE_FILE_BYTES) {
     throw new Error(`Setting ${JSON.stringify(row.key)} exceeds the portable settings value limit`);
   }
-  const valueFile = `settings-values/${crypto.randomUUID()}.json`;
+  const valueFile = `settings-values/${uuidv4()}.json`;
   const source = Readable.from((async function* () {
     let yieldedBytes = 0;
     for (let start = 0; start < value.length;) {
@@ -581,7 +582,7 @@ async function runExport(
   controller: ReadableStreamDefaultController<Uint8Array>,
 ): Promise<void> {
   const { userId, includeVectors, signal } = opts;
-  const archiveId = opts.archiveId || crypto.randomUUID();
+  const archiveId = opts.archiveId || uuidv4();
   const counts: Record<string, number> = {};
   const missingFiles: string[] = [];
   const secretsExported: string[] = [];

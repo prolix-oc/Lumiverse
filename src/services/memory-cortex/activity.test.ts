@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { expect, jest, spyOn, test } from "bun:test";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
@@ -10,7 +11,7 @@ function latch() {
 }
 
 test("reports queued work before it runs and tracks simultaneous batch phases independently", async () => {
-  const chatId = crypto.randomUUID();
+  const chatId = uuidv4();
   const emitted: any[] = [];
   const off = eventBus.on(EventType.CORTEX_ACTIVITY, (event) => { if (event.payload.chatId === chatId) emitted.push(event.payload); });
   const tracker = new CortexActivityTracker("user", chatId, "rebuild");
@@ -56,7 +57,7 @@ test("reports queued work before it runs and tracks simultaneous batch phases in
 });
 
 test("failed requests and batches cannot leave ghost activity or count as completed batches", async () => {
-  const chatId = crypto.randomUUID();
+  const chatId = uuidv4();
   const tracker = new CortexActivityTracker("user", chatId, "ingestion");
   try {
     await expect(tracker.run(() => withCortexBatch(1, 1, async () => {
@@ -70,7 +71,7 @@ test("failed requests and batches cannot leave ghost activity or count as comple
 
 test("token activity is throttled without broadcasting model content", async () => {
   jest.useFakeTimers();
-  const chatId = crypto.randomUUID();
+  const chatId = uuidv4();
   // Observe publication directly: in-process event listeners use a separate
   // timer queue, which must not determine the throttle assertion's timing.
   const emit = spyOn(eventBus, "emit");
@@ -103,7 +104,7 @@ test("token activity is throttled without broadcasting model content", async () 
 });
 
 test("completed ingestion history stays bounded during a burst of work", () => {
-  const chatId = crypto.randomUUID();
+  const chatId = uuidv4();
   const active = new CortexActivityTracker("user", chatId, "rebuild");
   try {
     for (let i = 0; i < 100; i++) new CortexActivityTracker("user", chatId, "ingestion").finish();

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { describe, expect, test } from "bun:test";
 import type { Message } from "../types/message";
 import type { WorldBookEntry } from "../types/world-book";
@@ -8,7 +9,7 @@ import {
 } from "./world-info-activation.service";
 
 function entry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   return {
     folder: "", tags: [],
     id,
@@ -61,7 +62,7 @@ function entry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
 
 function message(content: () => string): Message {
   const value = {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     chat_id: "chat",
     index_in_chat: 0,
     is_user: true,

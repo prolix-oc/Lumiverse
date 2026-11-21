@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import { isDatabaseUnavailable } from "../db/execution";
 import * as svc from "../services/characters.service";
@@ -209,7 +210,7 @@ async function importGalleryFromUrls(userId: string, characterId: string, urls: 
       const buf = await res.arrayBuffer();
       const contentType = res.headers.get("content-type") || "image/webp";
       const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
-      return new File([buf], `remote_gallery_${crypto.randomUUID()}.${ext}`, { type: contentType });
+      return new File([buf], `remote_gallery_${uuidv4()}.${ext}`, { type: contentType });
     } catch {
       return null;
     }
@@ -931,7 +932,7 @@ app.get("/deletions/:operationId", async (c) => {
 
 app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  const operationId = c.req.query("operation_id") ?? crypto.randomUUID();
+  const operationId = c.req.query("operation_id") ?? uuidv4();
   if (!/^[\w-]{1,128}$/.test(operationId)) return c.json({ error: "Invalid operation ID" }, 400);
   try {
     const operation = await svc.requestCharacterDeletionAsync(userId, c.req.param("id"), operationId);

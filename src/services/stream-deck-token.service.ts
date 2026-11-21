@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
 
@@ -69,7 +70,7 @@ export function createToken(userId: string, input: { name?: string; scopes?: unk
   if (expiresAt !== null && expiresAt <= now) throw new Error("Expiration must be in the future");
 
   const token = `lvsd_${randomBytes(32).toString("base64url")}`;
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   getDb().query(`
     INSERT INTO stream_deck_tokens
       (id, user_id, name, token_hash, token_prefix, scopes, created_at, expires_at)

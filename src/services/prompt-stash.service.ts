@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { PresetRevisionConflictError } from "../types/preset";
 import { executeDatabaseOperation } from "../db/execution";
 import { mutatePresetWithDb, type PresetMutationResult } from "../db/preset-operations";
@@ -117,7 +118,7 @@ function emitPresetChanges(userId: string, presetIds: string[]): void {
 export function blockFromStash(entry: StashedPromptBlock): PromptBlock {
   return {
     ...entry.block,
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     enabled: true,
     group: null,
     stashId: entry.id,

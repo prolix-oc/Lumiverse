@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -80,7 +81,7 @@ function initDispatcherDb(): void {
 }
 
 function insertMessage(overrides: Record<string, unknown> = {}): string {
-  const id = typeof overrides.id === "string" ? overrides.id : crypto.randomUUID();
+  const id = typeof overrides.id === "string" ? overrides.id : uuidv4();
   const chatId = typeof overrides.chat_id === "string" ? overrides.chat_id : "b1";
   const indexInChat = typeof overrides.index_in_chat === "number" ? overrides.index_in_chat : 0;
   const isUser = typeof overrides.is_user === "number" ? overrides.is_user : 0;
@@ -96,7 +97,7 @@ function insertMessage(overrides: Record<string, unknown> = {}): string {
 }
 
 function insertOutbox(overrides: Record<string, string | number | null> = {}): string {
-  const id = typeof overrides.id === "string" ? overrides.id : crypto.randomUUID();
+  const id = typeof overrides.id === "string" ? overrides.id : uuidv4();
   const now = Date.now();
   getDb().query(
     `INSERT INTO generation_outbox (
@@ -175,7 +176,7 @@ function insertRequestCursor(overrides: {
       response, cursor, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    crypto.randomUUID(),
+    uuidv4(),
     userId,
     chatId,
     overrides.request_id,

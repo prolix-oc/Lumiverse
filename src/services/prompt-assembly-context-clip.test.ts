@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "path";
 
@@ -130,7 +131,7 @@ const EA_USER = "edit-send-assembly-user";
 
 function makeBlock(overrides: Partial<PromptBlock>): PromptBlock {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name: "block",
     content: "",
     role: "system",
@@ -233,7 +234,7 @@ describe("assemblePrompt edit-and-send history cutoff", () => {
       messageId: fixture.editedUserMessageId,
       content: "Committed user text",
       expectedVersion: readMessageRevision(message)!,
-      requestId: crypto.randomUUID(),
+      requestId: uuidv4(),
       branchChatOnEditAndSend: false,
     });
     if (committed.status !== "ok") throw new Error(committed.error);

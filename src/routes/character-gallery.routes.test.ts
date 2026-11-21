@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -29,7 +30,7 @@ describe("character gallery reference routes", () => {
   test('gallery removal reports completion and rejects an item under a different character path', async () => {
     const character = createCharacter(USER_ID, { name: 'Aster' });
     const other = createCharacter(USER_ID, { name: 'Other' });
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     getDb().query('INSERT INTO images (id, user_id, filename, original_filename) VALUES (?, ?, ?, ?)').run(imageId, USER_ID, 'missing.png', 'missing.png');
     const item = addToGallery(USER_ID, character.id, imageId);
     expect((await app.request(`/characters/${other.id}/gallery/${item.id}`, { method: 'DELETE' })).status).toBe(404);

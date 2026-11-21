@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import type {
   CouncilSettings,
   CouncilMember,
@@ -570,7 +571,7 @@ export function appendCouncilDeliberationHistory(input: {
     if (!retentionByAssignment.has(assignmentKey(result.memberId, result.toolName))) continue;
 
     additions.push({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       createdAt: now,
       memberId: result.memberId,
       memberName: result.memberName,

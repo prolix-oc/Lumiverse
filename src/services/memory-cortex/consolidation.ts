@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Memory Cortex — Hierarchical memory consolidation.
  *
@@ -420,7 +421,7 @@ async function consolidateNext(
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const consolidationId = crypto.randomUUID();
+  const consolidationId = uuidv4();
 
   // Insert consolidation record
   db.query(
@@ -548,7 +549,7 @@ async function maybeConsolidateArcs(
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const arcId = crypto.randomUUID();
+  const arcId = uuidv4();
 
   // Merge metadata from source consolidations
   const entityIdSet = new Set<string>();

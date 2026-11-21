@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Temporary character-less chat lifecycle: creation without a character or
  * greeting, exclusion from the landing-page recent lists, the
@@ -154,7 +155,7 @@ describe("temporary character-less chats", () => {
     chatsSvc.createMessage(chat.id, { is_user: true, name: "User", content: "Hello there" }, USER_ID);
 
     const block = (overrides: Record<string, any>) => ({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: "block",
       content: "",
       role: "system",
@@ -230,7 +231,7 @@ describe("temporary character-less chats", () => {
     });
 
     const db = getDb();
-    const entityId = crypto.randomUUID();
+    const entityId = uuidv4();
     const now = Date.now();
     db.query(
       `INSERT INTO memory_entities
@@ -254,7 +255,7 @@ describe("temporary character-less chats", () => {
         (id, chat_id, entity_id, hex_color, usage_type, confidence, sample_count, sample_excerpt, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      crypto.randomUUID(),
+      uuidv4(),
       chat.id,
       entityId,
       "#aabbcc",
@@ -316,7 +317,7 @@ describe("temporary character-less chats", () => {
     );
 
     const block = (overrides: Record<string, any>) => ({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: "block",
       content: "",
       role: "system",
@@ -396,8 +397,8 @@ describe("temporary character-less chats", () => {
 
     const db = getDb();
     const now = Date.now();
-    const kaelId = crypto.randomUUID();
-    const aerithId = crypto.randomUUID();
+    const kaelId = uuidv4();
+    const aerithId = uuidv4();
     const insertEntity = db.query(
       `INSERT INTO memory_entities
         (id, chat_id, name, entity_type, aliases, description, facts, emotional_valence, metadata, mention_count, salience_avg, created_at, updated_at)
@@ -438,7 +439,7 @@ describe("temporary character-less chats", () => {
         (id, chat_id, source_entity_id, target_entity_id, relation_type, relation_label, strength, sentiment, evidence_chunk_ids, status, metadata, created_at, updated_at, edge_salience)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      crypto.randomUUID(),
+      uuidv4(),
       chat.id,
       kaelId,
       aerithId,
@@ -504,7 +505,7 @@ describe("temporary character-less chats", () => {
       metadata: {},
       prompt_order: [
         {
-          id: crypto.randomUUID(),
+          id: uuidv4(),
           name: "Main",
           content: "PRESET_SYSTEM_MARKER: be concise.",
           role: "system",

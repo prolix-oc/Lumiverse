@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Persona } from "../types/persona";
 import { resolvePersonaGlobalAddons } from "./global-addons.service";
 
@@ -91,7 +92,7 @@ export function withChatPersonaAddonState(
       ...(current.persona_addon_avatar_versions && typeof current.persona_addon_avatar_versions === "object"
         ? current.persona_addon_avatar_versions
         : {}),
-      [personaId]: crypto.randomUUID(),
+      [personaId]: uuidv4(),
     },
   };
 }

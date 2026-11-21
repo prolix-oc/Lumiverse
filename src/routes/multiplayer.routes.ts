@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import * as svc from "../services/multiplayer.service";
 import { mintRoomToken, ROOM_TOKEN_TTL_SECONDS } from "../crypto/room-token";
@@ -153,7 +154,7 @@ app.post("/rooms/:roomId/invite", roomMutationLimiter, async (c) => {
   const state = svc.getRoomStateForHost(userId, roomId);
   if (!state) return c.json({ error: "Not found" }, 404);
 
-  const subject = crypto.randomUUID();
+  const subject = uuidv4();
   const token = await mintRoomToken({ roomId, subject });
   return c.json({
     token,

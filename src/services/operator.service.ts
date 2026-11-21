@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { RingBuffer } from "../utils/ring-buffer";
 import { formatLogArguments } from "../utils/log-format";
 import { eventBus } from "../ws/bus";
@@ -237,7 +238,7 @@ class OperatorService {
       throw new Error("Runner IPC not available");
     }
 
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -118,7 +119,7 @@ async function seedConnectionAndSettings(extra: Record<string, unknown> = {}) {
 }
 
 function insertChat(characterId: string): string {
-  const chatId = crypto.randomUUID();
+  const chatId = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(

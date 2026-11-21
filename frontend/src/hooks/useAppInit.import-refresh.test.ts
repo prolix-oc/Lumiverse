@@ -1,3 +1,4 @@
+import { uuidv4 } from "../lib/uuid";
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 import { subscribeImportedDataRefresh } from '@/lib/import-data-events'
 
@@ -61,7 +62,7 @@ test('restarts every data view once after pending settings commit for duplicate 
   unsubscribe = subscribeImportedDataRefresh(refreshed)
   let finishFlush!: () => void
   flush.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFlush = resolve }))
-  const jobId = crypto.randomUUID()
+  const jobId = uuidv4()
   const first = refreshAppDataAfterImport(jobId)
   expect(refreshAppDataAfterImport(jobId)).toBe(first)
   expect(fetchBootstrap).not.toHaveBeenCalled()
@@ -78,7 +79,7 @@ test('discarding an old-user response cannot hydrate the next signed-in account'
   flush.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
   const refreshed = mock(() => {})
   unsubscribe = subscribeImportedDataRefresh(refreshed)
-  const refresh = refreshAppDataAfterImport(crypto.randomUUID())
+  const refresh = refreshAppDataAfterImport(uuidv4())
   await Bun.sleep(0)
   state.user = { id: 'other-owner' }
   finish(undefined)
@@ -90,7 +91,7 @@ test('discarding an old-user response cannot hydrate the next signed-in account'
 
 test('a failed settings flush can be retried for the same completed job', async () => {
   flush.mockRejectedValueOnce(new Error('offline'))
-  const jobId = crypto.randomUUID()
+  const jobId = uuidv4()
   await expect(refreshAppDataAfterImport(jobId)).rejects.toThrow('offline')
   await refreshAppDataAfterImport(jobId)
   expect(reload).toHaveBeenCalledTimes(1)

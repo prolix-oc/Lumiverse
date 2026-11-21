@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { BUILTIN_TOOLS_MAP } from "./council/builtin-tools";
 import { getSidecarSettings } from "./sidecar-settings.service";
 import * as settingsSvc from "./settings.service";
@@ -423,7 +424,7 @@ export async function generateSceneBackground(
   if (existing) {
     existing.controller.abort(new Error("Image generation superseded by a newer request"));
   }
-  const jobId = opts?.clientJobId || crypto.randomUUID();
+  const jobId = opts?.clientJobId || uuidv4();
   activeImageGenerations.set(registryKey, { controller, startedAt: Date.now(), jobId, userId, ownerExtensionIdentifier: opts?.ownerExtensionIdentifier });
 
   try {
@@ -2686,7 +2687,7 @@ function sanitizePresetForImport(
   // Parser connection/model/parameters never import — they're bound to the
   // importer's own parser connection profile.
   return {
-    id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID(),
+    id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : uuidv4(),
     name,
     mode: entry.mode === "parsed_custom" ? "parsed_custom" : "custom",
     prompt: typeof entry.prompt === "string" ? entry.prompt : "",
@@ -2725,7 +2726,7 @@ function sanitizeLoraPresetForImport(
   }
 
   const preset: LoraPreset = {
-    id: "id" in entry && typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID(),
+    id: "id" in entry && typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : uuidv4(),
     name,
     loras,
   };

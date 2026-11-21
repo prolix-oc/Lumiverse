@@ -1,5 +1,5 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { advanceVariableCheckpoint, observeVariableChanges, readVariableValues, restoreVariableCheckpoint, variableEffects, withVariableValues,
   type VariableCheckpoint, type VariableValues, type VariableStateSeed } from "../utils/variable-checkpoint";
@@ -48,7 +48,7 @@ function tracker(metadata: Record<string, any>): VariableTracking | undefined {
 }
 export function readVariableStateSeed(metadata: Record<string, any>): VariableStateSeed {
   const tracking = tracker(metadata);
-  return { values: readVariableValues(metadata), checkpoint: tracking?.head ?? [], epoch: tracking?.epoch ?? randomUUID() };
+  return { values: readVariableValues(metadata), checkpoint: tracking?.head ?? [], epoch: tracking?.epoch ?? uuidv4() };
 }
 
 /** Regeneration starts before the original reply while retaining subsequent external edits. */
@@ -87,7 +87,7 @@ export function trackVariableWrite(db: Database, chatId: string, before: Record<
   if (!source) {
     const next = readVariableValues(after);
     return { ...after, [SWIPE_VARIABLE_STATE_KEY]: { ...tracking,
-      ...(variableEffects(current, next).length ? { revision: randomUUID() } : {}), head: observeVariableChanges(tracking.head, current, next) } };
+      ...(variableEffects(current, next).length ? { revision: uuidv4() } : {}), head: observeVariableChanges(tracking.head, current, next) } };
   }
   const row = message(db, chatId, source.messageId);
   if (!row) throw new Error("The variable source message was deleted");
@@ -107,7 +107,7 @@ export function trackVariableWrite(db: Database, chatId: string, before: Record<
   }
   const restored = restoreVariableCheckpoint(current, tracking.head, checkpoint);
   return { ...withVariableValues(after, restored.values), [SWIPE_VARIABLE_STATE_KEY]: {
-    version: 1, revision: randomUUID(), epoch: tracking.epoch, head: restored.checkpoint, messageId: row.id, stateId: record.id,
+    version: 1, revision: uuidv4(), epoch: tracking.epoch, head: restored.checkpoint, messageId: row.id, stateId: record.id,
   } satisfies VariableTracking };
 }
 
@@ -125,11 +125,11 @@ export function prepareNativeSwipeVariablesWithDb(db: Database, userId: string, 
     if (index < 0 || index >= records.length) throw new Error("The variable source swipe was deleted");
     const initial = seed ?? readVariableStateSeed(metadata);
     if (!tracking) {
-      tracking = { version: 1, revision: randomUUID(), epoch: initial.epoch,
+      tracking = { version: 1, revision: uuidv4(), epoch: initial.epoch,
         head: observeVariableChanges(initial.checkpoint, initial.values, readVariableValues(metadata)) };
     }
     const prior = records[index] as SwipeVariableRecord | null;
-    const id = stateId ?? prior?.id ?? randomUUID();
+    const id = stateId ?? prior?.id ?? uuidv4();
     records[index] = { version: 1, id, epoch: initial.epoch, before: (!seed || preserveBefore ? prior?.before : undefined) ?? initial,
       values: initial.values, checkpoint: initial.checkpoint } satisfies SwipeVariableRecord;
     storeRecords(db, row.id, extra, records);
@@ -141,7 +141,7 @@ export function prepareNativeSwipeVariablesWithDb(db: Database, userId: string, 
       } };
     }
     if (!isDeepStrictEqual(metadata, next)) {
-      next[SWIPE_VARIABLE_STATE_KEY].revision = randomUUID();
+      next[SWIPE_VARIABLE_STATE_KEY].revision = uuidv4();
       db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?")
         .run(JSON.stringify(next), chatId, userId);
     }
@@ -160,17 +160,17 @@ export function setSwipeVariablesWithDb(db: Database, userId: string, chatId: st
     const tracking = tracker(metadata);
     if (!isDeepStrictEqual(current, input.expected_variables) || !isDeepStrictEqual(swipes, input.expected_swipes) || (tracking?.revision ?? null) !== input.expected_revision) return false;
     if (input.variables.length !== swipes.length) throw new Error("Variable states must match the swipe count");
-    const epoch = tracking?.epoch ?? randomUUID();
+    const epoch = tracking?.epoch ?? uuidv4();
     const extra = parse(row.extra);
     if (readSwipeVariableRecords(extra)?.some(Boolean)) throw new Error("This message already has saved swipe variables");
     const before = { values: current, checkpoint: tracking?.head ?? [], epoch };
-    const records = input.variables.map(values => ({ version: 1 as const, id: randomUUID(), epoch, before, values,
+    const records = input.variables.map(values => ({ version: 1 as const, id: uuidv4(), epoch, before, values,
       checkpoint: advanceVariableCheckpoint(tracking?.head ?? [], variableEffects(current, values), epoch) }));
     storeRecords(db, row.id, extra, records);
     const selected = records[row.swipe_id]!;
     const restored = restoreVariableCheckpoint(current, tracking?.head ?? [], selected.checkpoint);
     const next = { ...withVariableValues(metadata, restored.values), [SWIPE_VARIABLE_STATE_KEY]: {
-      version: 1, revision: randomUUID(), epoch, head: restored.checkpoint, messageId: row.id, stateId: selected.id,
+      version: 1, revision: uuidv4(), epoch, head: restored.checkpoint, messageId: row.id, stateId: selected.id,
     } satisfies VariableTracking };
     db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(next), chatId, userId);
     return true;
@@ -203,7 +203,7 @@ export function reconcileSwipeVariablesWithDb(db: Database, userId: string, chat
       ...(!boundary && record && row ? { messageId: row.id, stateId: record.id } : {}) };
     const after = { ...withVariableValues(before, restored.values), [SWIPE_VARIABLE_STATE_KEY]: nextTracking };
     if (isDeepStrictEqual(before, after)) return null;
-    nextTracking.revision = randomUUID();
+    nextTracking.revision = uuidv4();
     db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?").run(JSON.stringify(after), chatId, userId);
     return { before, after };
   }).immediate();

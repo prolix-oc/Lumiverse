@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { ProviderRequestSnapshot, ProviderResponseSnapshot, RequestOrigin } from "../llm/request-observer";
 import { redactRequestValue } from "../utils/redact-request";
 import { redactResponseBody } from "../utils/redact-response";
@@ -93,7 +94,7 @@ export class RequestHistoryStore {
       }
     }
     const entry: RequestHistoryEntry = {
-      ...safeContext, id: crypto.randomUUID(), sentAt: Date.now(), bodyBytes,
+      ...safeContext, id: uuidv4(), sentAt: Date.now(), bodyBytes,
       redacted, ...(bodyUnavailable ? { bodyUnavailable } : {}), bodyJson,
       response: { state: "pending", bodyBytes: 0, redacted: false }, responseBody: null, responseError: null,
     };

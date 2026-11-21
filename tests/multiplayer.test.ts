@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Multiplayer rooms: turn engine (round-robin advance / promote / skip / pass),
  * join + ban + capacity, peer-message authorization + author attribution, and
@@ -111,8 +112,8 @@ describe("multiplayer turn engine", () => {
 
   test("ensureJoinedRoomChat records a joined room in the peer's own history", () => {
     const PEER = "peer-user";
-    const hostChatId = crypto.randomUUID();
-    const roomId = crypto.randomUUID();
+    const hostChatId = uuidv4();
+    const roomId = uuidv4();
 
     const res = mp.ensureJoinedRoomChat(PEER, {
       chatId: hostChatId,
@@ -151,8 +152,8 @@ describe("multiplayer turn engine", () => {
     getDb().run("UPDATE characters SET updated_at = 123 WHERE id = ?", [legacy.id]);
     expect(legacy.extensions._lumiverse_library_hidden).toBeUndefined();
 
-    const hostChatId = crypto.randomUUID();
-    expect(mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId: crypto.randomUUID(), messages: [] }).ok).toBe(true);
+    const hostChatId = uuidv4();
+    expect(mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId: uuidv4(), messages: [] }).ok).toBe(true);
 
     const chat = chatsSvc.getChat(PEER, hostChatId)!;
     expect(chat.character_id).toBe(legacy.id);
@@ -163,22 +164,22 @@ describe("multiplayer turn engine", () => {
   test("joining a room does not turn an ordinary same-name card into a system card", () => {
     const PEER = "peer-name-collision";
     const ordinary = charactersSvc.createCharacter(PEER, { name: "Multiplayer Rooms", description: "My card" });
-    const chatId = crypto.randomUUID();
-    mp.ensureJoinedRoomChat(PEER, { chatId, roomId: crypto.randomUUID() });
+    const chatId = uuidv4();
+    mp.ensureJoinedRoomChat(PEER, { chatId, roomId: uuidv4() });
     const placeholderId = chatsSvc.getChat(PEER, chatId)!.character_id!;
     expect(placeholderId).not.toBe(ordinary.id);
     expect(charactersSvc.getCharacter(PEER, ordinary.id)!.extensions._lumiverse_library_hidden).toBeUndefined();
 
     charactersSvc.updateCharacter(PEER, placeholderId, { name: "Renamed container" });
-    const secondChatId = crypto.randomUUID();
-    mp.ensureJoinedRoomChat(PEER, { chatId: secondChatId, roomId: crypto.randomUUID() });
+    const secondChatId = uuidv4();
+    mp.ensureJoinedRoomChat(PEER, { chatId: secondChatId, roomId: uuidv4() });
     expect(chatsSvc.getChat(PEER, secondChatId)!.character_id).toBe(placeholderId);
   });
 
   test("ensureJoinedRoomChat stores a reconnect token getJoinedRoomReconnect reads back", () => {
     const PEER = "peer-user-rc";
-    const hostChatId = crypto.randomUUID();
-    const roomId = crypto.randomUUID();
+    const hostChatId = uuidv4();
+    const roomId = uuidv4();
 
     mp.ensureJoinedRoomChat(PEER, {
       chatId: hostChatId,
@@ -427,8 +428,8 @@ describe("multiplayer turn engine", () => {
     // No profiles at all → undefined (a genuine misconfiguration, not our bug).
     expect(mp.resolveHostConnectionId(HOST)).toBeUndefined();
 
-    const c1 = crypto.randomUUID();
-    const c2 = crypto.randomUUID();
+    const c1 = uuidv4();
+    const c2 = uuidv4();
     addConn(c1, 0, now - 100);
     addConn(c2, 0, now); // most-recently-updated
 
@@ -457,7 +458,7 @@ describe("multiplayer turn engine", () => {
     expect(mp.buildHydrationPayload(room, "self").generation).toBeNull();
 
     // Host starts streaming a reply.
-    const genId = crypto.randomUUID();
+    const genId = uuidv4();
     poolSvc.createPoolEntry({
       generationId: genId,
       userId: HOST,
@@ -477,7 +478,7 @@ describe("multiplayer turn engine", () => {
     expect(hy.generation?.targetMessageId).toBe("msg-1");
 
     // Host-local impersonate drafts are never resumed on a peer.
-    const imp = crypto.randomUUID();
+    const imp = uuidv4();
     poolSvc.createPoolEntry({
       generationId: imp,
       userId: HOST,
@@ -498,7 +499,7 @@ describe("multiplayer turn engine", () => {
       }, HOST);
       chatsSvc.addSwipe(HOST, message.id, "", { select: false });
       poolSvc.createPoolEntry({
-        generationId: crypto.randomUUID(),
+        generationId: uuidv4(),
         userId: HOST,
         chatId,
         generationType: "swipe",

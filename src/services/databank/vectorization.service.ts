@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Databank Vectorization Service — Orchestrates parse → chunk → embed → LanceDB upsert.
  *
@@ -121,7 +122,7 @@ export async function processDocument(userId: string, docId: string): Promise<vo
 
     // 5. Insert chunk rows into SQLite
     const chunkRows = chunkResults.map((c) => ({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       documentId: docId,
       databankId: doc.databankId,
       userId,

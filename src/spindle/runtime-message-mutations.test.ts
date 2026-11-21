@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { expect, spyOn, test } from 'bun:test';
 import { join } from 'node:path';
 import { initDatabase, closeDatabase } from '../db/connection';
@@ -55,7 +56,7 @@ test('runtime role changes and insertion preserve message identity, swipes, atta
     await writeRuntimeState(userId, chat.id, { kind: 'message.edit', id: first.id, role: 'assistant' }, 'extension-a');
     const changed = chats.getMessage(userId, first.id)!;
     expect(changed).toMatchObject({ ...before[0]!, is_user: false, name: '', revision: (before[0] as any).revision + 1 });
-    const insertedId = crypto.randomUUID();
+    const insertedId = uuidv4();
     const inserted = await writeRuntimeState(userId, chat.id, { kind: 'message.create', id: insertedId, content: 'Inserted', role: 'user', beforeId: first.id, ownMetadata: { sentAt: 0 } }, 'extension-a');
     expect(inserted.patch.message).toMatchObject({ id: insertedId, index_in_chat: 0, ownMetadata: { sentAt: 0 } });
     expect(chats.getMessages(userId, chat.id).map(row => row.id)).toEqual([insertedId, first.id, second.id]);
@@ -73,7 +74,7 @@ test('runtime role changes and insertion preserve message identity, swipes, atta
     await expect(writeRuntimeState(userId, chat.id, { kind: 'message.create', id: insertedId, content: 'Duplicate', role: 'user', beforeId: first.id }, 'extension-a')).rejects.toThrow();
     const foreign = chats.createChatRaw('mutation-foreign-owner', { character_id: character.id });
     const target = chats.createMessage(foreign.id, { content: 'Private', name: 'Other', is_user: true }, 'mutation-foreign-owner');
-    await expect(writeRuntimeState(userId, chat.id, { kind: 'message.create', id: crypto.randomUUID(), content: 'Invalid', role: 'user', beforeId: target.id }, 'extension-a')).rejects.toThrow('Insertion target');
+    await expect(writeRuntimeState(userId, chat.id, { kind: 'message.create', id: uuidv4(), content: 'Invalid', role: 'user', beforeId: target.id }, 'extension-a')).rejects.toThrow('Insertion target');
     expect(chats.getMessages(userId, chat.id)).toEqual(stable);
     await expect(writeRuntimeState(userId, chat.id, { kind: 'message.edit', id: first.id, ownMetadata: {} })).rejects.toThrow('namespace');
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -97,7 +98,7 @@ test('an insert sends one event however many rows move, and a same-side role edi
     expect(chats.getMessage(userId, rows[1]!.id)!.name).toBe('Character');
     await new Promise(resolve => setTimeout(resolve, 0));
     for (const event of [EventType.MESSAGE_SENT, EventType.MESSAGE_EDITED]) cleanups.push(eventBus.on(event, payload => events.push(payload)));
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     await writeRuntimeState(userId, chat.id, { kind: 'message.create', id, content: 'Inserted', role: 'user', beforeId: rows[0]!.id }, 'extension-a');
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(events).toHaveLength(1);

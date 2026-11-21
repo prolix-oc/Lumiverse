@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -12,7 +13,7 @@ import type { Message } from "../types/message";
 
 function message(overrides: Partial<Message>): Message {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     chat_id: "chat-1",
     index_in_chat: 0,
     is_user: false,

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { getDb } from "../../db/connection";
 import { DEFAULT_BUILD_TYPE, getBuildType, isEnabledBuildType } from "./build-types";
 import { getBuildRegistry } from "./build-registry";
@@ -166,7 +167,7 @@ export function createSession(
   input: CreateWeaverSessionInput = {},
 ): WeaverSession {
   const db = getDb();
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const sessionNumber = nextSessionNumber(userId);
 

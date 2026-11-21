@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getDb } from "../db/connection";
 import { getEncryptionKeyBytes } from "../crypto/init";
@@ -69,7 +70,7 @@ export function createAndroidDestination(userId: string, input: CreateAndroidPus
       .all(input.deviceId, input.deviceToken ?? null) as PrivateDestination[];
     for (const row of old) { getDb().query("DELETE FROM android_push_destinations WHERE id = ?").run(row.id); revoke(row.user_id, row.id); if (row.enrollment_id !== input.enrollmentId) retired.push(row) }
     // A new ID makes delayed pushes from an earlier account/enrollment unusable.
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     getDb().query(`INSERT INTO android_push_destinations
       (id,user_id,device_id,transport,device_token,project_id,server_origin,token_hash,label,user_agent,created_at,updated_at,registered_at,delivery_mode,package_name,enrollment_id,relay_url,relay_credential,encryption_key,encryption_key_id)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, userId, input.deviceId, input.transport,

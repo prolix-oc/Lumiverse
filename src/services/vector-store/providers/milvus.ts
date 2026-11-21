@@ -1,5 +1,5 @@
+import { uuidv4 } from "../../../utils/uuid";
 import { connect as connectTcp } from "node:net";
-import { randomUUID } from "node:crypto";
 import type { DescribeCollectionResponse, IndexDescription } from "@zilliz/milvus2-sdk-node";
 import type { MilvusConnectionConfig, MilvusHybridSearchConfig, VectorStoreTuningProfile } from "../../vector-store-config.service";
 import {
@@ -259,7 +259,7 @@ export class MilvusStore implements VectorStore {
     // Reset keeps the empty Text schema/alias durable. A different embedding
     // dimension then gets a new collection before atomically changing routing.
     const client = await this.getClient();
-    const name = `lumiverse_reset_${randomUUID().replaceAll("-", "")}_${collection}`;
+    const name = `lumiverse_reset_${uuidv4().replaceAll("-", "")}_${collection}`;
     this.routes.set(collection, name);
     this.textCollections.add(name);
     try {

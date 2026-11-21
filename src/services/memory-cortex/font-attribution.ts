@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Memory Cortex — Font/dialogue color attribution.
  *
@@ -709,7 +710,7 @@ export function recordColorAttribution(
       `INSERT INTO memory_font_colors
         (id, chat_id, entity_id, hex_color, usage_type, confidence, sample_count, sample_excerpt, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-    ).run(crypto.randomUUID(), chatId, entityId, hexColor, usageType, Math.min(0.9, evidenceConfidence), sampleExcerpt, now, now);
+    ).run(uuidv4(), chatId, entityId, hexColor, usageType, Math.min(0.9, evidenceConfidence), sampleExcerpt, now, now);
   }
 }
 

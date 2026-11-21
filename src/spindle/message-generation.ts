@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { isDeepStrictEqual } from "node:util";
 import type { StreamChunk } from "../llm/types";
 import { cloneEnv } from "../macros";
@@ -47,7 +48,7 @@ export class MessageGenerations {
   remember(userId: string, chatId: string, context: PreparedResponseContext): string {
     for (const [id, value] of this.prepared) if (Date.now() - value.at > 120_000) this.prepared.delete(id);
     if (this.prepared.size >= 100) throw new Error("Too many prepared response contexts");
-    const id = crypto.randomUUID(); this.prepared.set(id, { userId, chatId, context, at: Date.now() }); return id;
+    const id = uuidv4(); this.prepared.set(id, { userId, chatId, context, at: Date.now() }); return id;
   }
 
   begin(userId: string, input: BeginMessageGenerationInput): { id: string } {
@@ -82,7 +83,7 @@ export class MessageGenerations {
       return { stateId: state.id, context, presetContext: structuredClone(presetContext), content: context.prefill,
         reasoning: "", nativeReasoning: "", native: {}, status: "waiting" };
     });
-    const id = crypto.randomUUID(), controller = new AbortController();
+    const id = uuidv4(), controller = new AbortController();
     let resolveCompletion!: () => void;
     const completion = new Promise<void>(resolve => { resolveCompletion = resolve; });
     const session: Session = { id, userId, chatId: input.chatId, messageId: message.id, frontendSessionId: input.frontendSessionId,

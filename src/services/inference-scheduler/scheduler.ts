@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { getInferenceSchedulerConfig } from "./config";
@@ -142,7 +143,7 @@ function configFor(userId: string): InferenceSchedulerConfig {
 }
 
 function newId(): string {
-  return crypto.randomUUID();
+  return uuidv4();
 }
 
 function createResource(resolved: ResolvedInferenceResource, concurrency: number): ResourceState {

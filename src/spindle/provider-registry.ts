@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { safeFetch, type SafeFetchOptions } from "../utils/safe-fetch";
 import { SYSTEM_SECRET_PRINCIPAL } from "../services/secrets.service";
 import type { ProviderRequestSnapshot, ProviderResponseObserver } from "../llm/request-observer";
@@ -567,7 +568,7 @@ export class ProviderRegistry {
       return this.completeBroker(prepared);
     }
 
-    const correlationId = opts.correlationId || crypto.randomUUID();
+    const correlationId = opts.correlationId || uuidv4();
     const round = opts.round ?? 1;
     const redacted = redactForWorker(request);
     assertByteLimit(
@@ -909,7 +910,7 @@ export class ProviderRegistry {
       body: "body" in payload ? payload.body : payload,
       secretKey: broker.secretKey,
       binary: payload.binary === true,
-      correlationId: opts.correlationId || crypto.randomUUID(),
+      correlationId: opts.correlationId || uuidv4(),
       round: opts.round ?? 1,
     };
   }

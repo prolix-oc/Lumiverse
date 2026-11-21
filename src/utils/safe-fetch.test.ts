@@ -1,3 +1,4 @@
+import { uuidv4 } from "./uuid";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JavaScriptDownloadError, SSRFError, safeFetch, validateHost } from "./safe-fetch";
 
@@ -184,7 +185,7 @@ describe("validateHost DNS timeout", () => {
     // lookup that cannot complete within a 1ms budget. The timer fires first
     // and we surface a `timed out` SSRFError instead of stalling for minutes
     // (the Termux/.spot regression).
-    const uniqueHost = `ssrf-timeout-${crypto.randomUUID()}.invalid`;
+    const uniqueHost = `ssrf-timeout-${uuidv4()}.invalid`;
     const start = Date.now();
     await expect(
       validateHost(uniqueHost, { dnsTimeoutMs: 1 })

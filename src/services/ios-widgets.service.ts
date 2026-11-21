@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "../db/connection";
 import { parseMetadataObject } from "../db/chat-operations";
@@ -45,7 +46,7 @@ export function widgetSnapshot(userId: string) {
 
 export function prepareWidgets(userId: string, deviceId: unknown) {
   if (!widgetIdentifier(deviceId) || deviceId.length < 16) throw new Error("Invalid widget installation");
-  const db = getDb(), registrationId = crypto.randomUUID(), credential = randomBytes(32).toString("base64url"), expiresAt = Date.now() + lifetime;
+  const db = getDb(), registrationId = uuidv4(), credential = randomBytes(32).toString("base64url"), expiresAt = Date.now() + lifetime;
   db.transaction(() => {
     db.query("DELETE FROM ios_widget_registrations WHERE expires_at <= ?").run(Date.now());
     db.query("DELETE FROM ios_widget_registrations WHERE user_id = ? AND device_id = ?").run(userId, deviceId);

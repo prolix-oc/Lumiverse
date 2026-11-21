@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 // HTTP surface for user-data export and import.
 //
 // - GET  /api/v1/user-data/export    → streams a .lvbak archive
@@ -121,7 +122,7 @@ app.post("/export/prepare", async (c) => {
   const includeVectors = !!body.includeVectors;
   const includeSecrets = !!body.includeSecrets;
   const includeExtensionData = body.includeExtensionData === true;
-  const archiveId = crypto.randomUUID();
+  const archiveId = uuidv4();
 
   let ticket: ReturnType<typeof createTicket> extends Promise<infer R>
     ? R extends { ticket: infer T }

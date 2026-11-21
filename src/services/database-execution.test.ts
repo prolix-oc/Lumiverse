@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,7 +60,7 @@ afterEach(async () => {
 describe("file-backed service execution", () => {
   test('gallery removal confirms its committed relationship before slow image cleanup without backend-thread SQL', async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("INSERT INTO images (id, user_id, filename, original_filename) VALUES (?, 'user', 'missing.png', 'missing.png')").run(imageId);
     const item = gallery.addToGallery('user', 'character-user', imageId);
     const reached = Promise.withResolvers<void>();
@@ -88,7 +89,7 @@ describe("file-backed service execution", () => {
 
   test('a failed alias update rolls back gallery removal and publishes no confirmation', async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("INSERT INTO images (id, user_id, filename, original_filename) VALUES (?, 'user', 'missing.png', 'missing.png')").run(imageId);
     const item = gallery.addToGallery('user', 'character-user', imageId);
     db.exec("CREATE TRIGGER reject_gallery_alias BEFORE UPDATE OF extensions ON characters BEGIN SELECT RAISE(ABORT, 'alias failed'); END");
@@ -106,7 +107,7 @@ describe("file-backed service execution", () => {
 
   test('duplicate gallery entries keep aliases and shared images, with removal scoped to the owning character', async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("INSERT INTO images (id, user_id, filename, original_filename) VALUES (?, 'user', 'missing.png', 'missing.png')").run(imageId);
     const first = gallery.addToGallery('user', 'character-user', imageId);
     const second = gallery.addToGallery('user', 'character-user', imageId);
@@ -274,7 +275,7 @@ describe("file-backed service execution", () => {
 
   test("character cleanup and group removal perform no backend-thread SQL", async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("INSERT INTO images (id, user_id, filename, original_filename, mime_type, byte_size) VALUES (?, 'user', 'missing.png', 'missing.png', 'image/png', 1)").run(imageId);
     db.query("UPDATE characters SET extensions = ? WHERE id = 'character-user'").run(JSON.stringify({ gallery: [{ image_id: imageId }] }));
     for (const id of ["third", "fourth"]) db.query("INSERT INTO characters (id, user_id, name) VALUES (?, 'user', ?)").run(id, id);
@@ -298,7 +299,7 @@ describe("file-backed service execution", () => {
 
   test("a failed avatar cleanup preserves the committed character result and event", async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("UPDATE characters SET extensions = ? WHERE id = 'character-user'").run(JSON.stringify({ gallery: [{ image_id: imageId }] }));
     db.query("INSERT INTO chats (id, user_id, metadata) VALUES ('chat', 'user', ?)").run(JSON.stringify({ active_avatar_id: imageId }));
     db.exec("CREATE TRIGGER reject_avatar_cleanup BEFORE UPDATE ON chats BEGIN SELECT RAISE(ABORT, 'cleanup failed'); END");
@@ -320,7 +321,7 @@ describe("file-backed service execution", () => {
 
   test("chat attachment cleanup awaits asynchronous image and audio deletion", async () => {
     const db = getDb();
-    const imageId = crypto.randomUUID();
+    const imageId = uuidv4();
     db.query("INSERT INTO images (id, user_id, filename, original_filename, mime_type, byte_size) VALUES (?, 'user', 'image.png', 'image.png', 'image/png', 1)").run(imageId);
     db.query("INSERT INTO audio_files (id, user_id, filename, original_filename, mime_type, size_bytes) VALUES ('audio', 'user', 'audio.wav', 'audio.wav', 'audio/wav', 1)").run();
     db.query("INSERT INTO chats (id, user_id) VALUES ('attachments', 'user')").run();

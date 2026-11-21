@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import * as linkSvc from "../services/lumihub-link.service";
 import { deleteLumiHubClient, getLumiHubClient } from "../lumihub/client";
@@ -197,7 +198,7 @@ lumihubRoutes.post("/link", async (c) => {
   }
 
   // Store PKCE state
-  const stateId = crypto.randomUUID();
+  const stateId = uuidv4();
   pkceStateMap.set(stateId, {
     userId,
     codeVerifier,

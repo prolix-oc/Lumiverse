@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * Databank CRUD Service — Banks and documents.
  */
@@ -28,7 +29,7 @@ import type { PaginationParams, PaginatedResult } from "../../types/pagination";
 // ─── Banks ────────────────────────────────────────────────────
 
 export function createDatabank(userId: string, input: CreateDatabankInput): Databank {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const db = getDb();
 
@@ -183,7 +184,7 @@ export function createDocument(
   fileSize: number,
   contentHash: string,
 ): DatabankDocument {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   const slug = nameToSlug(name);
   const db = getDb();

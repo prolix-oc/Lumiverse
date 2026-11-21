@@ -1,3 +1,4 @@
+import { uuidv4 } from "../lib/uuid";
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { notifyImageDeleted, onImageDeleted } from '@/lib/deletion-events'
 
@@ -33,7 +34,7 @@ afterEach(() => {
 
 describe('image deletion confirmation', () => {
   test('a completed HTTP response and duplicate event share one notification', async () => {
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     const listener = mock(() => {})
     const stop = onImageDeleted(listener)
     try {
@@ -46,7 +47,7 @@ describe('image deletion confirmation', () => {
   })
 
   test('retained images stay visible and lost responses reconcile without another DELETE', async () => {
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     const listener = mock(() => {})
     const stop = onImageDeleted(listener)
     try {
@@ -63,7 +64,7 @@ describe('image deletion confirmation', () => {
   })
 
   test('unconfirmed and unauthorized outcomes remain errors', async () => {
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     const listener = mock(() => {})
     const stop = onImageDeleted(listener)
     try {

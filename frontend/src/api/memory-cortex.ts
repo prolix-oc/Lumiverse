@@ -1,3 +1,4 @@
+import { uuidv4 } from "../lib/uuid";
 import { get, put, post, del, patch } from "./client";
 import {
   createProviderRegistryProjection,
@@ -29,7 +30,7 @@ async function announceCortexRequest<T>(chatId: string,
   send: (timing: { requestId: string; initiatedAt: number }) => Promise<T>,
   accepted: (result: T) => { status: string; activity?: CortexActivitySnapshot },
 ): Promise<T> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const requestedAt = Date.now();
   const notify = (status: string, activity?: CortexActivitySnapshot) => {
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CORTEX_REQUEST_EVENT, {

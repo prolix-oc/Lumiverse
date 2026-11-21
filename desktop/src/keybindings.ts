@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../src/utils/uuid";
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import './custom-url.css';
@@ -64,7 +65,7 @@ element('add-binding').addEventListener('submit', event => {
   if (!snapshot || !chord || !action.value) { status.textContent = 'Choose an action and press a shortcut first.'; return; }
   if (!(chord.ctrl || chord.alt || chord.meta || /^F(1[3-9]|2[0-4])$/.test(chord.code))) { status.textContent = 'Include Control, Alt/Option or Command/Super, or use F13–F24 on their own.'; return; }
   const native = nativeActions.some(item => item.id === action.value);
-  bindings.push({ id: crypto.randomUUID(), chord: { ...chord }, scope: scope.value as Binding['scope'], action: action.value,
+  bindings.push({ id: uuidv4(), chord: { ...chord }, scope: scope.value as Binding['scope'], action: action.value,
     origin: native ? null : snapshot.origin, accountId: native ? null : snapshot.accountId });
   dirty = true; render(); status.textContent = 'Added. Save to apply your bindings.';
 });

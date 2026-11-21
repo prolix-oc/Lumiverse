@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { join } from 'path'
 
@@ -13,7 +14,7 @@ const USER_ID = 'prompt-impersonation-modes-user'
 
 function makeBlock(overrides: Partial<PromptBlock>): PromptBlock {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name: 'block',
     content: '',
     role: 'system',

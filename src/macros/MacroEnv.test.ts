@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { describe, expect, test } from "bun:test";
 import { buildEnv } from "./MacroEnv";
 import { macroInterceptorChain } from "../spindle/macro-interceptor";
@@ -60,7 +61,7 @@ const basePersona: Persona = {
 
 function makeMessage(overrides: Partial<Message>): Message {
   return {
-    id: overrides.id || crypto.randomUUID(),
+    id: overrides.id || uuidv4(),
     chat_id: overrides.chat_id || "chat-1",
     index_in_chat: overrides.index_in_chat ?? 0,
     is_user: overrides.is_user ?? false,

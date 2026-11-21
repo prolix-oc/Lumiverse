@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { uuidv4 } from "../utils/uuid";
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerBundleManifest } from "./bundle";
@@ -24,7 +25,7 @@ export async function extractServerBundle(
   if (complete(root, manifest)) return root;
   if (existsSync(root)) throw new Error(`The cached runtime is incomplete: ${root}. Remove this cache directory and launch again; your data is stored separately.`);
   mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const temporary = join(parent, `.extract-${randomUUID()}`);
+  const temporary = join(parent, `.extract-${uuidv4()}`);
   mkdirSync(temporary, { mode: 0o700 });
   try {
     const bytes = await Bun.file(archivePath).bytes();

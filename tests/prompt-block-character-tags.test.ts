@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { join } from "path";
 
@@ -18,7 +19,7 @@ async function applyBaseline(): Promise<void> {
 
 function makeBlock(overrides: Record<string, any> = {}) {
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     name: "block",
     content: "",
     role: "system",

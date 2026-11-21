@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createWriteStream, mkdirSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
@@ -103,7 +104,7 @@ export function createStagedFile(owner: FileOwner, fileName: string, budget: num
   let outstanding = 0;
   for (const rec of files.values()) outstanding += Math.max(0, rec.budget - rec.size);
   if (disk.bavail * disk.bsize < outstanding + budget + 64 * 1024 ** 2) throw new Error("Insufficient free disk space for staged file");
-  const fileId = crypto.randomUUID();
+  const fileId = uuidv4();
   const directory = join(base, fileId);
   mkdirSync(directory);
   const rec: StagedFile = {

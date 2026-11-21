@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { getDb } from "../../db/connection";
 import { getBible } from "./bible.service";
 import { getBuildRegistry, type WeaverBuildRegistry, type WeaverPeopleRegistry } from "./build-registry";
@@ -155,7 +156,7 @@ function insertPerson(
   hook: string,
   origin: WeaverPersonOrigin,
 ): WeaverPerson {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .prepare(
@@ -466,7 +467,7 @@ export async function personQuestion(
       kind: "review",
     });
     if (buildDynamicQuestionVerdict(gateRaw, people.questionGateCriteria).passed) {
-      return { id: crypto.randomUUID(), prompt, why, target: "person" };
+      return { id: uuidv4(), prompt, why, target: "person" };
     }
     avoid.push(prompt);
   }
@@ -487,7 +488,7 @@ export function answerPersonQuestion(
     ? (input.question as Record<string, unknown>)
     : {};
   const question = typeof q.prompt === "string" ? q.prompt.trim() : "";
-  const id = typeof q.id === "string" && q.id.trim() ? q.id.trim() : crypto.randomUUID();
+  const id = typeof q.id === "string" && q.id.trim() ? q.id.trim() : uuidv4();
   const content = typeof input.content === "string" ? input.content.trim() : "";
   if (!question) throw new Error("Missing question");
   if (!content) throw new Error("Answer is empty");

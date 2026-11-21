@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -40,7 +41,7 @@ beforeEach(async () => {
   db.run("PRAGMA foreign_keys = OFF");
   db.run(await Bun.file(join(import.meta.dir, "..", "db", "baseline.sql")).text());
   requests = [];
-  userId = crypto.randomUUID();
+  userId = uuidv4();
 });
 
 afterEach(() => closeDatabase());
@@ -61,7 +62,7 @@ for (const nonStreaming of [true, false]) {
           promptMode: "custom", outputTarget: "preview", addToGallery: false,
         });
         const character = characters.createCharacter(userId, { name: "Transport test" });
-        const chatId = crypto.randomUUID();
+        const chatId = uuidv4();
         const now = Math.floor(Date.now() / 1000);
         getDb().query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
           .run(chatId, userId, character.id, "Transport test", "{}", now, now);

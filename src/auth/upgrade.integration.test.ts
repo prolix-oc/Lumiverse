@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -123,7 +124,7 @@ async function ssoLogin(providerId = "authentik", overrides: Partial<NonNullable
   // The IdP registration does not need to change during the upgrade.
   expect(authorization.searchParams.get("redirect_uri")).toBe(`${origin}/api/auth/oauth2/callback/${providerId}`);
   expect(authorization.searchParams.get("nonce")).toBeTruthy();
-  const code = crypto.randomUUID();
+  const code = uuidv4();
   codes.set(code, {
     nonce: authorization.searchParams.get("nonce")!, challenge: authorization.searchParams.get("code_challenge")!,
     subject: "shared-subject", email: providerId === "authentik" ? owner.email : aliasUser.email, ...overrides,

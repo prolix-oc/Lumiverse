@@ -3,7 +3,7 @@ import { join } from "path";
 import { env } from "../env";
 
 // BetterAuth's default generator produces 32-char alphanumeric IDs; our
-// owner-seed path uses crypto.randomUUID(). Accept both shapes (plus nanoid)
+// owner-seed path uses the shared UUID helper. Accept both shapes (plus nanoid)
 // by allowing URL-safe characters only. Critically, `.`, `/`, and `\` are
 // rejected so a corrupt row can never escape the per-user data dir via
 // path.join (which doesn't strip "..").

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import type { TokenizerConfig, TokenizerModelPattern, CreateTokenizerConfigInput, CreateTokenizerModelPatternInput, InstallTokenizerInput } from "../types/tokenizer";
 import * as tokenizerService from "./tokenizer.service";
@@ -10,7 +11,7 @@ export function listConfigs(): TokenizerConfig[] {
 
 export function createConfig(input: CreateTokenizerConfigInput): TokenizerConfig {
   const db = getDb();
-  const id = input.id || crypto.randomUUID();
+  const id = input.id || uuidv4();
   const config = JSON.stringify(input.config || {});
   db.run(
     `INSERT INTO tokenizer_configs (id, name, type, config) VALUES (?, ?, ?, ?)`,
@@ -78,7 +79,7 @@ export function listPatterns(): TokenizerModelPattern[] {
 
 export function createPattern(input: CreateTokenizerModelPatternInput): TokenizerModelPattern {
   const db = getDb();
-  const id = input.id || crypto.randomUUID();
+  const id = input.id || uuidv4();
   // Validate regex
   try { new RegExp(input.pattern); } catch { throw new Error("Invalid regex pattern"); }
 

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import type { GenerationResponse, StreamChunk, ToolCallResult } from "../types";
 import { describeGenerationStop } from "../generation-stop";
 import { incompleteStream, readProviderSse, throwIfProviderError } from "../provider-sse";
@@ -12,7 +13,7 @@ function parseGoogleChunk(data: any, replaySignatures: boolean): StreamChunk {
     if (part.thought) reasoning += part.text || "";
     else if (part.functionCall) calls.push({
       name: part.functionCall.name, args: part.functionCall.args ?? {},
-      call_id: crypto.randomUUID(), thought_signature: part.thoughtSignature,
+      call_id: uuidv4(), thought_signature: part.thoughtSignature,
     });
     else text += part.text || "";
     if (replaySignatures && !part.functionCall && typeof part.thoughtSignature === "string") {

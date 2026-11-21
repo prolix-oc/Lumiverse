@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { Database } from "bun:sqlite";
 import { EventType } from "../ws/events";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptVariableValue } from "../types/preset";
@@ -38,7 +39,7 @@ function deleteRegexScriptsByPresetIdWithEvents(db: Database, events: PresetData
   for (const id of deletePresetRegexScriptsWithDb(db, userId, presetId)) events.push({ type: EventType.REGEX_SCRIPT_DELETED, payload: { id } });
 }
 function createPreset(db: Database, events: PresetDatabaseEvent[], userId: string, input: CreatePresetInput): Preset {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   const cleanedMetadata = prunePromptVariableOrphans(input.prompt_order, input.metadata) || {};
@@ -299,7 +300,7 @@ function addPromptBlockToStash(db: Database, events: PresetDatabaseEvent[],
   if (entries.length >= MAX_STASH_ENTRIES) throw new Error(`Prompt stash is limited to ${MAX_STASH_ENTRIES} blocks`);
   const now = Date.now();
   const entry: StashedPromptBlock = {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     block: payloadFromBlock(block),
     ...(sourcePreset ? { sourcePreset } : {}),
     createdAt: now,

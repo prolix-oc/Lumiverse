@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { executeDatabaseOperation } from "../db/execution";
 import { readDatabaseRow, runDatabaseStatement } from "../db/queries";
@@ -109,7 +110,7 @@ export interface SaveAudioInput {
  * (sharp metadata, thumbnail tiers).
  */
 export async function saveAudio(userId: string, input: SaveAudioInput): Promise<AudioFile> {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const ext = extForMime(input.mime_type) || extname(input.original_filename || "") || ".bin";
   const filename = `${id}${ext}`;
   const audioDir = join(env.dataDir, AUDIO_DIR);

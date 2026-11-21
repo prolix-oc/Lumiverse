@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../src/utils/uuid";
 import { mkdtempSync, rmSync } from "node:fs";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
@@ -71,8 +72,8 @@ try {
 
   // Exercise the actual next-turn transition, rather than only reassembling an
   // unchanged conversation with the same exclusion set.
-  const replyId = crypto.randomUUID();
-  const nextUserId = crypto.randomUUID();
+  const replyId = uuidv4();
+  const nextUserId = uuidv4();
   const appendTurn = getDb().query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, ?, ?, ?)");
   appendTurn.run(replyId, chat.id, 1, 0, "Kael", "A reply");
   appendTurn.run(nextUserId, chat.id, 2, 1, "User", "And then?");
@@ -128,7 +129,7 @@ try {
   const insertMessage = getDb().query("INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content) VALUES (?, ?, ?, 1, 'User', ?)");
   let lastMessageId = "";
   for (let i = 1; i < 8; i++) {
-    lastMessageId = crypto.randomUUID();
+    lastMessageId = uuidv4();
     insertMessage.run(lastMessageId, chat.id, i, `Recent turn ${i}`);
   }
   getDb().query("UPDATE messages SET is_user = 0, name = 'Assistant' WHERE id = ?").run(lastMessageId);

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 /**
  * Opt-in end-to-end memory benchmark for multi-gigabyte backups.
  *
@@ -38,7 +39,7 @@ function manifest(): Record<string, unknown> {
     schemaVersion: 1,
     producer: "lumiverse",
     exportedAt: 0,
-    archiveId: crypto.randomUUID(),
+    archiveId: uuidv4(),
     producerVersion: "benchmark",
     includeVectors: false,
     embeddingConfig: { provider: null, model: null, dimension: null },
@@ -169,7 +170,7 @@ test.skipIf(!process.env.IMPORT_BENCHMARK_GB)(
     const sampler = setInterval(() => samplePeak(peak, process.memoryUsage()), 100);
     const importStarted = performance.now();
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
       activeJobId = job.jobId;
       const finished = await waitForTerminal(job.jobId, 60 * 60 * 1000);
       activeJobId = null;

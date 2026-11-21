@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { Hono } from "hono";
 import * as svc from "../services/image-gen-connections.service";
 import { getImageProviderList } from "../image-gen/registry";
@@ -252,7 +253,7 @@ app.post("/:id/comfyui/workflows", async (c) => {
   if (!config) return c.json({ error: "No workflow imported for this connection" }, 400);
 
   const library = readComfyUIWorkflowLibrary(connection.metadata);
-  const entry = { id: crypto.randomUUID(), name, updated_at: Date.now(), config };
+  const entry = { id: uuidv4(), name, updated_at: Date.now(), config };
   const next = { entries: [...library.entries, entry], activeId: entry.id };
   await svc.updateConnection(userId, connectionId, {
     metadata: writeComfyUIWorkflowLibrary(connection.metadata, next),

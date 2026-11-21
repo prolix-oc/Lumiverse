@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 /**
  * SMB filesystem provider — shells out to the system `smbclient` binary.
  *
@@ -144,7 +145,7 @@ export class SMBFileSystem implements FileSystem {
   async readFile(path: string): Promise<Buffer> {
     const smbPath = this.toSmbPath(path);
     // Download to a temp file, read it, delete it
-    const tmpPath = `/tmp/lumiverse-smb-${crypto.randomUUID()}`;
+    const tmpPath = `/tmp/lumiverse-smb-${uuidv4()}`;
     try {
       await this.runCommand(`get "${smbPath}" "${tmpPath}"`);
       const data = await Bun.file(tmpPath).arrayBuffer();

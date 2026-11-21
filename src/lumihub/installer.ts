@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Handles remote install commands from LumiHub by calling existing Lumiverse
  * import services directly (no HTTP self-requests).
@@ -160,7 +161,7 @@ async function importGalleryFromUrls(userId: string, characterId: string, urls: 
       const buf = await res.arrayBuffer();
       const contentType = res.headers.get("content-type") || "image/webp";
       const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
-      const filename = `gallery_${crypto.randomUUID()}.${ext}`;
+      const filename = `gallery_${uuidv4()}.${ext}`;
       return new File([buf], filename, { type: contentType });
     } catch {
       // Skip individual failures
@@ -616,7 +617,7 @@ export async function installTheme(
     const theme = normalizeThemeConfig(themeData.theme);
     const components = normalizeThemeComponents(themeData.components);
     const globalCSS = typeof themeData.globalCSS === "string" ? themeData.globalCSS.slice(0, 2_000_000) : "";
-    const bundleId = crypto.randomUUID();
+    const bundleId = uuidv4();
     const hasEnabledComponentCSS = Object.values(components).some((component) => component.enabled && component.css.trim());
 
     await importThemeAssets(userId, bundleId, themeData.assets);

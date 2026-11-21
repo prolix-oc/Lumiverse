@@ -1,3 +1,4 @@
+import { uuidv4 } from "../src/utils/uuid";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
@@ -28,7 +29,7 @@ function manifest({
     schemaVersion: modern ? 2 : 1,
     producer: "lumiverse",
     exportedAt: 0,
-    archiveId: crypto.randomUUID(),
+    archiveId: uuidv4(),
     producerVersion: "test",
     ...(modern
       ? { ndjsonFormatVersion: 2, ndjsonMaxRecordBytes: maxRecordBytes }
@@ -153,7 +154,7 @@ describe("user-data import bounded extraction", () => {
       }),
     );
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(
@@ -180,7 +181,7 @@ describe("user-data import bounded extraction", () => {
       responses.push(app.request(`http://localhost/user-data/import/${payload.jobId}/status`));
     });
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
       expect((await waitForTerminal(job.jobId)).status).toBe("complete");
       const totalBytes = Object.values(entries).reduce((sum, entry) => sum + entry.byteLength, 0);
       expect(snapshots[0]).toMatchObject({ processed: 0, total: 2, bytesProcessed: 0, bytesTotal: totalBytes });
@@ -204,7 +205,7 @@ describe("user-data import bounded extraction", () => {
       if (event === EventType.USER_IMPORT_PROGRESS && payload.phase === "table" && payload.table === "characters") batches.push(payload.processed);
     });
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
       expect((await waitForTerminal(job.jobId)).status).toBe("complete");
       expect(batches).toEqual([3, 6, 9]);
       expect(getDb().query("SELECT COUNT(*) AS n FROM characters WHERE user_id = ? AND length(description) = ?").get(USER_ID, description.length)).toEqual({ n: 10 });
@@ -218,7 +219,7 @@ describe("user-data import bounded extraction", () => {
       read() { this.destroy(new Error("simulated archive read failure")); },
     }) as fs.ReadStream);
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
       const finished = await waitForTerminal(job.jobId, 1000);
       expect(finished.status).toBe("failed");
       expect(finished.error).toContain("simulated archive read failure");
@@ -235,7 +236,7 @@ describe("user-data import bounded extraction", () => {
       return stream as fs.ReadStream;
     });
     try {
-      const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+      const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
       await startedReading;
       expect(cancelJob(job.jobId)).toBe(true);
       expect((await waitForTerminal(job.jobId, 1000)).status).toBe("cancelled");
@@ -252,7 +253,7 @@ describe("user-data import bounded extraction", () => {
     payload[0] = 43;
     patchCentralDirectoryEntry(archive, "files/databank/checksum.bin", payload);
     writeFileSync(archivePath, archive);
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("failed");
     expect(finished.error).toContain("CRC32 disagrees");
@@ -272,7 +273,7 @@ describe("user-data import bounded extraction", () => {
     );
     getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run("large_current_setting", USER_ID);
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(
@@ -357,7 +358,7 @@ describe("user-data import bounded extraction", () => {
     patchCentralDirectoryEntry(archive, "database/world_book_entries.ndjson", intended);
     writeFileSync(archivePath, archive);
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(
@@ -389,7 +390,7 @@ describe("user-data import bounded extraction", () => {
       }),
     );
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     await waitForStatus(job.jobId, "awaiting_ticket");
     expect(cancelJob(job.jobId)).toBe(true);
     const finished = await waitForTerminal(job.jobId);
@@ -407,7 +408,7 @@ describe("user-data import bounded extraction", () => {
       }),
     );
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("failed");
     expect(finished.error).toContain("NDJSON line exceeds");
@@ -430,7 +431,7 @@ describe("user-data import bounded extraction", () => {
       }),
     );
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(
@@ -459,7 +460,7 @@ describe("user-data import bounded extraction", () => {
       }),
     );
 
-    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const job = startImport({ userId: USER_ID, archivePath, jobId: uuidv4() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
     expect(

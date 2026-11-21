@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../lib/uuid";
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Check, ChevronRight, Globe2, Keyboard, Plus, Save, Trash2 } from 'lucide-react'
@@ -131,7 +132,7 @@ export default function DesktopKeybindingsSettings({ extensionCommand }: { exten
       <section className={styles.section} aria-label="Shortcuts">
         <div className={styles.sectionHeader}>
           <h3 className={styles.sectionTitle}><Keyboard size={15} aria-hidden="true" />Shortcuts<span className={styles.count}>{bindings.length}</span></h3>
-          <button className={styles.actionButton} type="button" disabled={busy || bindings.length >= 64 || !actions.length} onClick={() => edit([...bindings, { id: crypto.randomUUID(), action: actions[0].id, origin: commandId ? snapshot.origin : null, accountId: commandId ? snapshot.accountId : null, scope: 'focused', chord: { code: '', ctrl: false, alt: false, shift: false, meta: false } }])}><Plus size={13} aria-hidden="true" />Add Binding</button>
+          <button className={styles.actionButton} type="button" disabled={busy || bindings.length >= 64 || !actions.length} onClick={() => edit([...bindings, { id: uuidv4(), action: actions[0].id, origin: commandId ? snapshot.origin : null, accountId: commandId ? snapshot.accountId : null, scope: 'focused', chord: { code: '', ctrl: false, alt: false, shift: false, meta: false } }])}><Plus size={13} aria-hidden="true" />Add Binding</button>
         </div>
         <fieldset className={styles.bindings} disabled={busy} aria-label="Configured shortcuts">
           {bindings.map((binding, index) => <div key={binding.id} className={styles.binding} role="group" aria-label={`Binding ${index + 1}`}>

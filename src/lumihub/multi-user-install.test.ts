@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { zipSync } from "fflate";
@@ -63,7 +64,7 @@ class HubSocket extends EventTarget {
   }
 
   install(type: string, payload: unknown): Promise<any> {
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     const result = new Promise((resolve) => this.pending.set(id, resolve));
     this.receive({ type, id, payload, timestamp: Date.now() });
     return result;

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 /**
  * Outbound WebSocket client that maintains a persistent connection to LumiHub.
  * Handles reconnection with exponential backoff, heartbeats, and dispatches
@@ -203,7 +204,7 @@ class LumiHubWSClient {
     if (this.ws !== socket || !this.connected) return;
     this.send({
       type: "instance_info",
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       payload,
       timestamp: Date.now(),
     });
@@ -215,7 +216,7 @@ class LumiHubWSClient {
       console.warn(`[LumiHub WS] Rejected install_character payload: ${validation.error}`);
       this.send({
         type: "install_result",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         replyTo: msg.id,
         payload: { requestId: msg.id, success: false, error: validation.error, errorCode: "PARSE_ERROR" },
         timestamp: Date.now(),
@@ -236,7 +237,7 @@ class LumiHubWSClient {
     // Send result back to LumiHub
     this.send({
       type: "install_result",
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       replyTo: msg.id,
       payload: result,
       timestamp: Date.now(),
@@ -256,7 +257,7 @@ class LumiHubWSClient {
       console.warn(`[LumiHub WS] Rejected install_worldbook payload: ${validation.error}`);
       this.send({
         type: "install_result",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         replyTo: msg.id,
         payload: { requestId: msg.id, success: false, error: validation.error },
         timestamp: Date.now(),
@@ -275,7 +276,7 @@ class LumiHubWSClient {
 
     this.send({
       type: "install_result",
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       replyTo: msg.id,
       payload: result,
       timestamp: Date.now(),
@@ -295,7 +296,7 @@ class LumiHubWSClient {
       console.warn(`[LumiHub WS] Rejected install_theme payload: ${validation.error}`);
       this.send({
         type: "install_result",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         replyTo: msg.id,
         payload: { requestId: msg.id, success: false, error: validation.error },
         timestamp: Date.now(),
@@ -315,7 +316,7 @@ class LumiHubWSClient {
 
     this.send({
       type: "install_result",
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       replyTo: msg.id,
       payload: result,
       timestamp: Date.now(),
@@ -336,7 +337,7 @@ class LumiHubWSClient {
       console.warn(`[LumiHub WS] Rejected install_preset payload: ${validation.error}`);
       this.send({
         type: "install_result",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         replyTo: msg.id,
         payload: { requestId: msg.id, success: false, error: validation.error },
         timestamp: Date.now(),
@@ -356,7 +357,7 @@ class LumiHubWSClient {
 
     this.send({
       type: "install_result",
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       replyTo: msg.id,
       payload: result,
       timestamp: Date.now(),
@@ -377,7 +378,7 @@ class LumiHubWSClient {
       const entries = selectLumiHubManifestEntries(buildInstallManifest(this.userId));
       this.send({
         type: "manifest_sync",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         payload: { entries },
         timestamp: Date.now(),
       });
@@ -394,7 +395,7 @@ class LumiHubWSClient {
       if (!payload) return;
       this.send({
         type: "stats_sync",
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         payload,
         timestamp: Date.now(),
       });
@@ -455,7 +456,7 @@ class LumiHubWSClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      this.send({ type: "ping", id: crypto.randomUUID(), timestamp: Date.now() });
+      this.send({ type: "ping", id: uuidv4(), timestamp: Date.now() });
     }, HEARTBEAT_INTERVAL_MS);
   }
 

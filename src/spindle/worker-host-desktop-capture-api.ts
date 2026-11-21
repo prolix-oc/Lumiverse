@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash } from "node:crypto";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import * as connections from "../services/connections.service";
@@ -42,7 +43,7 @@ export function hasDesktopCaptureParts(messages: unknown): boolean {
 }
 
 export class WorkerHostDesktopCaptureApi {
-  private runtimeId = crypto.randomUUID();
+  private runtimeId = uuidv4();
   private active = true;
 
   constructor(private readonly context: WorkerHostDesktopCaptureContext,
@@ -150,7 +151,7 @@ export class WorkerHostDesktopCaptureApi {
 
   revoke(): void {
     this.broker.revokeRuntime(this.runtimeId);
-    this.runtimeId = crypto.randomUUID();
+    this.runtimeId = uuidv4();
   }
 
   activate(): void {

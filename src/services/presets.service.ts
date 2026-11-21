@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { readDatabaseRow, readDatabaseRows, runDatabaseStatement } from "../db/queries";
 import { executeDatabaseOperation } from "../db/execution";
 import { mutatePresetWithDb, type PresetMutationResult } from "../db/preset-operations";
@@ -393,7 +394,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
   const characterTagTrigger = sanitizePromptBlockCharacterTagTrigger(input.characterTagTrigger);
   const placementBinding = normalizePromptBlockPlacementBinding(input.placementBinding);
   return {
-    id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
+    id: typeof input.id === "string" && input.id.trim() ? input.id : uuidv4(),
     name: typeof input.name === "string" && input.name.trim() ? input.name : "New Chat",
     content: typeof input.content === "string" ? input.content : "",
     role,

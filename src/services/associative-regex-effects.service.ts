@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import type { RegexActionEffect } from "../types/regex-script";
 import { applyDisplayRegex } from "./display-regex.service";
 import * as chatsSvc from "./chats.service";
@@ -62,7 +63,7 @@ export async function resolveRegexActionEffects(
   if (messageIndex < 0) return { status: "not_found" };
   const depth = visibleMessages.length - 1 - messageIndex;
   const presetContext = readMessagePresetContext(source.extra, source.swipe_id) ?? undefined;
-  const verificationNonce = crypto.randomUUID();
+  const verificationNonce = uuidv4();
   const replay = (context = presetContext) => applyDisplayRegex({
     content: source.swipes[source.swipe_id] ?? source.content,
     scripts,

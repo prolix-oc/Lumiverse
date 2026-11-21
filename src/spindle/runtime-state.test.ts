@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { closeDatabase, getDb, initDatabase } from '../db/connection';
 import { runMigrations } from '../db/migrate';
@@ -63,7 +64,7 @@ test('variable deltas preserve metadata and unmodified variables; acknowledgemen
 });
 
 test('client message identifiers preserve system roles and cannot overwrite an existing or foreign message', async () => {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const created = await writeRuntimeState('owner', chatId, { kind: 'message.create', id, content: 'System', role: 'system' });
   expect(created.patch.message).toMatchObject({ id, content: 'System', role: 'system' });
   expect(readRuntimeState('owner', chatId, characterId).messages[0]?.role).toBe('system');
@@ -106,7 +107,7 @@ test('committed mutation events carry their exact acknowledgement identity and u
   const seen: any[] = [];
   const remove = eventBus.on(EventType.CHAT_CHANGED, event => seen.push(event));
   try {
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     const result = await withRuntimeMutation('owner', id, () => writeRuntimeState('owner', chatId, { kind: 'chat.variables', values: { a: 'next' } }));
     await new Promise(resolve => setTimeout(resolve, 5));
     expect(seen).toHaveLength(1);
@@ -139,7 +140,7 @@ test('the worker state API denies missing permissions and foreign chats before r
 test('runtime mutations return current records and deletion identifiers for each domain', async () => {
   const metadata = await writeRuntimeState('owner', chatId, { kind: 'chat.metadata', key: 'selected', value: 3 });
   expect(metadata.patch.chat).toMatchObject({ metadata: { preserved: 'value', selected: 3 } });
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   await writeRuntimeState('owner', chatId, { kind: 'message.create', id, content: 'Before', role: 'assistant' });
   expect((await writeRuntimeState('owner', chatId, { kind: 'message.edit', id, content: 'After' })).patch.message).toMatchObject({ id, content: 'After' });
   expect((await writeRuntimeState('owner', chatId, { kind: 'message.delete', id })).patch).toEqual({ deletedMessageId: id });

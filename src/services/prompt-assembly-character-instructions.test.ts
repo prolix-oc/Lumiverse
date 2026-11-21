@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, initDatabase } from "../db/connection";
 import { initMacros } from "../macros";
@@ -17,7 +18,7 @@ const fields = [
 
 function block(overrides: Partial<PromptBlock> = {}): PromptBlock {
   return {
-    id: crypto.randomUUID(), name: "Block", content: "", role: "system",
+    id: uuidv4(), name: "Block", content: "", role: "system",
     enabled: true, position: "pre_history", depth: 0, marker: null,
     isLocked: false, color: null, injectionTrigger: [], group: null,
     ...overrides,

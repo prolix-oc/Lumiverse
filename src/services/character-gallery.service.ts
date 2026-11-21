@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import { executeDatabaseOperation } from '../db/execution';
 import { readDatabaseRow } from '../db/queries';
@@ -207,7 +208,7 @@ export function addToGallery(
   caption?: string,
   options: { registerReference?: boolean } = {},
 ): CharacterGalleryItem {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
 
   getDb()
@@ -230,7 +231,7 @@ export function linkImageToGallery(
   imageId: string,
   caption?: string
 ): void {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
   getDb()
     .query(

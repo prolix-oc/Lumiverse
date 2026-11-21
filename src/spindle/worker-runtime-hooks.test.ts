@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -68,12 +69,12 @@ test('worker hooks preserve thrown values and propagate cancellation across the 
     });
     for (const kind of ['context_handler', 'intercept']) {
       for (const failure of [null, undefined, '', 'failure', false, 0]) {
-        const requestId = crypto.randomUUID();
+        const requestId = uuidv4();
         worker.send({ type: `${kind}_request`, requestId, registrationId: registration.registrationId, messages: [], context: { failure } });
         const response = await waitFor(message => message.type === `${kind}_result` && message.requestId === requestId);
         expect(response.error).toBe(String(failure));
       }
-      const requestId = crypto.randomUUID();
+      const requestId = uuidv4();
       worker.send({ type: `${kind}_request`, requestId, registrationId: registration.registrationId, messages: [], context: { wait: true, id: requestId } });
       await waitFor(message => message.type === 'frontend_message' && message.payload.waiting === requestId);
       worker.send({ type: `${kind}_abort`, requestId, registrationId: registration.registrationId, reason: 'Cancelled by test' });

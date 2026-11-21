@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { getDb } from "../db/connection";
 import * as settingsSvc from "../services/settings.service";
 import { DEFAULT_PROMPT_BEHAVIOR } from "../services/prompt-behavior";
@@ -485,7 +486,7 @@ export function seedDefaultPreset(
   }
 
   if (!row) {
-    const id = crypto.randomUUID();
+    const id = uuidv4();
     const now = Math.floor(Date.now() / 1000);
     db.query(
       "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

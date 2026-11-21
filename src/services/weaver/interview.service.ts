@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { getDb } from "../../db/connection";
 import { getSession } from "./session.service";
 import { getExtraction, addCommittedFact, revertSlotsToGaps, forgetSlots } from "./extraction.service";
@@ -267,7 +268,7 @@ export function decideOptIn(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`,
       )
       .run(
-        crypto.randomUUID(),
+        uuidv4(),
         sessionId,
         userId,
         nextSeq(sessionId),
@@ -345,7 +346,7 @@ function priorityFor(reg: WeaverBuildRegistry, t: WeaverElicitTarget): { target:
 function fallbackQuestion(reg: WeaverBuildRegistry, t: WeaverElicitTarget): WeaverInterviewQuestion {
   const p = priorityFor(reg, t);
   return {
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     prompt: `${p.label} is still open for this ${reg.subject.noun}${p.description ? ` — ${p.description}` : ""}. What feels true here, in your own words?`,
     why: "This essential is still open; anything you give beats a guess from me.",
     target: p.target,
@@ -434,7 +435,7 @@ export async function generateQuestion(
       signal,
     });
     if (buildDynamicQuestionVerdict(gateRaw, reg.questionGateCriteria).passed) {
-      return { id: crypto.randomUUID(), prompt, why, target };
+      return { id: uuidv4(), prompt, why, target };
     }
     avoid.push(prompt);
   }
@@ -507,7 +508,7 @@ export async function answerQuestion(
   let addr: string;
   if (target === DYNAMIC_TARGET) {
     answerDynamicQuestion(userId, sessionId, {
-      id: typeof q.id === "string" && q.id.trim() ? q.id : crypto.randomUUID(),
+      id: typeof q.id === "string" && q.id.trim() ? q.id : uuidv4(),
       question: prompt,
       answer: content,
     });
@@ -523,7 +524,7 @@ export async function answerQuestion(
     addr = validPart && validPart !== slot ? `${slot}:${validPart}` : slot;
   }
 
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const seq = nextSeq(sessionId);
   getDb()
     .prepare(

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../utils/uuid";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getDb } from "../db/connection";
 import { activityCard, type ActivityCard } from "./spindle-live-activity-content";
@@ -41,7 +42,7 @@ export async function startSpindleLiveActivity(extensionId: string, extensionNam
   if (!Number.isInteger(duration) || duration < 60 || duration > 28800) throw new Error("Live Activity duration must be 60–28800 seconds");
   if (!spindleLiveActivityStatus(userId).available) throw new Error("Open an updated iOS app with notifications and Live Activities enabled first");
   const card = await activityCard(userId, input);
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   // Check again inside the transaction after asynchronous image preparation.
   return getDb().transaction(() => {
     const duplicate = getDb().query("SELECT * FROM spindle_live_activities WHERE extension_id = ? AND user_id = ? AND activity_key = ?")
@@ -113,7 +114,7 @@ export function spindleLiveActivitySnapshot(userId: string, input: Record<string
     let credential: string | undefined;
     if (!device || !known.has(device.id)) {
       credential = randomBytes(32).toString("base64url");
-      const id = device?.id ?? crypto.randomUUID();
+      const id = device?.id ?? uuidv4();
       getDb().query(`INSERT INTO spindle_live_activity_devices (id, activity_id, destination_id, credential_hash) VALUES (?, ?, ?, ?)
         ON CONFLICT(activity_id, destination_id) DO UPDATE SET credential_hash = excluded.credential_hash, native_activity_id = NULL,
           push_token = NULL, relay_credential = NULL, token_epoch = '', token_registered_at = 0, delivered_revision = 0, last_timestamp = 0, next_attempt_at = 0`).run(id, row.id, dest.id, hash(credential));
@@ -142,7 +143,7 @@ export function refreshSpindleLiveActivity(id: string, credential: string, input
   const changed = token !== row.push_token || relay !== oldRelay;
   if (changed) getDb().query(`UPDATE spindle_live_activity_devices SET native_activity_id = ?, push_token = ?, relay_credential = ?,
     token_epoch = ?, token_registered_at = ?, delivered_revision = 0, next_attempt_at = 0, attempts = 0 WHERE id = ?`)
-    .run(input.activityId, token, sealIOSNotificationSecret(relay, `spindle-activity:${id}`), crypto.randomUUID(), Date.now(), id);
+    .run(input.activityId, token, sealIOSNotificationSecret(relay, `spindle-activity:${id}`), uuidv4(), Date.now(), id);
   void flushSpindleLiveActivities();
   return true;
 }

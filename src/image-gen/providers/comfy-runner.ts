@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../utils/uuid";
 import { createWebSocketReceiveBackpressure, openWebSocket } from "./ws-helpers"
 import { parseProviderErrorBody, readBoundedText } from "../../utils/provider-errors"
 
@@ -90,7 +91,7 @@ export async function uploadComfyImage(
   const bytes = Buffer.from(image.data, "base64")
   const mime = image.mimeType || "image/png"
   const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("webp") ? "webp" : "png"
-  const filename = image.filename || `lumiverse-init-${crypto.randomUUID()}.${ext}`
+  const filename = image.filename || `lumiverse-init-${uuidv4()}.${ext}`
 
   const form = new FormData()
   form.append("image", new Blob([bytes], { type: mime }), filename)
@@ -165,7 +166,7 @@ export async function* executeComfyWorkflowStream(
   // The WS handshake then returns a normal HTTP response and Bun reports
   // "Expected 101 status code". Strip once at the boundary.
   baseUrl = baseUrl.replace(/\/+$/, "")
-  const clientId = crypto.randomUUID()
+  const clientId = uuidv4()
 
   const wsUrl = baseUrl.replace(/^http/, "ws") + `/ws?clientId=${clientId}`
   console.debug("[%s] Opening WS to %s (clientId=%s)", label, wsUrl, clientId)
