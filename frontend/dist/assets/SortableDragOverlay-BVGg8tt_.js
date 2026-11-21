@@ -1,0 +1,1 @@
+import{Oo as e,Vi as t,Xt as n,gi as r}from"./global-Cs_teJJq.js";var i=e(),a=t();function o({children:e,className:t}){let o=r();return(0,i.createPortal)((0,a.jsx)(n,{dropAnimation:null,zIndex:10010,style:{zoom:1/o},children:e&&(0,a.jsx)(`div`,{className:t,"aria-hidden":`true`,inert:!0,style:{zoom:o},children:e})}),document.body)}export{o as t};

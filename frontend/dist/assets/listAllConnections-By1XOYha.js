@@ -1,0 +1,1 @@
+async function e(e){let t=[],n=0;for(;;){let r=await e.list({limit:200,offset:n});if(t.push(...r.data),n+=r.data.length,r.data.length===0||n>=r.total)break}return{data:t,total:t.length,limit:t.length,offset:0}}export{e as t};

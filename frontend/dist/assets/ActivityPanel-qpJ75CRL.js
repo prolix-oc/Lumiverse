@@ -1,0 +1,1 @@
+import{Ro as e,Vi as t,ko as n}from"./global-Cs_teJJq.js";var r=e(n(),1),i=t();function a({active:e,children:t}){let[n,a]=(0,r.useState)(e);return e&&!n&&a(!0),!e&&!n?null:(0,i.jsx)(r.Activity,{mode:e?`visible`:`hidden`,children:t})}export{a as t};

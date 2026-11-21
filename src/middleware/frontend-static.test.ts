@@ -15,7 +15,7 @@ const app = new Hono().route('/', frontendStaticRoutes(root))
 app.notFound(c => c.json({ error: 'Not found' }, 404))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-test.each(['/assets/missing-12345678.js', '/sw-missing.js', '/api/missing', '/importmap.json'])('returns a real 404 for %s', async path => {
+test.each(['/assets/missing-12345678.js', '/sw-missing.js', '/api/missing', '/importmap.json', '/src/utils/uuid'])('returns a real 404 for %s', async path => {
   const response = await app.request(path)
   expect(response.status).toBe(404)
   expect(await response.text()).not.toContain('<html>')

@@ -1,0 +1,1 @@
+import{ft as e}from"./global-Cs_teJJq.js";var t=e(`outline`,`playlist-add`,`PlaylistAdd`,[[`path`,{d:`M19 8h-14`,key:`svg-0`}],[`path`,{d:`M5 12h9`,key:`svg-1`}],[`path`,{d:`M11 16h-6`,key:`svg-2`}],[`path`,{d:`M15 16h6`,key:`svg-3`}],[`path`,{d:`M18 13v6`,key:`svg-4`}]]);export{t};

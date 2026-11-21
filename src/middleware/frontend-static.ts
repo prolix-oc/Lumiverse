@@ -22,7 +22,7 @@ export function frontendStaticRoutes(root: string): Hono {
   routes.use('*', async (c, next) => {
     // An old import map may request a removed chunk. Returning index.html here
     // used to cache HTML for a year under that JS URL and hide the real 404.
-    if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/assets/')
+    if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/assets/') || c.req.path.startsWith('/src/')
       || /\.[a-z0-9]+$/i.test(c.req.path)) return next()
     return serveStatic({ root, path: 'index.html' })(c, next)
   })

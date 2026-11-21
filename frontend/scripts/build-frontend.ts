@@ -81,7 +81,9 @@ async function copyBuildOverLockedDirectory(
     }
   }
 
-  assertUsableBuild(distDir)
+  // The staged modules were checked before copying. Retained chunks from an
+  // older Windows build can still reference that build's former import map.
+  assertUsableBuild(distDir, false)
 }
 
 export function resolveViteRuntime(
@@ -98,7 +100,7 @@ export function resolveViteRuntime(
   return isTermuxLike ? nodeExecPath ?? 'node' : bunExecPath
 }
 
-function assertUsableBuild(buildDir: string): void {
+export function assertUsableBuild(buildDir: string, checkModuleImports = true): void {
   for (const file of REQUIRED_BUILD_FILES) {
     const path = join(buildDir, file)
     if (!existsSync(path) || !statSync(path).isFile()) {
@@ -111,6 +113,7 @@ function assertUsableBuild(buildDir: string): void {
     throw new Error('Frontend build is incomplete: assets directory is empty')
   }
 
+  const imports: Record<string, string> = Object.create(null)
   for (const entry of ['index.html', 'widget.html']) {
     const path = join(buildDir, entry)
     if (!existsSync(path)) continue
@@ -136,6 +139,25 @@ function assertUsableBuild(buildDir: string): void {
         if (!relative(assetsDir, asset).startsWith('..') && existsSync(asset) && statSync(asset).isFile()) continue
         throw new Error(`Frontend build is incomplete: missing import map asset ${target}`)
       }
+      Object.assign(imports, inline.imports)
+    }
+  }
+
+  if (!checkModuleImports) return
+  const transpiler = new Bun.Transpiler({ loader: 'js' })
+  for (const file of new Bun.Glob('**/*.{js,mjs}').scanSync({ cwd: buildDir, onlyFiles: true })) {
+    const moduleURL = new URL(file.replaceAll('\\', '/'), 'https://lumiverse.invalid/')
+    const dependencies = transpiler.scan(readFileSync(join(buildDir, file), 'utf8')).imports
+    for (const dependency of dependencies) {
+      const specifier = dependency.path
+      const url = new URL(specifier, moduleURL)
+      const target = imports[specifier] ?? imports[url.pathname + url.search] ?? specifier
+      if (/^(?:https?:|data:|blob:)/.test(target)) continue
+      const resolved = new URL(target, moduleURL)
+      const asset = resolve(buildDir, `.${decodeURIComponent(resolved.pathname)}`)
+      if ((target.startsWith('.') || target.startsWith('/')) && resolved.pathname.startsWith('/assets/')
+        && !relative(assetsDir, asset).startsWith('..') && existsSync(asset) && statSync(asset).isFile()) continue
+      throw new Error(`Frontend build is incomplete: unresolved browser import ${specifier} in ${file}`)
     }
   }
 }

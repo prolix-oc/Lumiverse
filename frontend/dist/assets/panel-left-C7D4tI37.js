@@ -1,0 +1,1 @@
+import{ho as e}from"./global-Cs_teJJq.js";var t=e(`PanelLeft`,[[`rect`,{width:`18`,height:`18`,x:`3`,y:`3`,rx:`2`,key:`afitv7`}],[`path`,{d:`M9 3v18`,key:`fh3hqa`}]]);export{t};

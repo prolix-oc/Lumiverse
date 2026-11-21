@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { rename } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { promoteFrontendBuild, recoverInterruptedBuild, resolveViteRuntime } from './build-frontend'
+import { join, resolve } from 'path'
+import { assertUsableBuild, promoteFrontendBuild, recoverInterruptedBuild, resolveViteRuntime } from './build-frontend'
 import { FRONTEND_BUILD_STAMP } from './frontend-build-inputs'
 
 const tempDirs: string[] = []
@@ -17,8 +17,8 @@ function makeTempDir(): string {
 function writeBuild(dir: string, marker: string, complete = true): void {
   mkdirSync(join(dir, 'assets'), { recursive: true })
   writeFileSync(join(dir, 'index.html'), marker)
-  writeFileSync(join(dir, 'assets', 'index.js'), marker)
-  if (complete) writeFileSync(join(dir, 'sw.js'), marker)
+  writeFileSync(join(dir, 'assets', 'index.js'), JSON.stringify(marker))
+  if (complete) writeFileSync(join(dir, 'sw.js'), JSON.stringify(marker))
 }
 
 function writeMappedBuild(dir: string): void {
@@ -34,6 +34,10 @@ afterEach(() => {
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop()!, { recursive: true, force: true })
   }
+})
+
+test('checked-in frontend modules have no unresolved browser imports', () => {
+  assertUsableBuild(resolve(import.meta.dirname, '../dist'))
 })
 
 describe('atomic frontend build promotion', () => {
@@ -116,6 +120,41 @@ describe('atomic frontend build promotion', () => {
       .rejects.toThrow('widget.html import map differs')
   })
 
+  for (const source of [
+    'import { uuidv4 } from "../../../src/utils/uuid"; uuidv4()',
+    'export { uuidv4 } from "/src/utils/uuid"',
+    'import "./missing.js"',
+    'export const load = () => import("./missing.js")',
+    'import "unbundled-package"',
+  ]) {
+    test(`preserves the current build when a chunk has an unresolved import: ${source}`, async () => {
+      const root = makeTempDir()
+      const staged = join(root, 'staged')
+      const dist = join(root, 'dist')
+      writeMappedBuild(staged)
+      writeBuild(dist, 'old')
+      writeFileSync(join(staged, 'assets/index.js'), source)
+      await expect(promoteFrontendBuild(staged, dist, join(root, 'backup')))
+        .rejects.toThrow('unresolved browser import')
+      expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
+    })
+  }
+
+  test('resolves relative, dynamic and re-exported imports through the emitted import map', async () => {
+    const root = makeTempDir()
+    const staged = join(root, 'staged')
+    writeMappedBuild(staged)
+    writeFileSync(join(staged, 'assets/index.js'), 'export default 1')
+    writeFileSync(join(staged, 'assets/loader.js'), `
+      import './stable.js'
+      export { default } from '/assets/stable.js'
+      export const load = () => import('./stable.js')
+    `)
+    const dist = join(root, 'dist')
+    await promoteFrontendBuild(staged, dist, join(root, 'backup'))
+    expect(existsSync(join(dist, 'assets/loader.js'))).toBe(true)
+  })
+
   test('Windows fallback promotes assets, map, both HTML entries, then the worker', async () => {
     const root = makeTempDir()
     const staged = join(root, 'staged')
@@ -156,9 +195,9 @@ describe('atomic frontend build promotion', () => {
       sleep: async () => {},
     })
 
-    expect(readFileSync(join(dist, 'assets', 'index.js'), 'utf8')).toBe('new')
+    expect(readFileSync(join(dist, 'assets', 'index.js'), 'utf8')).toBe('"new"')
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('new')
-    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('new')
+    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('"new"')
     expect(existsSync(join(dist, 'assets', 'old-hash.js'))).toBe(true)
     expect(existsSync(staged)).toBe(false)
     expect(existsSync(backup)).toBe(false)
@@ -188,9 +227,9 @@ describe('atomic frontend build promotion', () => {
       sleep: async () => {},
     })).rejects.toThrow('file is in use')
 
-    expect(readFileSync(join(dist, 'assets', 'index.js'), 'utf8')).toBe('old')
+    expect(readFileSync(join(dist, 'assets', 'index.js'), 'utf8')).toBe('"old"')
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
-    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('old')
+    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('"old"')
   })
 
   test('does not copy over dist after a non-transient Windows rename error', async () => {
@@ -215,6 +254,6 @@ describe('atomic frontend build promotion', () => {
     })).rejects.toThrow('disk full')
 
     expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('old')
-    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('old')
+    expect(readFileSync(join(dist, 'sw.js'), 'utf8')).toBe('"old"')
   })
 })
