@@ -14,8 +14,8 @@ import { installKeyboardFocusReveal } from './lib/keyboardFocusReveal'
 import { installIOSKeyboardScrollGuard } from './lib/iosKeyboardScroll'
 import { subscribeIOSNativeViewport } from './lib/iosNativeViewport'
 import { installIOSEditableFocusScrollPrevention } from './lib/iosEditableFocus'
-import { rememberRegistration } from './lib/swUpdater'
-import { claimServiceWorkerReload } from './lib/swUpdatePolicy'
+import { rememberRegistration, checkForBundleUpdate } from './lib/swUpdater'
+import { installServiceWorkerReload } from './lib/swReload'
 import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { installDisplayPerformanceTelemetry, markDisplayInteractive, markDisplayMilestone } from './lib/displayPerformance'
@@ -34,41 +34,38 @@ installWindowOpenGuard()
 installPwaLifecycleDiagnostics()
 installStreamDeckHandoffReceiver(path => { void router.navigate(path) })
 
-let reloading = false
-
-// Register service worker for PWA support — autoUpdate sends SKIP_WAITING
-// automatically when a new SW is detected.
+// The custom worker skips waiting and claims clients after its precache is ready.
 // The APK already carries its offline frontend. A PWA worker on its persistent
 // loopback origin can outlive an APK upgrade and serve a different bundle.
-if ((window as Window & { __LUMIVERSE_ANDROID_LOCAL__?: boolean }).__LUMIVERSE_ANDROID_LOCAL__ !== true) registerSW({
-  immediate: true,
-  // vite-plugin-pwa calls this only after an updated (including externally
-  // updated) worker takes control. Keep the reload policy with the
-  // registration lifecycle instead of duplicating it with a browser listener.
-  onNeedReload() {
-    if (reloading) return
-    if (!claimServiceWorkerReload(window.sessionStorage)) {
-      console.warn('[service-worker] Suppressed repeated automatic reload')
-      return
-    }
-    reloading = true
-    window.location.reload()
-  },
-  onRegisteredSW(_swUrl, registration) {
-    // Long-running tabs (especially PWAs) may stay open for days.
-    // Periodically check for a new SW so deploys are picked up without
-    // requiring a navigation or manual refresh.
-    if (registration) {
-      setInterval(() => {
-        if (document.visibilityState === 'visible') registration.update()
-      }, 60 * 60 * 1000)
-    }
-    // Hand the registration to swUpdater so the connection-lost overlay can
-    // ask for an immediate bundle check on reconnect, and so we can surface
-    // an "Updating…" state when a new worker is installing.
-    rememberRegistration(registration)
-  },
-})
+if (navigator.serviceWorker && (window as Window & { __LUMIVERSE_ANDROID_LOCAL__?: boolean }).__LUMIVERSE_ANDROID_LOCAL__ !== true) {
+  const reloadWhenControlled = installServiceWorkerReload(
+    navigator.serviceWorker, () => window.sessionStorage, () => window.location.reload(),
+  )
+  registerSW({
+    immediate: true,
+    // Some plugin versions notify on activation, before controllerchange. Both
+    // signals use the same check so an early callback cannot reload stale HTML.
+    onNeedReload: reloadWhenControlled,
+    onRegisteredSW(_swUrl, registration) {
+      // Long-running tabs (especially PWAs) may stay open for days.
+      // Periodically check for a new SW so deploys are picked up without
+      // requiring a navigation or manual refresh.
+      if (registration) {
+        setInterval(() => {
+          if (document.visibilityState === 'visible') void checkForBundleUpdate()
+        }, 5 * 60 * 1000)
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') void checkForBundleUpdate()
+        })
+        window.addEventListener('online', () => { void checkForBundleUpdate() })
+      }
+      // Hand the registration to swUpdater so the connection-lost overlay can
+      // ask for an immediate bundle check on reconnect, and so we can surface
+      // an "Updating…" state when a new worker is installing.
+      rememberRegistration(registration)
+    },
+  })
+}
 
 // Navigate when a push notification is clicked (SW posts NAVIGATE message)
 navigator.serviceWorker?.addEventListener('message', (event) => {

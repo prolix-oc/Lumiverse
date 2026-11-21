@@ -402,8 +402,11 @@ test("starts the server once after a stopped operation succeeds", async () => {
   expect(calls).toEqual(["stop", "operation", "start"]);
 });
 
-test("repairs Termux native bindings before a source-only frontend rebuild", () => {
-  expect(planChangedDependencies(["frontend/src/App.tsx"], true)).toEqual({
+test.each([
+  "frontend/src/App.tsx", "src/shared/schedule-microtask.ts", "src/shared/greeting-match.ts",
+  "src/utils/uuid.ts", "src/image-gen/image-input.ts",
+])("repairs Termux native bindings before a runtime frontend input rebuild: %s", (input) => {
+  expect(planChangedDependencies([input], true)).toEqual({
     installBackend: false,
     installFrontend: false,
     repairTermuxFrontendNativeDeps: true,

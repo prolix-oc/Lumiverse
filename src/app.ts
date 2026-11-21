@@ -3,7 +3,7 @@ import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
 import { bodyLimit } from "hono/body-limit";
-import { serveStatic } from "@hono/bun";
+import { frontendStaticRoutes } from "./middleware/frontend-static";
 import { websocket } from "./ws/transport";
 import { env } from "./env";
 import { auth } from "./auth";
@@ -501,30 +501,7 @@ app.get("/api/ws", wsHandler);
 
 // Serve frontend static files if FRONTEND_DIR is configured
 if (env.frontendDir) {
-  // Cache headers for frontend static files:
-  // - /assets/* have content hashes in filenames → immutable, cache forever
-  // - Everything else (index.html, sw.js, manifest.json, SPA fallback) → revalidate every time
-  // API routes are unaffected (they set their own headers).
-  app.use("*", async (c, next) => {
-    await next();
-    const path = c.req.path;
-    if (path.startsWith("/assets/")) {
-      c.res.headers.set("Cache-Control", "public, max-age=31536000, immutable");
-    } else if (!path.startsWith("/api/")) {
-      c.res.headers.set("Cache-Control", "no-cache");
-    }
-    if (path === "/manifest.json") {
-      c.res.headers.set("Content-Type", "application/manifest+json");
-    }
-    if (path === "/sw.js") {
-      c.res.headers.set("Service-Worker-Allowed", "/");
-    }
-  });
-
-  app.use("*", serveStatic({ root: env.frontendDir }));
-
-  // SPA fallback: serve index.html for any non-API route not matched above
-  app.use("*", serveStatic({ root: env.frontendDir, path: "index.html" }));
+  app.route("/", frontendStaticRoutes(env.frontendDir));
 }
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));

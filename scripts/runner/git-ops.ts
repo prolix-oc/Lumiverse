@@ -17,6 +17,7 @@ import { spawnAsync } from "./lib/spawn-async.js";
 import { npmCmd } from "./lib/termux-cli.js";
 import { resolveWindowsMsvc, windowsMsvcCommand } from "../windows-msvc.js";
 import { configuredBunExecutable, ensureBunRuntime } from "../../src/runtime/bun-runtime.js";
+import { frontendBuildIsCurrent } from "../../frontend/scripts/frontend-build-inputs.js";
 
 export interface UpdateState {
   available: boolean;
@@ -75,6 +76,8 @@ function getCommitsAhead(branchRef: string, upstreamRef: string): number {
 }
 
 function isFrontendBuildInput(filePath: string): boolean {
+  if (filePath.startsWith("src/shared/") || filePath.startsWith("src/utils/")
+    || filePath === "src/image-gen/image-input.ts" || filePath === "scripts/windows-fs-retry.ts") return true;
   if (!filePath.startsWith("frontend/")) return false;
   if (FRONTEND_BUILD_IGNORED_FILES.has(filePath)) return false;
   return !FRONTEND_BUILD_IGNORED_PATHS.some((prefix) => filePath.startsWith(prefix));
@@ -589,10 +592,10 @@ export async function applyUpdate(
       fromRef: previousHead,
       toRef: currentHead,
     });
-    if (shouldRebuildFrontend(changedFiles)) {
+    if (shouldRebuildFrontend(changedFiles) || !frontendBuildIsCurrent(frontendDir)) {
       const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
       reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
-      log(`Frontend changes detected in update; waiting for Vite build (${summary}).`);
+      log(`Frontend inputs changed or the installed bundle is unverified; waiting for Vite build (${summary}).`);
       await rebuildFrontend(frontendDir, reportProgress);
     } else {
       reportProgress?.("No frontend changes detected; restarting server...");
@@ -646,7 +649,7 @@ export async function switchBranch(
       fromRef: previousHead,
       toRef: currentHead,
     });
-    if (shouldRebuildFrontend(changedFiles)) {
+    if (shouldRebuildFrontend(changedFiles) || !frontendBuildIsCurrent(frontendDir)) {
       const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
       reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
       log(`Frontend changes detected after branch switch; waiting for Vite build (${summary}).`);

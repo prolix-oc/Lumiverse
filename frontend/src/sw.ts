@@ -13,7 +13,7 @@ declare let self: ServiceWorkerGlobalScope
 // Skip the waiting phase so updates take effect without requiring all
 // tabs to close. Combined with clients.claim() on activate, this ensures
 // a rebuild is picked up on the next navigation or periodic check.
-self.addEventListener('install', () => { self.skipWaiting() })
+self.addEventListener('install', (event) => { event.waitUntil(self.skipWaiting()) })
 
 // ── Precaching (injected by vite-plugin-pwa at build time) ──────────
 precacheAndRoute(self.__WB_MANIFEST)

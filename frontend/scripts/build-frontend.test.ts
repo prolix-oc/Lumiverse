@@ -4,6 +4,7 @@ import { rename } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { promoteFrontendBuild, recoverInterruptedBuild, resolveViteRuntime } from './build-frontend'
+import { FRONTEND_BUILD_STAMP } from './frontend-build-inputs'
 
 const tempDirs: string[] = []
 
@@ -121,6 +122,7 @@ describe('atomic frontend build promotion', () => {
     const dist = join(root, 'dist')
     const backup = join(root, 'backup')
     writeMappedBuild(staged)
+    writeFileSync(join(staged, FRONTEND_BUILD_STAMP), 'new fingerprint')
     writeBuild(dist, 'old')
     const promoted: string[] = []
     const renamePath: typeof rename = async (source, destination) => {
@@ -129,7 +131,7 @@ describe('atomic frontend build promotion', () => {
       return rename(source, destination)
     }
     await promoteFrontendBuild(staged, dist, backup, { platform: 'win32', renamePath, sleep: async () => {} })
-    expect(promoted).toEqual(['assets/index.js', 'importmap.json', 'index.html', 'widget.html', 'sw.js'])
+    expect(promoted).toEqual(['assets/index.js', 'importmap.json', 'index.html', 'widget.html', 'sw.js', FRONTEND_BUILD_STAMP])
   })
 
   test('atomically copies files when a transient Windows lock blocks the directory rename', async () => {

@@ -6,9 +6,11 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'fs'
 import { rename } from 'fs/promises'
 import { basename, dirname, join, relative, resolve } from 'path'
+import { FRONTEND_BUILD_STAMP, frontendBuildFingerprint } from './frontend-build-inputs'
 
 const REQUIRED_BUILD_FILES = ['index.html', 'sw.js'] as const
 
@@ -50,6 +52,7 @@ function buildFilesInPromotionOrder(buildDir: string): string[] {
 
   const priority = (path: string): number => {
     const name = relative(buildDir, path).replaceAll('\\', '/')
+    if (name === FRONTEND_BUILD_STAMP) return 4
     if (name === 'sw.js') return 3
     if (name.endsWith('.html')) return 2
     if (name === 'importmap.json') return 1
@@ -225,6 +228,7 @@ async function buildFrontend(): Promise<void> {
   rmSync(backupDir, { recursive: true, force: true })
 
   console.log(`Building frontend into ${basename(stagedDir)}...`)
+  const inputHash = frontendBuildFingerprint(frontendDir)
   const proc = Bun.spawn([resolveViteRuntime(), viteCli, 'build', '--outDir', stagedDir, '--emptyOutDir'], {
     cwd: frontendDir,
     env: {
@@ -242,6 +246,11 @@ async function buildFrontend(): Promise<void> {
     throw new Error(`Vite build failed with exit code ${exitCode}`)
   }
 
+  if (inputHash !== frontendBuildFingerprint(frontendDir)) {
+    rmSync(stagedDir, { recursive: true, force: true })
+    throw new Error('Frontend inputs changed during the build; rebuild before installing it')
+  }
+  writeFileSync(join(stagedDir, FRONTEND_BUILD_STAMP), JSON.stringify({ inputHash }))
   await promoteFrontendBuild(stagedDir, distDir, backupDir)
   console.log('Frontend bundle validated and installed atomically.')
 }
