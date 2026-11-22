@@ -117,6 +117,8 @@ For full styling control beyond what the Theme Panel exposes, open **Settings �
 - **Custom CSS** — raw CSS that's injected after the built-in stylesheet, so you can override any variable or selector
 - **Component Overrides** — safe TSX decorators for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
 
+With the CSS or TSX editor focused, press **Ctrl+F** (**Cmd+F** on macOS) to open its find and replace panel. Selected text becomes the initial search query. Use **Enter** / **Shift+Enter** to move between matches and **Escape** to close search and return to editing. Search stays within the current code document in both the modal and docked editor.
+
 Component starter templates render `<Original />`, a trusted slot containing the
 complete built-in component. Keep that slot in the template and add markup around
 it so native behavior—actions, swipes, editing, greetings, accessibility, and new

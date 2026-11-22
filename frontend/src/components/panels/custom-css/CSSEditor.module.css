@@ -53,6 +53,50 @@
   background: var(--lumiverse-primary-015);
 }
 
+.editor :global(.cm-panels) {
+  background: var(--lumiverse-bg-elevated);
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-border);
+}
+
+.editor :global(.cm-panel.cm-search) {
+  padding: 6px 30px 6px 8px;
+}
+
+.editor :global(.cm-search .cm-textfield) {
+  max-width: 100%;
+  font: inherit;
+  background: var(--lumiverse-input-bg);
+  color: var(--lumiverse-text);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-sm);
+}
+
+.editor :global(.cm-search .cm-button) {
+  font: inherit;
+  background: var(--lumiverse-fill);
+  color: var(--lumiverse-text);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-sm);
+}
+
+.editor :global(.cm-search .cm-button:hover) {
+  background: var(--lumiverse-fill-hover);
+}
+
+.editor :global(.cm-search input[type='checkbox']) {
+  accent-color: var(--lumiverse-primary);
+}
+
+.editor :global(.cm-searchMatch) {
+  background: var(--lumiverse-primary-020);
+  outline: 1px solid var(--lumiverse-primary-muted);
+}
+
+.editor :global(.cm-searchMatch-selected) {
+  background: var(--lumiverse-primary-050);
+}
+
 .editor :global(.cm-diagnostic-error) {
   border-bottom: 2px solid var(--lumiverse-danger);
 }

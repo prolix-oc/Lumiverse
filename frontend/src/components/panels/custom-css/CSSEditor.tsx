@@ -7,6 +7,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap, autocompletion } from '@codemirror/autocomplete'
 import { lintGutter } from '@codemirror/lint'
+import { search, searchKeymap } from '@codemirror/search'
 import styles from './CSSEditor.module.css'
 
 interface CodeEditorProps {
@@ -57,6 +58,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
         highlightActiveLine(),
         highlightActiveLineGutter(),
         history(),
+        search({ top: true }),
         foldGutter(),
         bracketMatching(),
         closeBrackets(),
@@ -65,12 +67,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
         oneDark,
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         lintGutter(),
+        // Keep handled shortcuts local, including while a search field is
+        // focused. App-level listeners must not also act on editor commands.
         keymap.of([
+          ...searchKeymap,
           ...defaultKeymap,
           ...historyKeymap,
           ...foldKeymap,
           ...closeBracketsKeymap,
-        ]),
+        ].map((binding) => ({ ...binding, stopPropagation: true }))),
         ...(extensionsRef.current ?? []),
         updateListener,
         EditorView.lineWrapping,
