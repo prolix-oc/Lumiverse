@@ -79,6 +79,7 @@ export async function startExtension(id: string): Promise<void> {
     // Re-fetch after sync in case permissions/metadata changed
     const freshExt = (await managerSvc.getExtension(id)) ?? ext;
     const manifest = await managerSvc.getManifest(freshExt.identifier);
+    await managerSvc.assertSafeFrontendBundles(freshExt.identifier, manifest);
     const host = new WorkerHost(freshExt.id, manifest, freshExt);
     await host.start();
     runningExtensions.set(id, host);

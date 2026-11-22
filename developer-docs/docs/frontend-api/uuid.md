@@ -4,6 +4,8 @@
 
 `crypto.randomUUID()` is unavailable in insecure browser contexts, such as a Lumiverse instance opened over plain HTTP on a remote host. This helper uses `crypto.getRandomValues()`, which is available in those contexts.
 
+Lumiverse rejects frontend bundles that reference `crypto.randomUUID()`, including bundled dependencies and dedicated desktop-widget entries. Use `ctx.uuid.v4()` or `ctx.uuid.v7()` instead. The error follows the backend capability checks: `Extension "…" uses blocked frontend capabilities: direct crypto.randomUUID API usage`, with guidance to use this helper. Backend crypto APIs remain available for UUID generation, hashing, and other backend work.
+
 `frontend-uuid-v1` advertises this frontend API. The backend capability `uuid-v1` does not imply that `ctx.uuid` exists. Feature-detect both the frontend capability and the member when supporting older hosts:
 
 ```ts

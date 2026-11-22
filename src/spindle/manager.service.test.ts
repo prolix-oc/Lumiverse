@@ -5,6 +5,7 @@ import {
   bunInstallEnv,
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
+  detectDangerousFrontendCapabilities,
   PRIVILEGED_PERMISSIONS,
   shouldUseWindowsSpindleBunSyncFallback,
 } from "./manager.service";
@@ -374,6 +375,68 @@ describe("detectDangerousBackendCapabilities", () => {
     const code = 'const message = `value: ${process.env.SECRET}`; void message;';
 
     expect(detectDangerousBackendCapabilities(code)).toContain("dangerous process API usage");
+  });
+});
+
+describe("detectDangerousFrontendCapabilities", () => {
+  test("blocks native UUID references, aliases, and common bundled forms", () => {
+    // Substitute the API name to keep intentional fixtures out of the repo's
+    // native UUID usage guard.
+    const samples = [
+      "crypto.nativeUUID();",
+      "crypto?.nativeUUID?.();",
+      'crypto["nativeUUID"]();',
+      'crypto?.["nativeUUID"]?.();',
+      'crypto["random" + "UUID"]();',
+      "crypto[String.fromCharCode(114, 97, 110, 100, 111, 109, 85, 85, 73, 68)]();",
+      "window.crypto.nativeUUID();",
+      "globalThis.crypto.nativeUUID();",
+      "self.crypto.nativeUUID();",
+      'window["crypto"]["nativeUUID"]();',
+      "globalThis?.crypto?.nativeUUID?.();",
+      "const c = crypto; c.nativeUUID();",
+      "const c = crypto; const other = c; other.nativeUUID();",
+      "const c$ = crypto; c$.nativeUUID();",
+      "const $root = window, $c = $root.crypto; $c.nativeUUID();",
+      "const root = window, c = root.crypto; c.nativeUUID();",
+      "const { crypto: c } = globalThis; c.nativeUUID();",
+      "const { nativeUUID: uuid } = crypto; uuid();",
+      'const { "nativeUUID": uuid } = window.crypto; uuid();',
+      "const uuid = crypto.nativeUUID.bind(crypto);",
+      "const native = typeof crypto !== 'undefined' && crypto.nativeUUID && crypto.nativeUUID.bind(crypto);",
+      String.raw`crypto.\u0072andomUUID();`,
+      "crypto /* inline comment */ . nativeUUID();",
+      'const text = `id: ${crypto.nativeUUID()}`;',
+    ];
+    for (const code of samples) {
+      expect(detectDangerousFrontendCapabilities(code.replaceAll("nativeUUID", "randomUUID")), code).toEqual(["direct crypto.randomUUID API usage"]);
+    }
+  });
+
+  test("allows Spindle UUIDs, other crypto APIs, and non-executable examples", () => {
+    const code = String.raw`
+      const id = ctx.uuid.v4();
+      const ordered = ctx.uuid.v7();
+      crypto.getRandomValues(new Uint8Array(16));
+      crypto.subtle.digest("SHA-256", bytes);
+      const unrelated = client.nativeUUID();
+      const { nativeUUID } = client;
+      const docs = "crypto.nativeUUID(); window.crypto.nativeUUID();";
+      const pattern = /crypto\.nativeUUID\(\)/;
+      // crypto.nativeUUID();
+      /* const { nativeUUID: uuid } = crypto; */
+    ` + 'const template = `Use crypto.nativeUUID()`;';
+    expect(detectDangerousFrontendCapabilities(code.replaceAll("nativeUUID", "randomUUID")), code).toEqual([]);
+  });
+
+  test("does not restrict backend UUID generation or hashing", () => {
+    expect(detectDangerousBackendCapabilities(`
+      import { createHash, nativeUUID } from "node:crypto";
+      const hash = createHash("sha256").update("key").digest("hex");
+      const id = nativeUUID();
+      const webId = crypto.nativeUUID();
+      crypto.getRandomValues(new Uint8Array(16));
+    `.replaceAll("nativeUUID", "randomUUID"))).toEqual([]);
   });
 });
 

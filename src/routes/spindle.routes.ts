@@ -594,78 +594,86 @@ app.get("/tools", async (c) => {
 
 // GET /api/v1/spindle/:id/frontend/widget — Serve the lightweight native-widget bundle
 app.get("/:id/frontend/widget", async (c) => {
-  const ext = await getVisibleExtension(c, c.req.param("id"));
-  if (!ext) return c.json({ error: "Not found" }, 404);
+  try {
+    const ext = await getVisibleExtension(c, c.req.param("id"));
+    if (!ext) return c.json({ error: "Not found" }, 404);
 
-  const bundlePath = await managerSvc.getWidgetFrontendBundlePath(ext.identifier);
-  if (!bundlePath || !(await Bun.file(bundlePath).exists())) {
-    return c.json({ error: "No widget frontend bundle" }, 404);
-  }
+    const bundlePath = await managerSvc.getWidgetFrontendBundlePath(ext.identifier);
+    if (!bundlePath || !(await Bun.file(bundlePath).exists())) {
+      return c.json({ error: "No widget frontend bundle" }, 404);
+    }
 
-  const cacheKey = await managerSvc.getWidgetFrontendBundleCacheKey(ext.identifier);
-  const etag = cacheKey ? `"spindle-widget-frontend-${ext.id}-${cacheKey}"` : undefined;
-  const versioned = !!cacheKey && c.req.query("v") === cacheKey;
-  const cacheControl = versioned
-    ? "private, max-age=31536000, immutable"
-    : "private, no-cache";
+    const cacheKey = await managerSvc.getWidgetFrontendBundleCacheKey(ext.identifier);
+    const etag = cacheKey ? `"spindle-widget-frontend-${ext.id}-${cacheKey}"` : undefined;
+    const versioned = !!cacheKey && c.req.query("v") === cacheKey;
+    const cacheControl = versioned
+      ? "private, max-age=31536000, immutable"
+      : "private, no-cache";
 
-  if (etag && ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
-    return new Response(null, {
-      status: 304,
+    if (etag && ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          ETag: etag,
+          "Cache-Control": cacheControl,
+        },
+      });
+    }
+
+    const response = new Response(Bun.file(bundlePath), {
       headers: {
-        ETag: etag,
+        "Content-Type": "application/javascript",
         "Cache-Control": cacheControl,
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
       },
     });
+    if (etag) response.headers.set("ETag", etag);
+    return response;
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
   }
-
-  const response = new Response(Bun.file(bundlePath), {
-    headers: {
-      "Content-Type": "application/javascript",
-      "Cache-Control": cacheControl,
-      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
-    },
-  });
-  if (etag) response.headers.set("ETag", etag);
-  return response;
 });
 
 // GET /api/v1/spindle/:id/frontend — Serve the extension's frontend bundle
 app.get("/:id/frontend", async (c) => {
-  const ext = await getVisibleExtension(c, c.req.param("id"));
-  if (!ext) return c.json({ error: "Not found" }, 404);
+  try {
+    const ext = await getVisibleExtension(c, c.req.param("id"));
+    if (!ext) return c.json({ error: "Not found" }, 404);
 
-  const bundlePath = await managerSvc.getFrontendBundlePath(ext.identifier);
-  if (!bundlePath || !(await Bun.file(bundlePath).exists())) {
-    return c.json({ error: "No frontend bundle" }, 404);
-  }
+    const bundlePath = await managerSvc.getFrontendBundlePath(ext.identifier);
+    if (!bundlePath || !(await Bun.file(bundlePath).exists())) {
+      return c.json({ error: "No frontend bundle" }, 404);
+    }
 
-  const cacheKey = await managerSvc.getFrontendBundleCacheKey(ext.identifier);
-  const etag = cacheKey ? `"spindle-frontend-${ext.id}-${cacheKey}"` : undefined;
-  const versioned = !!cacheKey && c.req.query("v") === cacheKey;
-  const cacheControl = versioned
-    ? "private, max-age=31536000, immutable"
-    : "private, no-cache";
+    const cacheKey = await managerSvc.getFrontendBundleCacheKey(ext.identifier);
+    const etag = cacheKey ? `"spindle-frontend-${ext.id}-${cacheKey}"` : undefined;
+    const versioned = !!cacheKey && c.req.query("v") === cacheKey;
+    const cacheControl = versioned
+      ? "private, max-age=31536000, immutable"
+      : "private, no-cache";
 
-  if (etag && ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
-    return new Response(null, {
-      status: 304,
+    if (etag && ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          ETag: etag,
+          "Cache-Control": cacheControl,
+        },
+      });
+    }
+
+    const response = new Response(Bun.file(bundlePath), {
       headers: {
-        ETag: etag,
+        "Content-Type": "application/javascript",
         "Cache-Control": cacheControl,
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
       },
     });
+    if (etag) response.headers.set("ETag", etag);
+    return response;
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
   }
-
-  const response = new Response(Bun.file(bundlePath), {
-    headers: {
-      "Content-Type": "application/javascript",
-      "Cache-Control": cacheControl,
-      "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; upgrade-insecure-requests;",
-    },
-  });
-  if (etag) response.headers.set("ETag", etag);
-  return response;
 });
 
 export { app as spindleRoutes };

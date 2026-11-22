@@ -100,6 +100,10 @@ const backendSafetyScanCache = new Map<string, {
   signature: string;
   blocked: string[];
 }>();
+const frontendSafetyScanCache = new Map<string, {
+  signature: string;
+  blocked: string[];
+}>();
 
 const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
   {
@@ -641,6 +645,63 @@ export function detectDangerousBackendCapabilities(
   });
 }
 
+/** Keep frontend UUID generation usable on HTTP/LAN origins. */
+export function detectDangerousFrontendCapabilities(content: string): string[] {
+  const escapeName = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const propertyAccess = (name: string) =>
+    `\\s*(?:(?:\\?\\.|\\.)\\s*${name}\\b|(?:\\?\\.)?\\s*\\[\\s*["'\x60]${name}["'\x60]\\s*\\])`;
+
+  for (const source of createScannableSources(content)) {
+    const globals = new Set(["globalThis", "global", "self", "window"]);
+    const cryptoAliases = new Set(["crypto"]);
+    const namesPattern = (names: Set<string>) => `(?:${[...names].map(escapeName).join("|")})(?![\\w$])`;
+    const cryptoPattern = () =>
+      `(?<![.\\w$])(?:${namesPattern(cryptoAliases)}|${namesPattern(globals)}${propertyAccess("crypto")})`;
+
+    // Follow ordinary aliases, including minified comma-separated declarations.
+    // Scan both original and transpiled code so comments and escaped identifiers
+    // cannot hide access, while documentation strings and regexes stay ignored.
+    let changed: boolean;
+    do {
+      changed = false;
+      for (const [names, pattern] of [
+        [globals, `(?<![.\\w$])${namesPattern(globals)}`],
+        [cryptoAliases, cryptoPattern()],
+      ] as const) {
+        const aliases = new RegExp(`(?:\\b(?:const|let|var)\\s+|,\\s*)([A-Za-z_$][\\w$]*)\\s*=\\s*${pattern}(?=\\s*[,;)]|\\s*$)`);
+        for (const match of matchOutsideIgnored(source, aliases)) {
+          if (!names.has(match[1])) {
+            names.add(match[1]);
+            changed = true;
+          }
+        }
+      }
+      const destructuredCrypto = new RegExp(`\\b(?:const|let|var)\\s*\\{\\s*crypto\\s*(?::\\s*([A-Za-z_$][\\w$]*))?\\s*\\}\\s*=\\s*${namesPattern(globals)}`);
+      for (const match of matchOutsideIgnored(source, destructuredCrypto)) {
+        const alias = match[1] || "crypto";
+        if (!cryptoAliases.has(alias)) {
+          cryptoAliases.add(alias);
+          changed = true;
+        }
+      }
+    } while (changed);
+
+    const access = new RegExp(`${cryptoPattern()}\\s*(?:(?:\\?\\.|\\.)\\s*randomUUID\\b(?![\\w$])|(?:\\?\\.)?\\s*\\[([^\\]]{1,300})\\])`);
+    for (const match of matchOutsideIgnored(source, access)) {
+      if (match[1] === undefined || decodeSimpleStringExpression(match[1]) === "randomUUID") {
+        return ["direct crypto.randomUUID API usage"];
+      }
+    }
+    const destructuring = new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${cryptoPattern()}`);
+    for (const match of matchOutsideIgnored(source, destructuring)) {
+      if (match[1].split(",").some((prop) => /^(?:randomUUID|["'\x60]randomUUID["'\x60])(?:\s*[:=]|\s*$)/.test(prop.trim()))) {
+        return ["direct crypto.randomUUID API usage"];
+      }
+    }
+  }
+  return [];
+}
+
 /**
  * Normalize a manifest's `requested_capabilities` field into a Set the
  * scanner can consume. Invalid entries are dropped silently — the scanner
@@ -685,6 +746,35 @@ async function assertSafeBackendBundle(
   throw new Error(
     `Extension "${identifier}" uses blocked backend capabilities: ${blocked.join(", ")}`
   );
+}
+
+async function assertSafeFrontendBundle(identifier: string, bundlePath: string): Promise<void> {
+  if (!(await Bun.file(bundlePath).exists())) return;
+
+  const stat = statSync(bundlePath);
+  const signature = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  let cached = frontendSafetyScanCache.get(bundlePath);
+  if (cached?.signature !== signature) {
+    cached = {
+      signature,
+      blocked: detectDangerousFrontendCapabilities(await Bun.file(bundlePath).text()),
+    };
+    frontendSafetyScanCache.set(bundlePath, cached);
+  }
+  if (cached.blocked.length === 0) return;
+
+  throw new Error(
+    `Extension "${identifier}" uses blocked frontend capabilities: ${cached.blocked.join(", ")}; use ctx.uuid.v4() or ctx.uuid.v7() instead for HTTP/LAN compatibility`
+  );
+}
+
+export async function assertSafeFrontendBundles(identifier: string, manifest: SpindleManifest): Promise<void> {
+  const repo = repoDir(identifier);
+  await assertSafeFrontendBundle(identifier, resolveWithin(repo, manifest.entry_frontend || "dist/frontend.js", "entry_frontend"));
+  const widgetEntry = (manifest as WidgetFrontendManifest).entry_frontend_widget;
+  if (widgetEntry) {
+    await assertSafeFrontendBundle(identifier, resolveWithin(repo, widgetEntry, "entry_frontend_widget"));
+  }
 }
 
 /**
@@ -1260,12 +1350,16 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   if (prebuilt) {
     await assertSafeBackendBundle(identifier, backendOut, declaredCaps);
+    await assertSafeFrontendBundles(identifier, manifest);
     return;
   }
 
   // Look for src/ to build from
   const srcDir = join(repo, "src");
-  if (!existsSync(srcDir)) return;
+  if (!existsSync(srcDir)) {
+    await assertSafeFrontendBundles(identifier, manifest);
+    return;
+  }
 
   const buildDistDir = join(repo, "dist");
 
@@ -1334,6 +1428,7 @@ export async function buildExtension(identifier: string): Promise<void> {
   }
 
   await assertSafeBackendBundle(identifier, backendOut, declaredCaps);
+  await assertSafeFrontendBundles(identifier, manifest);
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────
@@ -2055,7 +2150,9 @@ async function getWidgetFrontendBundlePathFromManifest(
 }
 
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
-  return getFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
+  const bundlePath = await getFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
+  if (bundlePath) await assertSafeFrontendBundle(identifier, bundlePath);
+  return bundlePath;
 }
 
 export async function getFrontendBundleCacheKey(identifier: string): Promise<string | null> {
@@ -2071,7 +2168,9 @@ export async function getFrontendBundleCacheKey(identifier: string): Promise<str
 }
 
 export async function getWidgetFrontendBundlePath(identifier: string): Promise<string | null> {
-  return getWidgetFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
+  const bundlePath = await getWidgetFrontendBundlePathFromManifest(identifier, await readManifest(identifier));
+  if (bundlePath) await assertSafeFrontendBundle(identifier, bundlePath);
+  return bundlePath;
 }
 
 export async function getWidgetFrontendBundleCacheKey(identifier: string): Promise<string | null> {
