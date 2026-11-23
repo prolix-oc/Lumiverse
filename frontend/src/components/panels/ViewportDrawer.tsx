@@ -601,37 +601,33 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
     }
   })()
 
-  const renderTabButton = (layoutTabId: string, options?: { organizedAnchor?: boolean }) => {
+  const renderTabButton = (layoutTabId: string) => {
     const entry = tabEntryById.get(layoutTabId)
     if (!entry || !isTabVisible(layoutTabId)) return null
     const Icon = entry.tabIcon
     const extensionState = extensionStateById.get(layoutTabId)
     const title = translateDrawerField(entry.id, 'tabName', entry.tabName)
     const shortName = translateDrawerField(entry.id, 'shortName', entry.shortName)
-    const organizedAnchor = options?.organizedAnchor ?? false
 
     return (
       <button
-        key={`${organizedAnchor ? 'organized-anchor' : 'tab'}:${layoutTabId}`}
+        key={`tab:${layoutTabId}`}
         type="button"
         className={clsx(
           styles.tabBtn,
           extensionIds.has(layoutTabId) && styles.tabBtnExtension,
           showTabLabels && styles.tabBtnLabeled,
-          !organizedAnchor && !activeFolder && activeLayoutTabId === layoutTabId && styles.tabBtnActive,
-          organizedAnchor && styles.organizedTabAnchor,
+          !activeFolder && activeLayoutTabId === layoutTabId && styles.tabBtnActive,
         )}
         data-tab-id={entry.id}
-        {...(organizedAnchor || organizeMode ? {} : preloadOnIntent(entry.id))}
-        onClick={organizedAnchor || organizeMode ? undefined : () => handleTabClick(layoutTabId)}
-        onContextMenu={organizedAnchor ? undefined : (event) => handleTabContextMenu(event)}
-        onTouchStart={organizedAnchor || organizeMode ? undefined : (event) => handleTabTouchStart(event)}
-        onTouchMove={organizedAnchor || organizeMode ? undefined : tabQuickMenu.onTouchMove}
-        onTouchEnd={organizedAnchor || organizeMode ? undefined : tabQuickMenu.onTouchEnd}
-        onTouchCancel={organizedAnchor || organizeMode ? undefined : tabQuickMenu.onTouchCancel}
+        {...(organizeMode ? {} : preloadOnIntent(entry.id))}
+        onClick={organizeMode ? undefined : () => handleTabClick(layoutTabId)}
+        onContextMenu={(event) => handleTabContextMenu(event)}
+        onTouchStart={organizeMode ? undefined : (event) => handleTabTouchStart(event)}
+        onTouchMove={organizeMode ? undefined : tabQuickMenu.onTouchMove}
+        onTouchEnd={organizeMode ? undefined : tabQuickMenu.onTouchEnd}
+        onTouchCancel={organizeMode ? undefined : tabQuickMenu.onTouchCancel}
         title={title}
-        tabIndex={organizedAnchor ? -1 : undefined}
-        aria-hidden={organizedAnchor || undefined}
       >
         <Icon size={20} strokeWidth={1.5} />
         {showTabLabels && <span className={styles.tabLabel}>{shortName}</span>}
@@ -784,17 +780,13 @@ export default function ViewportDrawer({ duoLayout = null }: { duoLayout?: DuoLa
                           {showTabLabels && <span className={styles.tabLabel}>{folderName}</span>}
                         </button>
                       </SidebarDragItem>
-                      {folderExpanded && (
-                        <div id={`drawer-sidebar-folder-${item.id}`} className={styles.folderChildren} role="group" aria-label={folderName}>
-                          {visibleChildren.map((tabId) => (
-                            <SidebarDragItem key={tabId} id={drawerLayoutTabKey(tabId)} enabled={dragEnabled} mobileDrag={mobileDrag} child hover={hover} suppressClick={suppressDraggedClick}>
-                              {renderTabButton(tabId)}
-                            </SidebarDragItem>
-                          ))}
-                        </div>
-                      )}
-                      <div className={styles.organizedTabAnchors} aria-hidden="true">
-                        {!folderExpanded && visibleChildren.map((tabId) => renderTabButton(tabId, { organizedAnchor: true }))}
+                      {/* Retain the same buttons and Spindle mounts when collapsed. */}
+                      <div id={`drawer-sidebar-folder-${item.id}`} className={styles.folderChildren} hidden={!folderExpanded} role="group" aria-label={folderName}>
+                        {visibleChildren.map((tabId) => (
+                          <SidebarDragItem key={tabId} id={drawerLayoutTabKey(tabId)} enabled={dragEnabled && folderExpanded} mobileDrag={folderExpanded ? mobileDrag : undefined} child hover={hover} suppressClick={suppressDraggedClick}>
+                            {renderTabButton(tabId)}
+                          </SidebarDragItem>
+                        ))}
                       </div>
                     </div>
                   )

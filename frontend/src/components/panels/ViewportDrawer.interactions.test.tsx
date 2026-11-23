@@ -183,6 +183,24 @@ test('multiple folder groups remain expanded until individually toggled', () => 
   } finally { p.close() }
 })
 
+test('folder expansion retains the canonical Spindle anchor and its mounted content', () => {
+  useStore.setState({ drawerSettings: folderSettings() })
+  const p = renderDrawer()
+  try {
+    const folder = p.host.querySelector<HTMLButtonElement>('button.folderTabBtn')!
+    const anchor = p.host.querySelector('[data-spindle-scope="drawer-tab:profile"]')!
+    const widget = document.createElement('input')
+    widget.value = 'Unsaved extension state'
+    anchor.append(widget)
+    for (let i = 0; i < 2; i++) {
+      act(() => { folder.click() })
+      expect(p.host.querySelector('[data-spindle-scope="drawer-tab:profile"]')).toBe(anchor)
+      expect(widget.isConnected).toBe(true)
+      expect(widget.value).toBe('Unsaved extension state')
+    }
+  } finally { p.close() }
+})
+
 test('a trailing folder keeps a distinct root-end drop boundary even when expanded', () => {
   useStore.setState({ drawerSettings: folderSettings() })
   const p = renderDrawer()

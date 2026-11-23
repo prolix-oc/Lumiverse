@@ -954,12 +954,8 @@
   }
 }
 
-/* Keep canonical drawer_tab mount anchors alive for foldered tabs. Extensions
-   may decorate their own sidebar button; organization must not turn that into
-   a registration-order race just because the visible button became a folder. */
-.organizedTabAnchors,
-.organizedTabAnchor {
-  display: none !important;
+.folderChildren[hidden] {
+  display: none;
 }
 
 .folderPanel {

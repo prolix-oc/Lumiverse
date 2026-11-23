@@ -25,6 +25,7 @@ type MobileSession = {
   id: string
   pointerId: number
   element: HTMLElement
+  captureElement: HTMLElement
   rail: HTMLElement
   horizontal: boolean
   startRect: DOMRect
@@ -200,15 +201,18 @@ export class DrawerMobilePointerDrag {
   start(event: DrawerMobilePointer, id: string, rail: HTMLElement | null, callbacks: DrawerMobileDragCallbacks) {
     if (!rail || this.session || !event.isPrimary || event.button !== 0) return
     const element = event.currentTarget
+    // Keep quick taps targeted at the real button. Capturing on its wrapper
+    // retargets the browser's click there too, bypassing folder expansion.
+    const captureElement = element.querySelector<HTMLElement>('button') ?? element
     const session: MobileSession = {
-      id, pointerId: event.pointerId, element, rail,
+      id, pointerId: event.pointerId, element, captureElement, rail,
       horizontal: isHorizontalRail(rail), startRect: element.getBoundingClientRect(),
       startScroll: (isHorizontalRail(rail) ? rail.scrollLeft : rail.scrollTop) ?? 0,
       startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY,
       started: false, holdTimer: null, scrollFrame: null, callbacks,
     }
     this.session = session
-    element.setPointerCapture?.(event.pointerId)
+    captureElement.setPointerCapture?.(event.pointerId)
     session.holdTimer = setTimeout(() => this.lift(session), HOLD_TO_LIFT_MS)
   }
 
@@ -297,6 +301,6 @@ export class DrawerMobilePointerDrag {
     if (session.holdTimer !== null) clearTimeout(session.holdTimer)
     if (session.scrollFrame !== null) session.rail.ownerDocument.defaultView?.cancelAnimationFrame?.(session.scrollFrame)
     session.element.style.translate = ''
-    if (session.element.hasPointerCapture?.(session.pointerId)) session.element.releasePointerCapture(session.pointerId)
+    if (session.captureElement.hasPointerCapture?.(session.pointerId)) session.captureElement.releasePointerCapture(session.pointerId)
   }
 }

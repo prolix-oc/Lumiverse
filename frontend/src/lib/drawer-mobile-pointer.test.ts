@@ -81,6 +81,25 @@ test('touch movement lifts the actual icon and commits the target beneath it', (
   } finally { f.dom.window.close() }
 })
 
+test('pointer capture preserves the folder button as the browser click target', () => {
+  const f = fixture()
+  const drag = new DrawerMobilePointerDrag()
+  const button = f.source.querySelector('button')!
+  const captures: number[] = []
+  const releases: number[] = []
+  button.setPointerCapture = id => { captures.push(id) }
+  button.hasPointerCapture = id => captures.includes(id)
+  button.releasePointerCapture = id => { releases.push(id) }
+  f.source.setPointerCapture = () => { throw new Error('Wrapper capture swallows button clicks') }
+  try {
+    drag.start(f.pointer(25), 'tab:profile', f.rail, f.callbacks)
+    expect(captures).toEqual([4])
+    drag.end(f.pointer(25))
+    expect(releases).toEqual([4])
+    expect(f.calls).toEqual([])
+  } finally { f.dom.window.close() }
+})
+
 test('quick taps and stationary long presses do not change the layout', async () => {
   const f = fixture()
   const drag = new DrawerMobilePointerDrag()

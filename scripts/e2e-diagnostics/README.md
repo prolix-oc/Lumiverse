@@ -257,3 +257,15 @@ You can force a specific chat instead of auto-selecting the busiest one:
 ```bash
 export LUMIVERSE_CHAT_ID=<chat ID from URL bar>
 ```
+
+## Sidebar folders
+
+Run `node scripts/e2e-diagnostics/check-sidebar-folders.mjs` from the repository root.
+It exercises the real drawer, organizer, styles, drag sensors and pointer capture
+with isolated settings persistence and panel content. Chromium, Firefox and WebKit
+cover desktop, narrow touch and wide touch layouts at UI scales 1 and 1.25:
+reordering, reload persistence, dwell-to-create folders, inline expansion, retained
+Spindle anchors, drag cancellation, moving tabs into/out of folders and focused
+folder customization. Touch taps use the browser touchscreen API; drag motion uses
+captured pointer input. No backend, credentials or personal data is used. Positional
+arguments select browser engines. Physical native WebViews still need device tests.
