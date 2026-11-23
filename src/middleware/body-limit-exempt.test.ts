@@ -34,6 +34,30 @@ describe("isLargeUploadBodyLimitExemptPath", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/characters/character-1/replace-card")).toBe(true);
   });
 
+  test.each([
+    "/api/v1/characters/preview-card-import",
+    "/api/v1/characters/character-1/preview-card-update",
+    "/api/v1/characters/character-1/apply-card-update",
+  ])("allows character-card uploads to %s through the global 10MB guard", (path) => {
+    expect(isLargeUploadBodyLimitExemptPath(path, "POST")).toBe(true);
+  });
+
+  test("keeps unrelated and nested character routes behind the global guard", () => {
+    for (const path of [
+      "/api/v1/characters/character-1",
+      "/api/v1/characters/import-url",
+      "/api/v1/characters/preview-card-update",
+      "/api/v1/characters/apply-card-update",
+      "/api/v1/characters/preview-card-import/extra",
+      "/api/v1/characters/character-1/preview-card-update/extra",
+      "/api/v1/characters/character-1/apply-card-update-extra",
+      "/api/v1/characters/character-1/nested/preview-card-update",
+      "/api/v1/characters/character-1/nested/apply-card-update",
+    ]) {
+      expect(isLargeUploadBodyLimitExemptPath(path, "POST")).toBe(false);
+    }
+  });
+
   test("allows only raw character-job file uploads through the global 10MB guard", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/characters/import-jobs/job-1/files/12")).toBe(true);
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/characters/import-jobs/job-1/start")).toBe(false);
