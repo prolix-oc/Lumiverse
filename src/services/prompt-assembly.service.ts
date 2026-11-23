@@ -1,6 +1,7 @@
 import { readGenerationVariableSeed } from "../db/swipe-variable-state";
 import { CHAT_HISTORY_KEY, isChatHistoryMessage } from "../llm/chat-history";
 import { omitDisabledPenalties } from "../llm/generation-parameters";
+import { supportsGeminiXhigh } from "../shared/gemini-model";
 import { withVariableValues } from "../utils/variable-checkpoint";
 import {
   getTextContent,
@@ -7833,7 +7834,8 @@ export function buildParameters(
  *                Anthropic-only: `thinkingDisplay` ('summarized' | 'omitted') maps to the
  *                `thinking.display` field. On Opus 4.7+ the API defaults to 'omitted' when
  *                unset, so users must opt in to 'summarized' to receive summary text.
- * - Google:      thinkingConfig.thinkingLevel (3.x) or thinkingBudget (2.5)
+ * - Google:      thinkingConfig.thinkingLevel (3.x/4.x) or thinkingBudget (2.5).
+ *                Gemini 4 Hydrogen and Neon additionally support "xhigh".
  * - DeepSeek:    thinking + reasoning_effort (OpenAI-format API). Effort is
  *                normalized to high/max per the official docs.
  * - OpenRouter:  reasoning: { effort } with values: none/minimal/low/medium/high/xhigh
@@ -7917,8 +7919,9 @@ export function injectReasoningParams(
     }
   } else if (providerName === "google" || providerName === "google_vertex") {
     // Google Gemini / Vertex AI: thinkingConfig with thinkingLevel
-    // Valid levels: minimal, low, medium, high
-    const validLevels = new Set(["minimal", "low", "medium", "high"]);
+    const validLevels = supportsGeminiXhigh(model)
+      ? new Set(["low", "medium", "high", "xhigh"])
+      : new Set(["minimal", "low", "medium", "high"]);
     const existing =
       params.thinkingConfig && typeof params.thinkingConfig === "object"
         ? params.thinkingConfig

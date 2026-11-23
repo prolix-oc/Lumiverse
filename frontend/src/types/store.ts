@@ -426,7 +426,7 @@ export interface RegenFeedbackSettings {
  *
  * Provider-specific values:
  * - OpenRouter: none, minimal, low, medium, high, xhigh
- * - Google:     minimal, low, medium, high
+ * - Google:     minimal, low, medium, high; Hydrogen/Neon use low, medium, high, xhigh
  * - Anthropic:  low, medium, high, max
  * - NanoGPT:    none, minimal, low, medium, high
  * - Moonshot:   (toggle-only — no effort dropdown)

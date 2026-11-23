@@ -247,7 +247,7 @@ export class GoogleProvider implements LlmProvider {
     const mediaResolution = resolveGoogleMediaResolution(params);
     if (mediaResolution !== undefined) generationConfig.mediaResolution = mediaResolution;
 
-    // Thinking configuration for Gemini 2.5+ and 3.x models
+    // Thinking configuration for Gemini 2.5+ models
     if (params.thinkingConfig) {
       generationConfig.thinkingConfig = params.thinkingConfig;
     }

@@ -1,6 +1,50 @@
 import { describe, expect, test } from "bun:test";
 
 import { applyProviderReasoningOffSwitch, buildParameters, injectReasoningParams } from "./prompt-assembly.service";
+import { GoogleProvider } from "../llm/providers/google";
+import { GoogleVertexProvider } from "../llm/providers/google-vertex";
+
+describe("Gemini Hydrogen and Neon reasoning", () => {
+  for (const provider of [new GoogleProvider(), new GoogleVertexProvider()]) {
+    test(`${provider.name} sends xhigh through to generationConfig`, () => {
+      for (const model of ["gemini-4-hydrogen", "gemini-4-neon", "publishers/google/models/gemini-4-neon"]) {
+        const parameters = buildParameters(null, null, {
+          apiReasoning: true, reasoningEffort: "xhigh",
+        }, provider.name, model);
+        const body = (provider as any).buildBody({
+          model, messages: [{ role: "user", content: "Solve this problem." }], parameters,
+        });
+        expect(body.generationConfig.thinkingConfig).toEqual({
+          thinkingLevel: "xhigh", includeThoughts: true,
+        });
+        expect(body.thinkingConfig).toBeUndefined();
+      }
+    });
+
+    test(`${provider.name} limits generated levels by model and preserves explicit overrides`, () => {
+      for (const model of ["gemini-4-hydrogen", "gemini-4-neon"]) {
+        for (const effort of ["low", "medium", "high", "xhigh"]) {
+          const params: Record<string, any> = {};
+          injectReasoningParams(params, provider.name, effort, model);
+          expect(params.thinkingConfig).toEqual({ thinkingLevel: effort, includeThoughts: true });
+        }
+        const minimal: Record<string, any> = {};
+        injectReasoningParams(minimal, provider.name, "minimal", model);
+        expect(minimal.thinkingConfig.thinkingLevel).toBe("medium");
+
+        const explicit = { thinkingConfig: { thinkingLevel: "LOW", includeThoughts: false } };
+        injectReasoningParams(explicit, provider.name, "xhigh", model);
+        expect(explicit.thinkingConfig).toEqual({ thinkingLevel: "LOW", includeThoughts: true });
+      }
+
+      for (const model of ["gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-4-neonish", undefined]) {
+        const params: Record<string, any> = {};
+        injectReasoningParams(params, provider.name, "xhigh", model);
+        expect(params.thinkingConfig.thinkingLevel).toBe("medium");
+      }
+    });
+  }
+});
 
 describe("applyProviderReasoningOffSwitch", () => {
   test("removes generic reasoning fields for OpenAI-compatible providers", () => {

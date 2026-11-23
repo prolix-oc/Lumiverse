@@ -1,5 +1,6 @@
 import type { ReasoningBindings, ReasoningEffort, ReasoningSettings } from '@/types/store'
 import { supportsClaudeOpusXhigh } from './claude-model'
+import { supportsGeminiXhigh } from '../../../src/shared/gemini-model'
 
 const REASONING_PRESETS: Array<{ label: string; prefix: string; suffix: string }> = [
   { label: 'DeepSeek', prefix: '<think>\n', suffix: '\n</think>' },
@@ -48,6 +49,14 @@ const GOOGLE_EFFORTS: EffortOption[] = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
+]
+
+const GOOGLE_XHIGH_EFFORTS: EffortOption[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
 ]
 
 const ANTHROPIC_EFFORTS: EffortOption[] = [
@@ -128,7 +137,7 @@ export function getEffortOptions(provider: string | null | undefined, model: str
       return OPENROUTER_EFFORTS
     case 'google':
     case 'google_vertex':
-      return GOOGLE_EFFORTS
+      return supportsGeminiXhigh(model) ? GOOGLE_XHIGH_EFFORTS : GOOGLE_EFFORTS
     case 'anthropic':
       return supportsClaudeOpusXhigh(model) ? ANTHROPIC_OPUS_XHIGH_EFFORTS : ANTHROPIC_EFFORTS
     case 'nanogpt':

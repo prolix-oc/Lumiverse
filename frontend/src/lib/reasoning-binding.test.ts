@@ -68,6 +68,45 @@ describe('captureReasoningBindings', () => {
 })
 
 describe('getEffortOptions', () => {
+  for (const provider of ['google', 'google_vertex']) {
+    test(`exposes the documented Hydrogen and Neon levels for ${provider}`, () => {
+      for (const model of [
+        'gemini-4-hydrogen',
+        'gemini-4-neon',
+        'models/gemini-4-hydrogen',
+        'google/gemini-4-neon',
+        'publishers/google/models/gemini-4-neon',
+        'projects/test/locations/global/publishers/google/models/gemini-4-hydrogen',
+        'gemini-4-hydrogen-preview',
+        ' GEMINI-4-NEON ',
+      ]) {
+        expect(getEffortOptions(provider, model).map(({ value }) => value)).toEqual([
+          'auto', 'low', 'medium', 'high', 'xhigh',
+        ])
+        expect(captureReasoningBindings(
+          { ...currentSettings, reasoningEffort: 'xhigh' }, '', provider, model,
+        ).settings.reasoningEffort).toBe('xhigh')
+        expect(normalizeReasoningSettingsForProvider(
+          { ...currentSettings, reasoningEffort: 'minimal' }, provider, model,
+        ).reasoningEffort).toBe('low')
+      }
+    })
+
+    test(`keeps existing levels for other ${provider} models`, () => {
+      for (const model of [
+        'gemini-4-carbon', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-2.5-pro',
+        'not-gemini-4-neon', 'gemini-4-neonish', undefined,
+      ]) {
+        expect(getEffortOptions(provider, model).map(({ value }) => value)).toEqual([
+          'auto', 'minimal', 'low', 'medium', 'high',
+        ])
+        expect(normalizeReasoningSettingsForProvider(
+          { ...currentSettings, reasoningEffort: 'xhigh' }, provider, model,
+        ).reasoningEffort).toBe('high')
+      }
+    })
+  }
+
   test('exposes XHigh for Opus 4.7 and version-matched Opus 4.8+ models', () => {
     for (const model of ['claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5']) {
       expect(getEffortOptions('anthropic', model).map(({ value }) => value)).toContain('xhigh')
