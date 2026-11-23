@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import clsx from 'clsx'
-import { Check, FolderPlus, GripVertical, Minus, Plus, Puzzle, Trash2, Upload } from 'lucide-react'
+import { Check, ChevronRight, FolderPlus, GripVertical, Minus, Plus, Puzzle, Trash2, Upload } from 'lucide-react'
 import {
   closestCenter,
   type CollisionDetection,
@@ -190,6 +190,9 @@ interface SortableFolderRowProps {
   entryMap: Map<string, DrawerTabEntry>
   extensionIds: Set<string>
   hiddenTabIds: Set<string>
+  expanded: boolean
+  focusName: boolean
+  onExpand: (folderId: string) => void
   onToggle: (tabId: string, enabled: boolean) => void
   onRename: (itemKey: string, value: string) => void
   onIconChange: (itemKey: string, icon: string) => void
@@ -202,6 +205,9 @@ function SortableFolderRow({
   entryMap,
   extensionIds,
   hiddenTabIds,
+  expanded,
+  focusName,
+  onExpand,
   onToggle,
   onRename,
   onIconChange,
@@ -213,6 +219,15 @@ function SortableFolderRow({
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const childIds = item.children.map(drawerLayoutTabKey)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!focusName) return
+    const input = nameInputRef.current
+    if (!input) return
+    input.scrollIntoView?.({ block: 'center' })
+    input.focus({ preventScroll: true })
+    input.select()
+  }, [focusName])
   const [showCustomIconImporter, setShowCustomIconImporter] = useState(false)
   const [customIconSource, setCustomIconSource] = useState('')
   const [customIconFileError, setCustomIconFileError] = useState('')
@@ -244,11 +259,21 @@ function SortableFolderRow({
       data-drawer-layout-kind="folder"
       data-drawer-folder-id={item.id}
       data-drawer-layout-title={item.name}
-      className={clsx(styles.folder, isDragging && styles.rowDragging)}
+      className={clsx(styles.folder, expanded && styles.folderExpanded, isDragging && styles.rowDragging)}
     >
       <div className={styles.folderHeader}>
         <button type="button" className={styles.dragHandle} {...attributes} {...listeners}>
           <GripVertical size={16} />
+        </button>
+        <button
+          type="button"
+          className={styles.folderExpandButton}
+          aria-expanded={expanded}
+          aria-controls={`drawer-folder-children-${item.id}`}
+          title={expanded ? i18n.t('configureDrawerTabs.collapseFolder', { ns: 'modals', defaultValue: 'Collapse folder' }) : i18n.t('configureDrawerTabs.expandFolder', { ns: 'modals', defaultValue: 'Expand folder' })}
+          onClick={() => onExpand(item.id)}
+        >
+          <ChevronRight size={16} />
         </button>
         <details className={styles.iconPicker}>
           <summary
@@ -352,6 +377,7 @@ function SortableFolderRow({
           </div>
         </details>
         <input
+          ref={nameInputRef}
           className={styles.nameInput}
           value={item.name}
           onChange={(event) => onRename(itemKey, event.target.value)}
@@ -371,8 +397,8 @@ function SortableFolderRow({
         </button>
       </div>
 
-      <SortableContext items={childIds} strategy={verticalListSortingStrategy}>
-        <div className={styles.folderChildren}>
+      {expanded && <SortableContext items={childIds} strategy={verticalListSortingStrategy}>
+        <div id={`drawer-folder-children-${item.id}`} className={styles.folderChildren}>
           {item.children.length === 0 ? (
             <div className={styles.folderEmpty}>
               {i18n.t('configureDrawerTabs.folderEmpty', { ns: 'modals', defaultValue: 'Drop tabs here' })}
@@ -393,7 +419,7 @@ function SortableFolderRow({
             )
           })}
         </div>
-      </SortableContext>
+      </SortableContext>}
     </div>
   )
 }
@@ -415,6 +441,11 @@ export default function ConfigureDrawerTabsModal() {
   const closeModal = useStore((s) => s.closeModal)
   const setSetting = useStore((s) => s.setSetting)
   const drawerSettings = useStore((s) => s.drawerSettings)
+  const modalProps = useStore((s) => s.modalProps)
+  const initialFocusedFolderId = typeof modalProps.focusFolderId === 'string' ? modalProps.focusFolderId : null
+  const [nameFocusFolderId, setNameFocusFolderId] = useState<string | null>(initialFocusedFolderId)
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() =>
+    new Set(initialFocusedFolderId ? [initialFocusedFolderId] : []))
   const drawerTabs = useStore((s) => s.drawerTabs)
   const extensions = useStore((s) => s.extensions)
   const enabledDrawerTabs = filterEnabledFrontendContributions(drawerTabs, extensions)
@@ -492,16 +523,28 @@ export default function ConfigureDrawerTabsModal() {
   }
 
   const addFolder = () => {
+    const id = createDrawerLayoutContainerId('folder')
     persistLayout([
       ...layout,
       {
         type: 'folder',
-        id: createDrawerLayoutContainerId('folder'),
+        id,
         name: t('configureDrawerTabs.newFolder', { defaultValue: 'New Folder' }),
         icon: 'folder',
         children: [],
       },
     ])
+    setExpandedFolderIds((previous) => new Set(previous).add(id))
+    setNameFocusFolderId(id)
+  }
+
+  const toggleFolder = (folderId: string) => {
+    setExpandedFolderIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(folderId)) next.delete(folderId)
+      else next.add(folderId)
+      return next
+    })
   }
 
   const addDivider = () => {
@@ -575,6 +618,9 @@ export default function ConfigureDrawerTabsModal() {
                       entryMap={entryMap}
                       extensionIds={extensionIds}
                       hiddenTabIds={hiddenTabIds}
+                      expanded={expandedFolderIds.has(item.id)}
+                      focusName={nameFocusFolderId === item.id}
+                      onExpand={toggleFolder}
                       onToggle={handleToggle}
                       onRename={(itemKey, value) => persistLayout(updateDrawerLayoutContainer(layout, itemKey, value))}
                       onIconChange={(itemKey, icon) => persistLayout(updateDrawerLayoutFolderIcon(layout, itemKey, icon))}

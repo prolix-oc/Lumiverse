@@ -257,6 +257,7 @@
   gap: 2px;
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-width: none;
 }
 
@@ -323,12 +324,61 @@
 
 /* ── Extension tab styles ── */
 
+/* Dividers are quiet at rest but have two substantial root drop targets.
+   Their midpoint line is decoration; each half is its own insertion zone. */
 .tabDivider {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--lumiverse-primary-020);
-  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 24px;
+  height: 24px;
+  margin: 1px 4px;
+  border-radius: 6px;
+  isolation: isolate;
 }
+
+.tabDivider::before {
+  content: '';
+  position: absolute;
+  top: calc(50% - 1px);
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--lumiverse-primary-020);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.tabDividerDropHalf {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+}
+
+.tabDividerTarget {
+  outline: 1px solid var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+}
+
+.tabDividerTarget::before { background: var(--lumiverse-primary-050); }
+
+/* The marker sits on the OUTER edge of the divider's hit area, so it shows
+   where the tab will land without suggesting it will enter the divider. */
+.tabDividerTarget::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--lumiverse-primary);
+  pointer-events: none;
+}
+
+.tabDividerTargetBefore::after { top: -1px; }
+.tabDividerTargetAfter::after { bottom: -1px; }
 
 .tabBtnExtension {
   position: relative;
@@ -613,28 +663,298 @@
   }
 
   .tabDivider {
-    width: 1px;
+    flex: 0 0 24px;
+    flex-direction: row;
+    width: 24px;
     height: 28px;
-    margin: 0 4px;
+    margin: 0 2px;
   }
+
+  .tabDivider::before {
+    left: calc(50% - 1px);
+    right: auto;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    height: auto;
+  }
+
+  .tabDividerDropHalf {
+    min-width: 0;
+    width: auto;
+    height: 100%;
+  }
+
+  .tabDividerTarget::after {
+    top: 4px;
+    bottom: 4px;
+    height: auto;
+    width: 3px;
+  }
+
+  .tabDividerTargetBefore::after { left: -1px; right: auto; }
+  .tabDividerTargetAfter::after { right: -1px; left: auto; }
 }
 
-/* ── Sidebar organization ── */
-
-.folderSlot {
-  display: contents;
+/* Sidebar-native DnD leaves each tab's real Spindle mount attached to its
+   own button. The wrapper moves, not a cloned icon or a rebuilt tab. */
+.tabDragSlot {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 0;
+  isolation: isolate;
 }
 
-.folderTabBtn {
+.tabDragEnabled {
+  cursor: grab;
+}
+
+.tabDragActive {
+  z-index: 5;
+  opacity: 0.78;
+  cursor: grabbing;
+  filter: drop-shadow(0 4px 9px var(--lumiverse-primary-020));
+}
+
+.sidebarOrganizing .tabDragSlot,
+.sidebarOrganizing .tabDragSlot * {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.folderDropArming {
+  background: var(--lumiverse-primary-015);
+  outline: 1px solid var(--lumiverse-primary-050);
+  border-radius: 7px;
+}
+
+/* Hover on another tab for 700 ms to merge; dropping quickly just reorders. */
+.folderMergeArming::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 2px solid var(--lumiverse-primary);
+  border-radius: 7px;
+  pointer-events: none;
+  opacity: 0.7;
+  animation: folderMergeArm 700ms ease-out forwards;
+}
+
+.folderDropReady {
+  background: var(--lumiverse-primary-020);
+  outline: 2px solid var(--lumiverse-primary);
+  border-radius: 8px;
+}
+
+.folderDropReady::after {
+  animation: none !important;
+  opacity: 1 !important;
+}
+
+@keyframes folderMergeArm {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+.rootDropBefore::before,
+.rootDropAfter::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  height: 3px;
+  z-index: 6;
+  pointer-events: none;
+  background: var(--lumiverse-primary);
+  border-radius: 4px;
+}
+
+.rootDropBefore::before { top: -2px; }
+.rootDropAfter::before { bottom: -2px; }
+
+.sidebarEdgeDrop {
+  flex: 0 0 4px;
+  min-height: 4px;
   position: relative;
 }
 
-/* Keep canonical drawer_tab mount anchors alive for foldered tabs. Extensions
-   may decorate their own sidebar button; organization must not turn that into
-   a registration-order race just because the visible button became a folder. */
-.organizedTabAnchors,
-.organizedTabAnchor {
-  display: none !important;
+.sidebarEdgeDropEnabled { flex-basis: 9px; min-height: 9px; }
+.sidebarEdgeDropOver { background: var(--lumiverse-primary-050); border-radius: 4px; }
+
+/* The end boundary takes up remaining empty rail space. It lives OUTSIDE the
+   last folder frame, so a drop past the frame appends to root rather than
+   slipping into its last child. The rail is visually unchanged at rest. */
+.sidebarEdgeDropEnd {
+  flex: 1 0 24px;
+  min-height: 24px;
+  width: 100%;
+}
+
+.sidebarEdgeDropEnd.sidebarEdgeDropOver { background: transparent; }
+
+/* Show the insertion boundary only while dragging, not another permanent icon. */
+.tabList[data-drawer-dragging] .sidebarEdgeDropEnd::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--lumiverse-primary);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.tabList[data-drawer-dragging] .sidebarEdgeDropEnd.sidebarEdgeDropOver::before {
+  opacity: 1;
+  height: 3px;
+}
+
+.organizeDone { color: var(--lumiverse-primary); }
+
+@media (max-width: 600px) {
+  .tabDragSlot { width: 42px; }
+  .tabDragSlot:has(.tabBtnLabeled) { width: 52px; }
+  .rootDropBefore::before,
+  .rootDropAfter::before {
+    top: 4px;
+    bottom: 4px;
+    left: auto;
+    right: auto;
+    width: 3px;
+    height: auto;
+  }
+  .rootDropBefore::before { left: -2px; }
+  .rootDropAfter::before { right: -2px; }
+  .sidebarEdgeDrop { min-width: 4px; }
+  .sidebarEdgeDropEnabled { min-width: 9px; }
+  .sidebarEdgeDropEnd { flex: 1 0 24px; min-width: 24px; min-height: 0; width: auto; }
+  .tabList[data-drawer-dragging] .sidebarEdgeDropEnd::before {
+    top: 6px;
+    bottom: 6px;
+    left: 4px;
+    right: auto;
+    width: 2px;
+    height: auto;
+  }
+  .tabList[data-drawer-dragging] .sidebarEdgeDropEnd.sidebarEdgeDropOver::before {
+    width: 3px;
+    height: auto;
+  }
+}
+
+/* ── Sidebar folders ── */
+
+/* One frame is the complete grouping cue. Folder headers and child buttons
+   share the normal sidebar alignment, with no extra rail or corner badges. */
+.folderSlot {
+  box-sizing: border-box;
+  display: flex;
+  position: relative;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 1px;
+  width: calc(100% - 4px);
+  min-width: 0;
+  margin: 2px 2px 4px;
+  padding: 2px;
+  border: 1px solid var(--lumiverse-primary-020);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 4%, transparent);
+}
+
+.folderSlotOpen {
+  background: color-mix(in srgb, var(--lumiverse-primary) 7%, transparent);
+}
+
+/* Only the outer frame lights up when aiming inside a folder. No extra
+   folder icons, indentation, or width shifts during the gesture. */
+.folderSlotDropInside {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-015);
+}
+
+.folderSlot .tabBtn {
+  box-sizing: border-box;
+  min-width: 0;
+  border-radius: 7px;
+}
+
+.folderSlotOpen .folderTabBtn {
+  color: var(--lumiverse-text);
+}
+
+/* The normal active sidebar stripe crowds the nested frame, particularly
+   on the opposite edge and for long names. Use a contained highlight. */
+.folderSlot .tabBtnActive,
+.wrapperLeft .folderSlot .tabBtnActive {
+  background: var(--lumiverse-primary-020);
+  color: var(--lumiverse-primary);
+  box-shadow: none;
+  border-radius: 7px;
+}
+
+.folderSlot .tabBtn:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050);
+  outline-offset: -2px;
+}
+
+/* Names may be longer than the narrower framed button. */
+.folderSlot .tabLabel {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.folderTabHasActiveChild {
+  color: var(--lumiverse-primary);
+}
+
+.folderTabHasActiveChild .tabLabel {
+  color: var(--lumiverse-primary);
+}
+
+.folderChildren {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+@media (max-width: 600px) {
+  .folderSlot {
+    flex-direction: row;
+    align-items: center;
+    width: auto;
+    margin: 0 3px;
+    padding: 2px;
+  }
+
+  .folderChildren {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+  }
+
+  /* Mobile's generic active rule uses !important; the group still needs
+     a contained highlight without squared corners or a bottom stripe. */
+  .folderSlot .tabBtnActive,
+  .wrapperLeft .folderSlot .tabBtnActive {
+    box-shadow: none !important;
+    border-radius: 7px !important;
+  }
+}
+
+.folderChildren[hidden] {
+  display: none;
 }
 
 .folderPanel {

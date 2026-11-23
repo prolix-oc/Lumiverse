@@ -2950,6 +2950,9 @@
     "hideTabLabels": "Hide tab labels",
     "showTabLabels": "Show tab labels",
     "configureTabs": "Configure Tabs",
+    "arrangeIcons": "Arrange sidebar icons",
+    "arrangeDone": "Done arranging icons",
+    "editFolder": "Customize Folder",
     "folderView": "Folder view",
     "listView": "List view",
     "gridView": "Grid view"

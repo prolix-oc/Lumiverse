@@ -56,6 +56,12 @@ a book launcher and select it, or press **F1**, to restore it.
 
 The drawer hosts every workspace panel as a tab. You can reorder them with drag-and-drop and hide ones you don't use from the tab-bar context menu.
 
+Click or tap a sidebar folder to expand its tabs inline. Several folders can stay expanded while you switch panels. Right-click a folder, or press and hold it on a touch screen, and choose **Customize Folder** to open its name, icon, and tab controls.
+
+On desktop, drag tabs to reorder them or drop them onto a folder to move them inside. Hold one tab over the center of another for 700 ms to create a folder. Drop beside a folder or on either side of a divider to place a tab back at the top level.
+
+On touch devices, press and hold a sidebar icon and choose **Arrange sidebar icons** before dragging. Tap folder headers to expand or collapse them while arranging, then choose **Done arranging icons** to return to panel navigation. The organizer also provides keyboard controls: focus a drag handle, press Space, use the arrow keys, and press Space again to drop.
+
 ### Character & Story
 
 | Tab | Purpose |
