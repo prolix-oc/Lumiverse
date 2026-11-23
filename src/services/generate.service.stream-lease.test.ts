@@ -8,7 +8,7 @@ import * as connections from "./connections.service";
 import * as secrets from "./secrets.service";
 import * as pool from "./generation-pool.service";
 import { startGeneration, stopAllGenerations, stopGeneration, stopGenerationSweep } from "./generate.service";
-import { getActiveGeneration, sweepInactiveGenerations } from "./generation/active-generation-registry";
+import { GENERATION_IDLE_TIMEOUT_MS, getActiveGeneration, sweepInactiveGenerations } from "./generation/active-generation-registry";
 import { DEFAULT_INFERENCE_SCHEDULER_CONFIG } from "./inference-scheduler/config";
 import { __test__ as schedulerTest, getInferenceSchedulerStatus, withInferenceLease } from "./inference-scheduler/scheduler";
 
@@ -123,13 +123,13 @@ describe("chat stream admission lease", () => {
       await waitFor(() => getInferenceSchedulerStatus(userId).resources.some((resource) => resource.waiting.length > 0));
       const entry = getActiveGeneration(generationId)!;
       expect(entry).toBeDefined();
-      sweepInactiveGenerations(entry.lastTokenAt + 11 * 60_000);
+      sweepInactiveGenerations(entry.lastTokenAt + GENERATION_IDLE_TIMEOUT_MS + 60_000);
       expect(entry.controller.signal.aborted).toBe(false);
       release();
       await holder;
       await waitFor(hasActiveChatLease);
       // Once admitted, a provider that stops sending tokens must still time out.
-      sweepInactiveGenerations(entry.lastTokenAt + 11 * 60_000);
+      sweepInactiveGenerations(entry.lastTokenAt + GENERATION_IDLE_TIMEOUT_MS + 60_000);
       expect(entry.controller.signal.aborted).toBe(true);
     } finally {
       release();

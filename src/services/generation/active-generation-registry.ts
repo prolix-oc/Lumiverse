@@ -137,7 +137,15 @@ export function getActiveGenerationCount(): number {
   return activeGenerations.size;
 }
 
-const GENERATION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+// Silence, not total age: every streamed token (reasoning included) refreshes
+// lastTokenAt, so a generation that keeps producing runs as long as it needs.
+// Large contexts with heavy reasoning can stall well past ten minutes without
+// the request being dead, and aborting those discards work the provider has
+// already billed, so the allowance sits above any stall worth waiting out.
+// The pool's own stale-entry failsafe sits at an hour, so this stays below it:
+// the token-aware abort should always land before the pool force-errors an
+// entry the generation may still be filling.
+export const GENERATION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const GENERATION_IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 export function sweepInactiveGenerations(now = Date.now()): void {
