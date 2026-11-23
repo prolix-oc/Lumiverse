@@ -70,6 +70,16 @@ Add expressions one at a time:
 
 ---
 
+## Display Placement
+
+Open **Expression display options** using the expression display's **…** button, or right-click the display, and choose **Half-dock view**. On desktop, the dock sits to the right of the chat; use **Move Dock Left** or **Move Dock Right** to switch sides. On mobile, it sits above the chat.
+
+Drag the dock's inner edge to resize it, or choose **Dock Size… → Compact**, **Medium**, or **Full**. With the resize edge focused, arrow keys adjust the size, **Shift** makes larger adjustments, and **Home** / **End** select the minimum / maximum size. Artwork stays aligned to the bottom. Use **Show Dock Background** or **Hide Dock Background** to change its backdrop.
+
+Choose **Floating view** to return to the floating display with its saved position and size. Desktop and mobile placement, dock size, and background settings are saved independently.
+
+---
+
 ## Expression Labels
 
 You can use any label names you want. Common ones include:

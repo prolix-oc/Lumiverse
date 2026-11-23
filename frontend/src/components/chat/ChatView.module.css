@@ -9,6 +9,10 @@
   background: transparent;
 }
 
+.container:has(> :is([data-expression-dock='left'], [data-expression-dock='right'])) {
+  flex-direction: row;
+}
+
 .hasSceneBackground {}
 
 .wallpaperTransitionLayer {
@@ -62,7 +66,8 @@
 
 .body {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   height: 100%;
   position: relative;
@@ -678,10 +683,8 @@
   -webkit-backdrop-filter: none !important;
 }
 
-/* ── Portrait side wrapper — slides tab + panel as a unit ──
-   Uses absolute positioning by default so the panel overlays the edge
-   without pushing the chat content. When chat is in full-width mode
-   (no max-width constraint), falls back to flex layout to avoid overlap. */
+/* The portrait panel and tab slide together. At the workspace edge they
+   overlay the expression dock. Inside full-width chat they reserve space. */
 .portraitSide {
   display: flex;
   align-items: stretch;
@@ -704,6 +707,14 @@
 .portraitSideLeft {
   flex-direction: row;
   left: 0;
+}
+
+.container > .portraitSideRight {
+  right: max(0px, calc(var(--chat-drawer-right, 0px) - var(--spindle-dock-right, 0px)));
+}
+
+.container > .portraitSideLeft {
+  left: max(0px, calc(var(--chat-drawer-left, 0px) - var(--spindle-dock-left, 0px)));
 }
 
 .portraitSideOpen {
@@ -859,6 +870,6 @@
   }
 }
 .chatColumnCentered {
-  margin-left: max(0px, calc(var(--chat-drawer-left, 0px) - var(--spindle-dock-left, 0px)));
-  margin-right: max(0px, calc(var(--chat-drawer-right, 0px) - var(--spindle-dock-right, 0px)));
+  margin-left: max(0px, calc(var(--chat-drawer-left, 0px) - var(--spindle-dock-left, 0px) - var(--expression-dock-left, 0px)));
+  margin-right: max(0px, calc(var(--chat-drawer-right, 0px) - var(--spindle-dock-right, 0px) - var(--expression-dock-right, 0px)));
 }

@@ -228,6 +228,15 @@ function expectCompleteToolbarAttributes(toolbar: Element, expectedSide: 'left' 
   expect(toolbar.hasAttribute('data-native-dock-side')).toBe(false)
 }
 
+test.each(['left', 'right'])('the %s portrait panel exposes one toggle with its open state', side => {
+  const state = createState(false, undefined, { select: false, oldest: false, browse: false })
+  const doc = renderChatView({ ...state, portraitPanelSide: side, portraitPanelOpen: true })
+  const toggles = doc.querySelectorAll('button[aria-label="chatView.togglePortraitPanel"]')
+  expect(toggles).toHaveLength(1)
+  expect(toggles[0]?.getAttribute('aria-expanded')).toBe('true')
+  expect(toggles[0]?.closest('[data-lumiverse-surface="chat-body"]')).not.toBeNull()
+})
+
 describe('ChatView native select-messages toolbar', () => {
   test('isShowNativeSelectMessages stays on unless explicitly false', () => {
     expect(isShowNativeSelectMessages(undefined)).toBe(true)

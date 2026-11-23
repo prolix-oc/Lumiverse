@@ -1,6 +1,8 @@
 .container {
   position: fixed;
   z-index: 9970;
+  max-width: calc(var(--app-scaled-viewport-width, 100vw) - 24px);
+  max-height: calc(var(--app-scaled-viewport-height, 100dvh) - 24px);
   touch-action: none;
   user-select: none;
   cursor: grab;
@@ -73,6 +75,7 @@
 }
 
 .container:hover .dragHandleFrameless,
+.container:focus-within .dragHandleFrameless,
 .clickThrough .dragHandleFrameless {
   opacity: 1;
 }
@@ -310,8 +313,86 @@
   }
 }
 
-@media (max-width: 400px) {
-  .container {
-    display: none !important;
+.dock {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex: 0 0 var(--expression-dock-size);
+  justify-content: center;
+  align-items: flex-end;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
+
+.dock:is([data-expression-dock='top'], [data-expression-dock='left']) {
+  order: -1;
+}
+
+.dock[data-dock-background] {
+  background: var(--lumiverse-bg);
+}
+
+.dockMedia {
+  display: flex;
+  width: 100%;
+  height: var(--expression-dock-media-scale);
+  min-width: 0;
+}
+
+.dock[data-expression-dock='top'] .dockMedia {
+  width: var(--expression-dock-media-scale);
+  height: 100%;
+}
+
+.dockResizeHandle {
+  composes: resizeHandle from '../../panels/ViewportDrawer.module.css';
+  left: 0;
+}
+
+.dock[data-expression-dock='left'] .dockResizeHandle {
+  left: auto;
+  right: 0;
+}
+
+.dock[data-expression-dock='top'] .dockResizeHandle {
+  --resize-handle-highlight: inset 0 -2px var(--lumiverse-primary);
+  inset: auto 0 0;
+  width: auto;
+  height: 28px;
+  cursor: row-resize;
+}
+
+.dockMenuButton {
+  position: absolute;
+  z-index: 4;
+  inset-block-start: 8px;
+  inset-inline-start: 8px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  transition: opacity 150ms ease;
+}
+
+.dock[data-expression-dock='left'] .dockMenuButton {
+  inset-inline-start: auto;
+  inset-inline-end: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dock:not(:hover) .dockMenuButton:not(:focus-visible, [aria-expanded='true']) {
+    opacity: 0;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .dragHandleFrameless {
+    opacity: 1;
   }
 }
