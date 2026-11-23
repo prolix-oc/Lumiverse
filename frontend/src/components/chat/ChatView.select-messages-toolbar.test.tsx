@@ -34,6 +34,7 @@ const moduleSources: Record<string, string> = {
     export const useTranslation = () => ({ t: (key) => key })
   `,
   'react-router': `
+    export const useOutletContext = () => null
     export const useNavigate = () => () => undefined
     export const useParams = () => ({ chatId: 'chat-test' })
   `,
