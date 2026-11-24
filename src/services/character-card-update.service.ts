@@ -160,6 +160,19 @@ export function buildCardReplacementInput(existing: Character, card: CreateChara
     )
   );
 
+  const mergedExtensions: Record<string, any> = {
+    ...(card.extensions ?? {}),
+    ...preservedExtensions,
+  };
+
+  // `alternate_fields` is preserved by default so re-importing an updated card
+  // does not drop the user's variants. When the incoming card actually carries
+  // alternates, they are authoritative — otherwise an updated card would
+  // silently keep stale variants.
+  if (card.extensions && Object.prototype.hasOwnProperty.call(card.extensions, "alternate_fields")) {
+    mergedExtensions.alternate_fields = card.extensions.alternate_fields;
+  }
+
   return {
     // Deliberately omit `name`: legacy replace-card only replaces card contents.
     description: card.description ?? "",
@@ -173,10 +186,7 @@ export function buildCardReplacementInput(existing: Character, card: CreateChara
     post_history_instructions: card.post_history_instructions ?? "",
     tags: card.tags ?? [],
     alternate_greetings: card.alternate_greetings ?? [],
-    extensions: {
-      ...(card.extensions ?? {}),
-      ...preservedExtensions,
-    },
+    extensions: mergedExtensions,
   };
 }
 

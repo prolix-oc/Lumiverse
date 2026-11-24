@@ -199,10 +199,19 @@ export async function applyCharxModulesAndAssets(
       }
     }
 
-    // Alternate fields
+    // Alternate fields. The card's own extensions may already carry converted
+    // SillyTavern alternates from parseCardJson, so merge rather than replace;
+    // module entries win on a key collision.
     if (lumiverseModules.alternate_fields) {
-      if (!merge) extensions.alternate_fields = lumiverseModules.alternate_fields;
-      else {
+      if (!merge) {
+        const cardAlternates = extensions.alternate_fields;
+        extensions.alternate_fields = {
+          ...(cardAlternates && typeof cardAlternates === "object" && !Array.isArray(cardAlternates)
+            ? cardAlternates
+            : {}),
+          ...lumiverseModules.alternate_fields,
+        };
+      } else {
         const alternateFields = { ...extensions.alternate_fields };
         for (const [field, variants] of Object.entries(lumiverseModules.alternate_fields)) {
           if (!Array.isArray(variants)) continue;

@@ -132,7 +132,7 @@ function replaceGalleryReferencesDeep(value: unknown, replacements: Map<string, 
   );
 }
 
-function registerGalleryReferences(
+export function registerGalleryReferences(
   userId: string,
   characterId: string,
   items: Array<Pick<CharacterGalleryItem, "id" | "image_id">>,
