@@ -21,6 +21,8 @@ import {
   importChats,
   importGroupChats,
 } from "./st-importer";
+import { importGalleryContent } from "./st-gallery-import";
+import type { MigrationResults } from "./st-types";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -31,13 +33,7 @@ interface DockerSTMigrationStatus {
   source_path: string;
   target_user: string;
   migration_target: number;
-  results: {
-    characters?: { imported: number; skipped: number; failed: number };
-    world_books?: { imported: number; skipped: number; failed: number; total_entries: number };
-    personas?: { imported: number; failed: number; avatars_uploaded: number };
-    chats?: { imported: number; failed: number; total_messages: number };
-    group_chats?: { imported: number; failed: number; skipped: number; total_messages: number };
-  };
+  results: MigrationResults;
   duration_ms: number;
 }
 
@@ -75,14 +71,17 @@ function resolveTargetFlags(target: number): {
   doPersonas: boolean;
   doChats: boolean;
   doGroupChats: boolean;
+  doGallery: boolean;
 } {
+  // Gallery import rides along with characters and chats: it attaches images to
+  // imported characters and rewrites character text + imported chats.
   switch (target) {
-    case 1: return { doCharacters: true, doWorldBooks: false, doPersonas: false, doChats: false, doGroupChats: false };
-    case 2: return { doCharacters: false, doWorldBooks: true, doPersonas: false, doChats: false, doGroupChats: false };
-    case 3: return { doCharacters: false, doWorldBooks: false, doPersonas: true, doChats: false, doGroupChats: false };
-    case 4: return { doCharacters: true, doWorldBooks: false, doPersonas: false, doChats: true, doGroupChats: true };
+    case 1: return { doCharacters: true, doWorldBooks: false, doPersonas: false, doChats: false, doGroupChats: false, doGallery: true };
+    case 2: return { doCharacters: false, doWorldBooks: true, doPersonas: false, doChats: false, doGroupChats: false, doGallery: false };
+    case 3: return { doCharacters: false, doWorldBooks: false, doPersonas: true, doChats: false, doGroupChats: false, doGallery: false };
+    case 4: return { doCharacters: true, doWorldBooks: false, doPersonas: false, doChats: true, doGroupChats: true, doGallery: true };
     case 5:
-    default: return { doCharacters: true, doWorldBooks: true, doPersonas: true, doChats: true, doGroupChats: true };
+    default: return { doCharacters: true, doWorldBooks: true, doPersonas: true, doChats: true, doGroupChats: true, doGallery: true };
   }
 }
 
@@ -152,7 +151,7 @@ export async function runDockerSTMigration(): Promise<void> {
     );
 
     // 5. Resolve import flags
-    const { doCharacters, doWorldBooks, doPersonas, doChats, doGroupChats } = resolveTargetFlags(target);
+    const { doCharacters, doWorldBooks, doPersonas, doChats, doGroupChats, doGallery } = resolveTargetFlags(target);
 
     // 6. Execute imports in order
     const results: DockerSTMigrationStatus["results"] = {};
@@ -223,6 +222,26 @@ export async function runDockerSTMigration(): Promise<void> {
       logger.info(`Group chats: ${gcResult.imported} imported (${gcResult.totalMessages} messages), ${gcResult.failed} failed`);
       if (gcResult.skipped > 0) {
         logger.warn(`${gcResult.skipped} group(s) skipped — no members found`);
+      }
+    }
+
+    // Gallery (needs characters + imported chats to rewrite)
+    if (doGallery && counts.characters > 0) {
+      const galleryResult = await importGalleryContent(userId, effectiveDataDir, filenameToId, logger);
+      results.gallery = {
+        imported: galleryResult.imported,
+        skipped: galleryResult.skipped,
+        failed: galleryResult.failed,
+        characters_with_gallery: galleryResult.charactersWithGallery,
+        rewrites: galleryResult.rewrites,
+        contested_characters: galleryResult.contestedCharacters,
+      };
+      logger.info(
+        `Gallery: ${galleryResult.imported} images imported, ${galleryResult.skipped} reused, ${galleryResult.failed} failed, ` +
+        `${galleryResult.charactersWithGallery} character(s) updated, ${galleryResult.rewrites} reference rewrite(s)`
+      );
+      if (galleryResult.contestedCharacters > 0) {
+        logger.warn(`${galleryResult.contestedCharacters} character(s) skipped — their gallery folder is shared with another character`);
       }
     }
 

@@ -638,6 +638,7 @@ The web UI wizard walks you through these steps:
     - Personas only
     - Characters + Chat History (including group chats)
     - Everything (recommended)
+    - **Galleries & Media** — Copy CharacterLibrary media from the selected user's `user/images/` folders and attach it to imported characters. This requires **Characters**. Known local paths and matched external URLs are rewritten in card text, alternate fields, embedded lore, and imported one-to-one chat messages and swipes. Shared gallery folders and ambiguous URL matches are skipped with warnings. No external media is downloaded.
     - Custom selection
 5. **Select target** — Choose which Lumiverse account receives the data.
 6. **(Optional) TagLibrary Backup** — If you used the [SillyTavern-TagLibrary](https://github.com/Inkbottle007/SillyTavern-TagLibrary) extension and exported a JSON backup, upload it here. Lumiverse will re-apply your tags to the imported characters once the main migration finishes. See [TagLibrary Re-Apply](#taglibrary-re-apply) below.

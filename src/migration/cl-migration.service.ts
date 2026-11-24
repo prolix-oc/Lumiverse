@@ -1,3 +1,4 @@
+import { replaceMediaReferences } from "./media-references";
 import { uuidv4 } from "../utils/uuid";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -315,7 +316,7 @@ export async function executeClMigration(userId: string, jobId: string, options:
         } catch (error) { add("gallery", `${c.avatar}/${path}`, "failed", undefined, message(error)); }
       }
       const character = getCharacter(userId, characterId)!;
-      const replace = (text: string) => replaceLocalPaths(text, mappings);
+      const replace = (text: string) => replaceMediaReferences(text, mappings);
       const fields = ["description", "personality", "scenario", "first_mes", "mes_example", "creator_notes", "system_prompt", "post_history_instructions"] as const;
       const patch: Record<string, any> = {};
       for (const field of fields) if (replace(character[field]) !== character[field]) patch[field] = replace(character[field]);
@@ -339,8 +340,8 @@ export async function executeClMigration(userId: string, jobId: string, options:
           sync("regex", key, digest(JSON.stringify(raw)), () => {
             const result = importRegexScripts(userId, { character_id: id, scripts: [{
               ...raw, script_id: "", sort_order: typeof raw.sort_order === "number" ? raw.sort_order : index, scope: "character", scope_id: id, character_id: id, pack_id: null, preset_id: null, owner_extension_identifier: null,
-              replaceString: raw.replaceString !== undefined ? replaceLocalPaths(raw.replaceString, textMappings.get(c.avatar)!) : undefined,
-              replace_string: raw.replace_string !== undefined ? replaceLocalPaths(raw.replace_string, textMappings.get(c.avatar)!) : undefined,
+              replaceString: raw.replaceString !== undefined ? replaceMediaReferences(raw.replaceString, textMappings.get(c.avatar)!) : undefined,
+              replace_string: raw.replace_string !== undefined ? replaceMediaReferences(raw.replace_string, textMappings.get(c.avatar)!) : undefined,
               disabled, metadata: { ...(raw.metadata ?? {}), ...(typeof raw.script_id === "string" && raw.script_id.trim() ? { imported_script_id: raw.script_id.trim() } : {}), source: "character_library", cl_source_key: key, cl_source_id: sourceId },
             }] });
             if (result.imported !== 1 || result.errors.length) throw new Error(result.errors.join("; ") || "Regex could not be imported");
@@ -379,7 +380,7 @@ export async function executeClMigration(userId: string, jobId: string, options:
           const chatId = sync("chat", path, digest(bytes), () => {
             const chat = createChatRaw(userId, { character_id: id, name: parsed?.name ?? file.replace(/\.jsonl$/i, ""), created_at: parsed?.createdAt, metadata });
             const mappings = textMappings.get(c.avatar)!;
-            bulkInsertMessages(chat.id, (parsed?.messages ?? []).map((m) => ({ ...m, content: replaceLocalPaths(m.content, mappings), swipes: m.swipes?.map((s) => replaceLocalPaths(s, mappings)) })), userId);
+            bulkInsertMessages(chat.id, (parsed?.messages ?? []).map((m) => ({ ...m, content: replaceMediaReferences(m.content, mappings), swipes: m.swipes?.map((s) => replaceMediaReferences(s, mappings)) })), userId);
             return chat.id;
           }, (chatId) => !!getDb().query("SELECT id FROM chats WHERE id = ? AND user_id = ? AND character_id = ?").get(chatId, userId, id));
           if (c.chat && c.chat.replace(/\.jsonl$/i, "") === file.replace(/\.jsonl$/i, "")) {
@@ -436,16 +437,6 @@ async function importBook(userId: string, payload: any, options: Parameters<type
   }
 }
 
-function replaceLocalPaths(text: string, mappings: Map<string, string>): string {
-  let result = text;
-  // Longest first prevents a short filename from consuming another path's prefix.
-  for (const [path, reference] of [...mappings].sort((a, b) => b[0].length - a[0].length)) {
-    const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Do not consume a filename prefix or a same-looking path at another host.
-    result = result.replace(new RegExp(`(?<![\\w:/.-])${escaped}(?![\\w%./-])`, "g"), () => reference);
-  }
-  return result;
-}
 
 export function startClMigration(userId: string, jobId: string, options: ClMigrationOptions = {}): ClMigrationJob {
   const job = getClMigrationJob(userId, jobId);

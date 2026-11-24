@@ -652,7 +652,7 @@ export interface SpindleToastPayload {
 // ---- Migration ----
 export interface MigrationProgressPayload {
   migrationId: string
-  phase: 'starting' | 'scanning' | 'characters' | 'worldBooks' | 'personas' | 'chats' | 'groupChats' | 'completed' | 'failed'
+  phase: 'starting' | 'scanning' | 'characters' | 'worldBooks' | 'personas' | 'chats' | 'groupChats' | 'gallery' | 'completed' | 'failed'
   label: string
   current: number
   total: number

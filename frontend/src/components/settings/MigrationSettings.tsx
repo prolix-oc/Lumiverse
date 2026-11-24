@@ -55,6 +55,7 @@ export default function MigrationSettings() {
     personas: true,
     chats: true,
     groupChats: true,
+    gallery: true,
   })
   const [targetUserId, setTargetUserId] = useState(user?.id || '')
   const [users, setUsers] = useState<AuthUser[]>([])
@@ -297,10 +298,11 @@ export default function MigrationSettings() {
 
   const handleScopeChange = (key: keyof MigrationScope, checked: boolean) => {
     const next = { ...scope, [key]: checked }
-    // Auto-enable characters if chats or group chats need them
-    if ((key === 'chats' || key === 'groupChats') && checked) {
+    // Chats, group chats and galleries all attach to characters.
+    if ((key === 'chats' || key === 'groupChats' || key === 'gallery') && checked) {
       next.characters = true
     }
+    if (key === 'characters' && !checked) next.gallery = false
     setScope(next)
   }
 
@@ -407,6 +409,7 @@ export default function MigrationSettings() {
     personas: t('migration.scopePersonas'),
     chats: t('migration.scopeChats'),
     groupChats: t('migration.scopeGroupChats'),
+    gallery: t('migration.scopeGallery'),
   }
 
   const phaseLabels: Record<string, string> = {
@@ -417,6 +420,7 @@ export default function MigrationSettings() {
     personas: t('migration.scopePersonas'),
     chats: t('migration.scopeChats'),
     groupChats: t('migration.scopeGroupChats'),
+    gallery: t('migration.phaseGallery'),
     completed: t('migration.phaseCompleted'),
     failed: t('migration.phaseFailed'),
   }
@@ -642,6 +646,9 @@ export default function MigrationSettings() {
           <div className={styles.scanRow}>
             <Toggle.Checkbox checked={scope.groupChats} onChange={(v) => handleScopeChange('groupChats', v)} label={scopeLabels.groupChats} />
             <span className={styles.scanCount}>{t('migration.groupChatsCount', { groups: scanResult.groupChats, files: scanResult.groupChatFiles })}</span>
+          </div>
+          <div className={styles.scanRow}>
+            <Toggle.Checkbox checked={scope.gallery} onChange={(v) => handleScopeChange('gallery', v)} label={scopeLabels.gallery} hint={t('migration.scopeGalleryHint')} />
           </div>
           {(scope.chats || scope.groupChats) && !scope.characters && (
             <div className={styles.scanWarning}>

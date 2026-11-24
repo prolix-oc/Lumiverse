@@ -98,7 +98,8 @@
     "bench:message-tags": "bun run scripts/bench-message-tag-interceptors.ts",
     "edit-env": "bun run scripts/edit-env.ts",
     "migrate:cl": "bun run scripts/migrate-character-library.ts",
-    "test:mobile-contracts": "bun test --isolate src/routes/android-notifications.routes.test.ts src/routes/ios-notifications.routes.test.ts src/routes/ios-live-activities.routes.test.ts src/routes/ios-widgets.routes.test.ts src/services/apns-encryption.test.ts src/services/apns-routing.test.ts"
+    "test:mobile-contracts": "bun test --isolate src/routes/android-notifications.routes.test.ts src/routes/ios-notifications.routes.test.ts src/routes/ios-live-activities.routes.test.ts src/routes/ios-widgets.routes.test.ts src/services/apns-encryption.test.ts src/services/apns-routing.test.ts",
+    "audit:st-gallery": "bun run scripts/audit-st-gallery.ts"
   },
   "type": "module",
   "optionalDependencies": {
