@@ -157,7 +157,7 @@ const HTML_AUDIO_RE = /<(?:audio|source)[^>]+src=["']([^"']+)["'][^>]*>/g;
 const CSS_URL_RE =
   /url\(["']?(https?:\/\/[^"')\s]+\.(?:png|jpg|jpeg|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|m4a))["']?\)/gi;
 const RAW_MEDIA_URL_RE =
-  /(https?:\/\/[^\s<>"{}|\\^`\[\]]+\.(?:png|jpg|jpeg|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|m4a))/gi;
+  /(https?:\/\/[^\s<>"{}|\\^`\[\]]+\.(?:png|jpg|jpeg|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|m4a)(?:[?#][^\s<>"'{}|\\^`\[\]()]*)?)/gi;
 
 /** CL `extractMediaUrls`, including its truncated-twin filter. */
 export function extractMediaUrls(text: string): string[] {

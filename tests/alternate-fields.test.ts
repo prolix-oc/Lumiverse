@@ -94,6 +94,9 @@ describe("convertAlternateEntries", () => {
 
   test("keeps an empty-string variant rather than dropping it", () => {
     expect(convertAlternateEntries([{ title: "Blank", content: "" }])).toHaveLength(1);
+    expect(convertAlternateEntries([""])).toEqual([
+      { id: expect.any(String), label: "Alternate 1", content: "" },
+    ]);
   });
 });
 

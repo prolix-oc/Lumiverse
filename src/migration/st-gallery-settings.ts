@@ -6,8 +6,8 @@
  * what the ST install did when it localized media.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { LocalFileSystem } from "../file-connections/providers/local";
+import type { FileSystem } from "../file-connections/types";
 
 export interface ClSettings {
   uniqueGalleryFolders: boolean;
@@ -16,10 +16,10 @@ export interface ClSettings {
   rewriteChats: boolean;
 }
 
-export function detectClSettings(stDataDir: string): ClSettings {
+export async function detectClSettings(stDataDir: string, fs: FileSystem = new LocalFileSystem()): Promise<ClSettings> {
   const defaults: ClSettings = { uniqueGalleryFolders: false, includeLorebook: false, rewriteChats: true };
   try {
-    const parsed = JSON.parse(readFileSync(join(stDataDir, "settings.json"), "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(await fs.readText(fs.join(stDataDir, "settings.json"))) as Record<string, unknown>;
     const extensionSettings = parsed.extension_settings;
     if (!extensionSettings || typeof extensionSettings !== "object") return defaults;
     const cl = (extensionSettings as Record<string, unknown>).SillyTavernCharacterGallery;

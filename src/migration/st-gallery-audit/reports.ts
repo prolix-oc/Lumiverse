@@ -6,6 +6,7 @@
  * small batches instead of accumulated in memory.
  */
 
+import { classifyGalleryAsset } from "./cl-algorithms";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -145,7 +146,7 @@ export async function writeAssetsJsonl(
           extension: file.extension,
           size_bytes: file.sizeBytes,
           characters,
-          classification: classifyForReport(file.filename),
+          classification: classifyGalleryAsset(file.filename),
         }),
       );
     }
@@ -153,12 +154,7 @@ export async function writeAssetsJsonl(
   await writer.close();
 }
 
-function classifyForReport(fileName: string): string {
-  if (fileName.startsWith("localized_media_")) return "localized_media";
-  if (fileName.startsWith("lorebook_media_")) return "lorebook_media";
-  if (/^[a-z]+gallery_[a-f0-9]+_/.test(fileName)) return "provider_gallery";
-  return "original_name";
-}
+
 
 const URLS_HEADER = [
   "character",

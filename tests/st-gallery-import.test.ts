@@ -21,6 +21,20 @@ import type { MigrationLogger } from "../src/migration/st-reader";
 import { importCharacters, importChats } from "../src/migration/st-importer";
 import { importGalleryContent, replaceReferences, localPathKey } from "../src/migration/st-gallery-import";
 import { LocalFileSystem } from "../src/file-connections/providers/local";
+import { runGalleryAudit } from "../src/migration/st-gallery-audit";
+import { createWorldBook, createEntry, listEntries } from "../src/services/world-books.service";
+
+// A remote source can have the same path as a different local directory.
+class RemoteSettingsFs extends LocalFileSystem {
+  override async readText(path: string): Promise<string> {
+    if (path === this.join(stDataDir, "settings.json")) {
+      return JSON.stringify({ extension_settings: { SillyTavernCharacterGallery: {
+        uniqueGalleryFolders: true, mediaLocalizationEnabled: false,
+      } } });
+    }
+    return super.readText(path);
+  }
+}
 
 const USER_ID = "gallery-import-user";
 const ONE_BY_ONE_PNG_BASE64 =
@@ -94,6 +108,109 @@ async function runImport(): Promise<{ filenameToId: Map<string, string> }> {
 }
 
 describe("ST gallery import", () => {
+  test("preserves unrelated linked lorebooks while localizing the embedded snapshot", async () => {
+    const url = "https://cdn.example.com/map.png";
+    const book = createWorldBook(USER_ID, { name: "Shared world" });
+    createEntry(USER_ID, book.id, { content: url });
+    writeImage(join(stDataDir, "user", "images", "Lore_abcdefghijkl", "localized_media_1_map.png"));
+    writeCard(join(stDataDir, "characters"), "Lore.png", cardPng("Lore", {
+      gallery_id: "abcdefghijkl", world_book_ids: [book.id],
+    }, { character_book: { entries: [{ content: url }] } }));
+    const { filenameToId } = await runImport();
+    await importGalleryContent(USER_ID, stDataDir, filenameToId, logger);
+    expect(listEntries(USER_ID, book.id)[0]!.content).toBe(url);
+    expect(getCharacter(USER_ID, filenameToId.get("Lore")!)!.extensions.character_book.entries[0].content)
+      .toBe("gallery://image-1");
+  });
+
+  test("uses the source provider's settings for unique folders and chat opt-out", async () => {
+    writeFileSync(join(stDataDir, "settings.json"), "{}");
+    writeImage(join(stDataDir, "user", "images", "Remote", "wrong.png"));
+    writeImage(join(stDataDir, "user", "images", "Remote_abcdefghijkl", "localized_media_1_scene.png"));
+    writeCard(join(stDataDir, "characters"), "Remote.png", cardPng("Remote", { gallery_id: "abcdefghijkl" }, {
+      description: "https://cdn.example.com/scene.png",
+    }));
+    const chatsDir = join(stDataDir, "chats", "Remote");
+    mkdirSync(chatsDir, { recursive: true });
+    writeFileSync(join(chatsDir, "one.jsonl"), [
+      JSON.stringify({ user_name: "User", chat_metadata: {} }),
+      JSON.stringify({ name: "Remote", is_user: false, mes: "https://cdn.example.com/scene.png" }),
+    ].join("\n"));
+    const fs = new RemoteSettingsFs();
+    const chars = await importCharacters(USER_ID, stDataDir, logger, fs);
+    await importChats(USER_ID, stDataDir, chars.filenameToId, new Map(), logger, fs);
+    const audit = await runGalleryAudit({ stDataDir, outDir: join(workDir, "audit") }, {}, fs);
+    expect(audit.readyCharacters).toBe(1);
+    await importGalleryContent(USER_ID, stDataDir, chars.filenameToId, logger, fs);
+    expect(getCharacter(USER_ID, chars.filenameToId.get("Remote")!)!.description).toBe("gallery://image-1");
+    expect((getDb().query("SELECT content FROM messages").get() as { content: string }).content)
+      .toBe("https://cdn.example.com/scene.png");
+  });
+
+  test("treats chat source prefixes literally, including SQL wildcards and case", async () => {
+    const url = "https://cdn.example.com/scene.png";
+    writeImage(join(stDataDir, "user", "images", "Owner_abcdefghijkl", "localized_media_1_scene.png"));
+    const stems = ["A_%", "A_other", "a_%"];
+    for (const stem of stems) {
+      const chatsDir = join(stDataDir, "chats", stem);
+      mkdirSync(chatsDir, { recursive: true });
+      writeFileSync(join(chatsDir, "one.jsonl"), [
+        JSON.stringify({ user_name: "User", chat_metadata: {} }),
+        JSON.stringify({ name: stem, is_user: false, mes: url, swipes: [url] }),
+      ].join("\n"));
+    }
+    // The differently-cased source is inserted below; case-insensitive disks
+    // cannot hold both character files reliably.
+    writeCard(join(stDataDir, "characters"), "A_%.png", cardPng("Owner", { gallery_id: "abcdefghijkl" }));
+    writeCard(join(stDataDir, "characters"), "A_other.png", cardPng("Other", {}));
+    const { filenameToId } = await runImport();
+    await importChats(USER_ID, stDataDir, filenameToId, new Map(), logger);
+    getDb().query("UPDATE chats SET metadata = json_set(metadata, '$._lumiverse_source_filename', 'chats/a_%/one.jsonl') WHERE json_extract(metadata, '$._lumiverse_source_filename') = 'chats/A_other/one.jsonl'").run();
+    await importGalleryContent(USER_ID, stDataDir, filenameToId, logger);
+    const rows = getDb().query(`SELECT m.content, m.swipes, json_extract(c.metadata, '$._lumiverse_source_filename') AS source
+      FROM messages m JOIN chats c ON c.id = m.chat_id`).all() as Array<{ content: string; swipes: string; source: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.content).toBe(row.source === "chats/A_%/one.jsonl" ? "gallery://image-1" : url);
+      expect(JSON.parse(row.swipes)[0]).toBe(row.content);
+    }
+  });
+
+  test("rewrites unescaped paths and alternate variants without changing variant labels", async () => {
+    const folder = "A B_abcdefghijkl";
+    const path = `/user/images/${folder}/scene one.png`;
+    writeImage(join(stDataDir, "user", "images", folder, "scene one.png"));
+    writeCard(join(stDataDir, "characters"), "A B.png", cardPng("A B", {
+      gallery_id: "abcdefghijkl",
+      alternate_fields: { alt_descriptions: [{ title: path, content: path }] },
+    }, { description: `<img src="${path}">` }));
+    const { filenameToId } = await runImport();
+    await importGalleryContent(USER_ID, stDataDir, filenameToId, logger);
+    const character = getCharacter(USER_ID, filenameToId.get("A B")!)!;
+    expect(character.description).toBe('<img src="gallery://image-1">');
+    expect(character.extensions.alternate_fields.description[0].content).toBe("gallery://image-1");
+    expect(character.extensions.alternate_fields.description[0].label).toBe(path);
+    expect(character.extensions.alternate_fields.alt_descriptions[0].content).toBe("gallery://image-1");
+  });
+
+  test("audit predicts references over all assets, including audio before images", async () => {
+    const folder = "Media_abcdefghijkl";
+    mkdirSync(join(stDataDir, "user", "images", folder), { recursive: true });
+    writeFileSync(join(stDataDir, "user", "images", folder, "a.mp3"), "audio");
+    writeImage(join(stDataDir, "user", "images", folder, "z.png"));
+    writeCard(join(stDataDir, "characters"), "Media.png", cardPng("Media", { gallery_id: "abcdefghijkl" }, {
+      description: "https://cdn.example.com/a.mp3 https://cdn.example.com/z.png",
+    }));
+    const outDir = join(workDir, "audit");
+    await runGalleryAudit({ stDataDir, outDir });
+    const report = readFileSync(join(outDir, "gallery-audit-urls.csv"), "utf8");
+    expect(report).toContain(",gallery://image-1\n");
+    expect(report).toContain(",gallery://image-2\n");
+    const { filenameToId } = await runImport();
+    await importGalleryContent(USER_ID, stDataDir, filenameToId, logger);
+    expect(getCharacter(USER_ID, filenameToId.get("Media")!)!.description).toBe("gallery://image-1 gallery://image-2");
+  });
+
   test("imports a character's gallery and rewrites card text to gallery references", async () => {
     const charactersDir = join(stDataDir, "characters");
     const folder = "Alice_abcdefghijkl";
@@ -108,7 +225,7 @@ describe("ST gallery import", () => {
         "Alice",
         { gallery_id: "abcdefghijkl" },
         {
-          description: "External: https://cdn.example.com/hero.png and https://cdn.example.com/villain.png",
+          description: "External: https://cdn.example.com/hero.png?token=one#preview and https://cdn.example.com/villain.png",
           first_mes: "![Hero](/user/images/Alice_abcdefghijkl/localized_media_1700000000_hero.png)",
         },
       ),
@@ -130,6 +247,7 @@ describe("ST gallery import", () => {
     expect(character!.description).toContain("gallery://image-1");
     expect(character!.description).toContain("gallery://image-2");
     expect(character!.description).not.toContain("cdn.example.com");
+    expect(character!.description).not.toContain("?token=");
 
     // The local path in the greeting resolved to the same reference as its file.
     expect(character!.first_mes).toContain("gallery://image-1");

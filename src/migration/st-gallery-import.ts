@@ -22,6 +22,7 @@
  * more than one local file.
  */
 
+import { replaceMediaReferences as replaceReferences } from "./media-references";
 import { extname } from "node:path";
 import { LocalFileSystem } from "../file-connections/providers/local";
 import type { FileSystem } from "../file-connections/types";
@@ -100,26 +101,7 @@ export function localPathKey(folder: string, filename: string): string {
   return `/user/images/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}`;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Replace every key in `text` with its value. Longest key first so a short
- * filename cannot consume another path's prefix, and boundary guards so a
- * filename prefix or a same-looking path on another host is left alone —
- * identical to the CharacterLibrary bundle importer's rule.
- */
-export function replaceReferences(text: string, mappings: ReadonlyMap<string, string>): string {
-  let result = text;
-  for (const [key, value] of [...mappings].sort((a, b) => b[0].length - a[0].length)) {
-    result = result.replace(
-      new RegExp(`(?<![\\w:/.-])${escapeRegExp(key)}(?![\\w%./-])`, "g"),
-      () => value,
-    );
-  }
-  return result;
-}
+export { replaceMediaReferences as replaceReferences } from "./media-references";
 
 /** The standalone world book representing this character's embedded book. */
 function characterBookId(character: Character | null): string | null {
@@ -177,7 +159,6 @@ function createTextRewriter(
 interface PlannedGallery {
   filename: string;
   folder: string | null;
-  card: unknown;
 }
 
 interface ImportedGallery {
@@ -205,7 +186,7 @@ export async function importGalleryContent(
   const imagesDir = fs.join(stDataDir, "user", "images");
   if (!(await fs.exists(imagesDir)) || !(await fs.exists(charactersDir))) return result;
 
-  const settings = detectClSettings(stDataDir);
+  const settings = await detectClSettings(stDataDir, fs);
   const folderEntries = await fs.readdir(imagesDir);
   const folderNames = folderEntries.filter((entry) => entry.isDirectory).map((entry) => entry.name);
   if (folderNames.length === 0) return result;
@@ -248,7 +229,7 @@ export async function importGalleryContent(
       if (owners) owners.push(filename);
       else folderOwners.set(folder, [filename]);
     }
-    plans.push({ filename, folder, card });
+    plans.push({ filename, folder });
   }
 
   // Pass 2 — import owned folders and rewrite references.
@@ -414,7 +395,10 @@ async function importCharacterGalleryAssets(
     if (!imageId) continue;
     const reference = registration.referenceNames[imageId]
       ?? findGalleryImageReference(registration.assetMap, imageId);
-    if (reference) mappings.set(localPathKey(folder, filename), reference);
+    if (reference) {
+      mappings.set(localPathKey(folder, filename), reference);
+      mappings.set(`/user/images/${folder}/${filename}`, reference);
+    }
   }
   return { mappings };
 }
@@ -455,9 +439,10 @@ function rewriteCharacterReferences(
   // Card-embedded lore. ST migration leaves it inside `extensions.character_book`;
   // if a standalone book exists for it (CL bundle imports), rewrite that instead.
   const bookId = characterBookId(character);
+  const book = bookId ? getWorldBook(userId, bookId) : null;
   const embeddedEntries = embeddedBookEntries(character);
-  if (bookId && getWorldBook(userId, bookId)) {
-    for (const entry of listEntries(userId, bookId)) {
+  if (book && book.metadata.source_character_id === characterId && book.metadata.auto_managed_by_character === true) {
+    for (const entry of listEntries(userId, book.id)) {
       if (typeof entry.content !== "string") continue;
       const next = rewrite(entry.content);
       if (next === entry.content) continue;
@@ -476,6 +461,28 @@ function rewriteCharacterReferences(
     });
     if (changed) {
       patch.extensions = { ...(character.extensions ?? {}), character_book: { ...embeddedBook(character), entries: nextEntries } };
+      rewrites++;
+    }
+  }
+
+  // Variants can become the active field later; localize their text too.
+  // Keep IDs and labels byte-identical, including the retained ST source lists.
+  const alternates = character.extensions?.alternate_fields;
+  if (alternates && typeof alternates === "object" && !Array.isArray(alternates)) {
+    const nextAlternates = Object.fromEntries(Object.entries(alternates).map(([field, entries]) => {
+      if (!Array.isArray(entries)) return [field, entries];
+      return [field, entries.map((entry: unknown) => {
+        if (typeof entry === "string") return rewrite(entry);
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+        const variant = { ...entry } as Record<string, unknown>;
+        for (const key of ["content", "description"]) {
+          if (typeof variant[key] === "string") variant[key] = rewrite(variant[key]);
+        }
+        return variant;
+      })];
+    }));
+    if (JSON.stringify(nextAlternates) !== JSON.stringify(alternates)) {
+      patch.extensions = { ...(patch.extensions ?? character.extensions) as Record<string, unknown>, alternate_fields: nextAlternates };
       rewrites++;
     }
   }
@@ -504,9 +511,9 @@ function rewriteChatReferences(
     .query(
       `SELECT m.id AS id, m.content AS content, m.swipes AS swipes FROM messages m
        JOIN chats c ON c.id = m.chat_id
-       WHERE c.user_id = ? AND json_extract(c.metadata, '$._lumiverse_source_filename') LIKE ?`,
+       WHERE c.user_id = ? AND substr(json_extract(c.metadata, '$._lumiverse_source_filename'), 1, length(?)) = ?`,
     )
-    .all(userId, `chats/${chatDirName}/%`) as Array<{ id: string; content: string; swipes: string }>;
+    .all(userId, `chats/${chatDirName}/`, `chats/${chatDirName}/`) as Array<{ id: string; content: string; swipes: string }>;
   if (rows.length === 0) return 0;
 
   let changed = 0;

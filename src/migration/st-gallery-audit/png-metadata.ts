@@ -12,7 +12,7 @@
  */
 
 import { inflateSync } from "node:zlib";
-import { readFileRange } from "../../file-connections/range";
+import { supportsRange } from "../../file-connections/range";
 import type { FileSystem } from "../../file-connections/types";
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -68,11 +68,10 @@ function decodeTextChunk(type: string, data: Buffer, nullIdx: number): string | 
  * requested keyword has been found.
  */
 async function readTextChunks(
-  fs: FileSystem,
-  path: string,
+  readRange: (offset: number, length: number) => Promise<Buffer>,
   keywords: readonly string[],
 ): Promise<TextChunk[]> {
-  const signature = await readFileRange(fs, path, 0, 8);
+  const signature = await readRange(0, 8);
   if (signature.length < 8 || !signature.equals(PNG_SIGNATURE)) {
     throw new Error("not a valid PNG");
   }
@@ -82,7 +81,7 @@ async function readTextChunks(
   let offset = 8;
 
   for (;;) {
-    const header = await readFileRange(fs, path, offset, 8);
+    const header = await readRange(offset, 8);
     if (header.length < 8) return found; // truncated file
     const length = header.readUInt32BE(0);
     const type = header.toString("ascii", 4, 8);
@@ -102,14 +101,15 @@ async function readTextChunks(
     }
 
     if (TEXT_CHUNK_TYPES[type]) {
-      const data = await readFileRange(fs, path, dataStart, length);
+      const data = await readRange(dataStart, length);
       const nullIdx = data.indexOf(0);
       if (nullIdx !== -1) {
         const keyword = data.toString("ascii", 0, nullIdx);
         if (wanted.has(keyword)) {
           const decoded = decodeTextChunk(type, data, nullIdx);
           if (decoded !== null) found.push({ keyword, text: decoded });
-          if (found.length >= keywords.length) return found;
+          wanted.delete(keyword);
+          if (wanted.size === 0) return found;
         }
       }
     }
@@ -138,7 +138,14 @@ export async function readCardMetadata(
 ): Promise<CardMetadataResult> {
   let chunks: TextChunk[];
   try {
-    chunks = await readTextChunks(fs, path, CARD_KEYWORDS);
+    // Providers without seeking must transfer the card once, not once per
+    // chunk/header. Keep the buffer scoped to this card.
+    if (supportsRange(fs)) {
+      chunks = await readTextChunks((offset, length) => fs.readRange(path, offset, length), CARD_KEYWORDS);
+    } else {
+      const bytes = await fs.readFile(path);
+      chunks = await readTextChunks(async (offset, length) => bytes.subarray(offset, offset + length), CARD_KEYWORDS);
+    }
   } catch (err) {
     return {
       keyword: null,

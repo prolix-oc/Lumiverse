@@ -302,6 +302,7 @@ export default function MigrationSettings() {
     if ((key === 'chats' || key === 'groupChats' || key === 'gallery') && checked) {
       next.characters = true
     }
+    if (key === 'characters' && !checked) next.gallery = false
     setScope(next)
   }
 
@@ -647,8 +648,7 @@ export default function MigrationSettings() {
             <span className={styles.scanCount}>{t('migration.groupChatsCount', { groups: scanResult.groupChats, files: scanResult.groupChatFiles })}</span>
           </div>
           <div className={styles.scanRow}>
-            <Toggle.Checkbox checked={scope.gallery} onChange={(v) => handleScopeChange('gallery', v)} label={scopeLabels.gallery} />
-            <span className={styles.scanCount}>{t('migration.scopeGalleryHint')}</span>
+            <Toggle.Checkbox checked={scope.gallery} onChange={(v) => handleScopeChange('gallery', v)} label={scopeLabels.gallery} hint={t('migration.scopeGalleryHint')} />
           </div>
           {(scope.chats || scope.groupChats) && !scope.characters && (
             <div className={styles.scanWarning}>

@@ -106,7 +106,7 @@ async function main(): Promise<number> {
   const outDir = resolve(options.outDir || join("data", "reports", `st-gallery-audit-${timestampSlug()}`));
 
   printBanner("SillyTavern gallery dry-run audit");
-  const detected = detectClSettings(dataDir);
+  const detected = await detectClSettings(dataDir);
   console.log(`  ${theme.muted}Source:${theme.reset} ${dataDir}`);
   console.log(`  ${theme.muted}Reports:${theme.reset} ${outDir}`);
   console.log(`  ${theme.muted}uniqueGalleryFolders:${theme.reset} ${options.uniqueGalleryFolders ?? detected.uniqueGalleryFolders}`);

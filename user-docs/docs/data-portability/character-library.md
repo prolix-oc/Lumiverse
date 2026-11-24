@@ -8,6 +8,16 @@ Import a **SillyTavern CharacterLibrary full bundle** into your own Lumiverse ac
 
 ## Export from SillyTavern
 
+If you have access to the original SillyTavern user directory, the regular migration wizard also offers **Galleries & Media**. It copies CharacterLibrary folders directly without creating a bundle. PNG, JSON, and CHARX character imports convert CharacterLibrary's six alternate text fields into native Lumiverse variants while retaining the original `alt_*` data for portability.
+
+For a read-only inventory before a direct migration, run:
+
+```bash
+bun run audit:st-gallery -- --data-dir /path/to/SillyTavern/data/default-user --out /path/to/reports --include-chats
+```
+
+The command writes reports to `--out` and leaves character, chat, and media files unchanged. Its numbered references predict a new gallery; existing gallery items keep their saved references during import.
+
 In CharacterLibrary, select the characters, choose **Export → Full bundle (.zip)**, and keep **Include linked lorebooks** enabled. A bundle contains `manifest.json`, `cards/`, `gallery/`, `chats/`, and optional `worlds/`. A SillyTavern user-folder backup or a ZIP containing only PNGs uses a different import flow.
 
 The current v1 bundle does not export expression images, external extension script files, or regex permission settings. Keep your original SillyTavern data for those items. The transfer cannot restore files that were never included in the bundle.

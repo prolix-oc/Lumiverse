@@ -106,6 +106,10 @@ describe("URL-derived names", () => {
 });
 
 describe("media URL extraction", () => {
+  test("keeps bare URL queries and fragments so rewrites consume the entire URL", () => {
+    expect(extractMediaUrls("See https://host/scene.png?token=one#preview here"))
+      .toEqual(["https://host/scene.png?token=one#preview"]);
+  });
   test("finds markdown, html, audio, css, and bare URLs", () => {
     const text = [
       "![alt](https://a.example.com/one.png)",
@@ -310,6 +314,24 @@ describe("PNG card metadata reader", () => {
     const result = await readCardMetadata(new MemoryFs(png), "card.png");
     expect(result.keyword).toBe("chara");
     expect((result.json as { data: { name: string } }).data.name).toBe("V2");
+  });
+
+  test("duplicate V3 chunks do not hide a later preferred chara chunk", async () => {
+    const result = await readCardMetadata(new MemoryFs(pngWith(
+      textChunk("ccv3", base64Card("V3")),
+      textChunk("ccv3", base64Card("Duplicate")),
+      textChunk("chara", base64Card("V2")),
+    )), "card.png");
+    expect((result.json as { data: { name: string } }).data.name).toBe("V2");
+  });
+
+  test("reads a source without range support only once per card", async () => {
+    const png = pngWith(textChunk("chara", base64Card("Remote")), idatChunk(1024 * 1024));
+    const fs = new MemoryFs(png);
+    Object.defineProperty(fs, "readRange", { value: undefined });
+    const result = await readCardMetadata(fs, "card.png");
+    expect(result.keyword).toBe("chara");
+    expect(fs.bytesRead).toBe(png.length);
   });
 
   test("stops reading before the image data (IDAT)", async () => {

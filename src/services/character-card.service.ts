@@ -374,7 +374,7 @@ export function convertAlternateEntries(raw: unknown): AlternateFieldEntry[] {
   const converted: AlternateFieldEntry[] = [];
   for (let index = 0; index < raw.length; index++) {
     const entry = raw[index];
-    if (!entry) continue;
+    if (entry == null) continue;
     const item = typeof entry === "object" ? (entry as Record<string, unknown>) : {};
     const content = typeof entry === "string"
       ? entry

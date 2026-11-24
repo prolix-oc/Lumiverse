@@ -15,8 +15,7 @@
  * files using CL's own rules — reported as unique, ambiguous, or missing.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { detectClSettings } from "../st-gallery-settings";
 import { LocalFileSystem } from "../../file-connections/providers/local";
 import type { FileEntry, FileSystem } from "../../file-connections/types";
 import { currentWorkerBudget } from "../../utils/cpu-budget";
@@ -96,27 +95,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** Read CL's persisted settings so the audit reproduces the install's own behavior. */
-export function detectClSettings(
-  stDataDir: string,
-): { uniqueGalleryFolders: boolean; includeLorebook: boolean } {
-  // CL defaults (library.js:626): unique folders OFF, lorebook scanning OFF.
-  const defaults = { uniqueGalleryFolders: false, includeLorebook: false };
-  try {
-    const parsed = JSON.parse(readFileSync(join(stDataDir, "settings.json"), "utf8")) as Record<string, unknown>;
-    const extensionSettings = parsed.extension_settings;
-    if (!extensionSettings || typeof extensionSettings !== "object") return defaults;
-    const cl = (extensionSettings as Record<string, unknown>).SillyTavernCharacterGallery;
-    if (!cl || typeof cl !== "object") return defaults;
-    const settings = cl as Record<string, unknown>;
-    return {
-      uniqueGalleryFolders: settings.uniqueGalleryFolders === true,
-      includeLorebook: settings.includeLorebook === true,
-    };
-  } catch {
-    return defaults;
-  }
-}
+export { detectClSettings } from "../st-gallery-settings";
 
 function emptyFolderRecord(folder: string): FolderRecord {
   return { folder, fileCount: 0, imageCount: 0, totalBytes: 0, extensions: {}, characters: [] };
@@ -160,7 +139,7 @@ export async function runGalleryAudit(
   };
 
   ensureOutDir(options.outDir);
-  const detected = detectClSettings(options.stDataDir);
+  const detected = await detectClSettings(options.stDataDir, fs);
   const uniqueGalleryFolders = options.uniqueGalleryFolders ?? detected.uniqueGalleryFolders;
   const includeLorebook = options.includeLorebook ?? detected.includeLorebook;
   const includeChats = options.includeChats ?? false;
@@ -321,10 +300,8 @@ export async function runGalleryAudit(
     return built;
   };
   const expectedReferenceFor = (folder: string, filename: string): string => {
-    if (!IMAGE_EXTENSION_RE.test(filename)) {
-      return "/api/v1/images/<image-id> (non-image asset; id assigned at import)";
-    }
-    const files = (folderFiles.get(folder) ?? []).filter((file) => IMAGE_EXTENSION_RE.test(file.filename));
+    // The importer registers every media asset, including audio and video.
+    const files = folderFiles.get(folder) ?? [];
     const position = files.findIndex((file) => file.filename === filename) + 1;
     return position > 0 ? `gallery://image-${position}` : "";
   };
