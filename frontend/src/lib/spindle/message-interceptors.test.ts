@@ -24,6 +24,26 @@ afterEach(() => {
 })
 
 describe('message tag interception', () => {
+  test('opt-in display slots preserve tag delivery and never expose packet contents', () => {
+    const deliveries = register('window', { tagName: 'window', displaySlot: () => ({ key: 'slot', aspectRatio: 1.5 }) })
+    const raw = 'before <window>private packet</window> after'
+    const context = { messageId: 'm1', chatId: 'c1', swipeIndex: 0, isStreaming: true }
+    const result = stripMessageTags(raw, context)
+    expect(result.content).toContain('before <div data-no-island="true" data-spindle-tag-display="window"')
+    expect(result.content).toContain('data-spindle-tag-swipe="0"')
+    expect(result.content).toContain('aspect-ratio:1.5')
+    expect(result.content).toEndWith('</div> after')
+    expect(result.content).not.toContain('private packet')
+    const delivered = new Set<string>()
+    dispatchMessageTagIntercepts(result.intercepts, delivered)
+    dispatchMessageTagIntercepts(stripMessageTags(raw, context).intercepts, delivered)
+    expect(deliveries).toHaveLength(1)
+    expect(stripMessageTags(raw, { ...context, swipeIndex: undefined }).content).toBe('before  after')
+    expect(stripMessageTags(raw, { ...context, isUser: true }).content).not.toContain('data-spindle-tag-display')
+    expect(stripMessageTags('before <window>partial', context).content).not.toContain('data-spindle-tag-display')
+    register('unsafe-window', { tagName: 'unsafe-window', displaySlot: () => ({ key: '" onclick="oops', aspectRatio: 1 }) })
+    expect(stripMessageTags('<unsafe-window>text</unsafe-window>', context).content).toBe('')
+  })
   test('preserves tag ordering, removal, attributes, and payloads', () => {
     register('alpha-extension', { tagName: 'alpha', attrs: { kind: 'keep' } })
     register('beta-extension', { tagName: 'beta', removeFromMessage: false })

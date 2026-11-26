@@ -67,6 +67,7 @@ interface MessageContentProps {
   isStreaming?: boolean
   messageId?: string
   swipeIndex?: number
+  tagDisplaySwipeIndex?: number
   chatId?: string
   depth?: number
   characterNameOverride?: string
@@ -1772,6 +1773,7 @@ export default function MessageContent({
   isStreaming = false,
   messageId,
   swipeIndex,
+  tagDisplaySwipeIndex,
   presetContext,
   chatId,
   depth = 0,
@@ -1841,9 +1843,9 @@ export default function MessageContent({
       void interceptorRegistryVersion
       return disableInterceptors || readOnly
         ? { content, intercepts: [] }
-        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming })
+        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming, swipeIndex: tagDisplaySwipeIndex ?? swipeIndex })
     },
-    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion, disableInterceptors, readOnly],
+    [content, messageId, chatId, isUser, isStreaming, swipeIndex, tagDisplaySwipeIndex, interceptorRegistryVersion, disableInterceptors, readOnly],
   )
 
   useLayoutEffect(() => {

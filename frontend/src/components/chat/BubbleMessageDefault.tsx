@@ -513,6 +513,7 @@ export default function BubbleMessageDefault({
               isStreaming={isActivelyStreaming}
               messageId={message.id}
               chatId={chatId}
+              tagDisplaySwipeIndex={message.swipe_id ?? 0}
               depth={depth}
               findQuery={findQuery}
             />

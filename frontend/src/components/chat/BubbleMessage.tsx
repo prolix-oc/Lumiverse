@@ -121,6 +121,7 @@ function BubbleMessageNative({ message, chatId, depth = 0, isSelectMode = false,
         isStreaming={isActivelyStreaming}
         messageId={message.id}
         chatId={chatId}
+        tagDisplaySwipeIndex={message.swipe_id ?? 0}
         depth={depth}
         findQuery={findQuery}
       />
@@ -137,7 +138,7 @@ function BubbleMessageNative({ message, chatId, depth = 0, isSelectMode = false,
       <MessageAttachments attachments={attachments} isUser={isUser} chatId={chatId} messageId={message.id} />
     ) : null,
   }), [
-    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth, findQuery,
+    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, message.swipe_id, chatId, depth, findQuery,
     reasoning, reasoningDuration, reasoningStartedAt, attachments,
   ])
 

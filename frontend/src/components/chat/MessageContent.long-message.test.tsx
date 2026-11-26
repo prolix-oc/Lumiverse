@@ -746,6 +746,38 @@ describe('MessageContent long-message collapsing', () => {
 })
 
 describe('MessageContent image reuse', () => {
+  test('opt-in tag display slot survives prose updates and is scoped to the swipe', async () => {
+    const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
+    const previous = useStore.getState()
+    const raw = 'Before\n\n<display-window>private packet</display-window>\n\nAfter'
+    const dispose = registerTagInterceptor('display-window-test', 'Window test', {
+      tagName: 'display-window', displaySlot: () => ({ key: 'window', aspectRatio: 4 / 3 }),
+    }, () => {})
+    useStore.setState({ activeChatId: 'slot-chat', activeChatDisplayOwner: 'slot-owner', messages: [], regexScripts: [] })
+    const render = async (tail: string, swipe: number) => {
+      await act(async () => { root?.render(<MessageContent content={raw + tail} chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" isStreaming tagDisplaySwipeIndex={swipe} />) })
+      for (let i = 0; i < 10 && !host.querySelector('[data-spindle-tag-display]'); i++) await flushLayout()
+    }
+    try {
+      await render('', 0)
+      const slot = host.querySelector<HTMLElement>('[data-spindle-tag-display]')!
+      expect(slot).not.toBeNull()
+      expect(slot.dataset.spindleTagSwipe).toBe('0')
+      expect(host.textContent).not.toContain('private packet')
+      const image = document.createElement('img')
+      slot.attachShadow({ mode: 'open' }).append(image)
+      await render(' more prose', 0)
+      expect(host.querySelector('[data-spindle-tag-display]')).toBe(slot)
+      expect(slot.shadowRoot?.firstChild).toBe(image)
+      await render(' more prose', 1)
+      const next = host.querySelector<HTMLElement>('[data-spindle-tag-display]')!
+      expect(next.dataset.spindleTagSwipe).toBe('1')
+      expect(next).not.toBe(slot)
+      expect(next.shadowRoot).toBeNull()
+    } finally {
+      await act(async () => { dispose(); useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts }) })
+    }
+  })
   for (const island of [false, true]) {
     const imageRoot = () => island ? host.firstElementChild!.shadowRoot! : host
     const render = async (html: string, isStreaming = false) => {
