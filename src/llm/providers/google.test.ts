@@ -377,6 +377,61 @@ describe("GoogleProvider web search grounding", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("preserves the provider's cached token count in usage", async () => {
+    const usageMetadata = {
+      promptTokenCount: 1000,
+      candidatesTokenCount: 2,
+      totalTokenCount: 1002,
+      cachedContentTokenCount: 800,
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "Hi." }] }, finishReason: "STOP" }],
+        usageMetadata,
+      }),
+    })) as any;
+
+    try {
+      const result = await new GoogleProvider().generate(
+        "key",
+        "https://generativelanguage.googleapis.com",
+        { model: "gemini-2.5-flash", messages: [{ role: "user", content: "Hello" }], parameters: {}, tools: [] },
+      );
+
+      expect(result.usage).toEqual({
+        prompt_tokens: 1000,
+        completion_tokens: 2,
+        total_tokens: 1002,
+        provider_raw: usageMetadata,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("keeps the cached token count on the final stream chunk", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(
+      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hi."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":2,"totalTokenCount":1002,"cachedContentTokenCount":800}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    )) as any;
+
+    try {
+      const chunks = [];
+      for await (const chunk of new GoogleProvider().generateStream(
+        "key",
+        "https://generativelanguage.googleapis.com",
+        { model: "gemini-2.5-flash", messages: [{ role: "user", content: "Hello" }], parameters: {}, tools: [], stream: true },
+      )) chunks.push(chunk);
+
+      expect(chunks.at(-1)?.usage?.provider_raw?.cachedContentTokenCount).toBe(800);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("GoogleProvider streaming", () => {
