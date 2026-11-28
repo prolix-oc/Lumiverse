@@ -67,6 +67,7 @@ interface MessageContentProps {
   isStreaming?: boolean
   messageId?: string
   swipeIndex?: number
+  tagDisplaySwipeIndex?: number
   chatId?: string
   depth?: number
   characterNameOverride?: string
@@ -1772,6 +1773,7 @@ export default function MessageContent({
   isStreaming = false,
   messageId,
   swipeIndex,
+  tagDisplaySwipeIndex,
   presetContext,
   chatId,
   depth = 0,
@@ -1841,9 +1843,9 @@ export default function MessageContent({
       void interceptorRegistryVersion
       return disableInterceptors || readOnly
         ? { content, intercepts: [] }
-        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming })
+        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming, swipeIndex: tagDisplaySwipeIndex ?? swipeIndex })
     },
-    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion, disableInterceptors, readOnly],
+    [content, messageId, chatId, isUser, isStreaming, swipeIndex, tagDisplaySwipeIndex, interceptorRegistryVersion, disableInterceptors, readOnly],
   )
 
   useLayoutEffect(() => {
@@ -1918,6 +1920,26 @@ export default function MessageContent({
   )
   const containerRef = useRef<HTMLDivElement>(null)
   const contentBodyRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!interceptedMessageTags.intercepts.some(({ interceptor }) => interceptor.options.displaySlot)) return
+    const container = containerRef.current
+    if (!container) return
+    // Streaming status is live presentation state, not display-preprocess input.
+    // Putting it in the source would invalidate the finalization cache and
+    // briefly unmount the slot (including its shadow root) when streaming ends.
+    const roots: Array<HTMLElement | ShadowRoot> = [container]
+    for (const island of container.querySelectorAll<HTMLElement>('[data-lumiverse-html-island]')) {
+      if (island.shadowRoot) roots.push(island.shadowRoot)
+    }
+    for (const root of roots) {
+      for (const slot of root.querySelectorAll<HTMLElement>('[data-spindle-tag-display]')) {
+        const streaming = String(isStreaming)
+        if (slot.dataset.spindleTagStreaming !== streaming) slot.dataset.spindleTagStreaming = streaming
+      }
+    }
+  }, [interceptedMessageTags.intercepts, renderContent, isStreaming])
+
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [regexSelectionVersion, setRegexSelectionVersion] = useState(0)
   const [longMessageOverflowing, setLongMessageOverflowing] = useState(false)

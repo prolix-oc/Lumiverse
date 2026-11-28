@@ -39,7 +39,7 @@ import { isKnownMountPoint, type WidenedMountPoint } from './mount-points'
 import { clearExtensionMountPoints, recordExtensionMountPoint } from './extension-mount-points'
 export { hasExtensionMountPoint, subscribeExtensionMountPoints, getExtensionMountPointsVersion } from './extension-mount-points'
 import { createDOMHelper } from './dom-helper'
-import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
+import { registerTagInterceptor, unregisterTagInterceptorsByExtension, type DisplayTagInterceptorOptions } from './message-interceptors'
 import { registerDisplayResolver, unregisterDisplayResolver, revokeInlineCardWrappingOptOut } from './display-resolver-registry'
 import { invalidateDisplayRegexCacheForVars, invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
@@ -367,6 +367,7 @@ type FrontendExtensionContextBase = Omit<SpindleFrontendContext, 'ui' | 'message
     register(kind: string, handler: FrontendProcessHandler): () => void
   }
   messages: SpindleFrontendContext['messages'] & {
+    registerTagInterceptor(options: DisplayTagInterceptorOptions, handler: Parameters<SpindleFrontendContext['messages']['registerTagInterceptor']>[1]): () => void
     renderWidget(
       options: { messageId: string; widgetId: string; html: string; minHeight?: number; maxHeight?: number },
       handler?: (payload: unknown) => void,
@@ -1428,6 +1429,7 @@ async function doLoadFrontendExtension(
         ...SPINDLE_FRONTEND_UUID_HOST_CAPABILITIES,
         ...SPINDLE_TTS_HOST_CAPABILITIES,
         'frontend-session-origin-v1': 1,
+        'message-tag-display-slot-v1': 1,
         ...SPINDLE_COMPOSER_HOST_CAPABILITIES,
       }),
       extensionInstallationId: extensionId,

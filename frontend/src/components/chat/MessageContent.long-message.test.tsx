@@ -823,6 +823,62 @@ describe('MessageContent long-message collapsing', () => {
 })
 
 describe('MessageContent image reuse', () => {
+  test('tag display slots preserve Markdown immediately after a tag on its own line', async () => {
+    const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
+    const dispose = registerTagInterceptor('slot-markdown-test', 'Markdown test', {
+      tagName: 'display-window', displaySlot: () => ({ key: 'window', aspectRatio: 1 }),
+    }, () => {})
+    try {
+      await act(async () => { root?.render(<MessageContent
+        content={'<display-window>packet</display-window>\n**After**'}
+        chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" tagDisplaySwipeIndex={0}
+      />) })
+      await flushLayout()
+      expect(host.querySelector('[data-spindle-tag-display]')).not.toBeNull()
+      expect(host.querySelector('strong')?.textContent).toBe('After')
+    } finally { await act(async () => { dispose() }) }
+  })
+
+  test.each([false, true])('opt-in tag display slot survives updates and completion and is scoped to the swipe (island=%s)', async island => {
+    const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
+    const previous = useStore.getState()
+    const body = 'Before\n\n<display-window>private packet</display-window>\n\nAfter'
+    const raw = island ? `<div><style>.slot-test{color:red}</style>${body}</div>` : body
+    const findSlot = () => host.querySelector<HTMLElement>('[data-spindle-tag-display]')
+      ?? host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.querySelector<HTMLElement>('[data-spindle-tag-display]')
+    const dispose = registerTagInterceptor('display-window-test', 'Window test', {
+      tagName: 'display-window', displaySlot: () => ({ key: 'window', aspectRatio: 4 / 3 }),
+    }, () => {})
+    useStore.setState({ activeChatId: 'slot-chat', activeChatDisplayOwner: 'slot-owner', messages: [], regexScripts: [] })
+    const render = async (tail: string, swipe: number, isStreaming = true) => {
+      await act(async () => { root?.render(<MessageContent content={raw + tail} chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" isStreaming={isStreaming} tagDisplaySwipeIndex={swipe} />) })
+      for (let i = 0; i < 10 && !findSlot(); i++) await flushLayout()
+    }
+    try {
+      await render('', 0)
+      const slot = findSlot()!
+      expect(slot).not.toBeNull()
+      expect(slot.dataset.spindleTagSwipe).toBe('0')
+      expect(host.textContent).not.toContain('private packet')
+      const image = document.createElement('img')
+      slot.attachShadow({ mode: 'open' }).append(image)
+      await render(' more prose', 0)
+      expect(findSlot()).toBe(slot)
+      expect(slot.shadowRoot?.firstChild).toBe(image)
+      expect(slot.dataset.spindleTagStreaming).toBe('true')
+      await render(' more prose', 0, false)
+      expect(findSlot()).toBe(slot)
+      expect(slot.shadowRoot?.firstChild).toBe(image)
+      expect(slot.dataset.spindleTagStreaming).toBe('false')
+      await render(' more prose', 1, false)
+      const next = findSlot()!
+      expect(next.dataset.spindleTagSwipe).toBe('1')
+      expect(next).not.toBe(slot)
+      expect(next.shadowRoot).toBeNull()
+    } finally {
+      await act(async () => { dispose(); useStore.setState({ activeChatId: previous.activeChatId, activeChatDisplayOwner: previous.activeChatDisplayOwner, messages: previous.messages, regexScripts: previous.regexScripts }) })
+    }
+  })
   for (const island of [false, true]) {
     const imageRoot = () => island ? host.firstElementChild!.shadowRoot! : host
     const render = async (html: string, isStreaming = false) => {

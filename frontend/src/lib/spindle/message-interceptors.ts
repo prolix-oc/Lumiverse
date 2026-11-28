@@ -12,10 +12,17 @@ import {
 
 type InterceptorHandler = (payload: SpindleMessageTagIntercept) => void
 
+/** Display-only anchor; never participates in the stored message or delivery identity. */
+export type DisplayTagInterceptorOptions = SpindleMessageTagInterceptorOptions & {
+  displaySlot?: (payload: SpindleMessageTagIntercept & { displaySwipeIndex?: number }) => {
+    key: string; aspectRatio: number
+  } | null | undefined
+}
+
 type RegisteredTagInterceptor = {
   extensionId: string
   extensionName: string
-  options: SpindleMessageTagInterceptorOptions
+  options: DisplayTagInterceptorOptions
   handler: InterceptorHandler
   attrEntries?: ReadonlyArray<readonly [string, string]>
   pendingHtml: string
@@ -107,6 +114,19 @@ function pendingIndicator(interceptor: RegisteredTagInterceptor): string {
   return `<div class="spindle-message-tag-pending" data-spindle-extension-id="${id}"><span class="spindle-message-tag-pending-dot"></span><span>${name} is processing this part of the message...</span></div>`
 }
 
+function displaySlotHtml(interceptor: RegisteredTagInterceptor, payload: SpindleMessageTagIntercept, swipeIndex?: number): string | undefined {
+  if (!interceptor.options.displaySlot || payload.isUser || !payload.chatId || !payload.messageId
+    || !Number.isInteger(swipeIndex) || swipeIndex! < 0) return
+  try {
+    const slot = interceptor.options.displaySlot({ ...payload, extensionId: interceptor.extensionId, displaySwipeIndex: swipeIndex })
+    if (!slot || typeof slot.key !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(slot.key)
+      || !Number.isFinite(slot.aspectRatio) || slot.aspectRatio < .1 || slot.aspectRatio > 10) return
+    // An inline HTML tag keeps Markdown parsing active on following lines.
+    // A div here would turn the rest of the paragraph into a raw HTML block.
+    return `<span data-no-island="true" data-spindle-tag-display="${escapeHtml(interceptor.extensionId)}" data-spindle-tag-display-key="${escapeHtml(slot.key)}" data-spindle-tag-chat="${escapeHtml(payload.chatId)}" data-spindle-tag-message="${escapeHtml(payload.messageId)}" data-spindle-tag-swipe="${swipeIndex}" style="display:block;width:100%;aspect-ratio:${slot.aspectRatio};margin:0;"></span>`
+  } catch { /* A display-only feature must not interrupt interception. */ }
+}
+
 function rebuildTagMatchPlan(tagName: string, interceptors: RegisteredTagInterceptor[]): void {
   const escapedTagName = escapeRegex(tagName)
   tagMatchPlans.set(tagName, {
@@ -131,7 +151,7 @@ function deliveryKey(payload: SpindleMessageTagIntercept, interceptor: Registere
 export function registerTagInterceptor(
   extensionId: string,
   extensionName: string,
-  options: SpindleMessageTagInterceptorOptions,
+  options: DisplayTagInterceptorOptions,
   handler: InterceptorHandler,
 ): () => void {
   const tagName = normalizeTagName(options.tagName || '')
@@ -139,7 +159,7 @@ export function registerTagInterceptor(
     throw new Error('registerTagInterceptor requires a non-empty tagName')
   }
 
-  const normalizedOptions: SpindleMessageTagInterceptorOptions = {
+  const normalizedOptions: DisplayTagInterceptorOptions = {
     ...options,
     tagName,
     ...(options.attrs ? { attrs: { ...options.attrs } } : {}),
@@ -199,7 +219,7 @@ export function unregisterTagInterceptorsByExtension(extensionId: string): void 
 
 export function stripMessageTags(
   content: string,
-  context: { messageId?: string; chatId?: string; isUser?: boolean; isStreaming?: boolean },
+  context: { messageId?: string; chatId?: string; isUser?: boolean; isStreaming?: boolean; swipeIndex?: number },
 ): { content: string; intercepts: PendingTagIntercept[] } {
   if (!content || tagInterceptors.size === 0) return { content, intercepts: [] }
   if (!content.includes('<')) return { content, intercepts: [] }
@@ -237,15 +257,17 @@ export function stripMessageTags(
       }
 
       let shouldRemove = false
+      let displaySlot: string | undefined
       for (const interceptor of interceptors) {
         if (!attrsMatch(interceptor.attrEntries, attrs)) continue
         intercepts.push({ payload, interceptor })
         if (interceptor.options.removeFromMessage !== false) {
           shouldRemove = true
+          displaySlot ??= displaySlotHtml(interceptor, payload, context.swipeIndex)
         }
       }
 
-      return shouldRemove ? '' : fullMatch
+      return shouldRemove ? (displaySlot ?? '') : fullMatch
     })
 
     if (context.isStreaming) {

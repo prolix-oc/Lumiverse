@@ -26,6 +26,17 @@ function syncAttributes(current: Element, next: Element): void {
 function nodeKey(node: Node): string {
   if (node.nodeType !== Node.ELEMENT_NODE) return String(node.nodeType)
   const element = node as Element
+  // Only the interceptor's opt-in span anchors have display-slot identity.
+  // Ordinary media must retain the source-only attribute lookup fast path.
+  const displayKey = element.localName === 'span' && element.hasAttribute('data-spindle-tag-display')
+    ? element.getAttribute('data-spindle-tag-display-key') : null
+  if (displayKey) {
+    // Shadow-root contents belong to the subscribing extension. Never reuse
+    // its live node for another chat, alternative or packet.
+    return JSON.stringify([element.namespaceURI, element.localName, 'display-slot', ...[
+      'data-spindle-tag-display', 'data-spindle-tag-chat', 'data-spindle-tag-message', 'data-spindle-tag-swipe', 'data-spindle-tag-display-key',
+    ].map(name => element.getAttribute(name))])
+  }
   const identity = element.localName === 'img'
     ? `src:${element.getAttribute('src') ?? ''}`
     : element.id ? `id:${element.id}` : ''
