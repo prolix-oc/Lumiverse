@@ -75,6 +75,14 @@ Enable **Skip Duplicates** during bulk import to avoid creating copies of charac
 
 ---
 
+## Embedded Images
+
+In the character editor's **Gallery** tab, use **Embedded Images → Import All** to save images from the character's fields, greetings, creator notes, and extension data to its local gallery. This includes Markdown images, HTML images, CSS backgrounds, and direct image links.
+
+Successfully imported image URLs are replaced with portable `gallery://` references that load the local images. Creator notes use the same process, so their imported images no longer depend on the original host. Images that cannot be downloaded keep their original URLs and can be retried.
+
+---
+
 ## Embedded Lorebooks
 
 Some character cards include an embedded **World Book** (lorebook) in their data. When you import such a character:

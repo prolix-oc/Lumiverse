@@ -1751,7 +1751,7 @@ export function resolveMarkdownImgTags(text: string, assetMap: Record<string, st
     if (sourceEnd === -1) break
     if (sourceEnd === labelEnd + 2) { cursor = labelEnd + 1; continue }
     const rawSrc = text.slice(labelEnd + 2, sourceEnd)
-    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim()
+    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim().replace(/^<([^>]+)>$/, '$1')
     if (src && !/^(?:https?:\/\/|\/|data:)/i.test(src)) {
       const imageId = resolveAssetId(src, assetMap)
       if (imageId) {

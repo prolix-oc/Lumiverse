@@ -181,6 +181,8 @@ export interface CharactersSlice {
   selectedCharacterId: string | null
   editingCharacterId: string | null
   searchQuery: string
+  characterSearchScope: 'metadata' | 'all'
+  setCharacterSearchScope: (scope: 'metadata' | 'all') => void
   filterTab: CharacterFilterTab
   sortField: CharacterSortField
   sortDirection: CharacterSortDirection

@@ -1154,6 +1154,8 @@ describe('Markdown image asset boundaries', () => {
     ['![a](https://example.com/x) ![b](/x) ![c](data:x)', '![a](https://example.com/x) ![b](/x) ![c](data:x)'],
     ['![a](portrait', '![a](portrait'],
     ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+    ['![a](<portrait>)', '![a](/api/v1/images/image-id)'],
+    ['![a](<portrait> "title")', '![a](/api/v1/images/image-id)'],
   ])('preserves Markdown resolution for %s', async (raw, expected) => {
     const { resolveMarkdownImgTags } = await import('./MessageContent')
     expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)

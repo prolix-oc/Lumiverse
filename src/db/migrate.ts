@@ -8,6 +8,7 @@ import { healCorruptDatabase } from "./maintenance";
  * The baseline replaces replaying these individually on fresh databases.
  */
 const BASELINE_MIGRATIONS: readonly string[] = [
+  "137_character_content_search.sql",
   "136_spindle_live_activities.sql",
   "001_settings.sql",
   "002_characters.sql",

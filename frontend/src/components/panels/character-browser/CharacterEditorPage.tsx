@@ -72,6 +72,7 @@ import { toast } from '@/lib/toast'
 import { hasNativeDownloadCompletion } from '@/lib/downloads'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { galleryImageMarkdown } from '@/lib/galleryImageReference'
+import { characterEmbeddedImageUrls } from '../../../../../src/shared/embedded-images'
 import { getTauriMobilePlatform } from '@/lib/desktopWebView'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -132,10 +133,6 @@ interface CharxExportProgress {
   error?: string
 }
 const GALLERY_OVERSCAN = 3
-const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g
-const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi
-const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi
-const IMAGE_PATH_RE = /\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|jfif|pjp|pjpeg|png|svg|webp)$/i
 
 type BuiltInTabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
 type TabId = BuiltInTabId | string
@@ -344,60 +341,6 @@ function GreetingNameInput({
 
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function trimTrailingUrlPunctuation(url: string): string {
-  let trimmed = url.trim()
-
-  while (/[.,!?;:]$/.test(trimmed)) {
-    trimmed = trimmed.slice(0, -1)
-  }
-
-  while (trimmed.endsWith(')') && ((trimmed.match(/\(/g)?.length ?? 0) < (trimmed.match(/\)/g)?.length ?? 0))) {
-    trimmed = trimmed.slice(0, -1)
-  }
-
-  while (trimmed.endsWith(']') && ((trimmed.match(/\[/g)?.length ?? 0) < (trimmed.match(/\]/g)?.length ?? 0))) {
-    trimmed = trimmed.slice(0, -1)
-  }
-
-  return trimmed
-}
-
-function isDirectImageUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && IMAGE_PATH_RE.test(parsed.pathname)
-  } catch {
-    return false
-  }
-}
-
-function extractEmbeddedImageUrls(text: string): string[] {
-  const seen = new Set<string>()
-  const urls: string[] = []
-  let match: RegExpExecArray | null
-
-  const push = (url: string) => {
-    if (!seen.has(url)) {
-      seen.add(url)
-      urls.push(url)
-    }
-  }
-
-  MD_IMAGE_RE.lastIndex = 0
-  while ((match = MD_IMAGE_RE.exec(text)) !== null) push(match[1])
-
-  HTML_IMG_RE.lastIndex = 0
-  while ((match = HTML_IMG_RE.exec(text)) !== null) push(match[1])
-
-  BARE_URL_RE.lastIndex = 0
-  while ((match = BARE_URL_RE.exec(text)) !== null) {
-    const candidate = trimTrailingUrlPunctuation(match[0])
-    if (isDirectImageUrl(candidate)) push(candidate)
-  }
-
-  return urls
 }
 
 function readPerspectiveLayers(raw: unknown): CharacterPerspectiveLayerInput[] {
@@ -911,40 +854,7 @@ export default function CharacterEditorPage() {
     },
   ] : []
 
-  const handleGalleryExtract = useCallback(async () => {
-    if (!editingCharacterId) return
-    setExtracting(true)
-    try {
-      const items = await characterGalleryApi.extract(editingCharacterId)
-      if (items.length > 0) setGalleryItems((prev) => [...prev, ...items])
-    } catch {
-      // extraction failed
-    } finally {
-      setExtracting(false)
-    }
-  }, [editingCharacterId])
-
-  const embeddedImageCount = useMemo(() => {
-    if (!character) return 0
-    const texts = [
-      character.first_mes,
-      character.description,
-      character.personality,
-      character.scenario,
-      character.mes_example,
-      character.system_prompt,
-      character.post_history_instructions,
-      character.creator_notes,
-      ...(character.alternate_greetings || []),
-      character.extensions ? JSON.stringify(character.extensions) : '',
-    ]
-    const seen = new Set<string>()
-    for (const t of texts) {
-      if (!t) continue
-      for (const url of extractEmbeddedImageUrls(t)) seen.add(url)
-    }
-    return seen.size
-  }, [character])
+  const embeddedImageCount = useMemo(() => character ? characterEmbeddedImageUrls(character).length : 0, [character])
 
   const debouncedSave = useCallback(
     (field: string, value: any) => {
@@ -1627,6 +1537,34 @@ export default function CharacterEditorPage() {
     }, 400)
   }, [flushPerspectiveLayersSave])
 
+  const handleGalleryExtract = useCallback(async () => {
+    if (!editingCharacterId || extracting) return
+    const characterId = editingCharacterId
+    setExtracting(true)
+    try {
+      // Finish debounced edits before the server scans and rewrites the card.
+      for (const timer of Object.values(timers.current)) clearTimeout(timer)
+      const pending = pendingFieldValues.current[characterId] ?? {}
+      delete pendingFieldValues.current[characterId]
+      await fieldSaveLock.current
+      if (Object.keys(pending).length) await browser.updateCharacter(characterId, pending)
+      await flushExtensionsSave()
+      if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+      await flushPerspectiveLayersSave()
+      const items = await characterGalleryApi.extract(characterId)
+      const updated = await charactersApi.get(characterId)
+      if (editingCharacterIdRef.current === characterId) {
+        lastSyncedId.current = null
+        setGalleryItems((prev) => [...prev, ...items])
+      }
+      updateCharInStore(characterId, updated)
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || t('characterEditor.embeddedImagesImportFailed'))
+    } finally {
+      setExtracting(false)
+    }
+  }, [editingCharacterId, extracting, browser, flushExtensionsSave, flushPerspectiveLayersSave, updateCharInStore, t])
+
   const handleReplaceCard = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
@@ -2223,6 +2161,7 @@ export default function CharacterEditorPage() {
                       activeTab === tab.id && styles.tabActive,
                   )}
                     onClick={() => setActiveTab(tab.id)}
+                    disabled={extracting}
                 >
                  {tab.label}
                 </button>

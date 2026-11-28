@@ -1,4 +1,5 @@
 import { uuidv4 } from "../utils/uuid";
+import { CharacterSearchValidationError } from "../services/character-search";
 import { Hono } from "hono";
 import { isDatabaseUnavailable } from "../db/execution";
 import * as svc from "../services/characters.service";
@@ -518,6 +519,8 @@ app.get("/summary", (c) => {
   if (rawScope !== undefined && !scope) return c.json({ error: "scope must be either 'mine' or 'shared'" }, 400);
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const search = c.req.query("search") || undefined;
+  const searchIn = c.req.query("search_in") ?? "metadata";
+  if (searchIn !== "metadata" && searchIn !== "all") return c.json({ error: 'search_in must be "metadata" or "all"' }, 400);
   const rawTags = c.req.query("tags");
   const tags = rawTags ? rawTags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
   const rawExcludeTags = c.req.query("exclude_tags");
@@ -531,9 +534,10 @@ app.get("/summary", (c) => {
   const favoriteIds = rawFavorites ? rawFavorites.split(",").filter(Boolean) : undefined;
   const chatId = c.req.query("chat_id") || undefined;
 
-  return c.json(
-    svc.listCharacterSummaries(userId, pagination, {
+  try {
+    return c.json(svc.listCharacterSummaries(userId, pagination, {
       search,
+      searchIn,
       tags,
       excludeTags,
       sort,
@@ -543,8 +547,11 @@ app.get("/summary", (c) => {
       seed: isNaN(seed as number) ? undefined : seed,
       chatId,
       ...(scope ? { scope } : {}),
-    })
-  );
+    }));
+  } catch (error) {
+    if (error instanceof CharacterSearchValidationError) return c.json({ error: error.message, code: error.code }, 400);
+    throw error;
+  }
 });
 
 // ─── Tags endpoint for character browser ──────────────────────────────────

@@ -22,6 +22,7 @@ import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { rowToDeletionOperation } from "../db/deletion-operations";
 import type { DeletionOperation } from "../types/deletion";
+import { buildCharacterSearch, type CharacterSearchScope } from "./character-search";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
@@ -69,31 +70,9 @@ export function getCharacterDisplayOwner(
   return row?.owner ?? null;
 }
 
-/**
- * Build an FTS5 MATCH query for the trigram tokenizer. Each whitespace-delimited
- * token is wrapped in a quoted phrase (substring needle); tokens are AND-ed
- * together. Embedded double quotes are escaped by doubling per FTS5 syntax.
- *
- * Returns "" when the trimmed input is shorter than the trigram minimum (3
- * chars). Callers must fall back to LIKE in that case — see `buildLikeFallback`.
- */
-function sanitizeFtsQuery(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.length < 3) return "";
-  return trimmed
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((t) => `"${t.replace(/"/g, '""')}"`)
-    .join(" ");
-}
-
-/** Escape SQL LIKE metacharacters so a raw user query is matched literally. */
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, "\\$&");
-}
-
 export interface SummaryQueryOptions {
   search?: string;
+  searchIn?: CharacterSearchScope;
   tags?: string[];
   excludeTags?: string[];
   sort?: string;
@@ -214,28 +193,11 @@ export function listCharacterSummaries(
     whereParams.push(...exclusion.params);
   }
 
-  // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
-  // trigram cannot match (common for 2-char CJK names like 魔王).
-  let fromClause = "characters c";
-  let usedFts = false;
-  if (search) {
-    const ftsQuery = sanitizeFtsQuery(search);
-    if (ftsQuery) {
-      fromClause = "characters c JOIN characters_fts fts ON fts.rowid = c.rowid";
-      whereClauses.push("characters_fts MATCH ?");
-      whereParams.push(ftsQuery);
-      usedFts = true;
-    } else {
-      const trimmed = search.trim();
-      if (trimmed) {
-        const like = `%${escapeLike(trimmed)}%`;
-        whereClauses.push(
-          "(c.name LIKE ? ESCAPE '\\' OR c.creator LIKE ? ESCAPE '\\' OR c.tags LIKE ? ESCAPE '\\')"
-        );
-        whereParams.push(like, like, like);
-      }
-    }
-  }
+  const searchSql = buildCharacterSearch(search, options.searchIn, !sort);
+  const fromClause = `characters c${searchSql.join}`;
+  const usedFts = searchSql.usedFts;
+  if (searchSql.condition) whereClauses.push(searchSql.condition);
+  whereParams.push(...searchSql.params);
 
   // Tag AND filter (character must have ALL of these tags)
   if (tags && tags.length > 0) {
@@ -359,7 +321,7 @@ export function listCharacterSummaries(
   return paginatedQuery(
     `SELECT ${SUMMARY_COLUMNS} FROM ${fromClause} ${extraJoin} WHERE ${whereStr} ${orderBy}`,
     `SELECT COUNT(*) as count FROM ${fromClause} WHERE ${whereStr}`,
-    queryParams, pagination, rowToSummary, whereParams,
+    [...searchSql.joinParams, ...queryParams], pagination, rowToSummary, [...searchSql.joinParams, ...whereParams],
   );
 }
 
@@ -396,24 +358,10 @@ function listCharacterSummariesDiscover(
     whereParams.push(...exclusion.params);
   }
 
-  let extraJoin = "";
-  if (search) {
-    const ftsQuery = sanitizeFtsQuery(search);
-    if (ftsQuery) {
-      extraJoin = "JOIN characters_fts fts ON fts.rowid = c.rowid";
-      whereClauses.push("characters_fts MATCH ?");
-      whereParams.push(ftsQuery);
-    } else {
-      const trimmed = search.trim();
-      if (trimmed) {
-        const like = `%${escapeLike(trimmed)}%`;
-        whereClauses.push(
-          "(c.name LIKE ? ESCAPE '\\' OR c.creator LIKE ? ESCAPE '\\' OR c.tags LIKE ? ESCAPE '\\')"
-        );
-        whereParams.push(like, like, like);
-      }
-    }
-  }
+  const searchSql = buildCharacterSearch(search, options.searchIn);
+  const extraJoin = searchSql.join;
+  if (searchSql.condition) whereClauses.push(searchSql.condition);
+  whereParams.push(...searchSql.params);
 
   if (tags && tags.length > 0) {
     for (const tag of tags) {
@@ -444,7 +392,7 @@ function listCharacterSummariesDiscover(
 
   const countRow = db
     .query(`SELECT COUNT(*) as count FROM characters c ${extraJoin} WHERE ${whereStr}`)
-    .get(...whereParams) as { count: number } | null;
+    .get(...searchSql.joinParams, ...whereParams) as { count: number } | null;
   const total = countRow?.count ?? 0;
 
   const dataSql = `
@@ -471,6 +419,7 @@ function listCharacterSummariesDiscover(
   const rows = db
     .query(dataSql)
     .all(
+      ...searchSql.joinParams,
       userId,
       ...whereParams,
       nowSeconds,

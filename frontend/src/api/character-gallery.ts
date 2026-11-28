@@ -43,7 +43,7 @@ export const characterGalleryApi = {
   },
 
   extract(characterId: string) {
-    return post<CharacterGalleryItem[]>(`/characters/${characterId}/gallery/extract`)
+    return post<CharacterGalleryItem[]>(`/characters/${characterId}/gallery/extract`, undefined, { timeout: 0 })
   },
 
   remove(characterId: string, itemId: string) {

@@ -3,6 +3,26 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "./migrate";
 
 describe("database migrations", () => {
+  test("fresh bootstrap records content search once and preserves its index on restart", async () => {
+    const db = new Database(":memory:");
+    try {
+      db.run("PRAGMA foreign_keys = ON");
+      await runMigrations(db);
+      db.run("INSERT INTO user(id,name,email) VALUES('search-owner','Owner','search@example.invalid')");
+      db.run(`INSERT INTO characters(id,user_id,name,first_mes,alternate_greetings,extensions)
+        VALUES('search-card','search-owner','Card','firstgreetingneedle','["alternategreetingneedle"]',
+          '{"alternate_fields":{"scenario":[{"content":"alternatescenarioneedle"}]}}')`);
+      await runMigrations(db);
+      expect(db.query("SELECT COUNT(*) AS count FROM _migrations WHERE name=?")
+        .get("137_character_content_search.sql")).toEqual({ count: 1 });
+      for (const term of ["firstgreetingneedle", "alternategreetingneedle", "alternatescenarioneedle"]) {
+        expect(db.query("SELECT rowid FROM characters_content_fts WHERE characters_content_fts MATCH ?")
+          .all(term)).toHaveLength(1);
+      }
+      db.run("INSERT INTO characters_content_fts(characters_content_fts,rank) VALUES('integrity-check',1)");
+    } finally { db.close(); }
+  });
+
   test("fresh bootstrap applies the preset cache revision exactly once", async () => {
     const db = new Database(":memory:");
     try {

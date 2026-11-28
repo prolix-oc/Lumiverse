@@ -31,6 +31,7 @@ export interface SummaryParams {
   limit?: number
   offset?: number
   search?: string
+  search_in?: 'metadata' | 'all'
   tags?: string
   exclude_tags?: string
   sort?: string

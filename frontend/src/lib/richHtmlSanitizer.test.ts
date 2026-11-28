@@ -88,6 +88,18 @@ test('retains legacy font inline styles after sanitization', () => {
   expect(font?.style.fontWeight).toBe('bold')
 })
 
+test('keeps imported creator note assets local through rich HTML sanitization', () => {
+  const resolved = resolveGalleryImageSourcesInHtml(
+    '<div class="notes" style="background-image:url(gallery://image-1)"><img src="gallery://image-1" alt="Notes"></div>',
+    { 'gallery://image-1': 'local-note-image' },
+  )
+  const root = parseFragment(sanitizeRichHtml(resolved))
+  expect(root.querySelector('img')?.getAttribute('src')).toBe('/api/v1/images/local-note-image')
+  expect(root.querySelector('.notes')?.getAttribute('style')).toContain('/api/v1/images/local-note-image')
+  expect(root.innerHTML).not.toContain('/remote')
+  expect(root.innerHTML).not.toContain('gallery://')
+})
+
 describe('richHtmlSanitizer inline SVG support', () => {
   test('preserves safe inline svg in rich html', () => {
     const root = parseFragment(
