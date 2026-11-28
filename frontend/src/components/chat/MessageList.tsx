@@ -20,6 +20,7 @@ import MessageCard from './MessageCard'
 import GroupChatProgressBar from './GroupChatProgressBar'
 import GroupChatMemberBar from './GroupChatMemberBar'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
+import { createWarmDisplayMeasurementQueue } from './warmDisplayMeasurement'
 import { isMessageListScrollRangeClamp, shouldPinMessageListTail, type MessageListScrollPosition } from './messageListPinning'
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT, isCollapsibleToggleElement } from './collapsibleLayout'
 import { getLongMessageCollapseHeight, isLongMessageCollapseEligible, longMessageExpansionKey } from '@/lib/longMessageCollapse'
@@ -285,7 +286,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
   const recentCollapsibleToggleMessageIdRef = useRef<string | null>(null)
   const recentCollapsibleToggleUntilRef = useRef(0)
   const recentCollapsibleToggleTimerRef = useRef<number | null>(null)
-  const programmaticReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
+  const programmaticReflowByRowRef = useRef(new WeakMap<Element, { until: number; warm: boolean }>())
+  const warmDisplayMeasurementsRef = useRef<ReturnType<typeof createWarmDisplayMeasurementQueue> | null>(null)
   const coldDisplayAnchorIndexRef = useRef<number | null>(null)
   const previousSwipeIdByMessageIdRef = useRef<Map<string, number>>(new Map())
   const swipeVariantReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
@@ -393,7 +395,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     setCollapsibleResizeActive(false)
     recentCollapsibleToggleMessageIdRef.current = null
     recentCollapsibleToggleUntilRef.current = 0
-    programmaticReflowUntilByMessageIdRef.current.clear()
+    programmaticReflowByRowRef.current = new WeakMap()
     previousSwipeIdByMessageIdRef.current.clear()
     swipeVariantReflowUntilByMessageIdRef.current.clear()
     if (recentCollapsibleToggleTimerRef.current != null) {
@@ -929,10 +931,9 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
           && performance.now() <= recentCollapsibleToggleUntilRef.current
         )
       )
-      const programmaticReflowUntil = row?.type === 'message'
-        ? programmaticReflowUntilByMessageIdRef.current.get(row.message.id) ?? 0
-        : 0
-      const isProgrammaticContentReflow = performance.now() <= programmaticReflowUntil
+      const element = instance.elementsCache.get(item.key)
+      const programmaticReflow = element && programmaticReflowByRowRef.current.get(element)
+      const isProgrammaticContentReflow = !!programmaticReflow && performance.now() <= programmaticReflow.until
       const swipeVariantReflowUntil = row?.type === 'message'
         ? swipeVariantReflowUntilByMessageIdRef.current.get(row.message.id) ?? 0
         : 0
@@ -950,6 +951,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
         isFocusedEditableRow,
         isUserToggledCollapsibleRow,
         isProgrammaticContentReflow,
+        isWarmDisplayReflow: isProgrammaticContentReflow && programmaticReflow?.warm,
         isAboveVisibleAnchor: coldDisplayAnchorIndexRef.current !== null && item.index < coldDisplayAnchorIndexRef.current,
       })
     },
@@ -1011,6 +1013,8 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       instance.scrollOffset = el.scrollTop
     }
   }, [isCoarsePointer])
+  const syncNativeScrollOffsetRef = useRef(syncNativeScrollOffset)
+  syncNativeScrollOffsetRef.current = syncNativeScrollOffset
 
   const rowVirtualizer = useVirtualizer({
     count: virtualListItems.length,
@@ -1051,8 +1055,14 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     scrollPaddingEnd: inputSafeZone,
     scrollToFn: scrollToVirtualOffset,
     directDomUpdates: true,
+    // Measurement can synchronously commit a new virtual range, mounting or
+    // removing rows watched by other observers. Keep that React commit out
+    // of native resize delivery, including at stream completion.
+    useAnimationFrameWithResizeObserver: true,
     measureElement: (element, entry, instance) => {
       const row = element as HTMLElement
+      const heldHeight = warmDisplayMeasurementsRef.current?.measure(row)
+      if (heldHeight !== undefined) return heldHeight
       if (row.querySelector('[data-display-pending]')) {
         // A hidden placeholder's CSS reservation may still reflect the last
         // React render. Direct DOM positioning can advance the size cache
@@ -1820,6 +1830,25 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     return () => window.removeEventListener(CHAT_SCROLL_TO_BOTTOM_EVENT, handleScrollToBottom)
   }, [scrollToHistoryBottom])
 
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const queue = createWarmDisplayMeasurementQueue(row => {
+      if (!el.contains(row) || row.querySelector('[data-display-pending]')) return
+      const index = Number(row.dataset.virtualIndex)
+      if (!Number.isInteger(index) || index < 0 || index >= rowVirtualizer.options.count) return
+      const key = rowVirtualizer.options.getItemKey(index)
+      if (rowVirtualizer.elementsCache.get(key) !== row) return
+      syncNativeScrollOffsetRef.current(rowVirtualizer)
+      rowVirtualizer.resizeItem(index, readMessageRowHeight(row))
+    })
+    warmDisplayMeasurementsRef.current = queue
+    return () => {
+      queue.dispose()
+      if (warmDisplayMeasurementsRef.current === queue) warmDisplayMeasurementsRef.current = null
+    }
+  }, [chatId, rowVirtualizer])
+
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -1869,14 +1898,31 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       if (pendingRow && shouldPreserveScrollAnchorForLayout(event)) {
         const messageId = pendingRow.dataset.messageId
         if (messageId) {
-          programmaticReflowUntilByMessageIdRef.current.set(
-            messageId,
-            performance.now() + PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS,
-          )
+          const warm = !pendingRow.hasAttribute(MESSAGE_ROW_MEASURING_ATTRIBUTE)
+          programmaticReflowByRowRef.current.set(pendingRow, {
+            until: performance.now() + PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS,
+            warm,
+          })
+          if (warm && !isPinnedRef.current && pendingRow.querySelector('[data-display-pending]')) {
+            const index = Number(pendingRow.dataset.virtualIndex)
+            if (Number.isInteger(index) && index >= 0 && index < rowVirtualizer.options.count) {
+              const key = rowVirtualizer.options.getItemKey(index)
+              const height = rowVirtualizer.itemSizeCache.get(key)
+              if (height !== undefined && rowVirtualizer.elementsCache.get(key) === pendingRow) {
+                warmDisplayMeasurementsRef.current?.begin(pendingRow, height)
+              }
+            }
+          }
         }
       }
 
-      if (pendingRow && isMessageDisplayReadyLayout(event)) revealQueue.schedule(pendingRow)
+      if (pendingRow && isMessageDisplayReadyLayout(event)) {
+        if (!warmDisplayMeasurementsRef.current?.ready(pendingRow)) revealQueue.schedule(pendingRow)
+      }
+      // Some layout events arrive before the debounced measure or a ResizeObserver
+      // notification. Let each held row extend its own quiet window, not just
+      // whichever row happened to dispatch last in the batch.
+      if (pendingRow) warmDisplayMeasurementsRef.current?.measure(pendingRow)
 
       // Debounce the burst of layout events fired during streaming/content
       // changes so we don't re-measure the same row multiple times per frame.

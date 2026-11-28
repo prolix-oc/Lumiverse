@@ -149,6 +149,30 @@ describe('shouldAdjustMessageListScrollOnResize', () => {
     })).toBe(false)
   })
 
+  test.each([-4569, 4569])('does not move an unpinned reader inside a warm reflow (delta %s)', delta => {
+    const input = {
+      delta, itemStart: 18500, itemEnd: 28964, scrollOffset: 26361,
+      scrollDirection: 'forward' as const, hasMeasuredSize: true,
+      isPinned: false, isStreamingTail: false, isProgrammaticContentReflow: true,
+      isWarmDisplayReflow: true,
+    }
+    expect(shouldAdjustMessageListScrollOnResize(input)).toBe(false)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, isAboveVisibleAnchor: true })).toBe(false)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, isWarmDisplayReflow: false })).toBe(true)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, isPinned: true })).toBe(true)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, hasMeasuredSize: false })).toBe(true)
+  })
+
+  test.each(['forward', 'backward'] as const)('warm reflow wholly above or below the reader (%s)', scrollDirection => {
+    const input = {
+      delta: -600, itemStart: 1000, itemEnd: 2000, scrollOffset: 3000,
+      scrollDirection, hasMeasuredSize: true, isPinned: false,
+      isStreamingTail: false, isProgrammaticContentReflow: true, isWarmDisplayReflow: true,
+    }
+    expect(shouldAdjustMessageListScrollOnResize(input)).toBe(true)
+    expect(shouldAdjustMessageListScrollOnResize({ ...input, itemStart: 4000, itemEnd: 5000 })).toBe(false)
+  })
+
   test('does not compensate remeasurement of the focused editable row', () => {
     expect(shouldAdjustMessageListScrollOnResize({
       delta: 48,

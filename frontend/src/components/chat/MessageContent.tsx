@@ -2330,20 +2330,33 @@ export default function MessageContent({
     // whereas getBoundingClientRect() would return scaled pixels and the lock
     // would be applied twice.
     let maxHeight = contentBody.offsetHeight
+    let pendingRaf = 0
     contentBody.style.minHeight = `${maxHeight}px`
 
     const updateMinHeight = () => {
       const h = contentBody.offsetHeight
       if (h > maxHeight) {
         maxHeight = h
-        contentBody.style.minHeight = `${h}px`
+        // The rounded layout height can exceed the observed fractional size.
+        // Writing it back during resize delivery resizes this same target and
+        // triggers a ResizeObserver loop error. Coalesce writes next frame,
+        // retaining the largest observed height if several updates arrive.
+        if (!pendingRaf) {
+          pendingRaf = window.requestAnimationFrame(() => {
+            pendingRaf = 0
+            contentBody.style.minHeight = `${maxHeight}px`
+          })
+        }
       }
     }
 
     const observer = new ResizeObserver(updateMinHeight)
     observer.observe(contentBody)
 
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (pendingRaf) window.cancelAnimationFrame(pendingRaf)
+    }
   }, [isStreaming])
 
   const renderedBlocks = useMemo(() => {

@@ -11,6 +11,7 @@ export interface MessageListScrollAdjustmentInput {
   isFocusedEditableRow?: boolean
   isUserToggledCollapsibleRow?: boolean
   isProgrammaticContentReflow?: boolean
+  isWarmDisplayReflow?: boolean
   isAboveVisibleAnchor?: boolean
 }
 
@@ -26,6 +27,7 @@ export function shouldAdjustMessageListScrollOnResize({
   isFocusedEditableRow,
   isUserToggledCollapsibleRow,
   isProgrammaticContentReflow,
+  isWarmDisplayReflow,
   isAboveVisibleAnchor,
 }: MessageListScrollAdjustmentInput) {
   const overlapsViewportTop = itemStart < scrollOffset && itemEnd > scrollOffset
@@ -61,6 +63,14 @@ export function shouldAdjustMessageListScrollOnResize({
   // row. Compensating scrollTop while the row animates makes the whole chat
   // appear to lurch even though only a collapsible section changed.
   if (hasMeasuredSize && isUserToggledCollapsibleRow && overlapsViewportTop) {
+    return false
+  }
+
+  // A completed row that straddles the viewport is not wholly above it.
+  // Its total height delta may be caused by media below the reader. Never
+  // translate the entire delta into scroll movement for a warm replacement.
+  // Cold completions still use their explicit visible-row anchor below.
+  if (!isPinned && hasMeasuredSize && isWarmDisplayReflow && overlapsViewportTop) {
     return false
   }
 

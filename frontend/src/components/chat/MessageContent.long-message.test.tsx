@@ -220,6 +220,83 @@ describe('MessageContent display readiness', () => {
   )
 })
 
+describe('MessageContent streaming height lock', () => {
+  async function render(isStreaming: boolean) {
+    await act(async () => {
+      root?.render(<MessageContent content="Streaming text" isUser={false} userName="Reader" isStreaming={isStreaming} disableInterceptors />)
+    })
+  }
+
+  function controlFrames() {
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrame = 0
+    const request = spyOn(domWindow, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.set(++nextFrame, callback)
+      return nextFrame
+    })
+    const cancel = spyOn(domWindow, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id) })
+    return {
+      async flush() {
+        await act(async () => {
+          const pending = [...frames.values()]
+          frames.clear()
+          for (const callback of pending) callback(performance.now())
+        })
+      },
+      restore() { request.mockRestore(); cancel.mockRestore() },
+    }
+  }
+
+  test('coalesces growth outside resize delivery while retaining the largest streamed height', async () => {
+    await render(false)
+    await flushLayout()
+    let body = setRenderedBodyHeight(100)
+    const frames = controlFrames()
+    try {
+      await render(true)
+      expect(body.style.minHeight).toBe('100px')
+      body = setRenderedBodyHeight(200)
+      for (const observer of resizeObservers) observer.trigger()
+      // Writing to the observed box during delivery can trigger a native
+      // ResizeObserver loop error; only the next frame may update the lock.
+      expect(body.style.minHeight).toBe('100px')
+      body = setRenderedBodyHeight(300)
+      for (const observer of resizeObservers) observer.trigger()
+      await frames.flush()
+      expect(body.style.minHeight).toBe('300px')
+
+      body = setRenderedBodyHeight(120)
+      for (const observer of resizeObservers) observer.trigger()
+      await frames.flush()
+      expect(body.style.minHeight).toBe('300px')
+    } finally {
+      await act(async () => { root?.unmount(); root = null })
+      frames.restore()
+    }
+  })
+
+  test.each(['stop', 'unmount'] as const)('cancels pending height writes on %s', async action => {
+    await render(false)
+    await flushLayout()
+    let body = setRenderedBodyHeight(100)
+    const frames = controlFrames()
+    try {
+      await render(true)
+      body = setRenderedBodyHeight(240)
+      for (const observer of resizeObservers) observer.trigger()
+      if (action === 'stop') await render(false)
+      else await act(async () => { root?.unmount(); root = null })
+      const heightAfterCleanup = body.style.minHeight
+      await frames.flush()
+      expect(body.style.minHeight).toBe(heightAfterCleanup)
+      if (action === 'stop') expect(body.style.minHeight).toBe('')
+    } finally {
+      await act(async () => { root?.unmount(); root = null })
+      frames.restore()
+    }
+  })
+})
+
 describe('MessageContent inline HTML rendering', () => {
   test('action activation identifies displayed captures while retaining configured effect templates', async () => {
     const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')

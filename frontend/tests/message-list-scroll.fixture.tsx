@@ -5,6 +5,8 @@ import { useStore } from '@/store'
 import { messagesApi } from '@/api/chats'
 import { registerDisplayResolver } from '@/lib/spindle/display-resolver-registry'
 import { resetDisplayRegexCachesForTests } from '@/hooks/useDisplayRegex'
+import { initI18n } from '@/i18n'
+import { reconcileMessageTagRuntimeCapabilities } from '@/lib/spindle/message-tag-runtime-readiness'
 import type { Message } from '@/types/api'
 import '@/theme/variables.css'
 import '@/theme/reset.css'
@@ -37,6 +39,7 @@ useStore.setState({
   chatDisplayMode: displayMode, oocEnabled: false, lumiaOOCStyle: 'raw',
   longMessageCollapseEnabled: false, isGroupChat: false,
 } as never)
+reconcileMessageTagRuntimeCapabilities([])
 
 registerDisplayResolver('scroll-fixture', {
   ready: () => true,
@@ -61,11 +64,14 @@ messagesApi.before = async (_chatId, boundary, limit) => {
   return { data: older.slice(-limit), has_more: older.length > limit, limit }
 }
 Object.assign(window, {
+  scrollFixtureStore: useStore,
   clearScrollFixtureCaches: resetDisplayRegexCachesForTests,
   scrollFixtureLoadedCount: () => useStore.getState().messages.length,
 })
 function Fixture() {
   const loaded = useStore(s => s.messages)
-  return <BrowserRouter><MessageList messages={loaded} chatId={chatId} isStreaming={false} /></BrowserRouter>
+  const isStreaming = useStore(s => s.isStreaming)
+  return <BrowserRouter><MessageList messages={loaded} chatId={chatId} isStreaming={isStreaming} /></BrowserRouter>
 }
+await initI18n()
 createRoot(document.getElementById('root')!).render(<Fixture />)
