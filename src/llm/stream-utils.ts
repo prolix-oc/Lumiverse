@@ -18,6 +18,18 @@ import { transportCredentials } from "../utils/redact-request";
 // cancellation path that crashes Bun on Windows.
 const responseConnections = new WeakMap<Response, AbortController>();
 
+// Bun's HTTP client applies a socket idle timeout to every fetch — 5 minutes
+// unless BUN_CONFIG_HTTP_IDLE_TIMEOUT says otherwise. The timer is reset by
+// each byte, so it only measures silence, but a reasoning model can legitimately
+// go quiet for longer than that both before the first token and mid-stream, and
+// the transport then fails the request with "The operation timed out" even
+// though the provider was still working. Provider calls therefore set their own
+// idle allowance, well above any plausible stall. This is not a cap on how long
+// a generation may run: the token-aware watchdog in the generation registry
+// (GENERATION_IDLE_TIMEOUT_MS) is the authority on an upstream that went quiet,
+// and this value stays above it so the watchdog speaks first.
+const PROVIDER_IDLE_TIMEOUT_MS = 45 * 60 * 1000;
+
 /** Force-close the HTTP connection behind a fetchWithPreflightAbort response.
  *  Call only after reader.cancel() has settled (or when no read is pending) —
  *  aborting with a read in flight is the crash path the preflight pattern
@@ -62,7 +74,7 @@ export async function fetchWithPreflightAbort(
         });
       } catch { /* Diagnostics must never fail generation or expose a raw fallback. */ }
     }
-    const res = observeProviderResponse(await fetch(input, { ...init, signal: controller.signal }), responseObserver, signal);
+    const res = observeProviderResponse(await fetch(input, { timeout: PROVIDER_IDLE_TIMEOUT_MS, ...init, signal: controller.signal }), responseObserver, signal);
     responseConnections.set(res, controller);
     return res;
   } catch (error) {
