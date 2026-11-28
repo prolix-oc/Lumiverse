@@ -5,6 +5,7 @@ import { applyRawOverride } from "../types"
 import { parseProviderErrorBody, ProviderRequestError, readBoundedText, throwProviderResponseError } from "../../utils/provider-errors"
 import { closeWebSocketGracefully, createWebSocketReceiveBackpressure, openWebSocket } from "./ws-helpers"
 import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
+import { createSwarmStreamTrace, type SwarmStreamTrace } from "./swarmui-stream-trace"
 
 const PARAMETERS: ImageParameterSchemaMap = {
   width: {
@@ -720,14 +721,20 @@ export class SwarmUIImageProvider implements ImageProvider {
       }
     }
 
+    const trace = createSwarmStreamTrace(request.onProviderTrace)
+    trace?.event("session-start")
     const sessionId = await this.getSession(base, token, request.signal)
+    trace?.event("session-ready")
 
     const wsUrl = base.replace(/^http/, "ws") + "/API/GenerateText2ImageWS"
+    trace?.event("socket-open-start")
     const ws = await openWebSocket(wsUrl, { label: "SwarmUI", timeoutMs: 15_000 })
+    trace?.event("socket-open")
 
     // Send the generation parameters as the initial message
     const body = this.buildBody(sessionId, request)
     ws.send(JSON.stringify(body))
+    trace?.event("request-sent")
 
     const abortHandler = () => {
       fetch(`${base}/API/InterruptAll`, {
@@ -742,7 +749,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     let imagePath: string | null = null
 
     try {
-      for await (const event of this.wsEvents(ws, request.signal)) {
+      for await (const event of this.wsEvents(ws, request.signal, trace)) {
         if (event.type === "progress") {
           yield {
             step: event.step,
@@ -751,25 +758,32 @@ export class SwarmUIImageProvider implements ImageProvider {
           }
         } else if (event.type === "image") {
           imagePath = event.path
+          trace?.event("image-consumed")
         } else if (event.type === "error") {
           throw event.error
         } else if (event.type === "complete") {
+          trace?.event("batch-complete-consumed")
           break
         }
       }
     } finally {
       request.signal?.removeEventListener("abort", abortHandler)
+      trace?.event("socket-cleanup-start")
       await closeWebSocketGracefully(
         ws,
         request.signal?.aborted ? 100 : 1_000,
       )
+      trace?.event("socket-cleanup-complete")
+      trace?.summary()
     }
 
     if (!imagePath) {
       throw new Error("SwarmUI WebSocket completed without producing an image")
     }
 
+    trace?.event("image-fetch-start")
     const imageDataUrl = await this.fetchImage(base, imagePath, token, request.signal)
+    trace?.event("image-fetch-complete")
 
     return {
       imageDataUrl,
@@ -876,6 +890,7 @@ export class SwarmUIImageProvider implements ImageProvider {
   private async *wsEvents(
     ws: WebSocket,
     signal?: AbortSignal,
+    trace?: SwarmStreamTrace,
   ): AsyncGenerator<
     | { type: "progress"; step: number; totalSteps: number; preview?: string }
     | { type: "image"; path: string }
@@ -910,6 +925,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
         // Image result — may come as a standalone field or alongside gen_progress
         if (typeof msg.image === "string" && msg.image) {
+          trace?.event("image-frame")
           enqueue({ type: "image", path: msg.image })
         }
 
@@ -918,6 +934,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         if (gp && typeof gp === "object") {
           const overall = typeof gp.overall_percent === "number" ? gp.overall_percent : null
           const current = typeof gp.current_percent === "number" ? gp.current_percent : null
+          trace?.progress(overall, current, typeof gp.preview === "string" && Boolean(gp.preview))
           const pct = overall ?? current
 
           if (pct != null) {
@@ -932,6 +949,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
         // Discard indices signal (marks the end of generation for our batch)
         if (Array.isArray(msg.discard_indices)) {
+          trace?.event("batch-complete-frame", { discardCount: msg.discard_indices.length })
           enqueue({ type: "complete" })
         }
       } catch {
@@ -940,6 +958,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     })
 
     ws.addEventListener("close", () => {
+      trace?.event("socket-close-frame")
       done = true
       if (resolve) {
         resolve()

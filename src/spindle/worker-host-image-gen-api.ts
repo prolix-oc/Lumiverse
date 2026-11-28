@@ -417,10 +417,24 @@ export class WorkerHostImageGenApi {
   async handleGenerateStream(requestId: string, input: any): Promise<void> {
     const abortController = new AbortController();
     this.streamAbortControllers.set(requestId, abortController);
+    // Only this host-local stream gets a trace. It never enters the wire request.
+    const started = performance.now();
+    let trace: ((action: string, details?: Record<string, unknown>) => void) | undefined;
 
     try {
       const generation = await this.resolveGeneration(input, abortController.signal);
       const { provider } = generation;
+      if (provider.name === "swarmui") {
+        const traceId = crypto.randomUUID();
+        const write = (event: Record<string, unknown>) => {
+          // Best effort, bounded numeric diagnostics. No prompts, credentials,
+          // image paths, user IDs or image bytes enter this log.
+          try { console.info("[image-gen:swarm-timing]", JSON.stringify({ traceId, ...event })); } catch { /* diagnostics only */ }
+        };
+        trace = (action, details = {}) => write({ action, atMs: Date.now(), hostElapsedMs: Math.round(performance.now() - started), ...details });
+        generation.request.onProviderTrace = (event) => write({ action: event.action, atMs: event.atMs, providerElapsedMs: event.elapsedMs, ...event.details });
+        trace("host-resolved", { transport: generation.request.parameters?.workflow ? "comfy-proxy" : "swarm-ws" });
+      }
       if (!supportsWebSocketPreviewStreaming(provider)) {
         throw new Error(`${provider.displayName} does not support WebSocket preview/status streaming`);
       }
@@ -433,8 +447,13 @@ export class WorkerHostImageGenApi {
       while (true) {
         const next = await stream.next();
         if (next.done) {
+          trace?.("host-provider-returned");
+          trace?.("host-persist-start");
           const result = await this.persistResult(next.value, generation, input);
+          const imageId = typeof result.imageId === "string" ? result.imageId : undefined;
+          trace?.("host-persist-complete", { imageId, persisted: Boolean(imageId) });
           this.postStreamEvent(requestId, { type: "done", result });
+          trace?.("host-done-posted", { imageId });
           return;
         }
 
@@ -462,6 +481,7 @@ export class WorkerHostImageGenApi {
       }
     } catch (err: any) {
       const aborted = abortController.signal.aborted || err?.name === "AbortError";
+      trace?.("host-stream-failed", { aborted });
       this.postStreamError(
         requestId,
         aborted ? "AbortError: Image generation aborted" : err?.message ?? String(err),

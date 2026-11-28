@@ -18,6 +18,14 @@ export interface ComfyUICapabilities {
   clipLoaderType: "single" | "dual" | "none";
 }
 
+/** Host-local diagnostics; never serialized into an upstream provider request. */
+export interface ImageGenProviderTraceEvent {
+  action: string;
+  atMs: number;
+  elapsedMs: number;
+  details?: Record<string, unknown>;
+}
+
 export interface ImageGenRequest {
   prompt: string;
   negativePrompt?: string;
@@ -28,6 +36,8 @@ export interface ImageGenRequest {
     novelai?: { nonStreaming?: boolean };
   };
   signal?: AbortSignal;
+  /** Optional observer for provider transport milestones. Must not affect generation. */
+  onProviderTrace?: (event: ImageGenProviderTraceEvent) => void;
 }
 
 export interface ImageGenResponse {

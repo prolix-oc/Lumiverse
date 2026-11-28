@@ -117,3 +117,59 @@ test("applyDataUrlInclusion does not mutate the source result", () => {
   expect("imageDataUrl" in stripped).toBe(false);
 });
 
+
+test("Swarm host trace separates provider completion, delayed persistence and done delivery", async () => {
+  const messages: any[] = [];
+  const logs: any[] = [];
+  const originalInfo = console.info;
+  let releasePersist!: () => void;
+  const persistGate = new Promise<void>(resolve => { releasePersist = resolve; });
+  let persistStarted!: () => void;
+  const enteredPersist = new Promise<void>(resolve => { persistStarted = resolve; });
+  const api = new WorkerHostImageGenApi({
+    extensionIdentifier: "preview_test",
+    hasPermission: () => true,
+    resolveEffectiveUserId: () => "private-user",
+    enforceScopedUser: () => undefined,
+    post: message => messages.push(message),
+  });
+  const provider = makeProvider({
+    name: "swarmui",
+    capabilities: { ...makeProvider().capabilities, websocketPreviewStreaming: { previews: true, status: true } },
+    async *generateStream(_key, _url, request) {
+      request.onProviderTrace?.({ action: "image-frame", atMs: Date.now(), elapsedMs: 10 });
+      yield { step: 92, totalSteps: 100, preview: "data:image/png;base64,PRIVATE" };
+      request.onProviderTrace?.({ action: "batch-complete-frame", atMs: Date.now(), elapsedMs: 20 });
+      return { imageDataUrl: "data:image/png;base64,PRIVATE", provider: "swarmui", model: "test" };
+    },
+  });
+  // Stub only the host services (connection resolution and persistence). The
+  // actual WorkerHostImageGenApi stream loop and its message contract run here.
+  Object.assign(api, {
+    resolveGeneration: async () => ({ provider, apiKey: "private-token", connection: { api_url: "private-url" }, request: { prompt: "private-prompt", model: "test", parameters: {} } }),
+    persistResult: async () => { persistStarted(); await persistGate; return { imageId: "image-1", provider: "swarmui" }; },
+  });
+  console.info = (...args: unknown[]) => {
+    if (args[0] === "[image-gen:swarm-timing]") logs.push(JSON.parse(String(args[1])));
+    // Also prove an unavailable log sink cannot change the stream outcome.
+    throw new Error("diagnostic sink unavailable");
+  };
+  try {
+    const running = api.handleGenerateStream("request-1", {});
+    await enteredPersist;
+    expect(messages.map(m => m.event?.type)).toEqual(["status", "preview"]);
+    expect(logs.map(e => e.action)).toEqual(["host-resolved", "image-frame", "batch-complete-frame", "host-provider-returned", "host-persist-start"]);
+    releasePersist();
+    await running;
+    expect(messages.map(m => m.event?.type)).toEqual(["status", "preview", "done"]);
+    expect(messages.at(-1)?.event.result.imageId).toBe("image-1");
+    expect(logs.slice(-2).map(e => e.action)).toEqual(["host-persist-complete", "host-done-posted"]);
+    expect(logs.at(-1)?.imageId).toBe("image-1");
+    expect(new Set(logs.map(e => e.traceId)).size).toBe(1);
+    expect(JSON.stringify(logs).includes("PRIVATE")).toBe(false);
+    expect(JSON.stringify(logs).includes("private-")).toBe(false);
+  } finally {
+    releasePersist();
+    console.info = originalInfo;
+  }
+});
