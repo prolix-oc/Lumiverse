@@ -19,6 +19,14 @@ import {
   parseGalleryImageReference,
 } from "../utils/gallery-image-reference";
 
+import {
+  EMBEDDED_IMAGE_FIELDS,
+  characterEmbeddedImageUrls,
+  mapEmbeddedImageText,
+  replaceEmbeddedImageUrls,
+} from "../shared/embedded-images";
+export { extractImageUrls } from "../shared/embedded-images";
+
 const GALLERY_REFERENCE_SEQUENCE_KEY = "gallery_reference_sequence";
 
 interface GalleryReferenceRegistration {
@@ -521,71 +529,14 @@ export function getGalleryItem(
 
 // ── Image extraction from character data ──
 
-const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
-const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi;
-const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi;
-const IMAGE_PATH_RE = /\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|jfif|pjp|pjpeg|png|svg|webp)$/i;
-
-function trimTrailingUrlPunctuation(url: string): string {
-  let trimmed = url.trim();
-
-  while (/[.,!?;:]$/.test(trimmed)) {
-    trimmed = trimmed.slice(0, -1);
-  }
-
-  while (trimmed.endsWith(")") && ((trimmed.match(/\(/g)?.length ?? 0) < (trimmed.match(/\)/g)?.length ?? 0))) {
-    trimmed = trimmed.slice(0, -1);
-  }
-
-  while (trimmed.endsWith("]") && ((trimmed.match(/\[/g)?.length ?? 0) < (trimmed.match(/\]/g)?.length ?? 0))) {
-    trimmed = trimmed.slice(0, -1);
-  }
-
-  return trimmed;
-}
-
-function isDirectImageUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    return IMAGE_PATH_RE.test(parsed.pathname);
-  } catch {
-    return false;
-  }
-}
-
-export function extractImageUrls(text: string): string[] {
-  const seen = new Set<string>();
-  const urls: string[] = [];
-  let m: RegExpExecArray | null;
-
-  const push = (url: string): void => {
-    if (!seen.has(url)) {
-      seen.add(url);
-      urls.push(url);
-    }
-  };
-
-  MD_IMAGE_RE.lastIndex = 0;
-  while ((m = MD_IMAGE_RE.exec(text)) !== null) push(m[1]);
-
-  HTML_IMG_RE.lastIndex = 0;
-  while ((m = HTML_IMG_RE.exec(text)) !== null) push(m[1]);
-
-  BARE_URL_RE.lastIndex = 0;
-  while ((m = BARE_URL_RE.exec(text)) !== null) {
-    const candidate = trimTrailingUrlPunctuation(m[0]);
-    if (isDirectImageUrl(candidate)) push(candidate);
-  }
-
-  return urls;
-}
-
 function dataUriToFile(dataUri: string): File {
-  const [header, base64] = dataUri.split(",", 2);
-  const mime = header.match(/data:([^;]+)/)?.[1] || "image/png";
+  const separator = dataUri.indexOf(",");
+  if (separator < 0) throw new Error("Invalid image data URI");
+  const header = dataUri.slice(0, separator);
+  const data = dataUri.slice(separator + 1);
+  const mime = header.match(/^data:([^;,]+)/i)?.[1] || "image/png";
   const ext = mime.split("/")[1]?.replace("+xml", "") || "png";
-  const buffer = Buffer.from(base64, "base64");
+  const buffer = /;base64$/i.test(header) ? Buffer.from(data, "base64") : Buffer.from(decodeURIComponent(data));
   return new File([buffer], `extracted.${ext}`, { type: mime });
 }
 
@@ -609,51 +560,46 @@ export async function extractImagesFromCharacter(
   const character = await getCharacterAsync(userId, characterId);
   if (!character) return [];
 
-  const textFields = [
-    character.first_mes,
-    character.description,
-    character.personality,
-    character.scenario,
-    character.mes_example,
-    character.system_prompt,
-    character.post_history_instructions,
-    character.creator_notes,
-    ...(character.alternate_greetings || []),
-  ];
-
-  if (character.extensions && Object.keys(character.extensions).length > 0) {
-    textFields.push(JSON.stringify(character.extensions));
-  }
-
-  const seen = new Set<string>();
-  const urls: string[] = [];
-  for (const text of textFields) {
-    if (!text) continue;
-    for (const url of extractImageUrls(text)) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        urls.push(url);
-      }
-    }
-  }
+  const urls = characterEmbeddedImageUrls(character);
 
   if (urls.length === 0) return [];
 
   const items: CharacterGalleryItem[] = [];
+  const replacements = new Map<string, string>();
   for (const url of urls) {
     try {
       let file: File;
-      if (url.startsWith("data:")) {
+      if (/^data:/i.test(url)) {
         file = dataUriToFile(url);
-      } else if (url.startsWith("http://") || url.startsWith("https://")) {
+      } else if (/^https?:\/\//i.test(url)) {
         file = await fetchUrlAsFile(url);
       } else {
         continue; // skip relative or unrecognised URLs
       }
       const item = await uploadToGallery(userId, characterId, file);
       items.push(item);
+      replacements.set(url, item.reference);
     } catch {
       // skip images that fail to download/convert
+    }
+  }
+
+  if (replacements.size > 0) {
+    // Downloads may take a while. Apply replacements to the latest saved text
+    // and extensions, including the reference mappings registered by uploads.
+    const current = getCharacter(userId, characterId);
+    if (current) {
+      const updates: Record<string, unknown> = {};
+      for (const field of EMBEDDED_IMAGE_FIELDS) {
+        let changed = false;
+        const next = mapEmbeddedImageText(current[field], (text) => {
+          const replaced = replaceEmbeddedImageUrls(text, replacements);
+          if (replaced !== text) changed = true;
+          return replaced;
+        });
+        if (changed) updates[field] = next;
+      }
+      if (Object.keys(updates).length) updateCharacter(userId, characterId, updates);
     }
   }
 

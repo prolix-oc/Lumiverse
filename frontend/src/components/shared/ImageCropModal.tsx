@@ -31,6 +31,7 @@ export default function ImageCropModal({
   const [zoom, setZoom] = useState(1)
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null)
   const [processing, setProcessing] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   const onCropComplete = useCallback((_croppedArea: Area, croppedPixels: Area) => {
     setCroppedAreaPixels(croppedPixels)
@@ -39,11 +40,13 @@ export default function ImageCropModal({
   const handleConfirm = useCallback(async () => {
     if (!imageSrc || !croppedAreaPixels) return
     setProcessing(true)
+    setFailed(false)
     try {
       const blob = await cropImage(imageSrc, croppedAreaPixels, outputSize, outputSize)
       onCropDone(blob)
     } catch (err) {
       console.error('[ImageCropModal] Crop failed:', err)
+      setFailed(true)
     } finally {
       setProcessing(false)
       setCrop({ x: 0, y: 0 })
@@ -54,6 +57,7 @@ export default function ImageCropModal({
   const handleCancel = useCallback(() => {
     setCrop({ x: 0, y: 0 })
     setZoom(1)
+    setFailed(false)
     onCancel()
   }, [onCancel])
 
@@ -88,6 +92,7 @@ export default function ImageCropModal({
             />
           </label>
         </div>
+        {failed && <p className={styles.error} role="alert">{t('failed')}</p>}
         <div className={styles.actions}>
           <button type="button" className={styles.cancelBtn} onClick={handleCancel}>
             {tc('actions.cancel')}

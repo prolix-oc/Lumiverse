@@ -24,8 +24,8 @@ describe('persona avatar URL helpers', () => {
     }
 
     expect(pickPersonaThumbImageId(persona)).toBe('persona-crop')
-    expect(getPersonaAvatarThumbUrl(persona)).toBe('/api/v1/images/persona-crop?size=sm')
-    expect(getPersonaAvatarLargeUrl(persona)).toBe('/api/v1/images/persona-crop?size=lg')
+    expect(getPersonaAvatarThumbUrl(persona)).toBe('/api/v1/images/persona-crop?size=sm&thumbnail_version=3')
+    expect(getPersonaAvatarLargeUrl(persona)).toBe('/api/v1/images/persona-crop?size=lg&thumbnail_version=3')
     expect(getPersonaAvatarUrl(persona)).toBe('/api/v1/images/persona-original')
   })
 
@@ -50,7 +50,7 @@ describe('persona avatar URL helpers', () => {
 
     expect(pickPersonaThumbImageId(persona)).toBe('persona-image')
     expect(pickPersonaOriginalImageId(persona)).toBe('persona-image')
-    expect(getPersonaAvatarThumbUrl(persona)).toBe('/api/v1/images/persona-image?size=sm')
+    expect(getPersonaAvatarThumbUrl(persona)).toBe('/api/v1/images/persona-image?size=sm&thumbnail_version=3')
     expect(getPersonaAvatarUrl(persona)).toBe('/api/v1/images/persona-image')
   })
 
@@ -60,7 +60,7 @@ describe('persona avatar URL helpers', () => {
         chatId: 'chat-1',
         version: 'toggle-2',
       }),
-    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&variant=crop&v=toggle-2')
+    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&thumbnail_version=3&variant=crop&v=toggle-2')
   })
 
   test('keeps an upload-derived resolver version in the URL', () => {
@@ -69,7 +69,7 @@ describe('persona avatar URL helpers', () => {
         chatId: 'chat-1',
         version: 'toggle-2.original-image.crop-image',
       }),
-    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&variant=crop&v=toggle-2.original-image.crop-image')
+    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&thumbnail_version=3&variant=crop&v=toggle-2.original-image.crop-image')
   })
 
   test('keeps original and cropped chat-scoped avatar tiers distinct', () => {
@@ -78,8 +78,8 @@ describe('persona avatar URL helpers', () => {
     expect(getPersonaAvatarUrlById('persona-mode', null, context))
       .toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&variant=original&v=toggle-2')
     expect(getPersonaAvatarTiers('persona-mode', null, context, 'original')).toEqual({
-      sm: '/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&variant=original&v=toggle-2',
-      lg: '/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=lg&variant=original&v=toggle-2',
+      sm: '/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&thumbnail_version=3&variant=original&v=toggle-2',
+      lg: '/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=lg&thumbnail_version=3&variant=original&v=toggle-2',
       full: '/api/v1/personas/persona-mode/avatar?chat_id=chat-1&variant=original&v=toggle-2',
     })
   })

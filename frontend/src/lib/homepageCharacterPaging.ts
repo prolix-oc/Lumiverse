@@ -163,6 +163,7 @@ export function shouldLoadMore<T extends IdentifiedRow>(
 }
 
 export interface CharacterQueryParams {
+  searchIn?: 'metadata' | 'all'
   search?: string
   tag?: string
   sortField?: string
@@ -188,6 +189,7 @@ export function characterQueryKey(params: CharacterQueryParams): string {
     : params.favoriteIds ?? ''
   return JSON.stringify([
     (params.search ?? '').trim(),
+    params.searchIn ?? 'metadata',
     params.tag ?? '',
     params.sortField ?? '',
     params.sortDirection ?? '',

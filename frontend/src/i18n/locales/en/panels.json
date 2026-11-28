@@ -743,6 +743,14 @@
     "noModelsDynamic": "No models found. Refresh, or enter one manually.",
     "noModelsStatic": "No models for this provider."
   },
+  "characterSearch": {
+    "placeholder": "Search all character fields...",
+    "searchIn": "Search in",
+    "metadata": "Names, creators & tags",
+    "allFields": "All fields",
+    "allFieldsHint": "Includes greetings, character fields, alternate fields and creator notes. Use at least 3 characters in each word.",
+    "minimumCharacters": "Use at least 3 characters in each word to search all fields."
+  },
   "characterToolbar": {
     "searchGroupChats": "Search group chats...",
     "searchCharacters": "Search characters...",
@@ -1414,6 +1422,7 @@
     "uploading": "Uploading...",
     "addImages": "Add Images",
     "embeddedImages": "Embedded Images",
+    "embeddedImagesImportFailed": "Could not import embedded images.",
     "embeddedImagesFound_one": "{{count}} image found in character data",
     "embeddedImagesFound_other": "{{count}} images found in character data",
     "importing": "Importing...",

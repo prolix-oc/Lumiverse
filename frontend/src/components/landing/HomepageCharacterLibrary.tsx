@@ -1,3 +1,4 @@
+import CharacterSearchScopeControl from '@/components/shared/CharacterSearchScopeControl'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { BookOpen, Edit3, MessageSquare, Pin, PinOff, Search, Settings, Star, X } from 'lucide-react'
@@ -204,6 +205,8 @@ export function HomepageCharacterLibrary() {
     setFilter,
     search,
     setSearch,
+    searchScope,
+    setSearchScope,
     selectedTag,
     setSelectedTag,
     sortField,
@@ -573,7 +576,7 @@ export function HomepageCharacterLibrary() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search names, tags, creators..."
+            placeholder={searchScope === 'all' ? 'Search all character fields...' : 'Search names, tags, creators...'}
             aria-label="Search characters"
             className={styles.search}
           />
@@ -589,6 +592,8 @@ export function HomepageCharacterLibrary() {
           Settings
         </Button>
       </div>
+
+      <CharacterSearchScopeControl value={searchScope} onChange={setSearchScope} query={search} />
 
       <div className={styles.controls}>
         <div className={styles.filters} role="group" aria-label="Character filter">

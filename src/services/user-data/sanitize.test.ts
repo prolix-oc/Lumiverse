@@ -64,12 +64,12 @@ describe("user-data image archive paths", () => {
 });
 
 describe("user-data thumbnail archive paths", () => {
-  test("accepts WebP and AVIF v2 thumbnails", () => {
-    for (const codec of ["webp", "avif"] as const) {
-      expect(sanitizeEntry(`files/thumbnails/${IMAGE_ID}_thumb_sm_v2.${codec}`)).toMatchObject({
+  test("accepts WebP and AVIF v2/v3 thumbnails", () => {
+    for (const version of [2, 3]) for (const codec of ["webp", "avif"] as const) {
+      expect(sanitizeEntry(`files/thumbnails/${IMAGE_ID}_thumb_sm_v${version}.${codec}`)).toMatchObject({
         kind: "files",
         bucket: "thumbnails",
-        inner: `${IMAGE_ID}_thumb_sm_v2.${codec}`,
+        inner: `${IMAGE_ID}_thumb_sm_v${version}.${codec}`,
       });
     }
   });

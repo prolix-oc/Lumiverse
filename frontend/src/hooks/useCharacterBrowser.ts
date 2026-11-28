@@ -1,3 +1,4 @@
+import { isCharacterContentSearchValid } from '@/lib/characterSearch'
 import { loadCharacterIndex, refreshCachedCharacters, useCharacterCatalog } from './useCharacterCatalog'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router'
@@ -62,6 +63,8 @@ export function useCharacterBrowser() {
   const favorites = useStore((s) => s.favorites)
   const toggleFavorite = useStore((s) => s.toggleFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
+  const searchScope = useStore((s) => s.characterSearchScope)
+  const setSearchScope = useStore((s) => s.setCharacterSearchScope)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const filterTab = useStore((s) => s.filterTab)
   const setFilterTab = useStore((s) => s.setFilterTab)
@@ -231,6 +234,7 @@ export function useCharacterBrowser() {
       const limit = options?.limit ?? charactersPerPage
       const offset = options?.offset ?? ((options?.page ?? currentPage) - 1) * charactersPerPage
       const params: Record<string, any> = { limit, offset }
+      if (searchScope === 'all' && filterTab !== 'groups') params.search_in = 'all'
 
       if (sortField === 'shuffle') {
         params.sort = 'discover'
@@ -261,7 +265,7 @@ export function useCharacterBrowser() {
 
       return params
     },
-    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab]
+    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab, searchScope]
   )
 
   // ─── Fetch current page from server ─────────────────────────────────────
@@ -269,11 +273,17 @@ export function useCharacterBrowser() {
     if (!settingsLoaded) return
 
     const params = buildSummaryParams()
+    favoriteMutationSeqRef.current += 1
+    if (params.search_in === 'all' && !isCharacterContentSearchValid(params.search ?? '')) {
+      setBrowserItems([])
+      setBrowserTotal(0)
+      setLoading(false)
+      return
+    }
     const paramsChanged = JSON.stringify(params) !== JSON.stringify(prevSummaryParamsRef.current)
     prevSummaryParamsRef.current = params
 
     let cancelled = false
-    favoriteMutationSeqRef.current += 1
     if (paramsChanged || !summaryInitialFetchDoneRef.current) {
       setLoading(true)
     }
@@ -307,7 +317,7 @@ export function useCharacterBrowser() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
-  }, [filterTab, selectedTags, excludedTags, debouncedQuery, sortField, sortDirection, shuffleSeed])
+  }, [filterTab, selectedTags, excludedTags, debouncedQuery, sortField, sortDirection, shuffleSeed, searchScope])
 
   const totalPages = Math.max(1, Math.ceil(browserTotal / charactersPerPage))
   const safePage = Math.min(currentPage, totalPages)
@@ -843,6 +853,8 @@ export function useCharacterBrowser() {
     altFieldsSummaryOpen,
     pendingCardUpdate,
     searchQuery,
+    searchScope,
+    setSearchScope,
     filterTab,
     sortField,
     sortDirection,

@@ -1,10 +1,11 @@
 import { userMediaServingHeaders } from "./user-media-headers";
+import { THUMBNAIL_VERSION } from "../shared/image-animation";
 
 const AVATAR_RESOLVER_CACHE_CONTROL = "private, no-cache";
 
 function buildAvatarResolverEtag(identity: string | null | undefined): string {
   const normalized = (identity ?? "none").replace(/[^A-Za-z0-9._-]/g, "_");
-  return `"avatar-${normalized}"`;
+  return `"avatar-${normalized}-thumb${THUMBNAIL_VERSION}"`;
 }
 
 function requestMatchesEtag(ifNoneMatch: string | undefined, etag: string): boolean {

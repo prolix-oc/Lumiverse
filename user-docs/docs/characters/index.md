@@ -54,7 +54,7 @@ Lumiverse uses the **Character Card Specification** (CCSv3), the same format use
 
 From the **Character Browser** panel, you can:
 
-- **Search** — Find characters by name or creator
+- **Search** — Find characters by name, creator, or tags; choose **All fields** to search card text too
 - **Filter** — Filter by tags
 - **Sort** — By name, creation date, recent use, or random shuffle
 - **Favorite** — Mark characters as favorites for quick access
@@ -63,3 +63,11 @@ From the **Character Browser** panel, you can:
 - **Export** — Save characters as JSON, PNG, or CHARX files
 
 Switch between **grid**, **list**, and **single** view modes depending on how you like to browse.
+
+### Searching Card Text
+
+In the Character Browser or homepage library, change **Search in** from **Names, creators & tags** to **All fields**. This also searches greetings (including alternates), descriptions, personalities, scenarios, example messages, creator notes, system prompts, post-history instructions, and alternate field labels and content. Text near the end of long cards is searchable too.
+
+Each word in an all-fields search must contain at least **3 characters**. Multiple words must all occur somewhere on the card; they can match different fields. Matching uses substrings, so `school` also finds `schoolhouse`. Use the default search mode for shorter names or tags.
+
+The first server restart after upgrading builds the card-text index. It uses additional database space and can extend that startup; later edits and imports update the index automatically.

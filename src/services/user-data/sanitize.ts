@@ -11,7 +11,7 @@ const PREFIX_RE =
 // the UUID stem and a bounded, single-component backup label.
 const IMAGE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[a-zA-Z0-9]{1,8})?(?:\.bak(?:_[A-Za-z0-9_-]{1,128})?)?$/;
 
-const THUMB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_thumb_(?:sm|lg)_v2\.(?:webp|avif)$/;
+const THUMB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_thumb_(?:sm|lg)_v[23]\.(?:webp|avif)$/;
 
 const AVATAR_RE = /^[A-Za-z0-9._-]+$/;
 

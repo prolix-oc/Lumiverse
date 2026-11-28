@@ -29,7 +29,7 @@ function initCharactersTestDb(): void {
     updated_at INTEGER NOT NULL,
     deleting INTEGER NOT NULL DEFAULT 0
   )`);
-  db.run("CREATE VIRTUAL TABLE characters_fts USING fts5(name, description, personality, creator, content='characters', content_rowid='rowid', tokenize='trigram')");
+  db.run("CREATE VIRTUAL TABLE characters_fts USING fts5(name, creator, tags, content='characters', content_rowid='rowid', tokenize='trigram')");
 
   db.run(`CREATE TABLE chats (
     id TEXT PRIMARY KEY,

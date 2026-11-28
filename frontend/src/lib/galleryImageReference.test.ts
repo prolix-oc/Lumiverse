@@ -45,6 +45,13 @@ describe('galleryImageMarkdown', () => {
 })
 
 describe('resolveGalleryImageSourcesInHtml', () => {
+  test('resolves creator note CSS backgrounds and unquoted HTML sources locally', () => {
+    expect(resolveGalleryImageSourcesInHtml(
+      '<style>.notes { background: url("gallery://image-1") }</style><div style="background:url(gallery://image-1)"><img src=gallery://image-1 class="notes"></div>',
+      { 'gallery://image-1': 'local image/id' },
+    )).toBe('<style>.notes { background: url(/api/v1/images/local%20image%2Fid) }</style><div style="background:url(/api/v1/images/local%20image%2Fid)"><img src="/api/v1/images/local%20image%2Fid" class="notes"></div>')
+  })
+
   test('loads the local image while preserving regex-authored styling', () => {
     expect(resolveGalleryImageSourcesInHtml(
       '<div class="frame"><img class="scene" src="gallery://image-1" style="width:42%;border-radius:8px" data-panel="hero"></div>',

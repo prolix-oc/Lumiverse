@@ -39,6 +39,8 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
   selectedCharacterId: null,
   editingCharacterId: null,
   searchQuery: '',
+  characterSearchScope: 'metadata',
+  setCharacterSearchScope: (scope) => set({ characterSearchScope: scope }),
   filterTab: 'characters',
   sortField: 'name',
   sortDirection: 'asc',

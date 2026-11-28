@@ -7,6 +7,7 @@
 // references resolve cleanly under "INSERT OR IGNORE" merge semantics.
 
 import { existsSync } from "node:fs";
+import { THUMBNAIL_VERSION } from "../../shared/image-animation";
 
 export type OwnershipKind =
   | "user"           // row.user_id = importerId
@@ -95,7 +96,7 @@ export const TABLE_REGISTRY: readonly TableSpec[] = [
           if (!row.id) return [];
           return ["sm", "lg"]
             .flatMap((tier) => ["webp", "avif"].map(
-              (codec) => `${dataDir}/images/${row.id}_thumb_${tier}_v2.${codec}`,
+              (codec) => `${dataDir}/images/${row.id}_thumb_${tier}_v${THUMBNAIL_VERSION}.${codec}`,
             ))
             .filter(existsSync);
         },

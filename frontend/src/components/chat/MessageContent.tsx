@@ -1752,7 +1752,7 @@ export function resolveMarkdownImgTags(text: string, assetMap: Record<string, st
     if (sourceEnd === -1) break
     if (sourceEnd === labelEnd + 2) { cursor = labelEnd + 1; continue }
     const rawSrc = text.slice(labelEnd + 2, sourceEnd)
-    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim()
+    const src = rawSrc.trim().replace(/(?<!\s)\s+["'][^"']*["']\s*$/, '').trim().replace(/^<([^>]+)>$/, '$1')
     if (src && !/^(?:https?:\/\/|\/|data:)/i.test(src)) {
       const imageId = resolveAssetId(src, assetMap)
       if (imageId) {
@@ -1920,6 +1920,26 @@ export default function MessageContent({
   )
   const containerRef = useRef<HTMLDivElement>(null)
   const contentBodyRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!interceptedMessageTags.intercepts.some(({ interceptor }) => interceptor.options.displaySlot)) return
+    const container = containerRef.current
+    if (!container) return
+    // Streaming status is live presentation state, not display-preprocess input.
+    // Putting it in the source would invalidate the finalization cache and
+    // briefly unmount the slot (including its shadow root) when streaming ends.
+    const roots: Array<HTMLElement | ShadowRoot> = [container]
+    for (const island of container.querySelectorAll<HTMLElement>('[data-lumiverse-html-island]')) {
+      if (island.shadowRoot) roots.push(island.shadowRoot)
+    }
+    for (const root of roots) {
+      for (const slot of root.querySelectorAll<HTMLElement>('[data-spindle-tag-display]')) {
+        const streaming = String(isStreaming)
+        if (slot.dataset.spindleTagStreaming !== streaming) slot.dataset.spindleTagStreaming = streaming
+      }
+    }
+  }, [interceptedMessageTags.intercepts, renderContent, isStreaming])
+
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [regexSelectionVersion, setRegexSelectionVersion] = useState(0)
   const [longMessageOverflowing, setLongMessageOverflowing] = useState(false)
@@ -2332,20 +2352,33 @@ export default function MessageContent({
     // whereas getBoundingClientRect() would return scaled pixels and the lock
     // would be applied twice.
     let maxHeight = contentBody.offsetHeight
+    let pendingRaf = 0
     contentBody.style.minHeight = `${maxHeight}px`
 
     const updateMinHeight = () => {
       const h = contentBody.offsetHeight
       if (h > maxHeight) {
         maxHeight = h
-        contentBody.style.minHeight = `${h}px`
+        // The rounded layout height can exceed the observed fractional size.
+        // Writing it back during resize delivery resizes this same target and
+        // triggers a ResizeObserver loop error. Coalesce writes next frame,
+        // retaining the largest observed height if several updates arrive.
+        if (!pendingRaf) {
+          pendingRaf = window.requestAnimationFrame(() => {
+            pendingRaf = 0
+            contentBody.style.minHeight = `${maxHeight}px`
+          })
+        }
       }
     }
 
     const observer = new ResizeObserver(updateMinHeight)
     observer.observe(contentBody)
 
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (pendingRaf) window.cancelAnimationFrame(pendingRaf)
+    }
   }, [isStreaming])
 
   const renderedBlocks = useMemo(() => {

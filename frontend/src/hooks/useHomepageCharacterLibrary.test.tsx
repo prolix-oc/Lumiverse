@@ -228,6 +228,54 @@ describe('useHomepageCharacterLibrary websocket invalidation', () => {
   })
 })
 
+describe('useHomepageCharacterLibrary content search', () => {
+  test('resets paging on scope changes and suppresses invalid content searches', async () => {
+    listSummaries.mockImplementation(async (params: { offset?: number; search_in?: string }) => ({
+      data: params.search_in === 'all' ? [summary(999)] : firstPage,
+      total: params.search_in === 'all' ? 1 : 160,
+      limit: 60, offset: params.offset ?? 0,
+    }))
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => { mountedRoot?.render(createElement(HookHarness)); await flush() })
+    await act(async () => { hookSurface.loadMore(); await flush() })
+    expect(listSummaries.mock.calls.at(-1)?.[0].offset).toBe(80)
+
+    await act(async () => { hookSurface.setSearchScope('all'); await flush() })
+    expect(listSummaries.mock.calls.at(-1)?.[0]).toMatchObject({ search_in: 'all', offset: 0 })
+    expect(hookSurface.characters.map(row => row.id)).toEqual(['character-999'])
+    await act(async () => { hookSurface.setSearch('a friend'); await flush() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 280)); await flush() })
+    const calls = listSummaries.mock.calls.length
+    expect(hookSurface.characters).toEqual([])
+    expect(hookSurface.loading).toBe(false)
+    await act(async () => { hookSurface.loadMore(); await flush() })
+    expect(listSummaries).toHaveBeenCalledTimes(calls)
+
+    await act(async () => { hookSurface.setSearchScope('metadata'); await flush() })
+    expect(listSummaries.mock.calls.at(-1)?.[0]).toMatchObject({ search: 'a friend', search_in: undefined, offset: 0 })
+    expect(hookSurface.characters).toHaveLength(80)
+  })
+
+  test('ignores a late metadata response after switching to all fields', async () => {
+    let resolveOld!: (value: unknown) => void
+    listSummaries.mockImplementation((params: { search_in?: string }) => params.search_in === 'all'
+      ? Promise.resolve({ data: [summary(999)], total: 1, limit: 60, offset: 0 })
+      : new Promise(resolve => { resolveOld = resolve }))
+    const host = document.createElement('div')
+    document.body.append(host)
+    mountedRoot = createRoot(host)
+    await act(async () => { mountedRoot?.render(createElement(HookHarness)); await flush() })
+    await act(async () => { hookSurface.setSearchScope('all'); await flush() })
+    await act(async () => {
+      resolveOld({ data: firstPage, total: 160, limit: 60, offset: 0 })
+      await flush()
+    })
+    expect(hookSurface.characters.map(row => row.id)).toEqual(['character-999'])
+  })
+})
+
 describe('useHomepageCharacterLibrary actions', () => {
   test('loads the full character into the store before opening the global editor without navigating', async () => {
     listSummaries.mockResolvedValue({ data: [], total: 0, limit: 80, offset: 0 })

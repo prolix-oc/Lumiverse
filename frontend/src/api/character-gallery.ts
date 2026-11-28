@@ -1,3 +1,4 @@
+import { THUMBNAIL_VERSION } from '../../../src/shared/image-animation'
 import { get, del, post, upload, patch, BASE_URL } from './client'
 import type { CharacterGalleryItem } from '@/types/api'
 import { completeGalleryRemoval } from '@/lib/gallery-removal'
@@ -43,7 +44,7 @@ export const characterGalleryApi = {
   },
 
   extract(characterId: string) {
-    return post<CharacterGalleryItem[]>(`/characters/${characterId}/gallery/extract`)
+    return post<CharacterGalleryItem[]>(`/characters/${characterId}/gallery/extract`, undefined, { timeout: 0 })
   },
 
   remove(characterId: string, itemId: string) {
@@ -72,6 +73,6 @@ export const characterGalleryApi = {
   },
 
   smallUrl(imageId: string) {
-    return `${BASE_URL}/images/${imageId}?size=sm`
+    return `${BASE_URL}/images/${imageId}?size=sm&thumbnail_version=${THUMBNAIL_VERSION}`
   },
 }

@@ -35,6 +35,8 @@ import { recordImageProcessingJob } from "./image-processing-queue";
 import { deriveWorkerBudget, setWorkerBudgetOverride } from "../utils/cpu-budget";
 import { applySharpSettings } from "./sharp-settings.service";
 import { readImageMetadata } from "../utils/image-pipeline";
+import { animatedPng, animatedWebp } from "../utils/animated-image.test-fixtures";
+import sharp from "../utils/sharp-config";
 
 const originalDataDir = env.dataDir;
 let testDataDir = "";
@@ -178,6 +180,24 @@ afterEach(() => {
 });
 
 describe("images.service ownership filters", () => {
+  test.each(["apng", "webp"] as const)("uploads %s animations and replaces legacy still thumbnails lazily under AVIF settings", async type => {
+    applySharpSettings({ thumbnailCodec: "avif" });
+    const bytes = type === "apng" ? animatedPng() : await animatedWebp();
+    const image = await uploadImage("u1", new File([new Uint8Array(bytes)], `avatar.${type === "apng" ? "png" : "webp"}`, { type: type === "apng" ? "image/png" : "image/webp" }));
+    await waitForDeferredImageProcessing();
+    for (const tier of ["sm", "lg"] as const) {
+      const path = await getImageFilePath("u1", image.id, tier);
+      expect(path).toEndWith(`_thumb_${tier}_v3.webp`);
+      expect(await sharp(path!).metadata()).toMatchObject({ pages: 2, loop: 3, delay: [100, 250] });
+      unlinkSync(path!);
+      // Older files remain until cleanup/rebuild, but cannot mask the new tier.
+      writeFileSync(join(testDataDir, "images", `${image.id}_thumb_${tier}_v2.webp`), "legacy still thumbnail");
+      const regenerated = await getImageFilePath("u1", image.id, tier);
+      expect(await sharp(regenerated!).metadata()).toMatchObject({ pages: 2, loop: 3 });
+    }
+    expect(await getImageFilePath("other-user", image.id, "sm")).toBeNull();
+  });
+
   test("does not create an image row when a write reports success without creating the file", async () => {
     const writeSpy = spyOn(Bun, "write").mockImplementation(async () => 1);
     try {
@@ -203,7 +223,7 @@ describe("images.service ownership filters", () => {
 
     expect(result.total).toBe(2);
     expect(result.data.map((image) => image.id)).toEqual(["img-1", "img-2"]);
-    expect(result.data[0].url).toBe("/api/v1/images/img-1?size=sm");
+    expect(result.data[0].url).toBe("/api/v1/images/img-1?size=sm&thumbnail_version=3");
     expect(result.data[0].specificity).toBe("sm");
     expect(result.data[1].owner_character_id).toBe("char-1");
   });
@@ -224,7 +244,7 @@ describe("images.service ownership filters", () => {
       owner_extension_identifier: "ext.other",
     });
 
-    expect(match?.url).toBe("/api/v1/images/img-1?size=lg");
+    expect(match?.url).toBe("/api/v1/images/img-1?size=lg&thumbnail_version=3");
     expect(match?.owner_chat_id).toBe("chat-1");
     expect(mismatch).toBeNull();
   });
@@ -355,7 +375,7 @@ describe("images.service ownership filters", () => {
     const imagesDir = join(env.dataDir, "images");
     mkdirSync(imagesDir, { recursive: true });
     const primaryPath = join(imagesDir, "clip-legacy.mp4");
-    const expectedThumbPath = join(imagesDir, "clip-legacy_thumb_lg_v2.webp");
+    const expectedThumbPath = join(imagesDir, "clip-legacy_thumb_lg_v3.webp");
     const generator = Bun.spawn([
       ffmpeg,
       "-hide_banner",
@@ -392,7 +412,7 @@ describe("images.service ownership filters", () => {
     mkdirSync(imagesDir, { recursive: true });
     const primaryPath = join(imagesDir, "clip-2.mp4");
     const hevcPath = join(imagesDir, "clip-2_hevc.mp4");
-    const avifThumbPath = join(imagesDir, "clip-2_thumb_sm_v2.avif");
+    const avifThumbPath = join(imagesDir, "clip-2_thumb_sm_v3.avif");
     writeFileSync(primaryPath, "primary");
     writeFileSync(hevcPath, "hevc");
     writeFileSync(avifThumbPath, "avif-thumb");
@@ -588,16 +608,16 @@ describe("deferred image processing", () => {
     const image = await uploadImageDeferred("u1", new File([ONE_BY_ONE_PNG], "embedded.png"));
 
     await waitForDeferredImageProcessing();
-    const avifSmPath = join(testDataDir, "images", `${image.id}_thumb_sm_v2.avif`);
-    const avifLgPath = join(testDataDir, "images", `${image.id}_thumb_lg_v2.avif`);
+    const avifSmPath = join(testDataDir, "images", `${image.id}_thumb_sm_v3.avif`);
+    const avifLgPath = join(testDataDir, "images", `${image.id}_thumb_lg_v3.avif`);
     expect(existsSync(avifSmPath)).toBe(true);
     expect(existsSync(avifLgPath)).toBe(true);
-    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(false);
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`))).toBe(false);
     expect(await readImageMetadata(avifSmPath)).toMatchObject({ format: "avif" });
     expect(await getImageFilePath("u1", image.id, "sm")).toBe(avifSmPath);
 
     applySharpSettings({ thumbnailCodec: "webp", webpQuality: 80 });
-    const webpSmPath = join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`);
+    const webpSmPath = join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`);
     expect(await getImageFilePath("u1", image.id, "sm")).toBe(webpSmPath);
     expect(existsSync(webpSmPath)).toBe(true);
 
@@ -615,8 +635,8 @@ describe("deferred image processing", () => {
       { skip_thumbnail_processing: true },
     );
     const originalPath = join(testDataDir, "images", image.filename);
-    const smPath = join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`);
-    const lgPath = join(testDataDir, "images", `${image.id}_thumb_lg_v2.webp`);
+    const smPath = join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`);
+    const lgPath = join(testDataDir, "images", `${image.id}_thumb_lg_v3.webp`);
 
     await waitForDeferredImageProcessing();
     expect(getDeferredImageProcessingStatus().total).toBe(0);
@@ -742,7 +762,7 @@ describe("deferred image processing", () => {
     await waitForDeferredImageProcessing();
     const first = uploaded[0]?.image;
     if (!first) throw new Error("expected uploaded image");
-    unlinkSync(join(testDataDir, "images", `${first.id}_thumb_sm_v2.webp`));
+    unlinkSync(join(testDataDir, "images", `${first.id}_thumb_sm_v3.webp`));
 
     const ticks: number[] = [];
     const result = await rebuildAllThumbnails("u1", {
@@ -761,7 +781,7 @@ describe("deferred image processing", () => {
       remaining: 0,
       total: 2,
     });
-    expect(existsSync(join(testDataDir, "images", `${first.id}_thumb_sm_v2.webp`))).toBe(true);
+    expect(existsSync(join(testDataDir, "images", `${first.id}_thumb_sm_v3.webp`))).toBe(true);
   });
 
   test("rebuildAllThumbnails wipes existing thumbs then reattributes them", async () => {
@@ -773,7 +793,7 @@ describe("deferred image processing", () => {
     await waitForDeferredImageProcessing();
     const image = uploaded[0]?.image;
     if (!image) throw new Error("expected uploaded image");
-    const smPath = join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`);
+    const smPath = join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`);
     const stalePath = join(testDataDir, "images", `${image.id}_thumb_sm.webp`);
     writeFileSync(stalePath, "stale-legacy-thumb");
     const before = existsSync(smPath) ? statSync(smPath).mtimeMs : 0;
@@ -796,7 +816,7 @@ describe("deferred image processing", () => {
     await waitForDeferredImageProcessing();
     const image = uploaded[0]?.image;
     if (!image) throw new Error("expected uploaded image");
-    unlinkSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`));
+    unlinkSync(join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`));
     recordImageProcessingJob("u1", image.id, "process");
 
     expect(getImageProcessingRecovery()).toEqual({
@@ -804,11 +824,11 @@ describe("deferred image processing", () => {
       process: 1,
       rebuild: 0,
     });
-    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(false);
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`))).toBe(false);
 
     recoverImageProcessingQueue();
     await waitForDeferredImageProcessing();
-    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(true);
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`))).toBe(true);
     expect(getImageProcessingRecovery().pending).toBe(0);
   });
 
@@ -839,7 +859,7 @@ describe("deferred image processing", () => {
     expect(getImageProcessingRecovery().pending).toBe(1);
     expect(recoverImageProcessingQueue()).toEqual({ pending: 0, process: 0, rebuild: 0 });
     await waitForDeferredImageProcessing();
-    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v2.webp`))).toBe(false);
-    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_lg_v2.webp`))).toBe(false);
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_sm_v3.webp`))).toBe(false);
+    expect(existsSync(join(testDataDir, "images", `${image.id}_thumb_lg_v3.webp`))).toBe(false);
   });
 });

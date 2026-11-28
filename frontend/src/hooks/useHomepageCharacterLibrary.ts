@@ -1,3 +1,4 @@
+import { isCharacterContentSearchValid, type CharacterSearchScope } from '@/lib/characterSearch'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { charactersApi } from '@/api/characters'
@@ -66,6 +67,7 @@ export function useHomepageCharacterLibrary() {
   const navigate = useNavigate()
   const [filter, setFilter] = useState<HomepageCharacterFilter>('all')
   const [search, setSearch] = useState('')
+  const [searchScope, setSearchScope] = useState<CharacterSearchScope>('metadata')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedTag, setSelectedTag] = useState('')
   const [sortField, setSortField] = useState<CharacterSortField>(settings.defaultSort)
@@ -171,6 +173,7 @@ export function useHomepageCharacterLibrary() {
     // thrown away when the user really changed something.
     const queryKey = characterQueryKey({
       search: debouncedSearch,
+      searchIn: searchScope,
       tag: selectedTag,
       sortField: resolved.query.sortField,
       sortDirection: resolved.query.sortDirection,
@@ -194,7 +197,7 @@ export function useHomepageCharacterLibrary() {
     loadingMoreRef.current = false
     setLoadingMore(false)
 
-    if (filter === 'this-chat' && !activeChatId) {
+    if ((searchScope === 'all' && !isCharacterContentSearchValid(debouncedSearch)) || (filter === 'this-chat' && !activeChatId)) {
       loadingRef.current = false
       settledQueryKeyRef.current = queryKey
       commitPageState(exhaustedCharacterPageState<CharacterSummary>(generation))
@@ -206,6 +209,7 @@ export function useHomepageCharacterLibrary() {
     const params: SummaryParams = {
       limit: HOMEPAGE_CHARACTER_PAGE_SIZE,
       search: debouncedSearch.trim() || undefined,
+      search_in: searchScope === 'all' ? 'all' : undefined,
       tags: selectedTag || undefined,
       sort: resolved.query.sortField === 'shuffle' ? 'discover' : resolved.query.sortField,
       direction: resolved.query.sortDirection,
@@ -258,6 +262,7 @@ export function useHomepageCharacterLibrary() {
     activeChatId,
     commitPageState,
     debouncedSearch,
+    searchScope,
     favorites,
     filter,
     resolved.query.sortDirection,
@@ -436,6 +441,8 @@ export function useHomepageCharacterLibrary() {
     setFilter,
     search,
     setSearch,
+    searchScope,
+    setSearchScope,
     selectedTag,
     setSelectedTag,
     sortField,

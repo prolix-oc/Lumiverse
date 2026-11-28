@@ -66,6 +66,18 @@ test('old wrappers, other origins, mutable avatar resolvers and video requests r
   expect(calls).toEqual([])
 })
 
+test('keeps versioned thumbnail cache entries distinct and rejects malformed versions', async () => {
+  const lease = acquireIOSMediaImage(image + '&thumbnail_version=3')!
+  expect(lease).not.toBeNull()
+  await lease.ready
+  expect(fetches).toEqual(['https://server.example' + image + '&thumbnail_version=3'])
+  expect(calls.find(call => call.action === 'mediaCache.write')?.payload.url).toEndWith('&thumbnail_version=3')
+  for (const query of ['thumbnail_version=3', 'size=lg&thumbnail_version=x', 'size=lg&thumbnail_version=3&thumbnail_version=3']) {
+    expect(acquireIOSMediaImage('/api/v1/images/avatar-1?' + query)).toBeNull()
+  }
+  lease.release()
+})
+
 test('logout discards a late cache result and another account obtains its own lookup', async () => {
   let complete!: (value: any) => void
   read = () => new Promise(resolve => { complete = resolve })

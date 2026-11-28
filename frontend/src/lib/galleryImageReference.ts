@@ -23,6 +23,17 @@ export function resolveGalleryImageSourcesInHtml(
   text: string,
   assetMap: Record<string, string>,
 ): string {
+  // CSS backgrounds in creator notes can use the same portable references.
+  text = text.replace(/\burl\(\s*(["']?)(gallery:\/\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})\1\s*\)/gi,
+    (match, _quote: string, source: string) => {
+      const imageId = resolveGalleryImageId(source, assetMap)
+      return imageId ? `url(/api/v1/images/${encodeURIComponent(imageId)})` : match
+    })
+  text = text.replace(/(<img\b[^>]*?\ssrc\s*=\s*)(gallery:\/\/[A-Za-z0-9][A-Za-z0-9._-]{0,127})(?=[\s/>])/gi,
+    (match, before: string, source: string) => {
+      const imageId = resolveGalleryImageId(source, assetMap)
+      return imageId ? `${before}"/api/v1/images/${encodeURIComponent(imageId)}"` : match
+    })
   return replaceHtmlImageSources(
     text, 'gallery',
     (match, before: string, quote: string, source: string, after: string) => {

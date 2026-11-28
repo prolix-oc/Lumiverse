@@ -271,11 +271,11 @@ export async function postBlob(path: string, body?: any, options?: RequestOption
     const res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         'Accept': 'application/octet-stream',
       },
       credentials: 'include',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     })
     if (!res.ok) {

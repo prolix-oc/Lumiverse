@@ -342,6 +342,8 @@ export default function CharacterBrowser() {
       <ChubExpressionBackfillBanner />
       <CharacterToolbar
         searchQuery={browser.searchQuery}
+        searchScope={browser.searchScope}
+        onSearchScopeChange={browser.setSearchScope}
         onSearchChange={browser.setSearchQuery}
         filterTab={browser.filterTab}
         onFilterTabChange={browser.setFilterTab}

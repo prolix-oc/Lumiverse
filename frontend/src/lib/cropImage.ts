@@ -1,9 +1,18 @@
-export default function cropImage(
+import { imageAnimationType } from '../../../src/shared/image-animation'
+import { imagesApi } from '@/api/images'
+
+export default async function cropImage(
   imageSrc: string,
   pixelCrop: { x: number; y: number; width: number; height: number },
   outputWidth = 512,
   outputHeight = 768
 ): Promise<Blob> {
+  const response = await fetch(imageSrc, { credentials: 'include' })
+  if (!response.ok) throw new Error('Failed to load image for cropping')
+  const source = await response.blob()
+  if (imageAnimationType(new Uint8Array(await source.arrayBuffer()))) {
+    return imagesApi.cropAnimated(source, pixelCrop, outputWidth, outputHeight)
+  }
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'

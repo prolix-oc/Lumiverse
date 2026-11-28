@@ -220,6 +220,83 @@ describe('MessageContent display readiness', () => {
   )
 })
 
+describe('MessageContent streaming height lock', () => {
+  async function render(isStreaming: boolean) {
+    await act(async () => {
+      root?.render(<MessageContent content="Streaming text" isUser={false} userName="Reader" isStreaming={isStreaming} disableInterceptors />)
+    })
+  }
+
+  function controlFrames() {
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrame = 0
+    const request = spyOn(domWindow, 'requestAnimationFrame').mockImplementation(callback => {
+      frames.set(++nextFrame, callback)
+      return nextFrame
+    })
+    const cancel = spyOn(domWindow, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id) })
+    return {
+      async flush() {
+        await act(async () => {
+          const pending = [...frames.values()]
+          frames.clear()
+          for (const callback of pending) callback(performance.now())
+        })
+      },
+      restore() { request.mockRestore(); cancel.mockRestore() },
+    }
+  }
+
+  test('coalesces growth outside resize delivery while retaining the largest streamed height', async () => {
+    await render(false)
+    await flushLayout()
+    let body = setRenderedBodyHeight(100)
+    const frames = controlFrames()
+    try {
+      await render(true)
+      expect(body.style.minHeight).toBe('100px')
+      body = setRenderedBodyHeight(200)
+      for (const observer of resizeObservers) observer.trigger()
+      // Writing to the observed box during delivery can trigger a native
+      // ResizeObserver loop error; only the next frame may update the lock.
+      expect(body.style.minHeight).toBe('100px')
+      body = setRenderedBodyHeight(300)
+      for (const observer of resizeObservers) observer.trigger()
+      await frames.flush()
+      expect(body.style.minHeight).toBe('300px')
+
+      body = setRenderedBodyHeight(120)
+      for (const observer of resizeObservers) observer.trigger()
+      await frames.flush()
+      expect(body.style.minHeight).toBe('300px')
+    } finally {
+      await act(async () => { root?.unmount(); root = null })
+      frames.restore()
+    }
+  })
+
+  test.each(['stop', 'unmount'] as const)('cancels pending height writes on %s', async action => {
+    await render(false)
+    await flushLayout()
+    let body = setRenderedBodyHeight(100)
+    const frames = controlFrames()
+    try {
+      await render(true)
+      body = setRenderedBodyHeight(240)
+      for (const observer of resizeObservers) observer.trigger()
+      if (action === 'stop') await render(false)
+      else await act(async () => { root?.unmount(); root = null })
+      const heightAfterCleanup = body.style.minHeight
+      await frames.flush()
+      expect(body.style.minHeight).toBe(heightAfterCleanup)
+      if (action === 'stop') expect(body.style.minHeight).toBe('')
+    } finally {
+      await act(async () => { root?.unmount(); root = null })
+      frames.restore()
+    }
+  })
+})
+
 describe('MessageContent inline HTML rendering', () => {
   test('action activation identifies displayed captures while retaining configured effect templates', async () => {
     const { REGEX_ACTION_EVENT } = await import('@/lib/regex/actionBus')
@@ -746,31 +823,55 @@ describe('MessageContent long-message collapsing', () => {
 })
 
 describe('MessageContent image reuse', () => {
-  test('opt-in tag display slot survives prose updates and is scoped to the swipe', async () => {
+  test('tag display slots preserve Markdown immediately after a tag on its own line', async () => {
+    const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
+    const dispose = registerTagInterceptor('slot-markdown-test', 'Markdown test', {
+      tagName: 'display-window', displaySlot: () => ({ key: 'window', aspectRatio: 1 }),
+    }, () => {})
+    try {
+      await act(async () => { root?.render(<MessageContent
+        content={'<display-window>packet</display-window>\n**After**'}
+        chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" tagDisplaySwipeIndex={0}
+      />) })
+      await flushLayout()
+      expect(host.querySelector('[data-spindle-tag-display]')).not.toBeNull()
+      expect(host.querySelector('strong')?.textContent).toBe('After')
+    } finally { await act(async () => { dispose() }) }
+  })
+
+  test.each([false, true])('opt-in tag display slot survives updates and completion and is scoped to the swipe (island=%s)', async island => {
     const { registerTagInterceptor } = await import('@/lib/spindle/message-interceptors')
     const previous = useStore.getState()
-    const raw = 'Before\n\n<display-window>private packet</display-window>\n\nAfter'
+    const body = 'Before\n\n<display-window>private packet</display-window>\n\nAfter'
+    const raw = island ? `<div><style>.slot-test{color:red}</style>${body}</div>` : body
+    const findSlot = () => host.querySelector<HTMLElement>('[data-spindle-tag-display]')
+      ?? host.querySelector('[data-lumiverse-html-island]')?.shadowRoot?.querySelector<HTMLElement>('[data-spindle-tag-display]')
     const dispose = registerTagInterceptor('display-window-test', 'Window test', {
       tagName: 'display-window', displaySlot: () => ({ key: 'window', aspectRatio: 4 / 3 }),
     }, () => {})
     useStore.setState({ activeChatId: 'slot-chat', activeChatDisplayOwner: 'slot-owner', messages: [], regexScripts: [] })
-    const render = async (tail: string, swipe: number) => {
-      await act(async () => { root?.render(<MessageContent content={raw + tail} chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" isStreaming tagDisplaySwipeIndex={swipe} />) })
-      for (let i = 0; i < 10 && !host.querySelector('[data-spindle-tag-display]'); i++) await flushLayout()
+    const render = async (tail: string, swipe: number, isStreaming = true) => {
+      await act(async () => { root?.render(<MessageContent content={raw + tail} chatId="slot-chat" messageId="slot-msg" isUser={false} userName="Reader" isStreaming={isStreaming} tagDisplaySwipeIndex={swipe} />) })
+      for (let i = 0; i < 10 && !findSlot(); i++) await flushLayout()
     }
     try {
       await render('', 0)
-      const slot = host.querySelector<HTMLElement>('[data-spindle-tag-display]')!
+      const slot = findSlot()!
       expect(slot).not.toBeNull()
       expect(slot.dataset.spindleTagSwipe).toBe('0')
       expect(host.textContent).not.toContain('private packet')
       const image = document.createElement('img')
       slot.attachShadow({ mode: 'open' }).append(image)
       await render(' more prose', 0)
-      expect(host.querySelector('[data-spindle-tag-display]')).toBe(slot)
+      expect(findSlot()).toBe(slot)
       expect(slot.shadowRoot?.firstChild).toBe(image)
-      await render(' more prose', 1)
-      const next = host.querySelector<HTMLElement>('[data-spindle-tag-display]')!
+      expect(slot.dataset.spindleTagStreaming).toBe('true')
+      await render(' more prose', 0, false)
+      expect(findSlot()).toBe(slot)
+      expect(slot.shadowRoot?.firstChild).toBe(image)
+      expect(slot.dataset.spindleTagStreaming).toBe('false')
+      await render(' more prose', 1, false)
+      const next = findSlot()!
       expect(next.dataset.spindleTagSwipe).toBe('1')
       expect(next).not.toBe(slot)
       expect(next.shadowRoot).toBeNull()
@@ -1186,6 +1287,8 @@ describe('Markdown image asset boundaries', () => {
     ['![a](https://example.com/x) ![b](/x) ![c](data:x)', '![a](https://example.com/x) ![b](/x) ![c](data:x)'],
     ['![a](portrait', '![a](portrait'],
     ['![a](portrait "title")', '![a](/api/v1/images/image-id)'],
+    ['![a](<portrait>)', '![a](/api/v1/images/image-id)'],
+    ['![a](<portrait> "title")', '![a](/api/v1/images/image-id)'],
   ])('preserves Markdown resolution for %s', async (raw, expected) => {
     const { resolveMarkdownImgTags } = await import('./MessageContent')
     expect(resolveMarkdownImgTags(raw, { portrait: 'image-id' })).toBe(expected)

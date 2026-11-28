@@ -18,6 +18,7 @@ mock.module('./client', () => ({
   del,
   get,
   post,
+  postBlob: mock(),
   upload: mock(),
   uploadWithProgress: mock(),
 }))

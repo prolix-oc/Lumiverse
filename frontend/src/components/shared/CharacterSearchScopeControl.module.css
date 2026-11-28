@@ -1,0 +1,38 @@
+.control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+}
+
+.select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font: inherit;
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.hint {
+  color: var(--lumiverse-text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}

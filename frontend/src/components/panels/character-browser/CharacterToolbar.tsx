@@ -1,3 +1,5 @@
+import CharacterSearchScopeControl from '@/components/shared/CharacterSearchScopeControl'
+import type { CharacterSearchScope } from '@/lib/characterSearch'
 import {
   Star,
   LayoutGrid,
@@ -18,6 +20,8 @@ import SearchField from '@/components/shared/SearchField'
 
 interface CharacterToolbarProps {
   searchQuery: string
+  searchScope: CharacterSearchScope
+  onSearchScopeChange: (scope: CharacterSearchScope) => void
   onSearchChange: (query: string) => void
   filterTab: CharacterFilterTab
   onFilterTabChange: (tab: CharacterFilterTab) => void
@@ -49,6 +53,8 @@ const SORT_OPTIONS: { value: CharacterSortField; label: string }[] = [
 
 export default function CharacterToolbar({
   searchQuery,
+  searchScope,
+  onSearchScopeChange,
   onSearchChange,
   filterTab,
   onFilterTabChange,
@@ -86,7 +92,7 @@ export default function CharacterToolbar({
       <SearchField
         value={searchQuery}
         onChange={onSearchChange}
-        placeholder={isGroupsTab ? t('characterToolbar.searchGroupChats') : t('characterToolbar.searchCharacters')}
+        placeholder={isGroupsTab ? t('characterToolbar.searchGroupChats') : searchScope === 'all' ? t('characterSearch.placeholder') : t('characterToolbar.searchCharacters')}
         clearLabel={t('actions.clear', { ns: 'common' })}
         actions={<ImportMenu
           onImportFile={onImportFile}
@@ -98,6 +104,8 @@ export default function CharacterToolbar({
           tagLibraryImporting={tagLibraryImporting}
         />}
       />
+
+      {!isGroupsTab && <CharacterSearchScopeControl value={searchScope} onChange={onSearchScopeChange} query={searchQuery} />}
 
       {/* Filter + Sort + View + Actions — single row */}
       <div className={styles.controlRow}>

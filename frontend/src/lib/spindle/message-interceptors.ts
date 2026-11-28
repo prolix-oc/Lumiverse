@@ -121,8 +121,9 @@ function displaySlotHtml(interceptor: RegisteredTagInterceptor, payload: Spindle
     const slot = interceptor.options.displaySlot({ ...payload, extensionId: interceptor.extensionId, displaySwipeIndex: swipeIndex })
     if (!slot || typeof slot.key !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(slot.key)
       || !Number.isFinite(slot.aspectRatio) || slot.aspectRatio < .1 || slot.aspectRatio > 10) return
-    const attr = escapeHtml
-    return `<div data-no-island="true" data-spindle-tag-display="${attr(interceptor.extensionId)}" data-spindle-tag-display-key="${attr(slot.key)}" data-spindle-tag-chat="${attr(payload.chatId)}" data-spindle-tag-message="${attr(payload.messageId)}" data-spindle-tag-swipe="${swipeIndex}" data-spindle-tag-streaming="${payload.isStreaming === true}" style="display:block;width:100%;aspect-ratio:${slot.aspectRatio};margin:0;"></div>`
+    // An inline HTML tag keeps Markdown parsing active on following lines.
+    // A div here would turn the rest of the paragraph into a raw HTML block.
+    return `<span data-no-island="true" data-spindle-tag-display="${escapeHtml(interceptor.extensionId)}" data-spindle-tag-display-key="${escapeHtml(slot.key)}" data-spindle-tag-chat="${escapeHtml(payload.chatId)}" data-spindle-tag-message="${escapeHtml(payload.messageId)}" data-spindle-tag-swipe="${swipeIndex}" style="display:block;width:100%;aspect-ratio:${slot.aspectRatio};margin:0;"></span>`
   } catch { /* A display-only feature must not interrupt interception. */ }
 }
 

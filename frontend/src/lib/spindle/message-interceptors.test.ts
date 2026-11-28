@@ -29,11 +29,13 @@ describe('message tag interception', () => {
     const raw = 'before <window>private packet</window> after'
     const context = { messageId: 'm1', chatId: 'c1', swipeIndex: 0, isStreaming: true }
     const result = stripMessageTags(raw, context)
-    expect(result.content).toContain('before <div data-no-island="true" data-spindle-tag-display="window"')
+    expect(result.content).toContain('before <span data-no-island="true" data-spindle-tag-display="window"')
     expect(result.content).toContain('data-spindle-tag-swipe="0"')
     expect(result.content).toContain('aspect-ratio:1.5')
-    expect(result.content).toEndWith('</div> after')
+    expect(result.content).toEndWith('</span> after')
     expect(result.content).not.toContain('private packet')
+    // Completion must not change preprocessing input just to update live status.
+    expect(stripMessageTags(raw, { ...context, isStreaming: false }).content).toBe(result.content)
     const delivered = new Set<string>()
     dispatchMessageTagIntercepts(result.intercepts, delivered)
     dispatchMessageTagIntercepts(stripMessageTags(raw, context).intercepts, delivered)
@@ -43,6 +45,26 @@ describe('message tag interception', () => {
     expect(stripMessageTags('before <window>partial', context).content).not.toContain('data-spindle-tag-display')
     register('unsafe-window', { tagName: 'unsafe-window', displaySlot: () => ({ key: '" onclick="oops', aspectRatio: 1 }) })
     expect(stripMessageTags('<unsafe-window>text</unsafe-window>', context).content).toBe('')
+  })
+
+  test('invalid display results and callback failures do not interrupt tag delivery', () => {
+    const context = { chatId: 'chat', messageId: 'message', swipeIndex: 0 }
+    const callbacks = [
+      () => ({ key: 'slot', aspectRatio: NaN }),
+      () => ({ key: 'slot', aspectRatio: Infinity }),
+      () => ({ key: 'slot', aspectRatio: 0 }),
+      () => ({ key: 'slot', aspectRatio: 11 }),
+      () => ({ key: '', aspectRatio: 1 }),
+      () => { throw new Error('Display failed') },
+    ]
+    for (const [index, displaySlot] of callbacks.entries()) {
+      const tagName = `invalid-slot-${index}`
+      const deliveries = register(tagName, { tagName, displaySlot })
+      const result = stripMessageTags(`<${tagName}>packet</${tagName}>`, context)
+      expect(result.content).toBe('')
+      dispatchMessageTagIntercepts(result.intercepts, new Set())
+      expect(deliveries.map(payload => payload.content)).toEqual(['packet'])
+    }
   })
   test('preserves tag ordering, removal, attributes, and payloads', () => {
     register('alpha-extension', { tagName: 'alpha', attrs: { kind: 'keep' } })
