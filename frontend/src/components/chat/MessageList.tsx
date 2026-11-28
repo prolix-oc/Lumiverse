@@ -1055,6 +1055,10 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
     scrollPaddingEnd: inputSafeZone,
     scrollToFn: scrollToVirtualOffset,
     directDomUpdates: true,
+    // Measurement can synchronously commit a new virtual range, mounting or
+    // removing rows watched by other observers. Keep that React commit out
+    // of native resize delivery, including at stream completion.
+    useAnimationFrameWithResizeObserver: true,
     measureElement: (element, entry, instance) => {
       const row = element as HTMLElement
       const heldHeight = warmDisplayMeasurementsRef.current?.measure(row)
