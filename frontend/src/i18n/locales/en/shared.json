@@ -114,6 +114,7 @@
     "dismiss": "Dismiss"
   },
   "imageCrop": {
+    "failed": "Could not crop this image. Try a smaller image or a shorter animation.",
     "zoom": "Zoom",
     "cropping": "Cropping...",
     "confirm": "Confirm"

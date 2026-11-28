@@ -1,3 +1,4 @@
+import { THUMBNAIL_VERSION } from '../../../src/shared/image-animation'
 import { get, post, put, del, upload, BASE_URL } from './client'
 import type {
   Persona,
@@ -106,7 +107,10 @@ export const personasApi = {
   }) {
     const params = new URLSearchParams()
     if (options?.chatId) params.set('chat_id', options.chatId)
-    if (options?.size) params.set('size', options.size)
+    if (options?.size) {
+      params.set('size', options.size)
+      params.set('thumbnail_version', String(THUMBNAIL_VERSION))
+    }
     if (options?.variant) params.set('variant', options.variant)
     if (options?.version) params.set('v', options.version)
     const query = params.toString()

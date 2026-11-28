@@ -327,7 +327,8 @@ export default function AlternateAvatarManager({
         onCancel={() => setGalleryCropSource(null)}
         onCropDone={(blob) => {
           if (!galleryCropSource) return
-          onGalleryCropComplete(new File([blob], 'avatar.png', { type: 'image/png' }), galleryCropSource)
+          const type = blob.type === 'image/webp' ? 'image/webp' : 'image/png'
+          onGalleryCropComplete(new File([blob], type === 'image/webp' ? 'avatar.webp' : 'avatar.png', { type }), galleryCropSource)
           setGalleryCropSource(null)
         }}
       />

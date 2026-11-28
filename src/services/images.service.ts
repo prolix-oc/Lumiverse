@@ -9,6 +9,8 @@ import { EventType } from "../ws/events";
 import { env } from "../env";
 import { currentWorkerBudget } from "../utils/cpu-budget";
 import { classifyUserMediaContentType } from "../utils/user-media-headers";
+import { readImageAnimationType } from "../utils/animated-image";
+import { THUMBNAIL_VERSION } from "../shared/image-animation";
 import {
   convertImageToWebp,
   readImageMetadata,
@@ -176,7 +178,7 @@ interface ThumbnailEncodingSettings {
 function buildImageUrl(id: string, specificity: ImageSpecificity = "full"): string {
   return specificity === "full"
     ? `/api/v1/images/${id}`
-    : `/api/v1/images/${id}?size=${specificity}`;
+    : `/api/v1/images/${id}?size=${specificity}&thumbnail_version=${THUMBNAIL_VERSION}`;
 }
 
 function normalizeOwnershipValue(value?: string): string | null {
@@ -358,7 +360,7 @@ async function deriveMediaMetadataAndThumbnails(
     height = metadata.height;
 
     const sizes = getThumbnailSettings(userId);
-    const encoding = getThumbnailEncodingSettings();
+    const encoding = await getThumbnailEncodingSettings(thumbnailSource);
     const [smOk, lgOk] = await Promise.all([
       generateThumbnail(
         thumbnailSource,
@@ -409,9 +411,11 @@ export function getThumbnailSettings(userId: string): ThumbnailSettings {
   return { smallSize: DEFAULT_SMALL_SIZE, largeSize: DEFAULT_LARGE_SIZE };
 }
 
-function getThumbnailEncodingSettings(): ThumbnailEncodingSettings {
+async function getThumbnailEncodingSettings(source: ThumbnailSource): Promise<ThumbnailEncodingSettings> {
   const settings = getSharpSettingsStatus().effectiveSettings;
-  const codec = settings.thumbnailCodec;
+  // AVIF's still-image path cannot represent the animation. Animated previews
+  // always use WebP, independently of the operator's still thumbnail codec.
+  const codec = await readImageAnimationType(source) ? "webp" : settings.thumbnailCodec;
   return {
     codec,
     quality: codec === "avif" ? settings.avifQuality : settings.webpQuality,
@@ -419,7 +423,7 @@ function getThumbnailEncodingSettings(): ThumbnailEncodingSettings {
 }
 
 function thumbSuffix(tier: ThumbTier, codec: ThumbnailCodec): string {
-  return `_thumb_${tier}_v2.${codec}`;
+  return `_thumb_${tier}_v${THUMBNAIL_VERSION}.${codec}`;
 }
 
 function legacyThumbSuffix(tier: ThumbTier): string {
@@ -427,7 +431,7 @@ function legacyThumbSuffix(tier: ThumbTier): string {
 }
 
 function thumbnailSuffixes(tier: ThumbTier): string[] {
-  return [thumbSuffix(tier, "webp"), thumbSuffix(tier, "avif"), legacyThumbSuffix(tier)];
+  return [thumbSuffix(tier, "webp"), thumbSuffix(tier, "avif"), `_thumb_${tier}_v2.webp`, `_thumb_${tier}_v2.avif`, legacyThumbSuffix(tier)];
 }
 
 function isThumbnailFilename(name: string): boolean {
@@ -987,7 +991,7 @@ async function processDeferredImage(
   }
   const dir = getImagesDir();
   const sizes = getThumbnailSettings(userId);
-  const encoding = getThumbnailEncodingSettings();
+  const encoding = await getThumbnailEncodingSettings(filepath);
   // Run tiers sequentially. The outer queue owns concurrency; fanning out here
   // multiplies native libvips pipelines during bursts of embedded-image imports.
   const smOk = await ensureThumbnail(
@@ -1073,7 +1077,7 @@ function scheduleRebuildThumbnailJob(
       }
 
       const sizes = getThumbnailSettings(userId);
-      const encoding = getThumbnailEncodingSettings();
+      const encoding = await getThumbnailEncodingSettings(originalPath);
       const smOk = await generateThumbnail(
         originalPath,
         join(dir, `${id}${thumbSuffix("sm", encoding.codec)}`),
@@ -1162,7 +1166,7 @@ async function scheduleRecoverRebuildBody(
     }
   }
   const sizes = getThumbnailSettings(userId);
-  const encoding = getThumbnailEncodingSettings();
+  const encoding = await getThumbnailEncodingSettings(originalPath);
   const smOk = await generateThumbnail(
     originalPath,
     join(dir, `${id}${thumbSuffix("sm", encoding.codec)}`),
@@ -1237,7 +1241,7 @@ export async function getImageFilePathPublic(id: string, tier?: ThumbTier): Prom
     if (row.skip_thumbnail_processing) {
       return existsSync(originalPath) ? originalPath : null;
     }
-    const encoding = getThumbnailEncodingSettings();
+    const encoding = await getThumbnailEncodingSettings(originalPath);
     const thumbPath = join(dir, `${id}${thumbSuffix(tier, encoding.codec)}`);
     if (existsSync(thumbPath)) return thumbPath;
     // Lazy generate if original exists
@@ -1303,7 +1307,7 @@ export async function getImageFilePath(
     if (image.skip_thumbnail_processing) {
       return existsSync(originalPath) ? originalPath : null;
     }
-    const encoding = getThumbnailEncodingSettings();
+    const encoding = await getThumbnailEncodingSettings(originalPath);
     const tieredPath = join(dir, `${image.id}${thumbSuffix(tier, encoding.codec)}`);
     if (existsSync(tieredPath)) return tieredPath;
 

@@ -13,6 +13,7 @@ import {
 } from "../utils/image-signature";
 import { extractRemoteImageUrlFromHtml } from "../utils/remote-image-page";
 import { userMediaServingHeaders } from "../utils/user-media-headers";
+import { transformAnimatedImage, type ImageCrop } from "../utils/animated-image";
 
 const app = new Hono();
 
@@ -200,6 +201,24 @@ app.delete("/wallpapers/:id", async (c) => {
   const deleted = await svc.deleteWallpaperLibraryImageAsync(userId, id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true, deleted: true, id, status: "completed" });
+});
+
+// Return a transient crop; the existing character/persona flows own persistence.
+app.post("/crop-animated", async (c) => {
+  const form = await c.req.formData();
+  const file = form.get("image");
+  if (!(file instanceof File)) return c.json({ error: "image file is required" }, 400);
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) return c.json({ error: "Image too large" }, 413);
+  try {
+    const crop = JSON.parse(String(form.get("crop"))) as ImageCrop & { outputWidth: number; outputHeight: number };
+    if (!crop || ![crop.outputWidth, crop.outputHeight].every(n => Number.isSafeInteger(n) && n > 0 && n <= 1200)) {
+      return c.json({ error: "Invalid crop output dimensions" }, 400);
+    }
+    const result = await transformAnimatedImage(file, { crop, width: crop.outputWidth, height: crop.outputHeight, quality: 90 });
+    return new Response(new Uint8Array(result), { headers: { "Content-Type": "image/webp", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Invalid animated image" }, 400);
+  }
 });
 
 app.post("/", async (c) => {

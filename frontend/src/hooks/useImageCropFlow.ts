@@ -29,7 +29,8 @@ export default function useImageCropFlow(onComplete: (croppedFile: File, origina
 
   const handleCropDone = useCallback(
     (blob: Blob) => {
-      const croppedFile = new File([blob], 'avatar.png', { type: 'image/png' })
+      const type = blob.type === 'image/webp' ? 'image/webp' : 'image/png'
+      const croppedFile = new File([blob], type === 'image/webp' ? 'avatar.webp' : 'avatar.png', { type })
       const original = originalFileRef.current
       cleanup()
       onComplete(croppedFile, original || croppedFile)

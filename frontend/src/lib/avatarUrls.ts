@@ -1,6 +1,7 @@
 import { charactersApi } from '@/api/characters'
 import { imagesApi, type ImageSize } from '@/api/images'
 import { personasApi } from '@/api/personas'
+import { THUMBNAIL_VERSION } from '../../../src/shared/image-animation'
 
 type AvatarEntity = {
   id: string
@@ -39,7 +40,7 @@ function resolveAvatarUrl(
     if (size === 'lg') return imagesApi.largeUrl(imageId)
     return imagesApi.url(imageId)
   }
-  return fallback(id) + (size ? `?size=${size}` : '')
+  return fallback(id) + (size ? `?size=${size}&thumbnail_version=${THUMBNAIL_VERSION}` : '')
 }
 
 /**

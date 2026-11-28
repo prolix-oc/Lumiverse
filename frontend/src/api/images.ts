@@ -1,4 +1,5 @@
-import { get, del, post, upload, uploadWithProgress, BASE_URL } from './client'
+import { get, del, post, postBlob, upload, uploadWithProgress, BASE_URL } from './client'
+import { THUMBNAIL_VERSION } from '../../../src/shared/image-animation'
 import type { Image } from '@/types/api'
 import { isImageDeleted, notifyImageDeleted } from '@/lib/deletion-events'
 
@@ -65,6 +66,12 @@ function isDirectImageUrl(value: string): boolean {
 }
 
 export const imagesApi = {
+  cropAnimated(file: Blob, crop: { x: number; y: number; width: number; height: number }, width: number, height: number) {
+    const form = new FormData()
+    form.append('image', file, 'avatar')
+    form.append('crop', JSON.stringify({ ...crop, outputWidth: width, outputHeight: height }))
+    return postBlob('/images/crop-animated', form)
+  },
   get(id: string) {
     return get<Image>(`/images/${id}`)
   },
@@ -122,12 +129,12 @@ export const imagesApi = {
 
   /** Small tier (~300px) — cards, message avatars, small UI */
   smallUrl(id: string) {
-    return `${BASE_URL}/images/${id}?size=sm`
+    return `${BASE_URL}/images/${id}?size=sm&thumbnail_version=${THUMBNAIL_VERSION}`
   },
 
   /** Large tier (~700px) — portrait panel, editor preview */
   largeUrl(id: string) {
-    return `${BASE_URL}/images/${id}?size=lg`
+    return `${BASE_URL}/images/${id}?size=lg&thumbnail_version=${THUMBNAIL_VERSION}`
   },
 
   /** Same-origin proxy for third-party raster images used in rich HTML. */

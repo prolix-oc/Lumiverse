@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { isLargeUploadBodyLimitExemptPath } from "./body-limit-exempt";
 
 describe("isLargeUploadBodyLimitExemptPath", () => {
+  test("lets only animated-crop POSTs use the route's 50 MB file cap", () => {
+    expect(isLargeUploadBodyLimitExemptPath('/api/v1/images/crop-animated', 'POST')).toBe(true);
+    expect(isLargeUploadBodyLimitExemptPath('/api/v1/images/crop-animated', 'GET')).toBe(false);
+    expect(isLargeUploadBodyLimitExemptPath('/api/v1/images/crop-animated/extra', 'POST')).toBe(false);
+  });
   test("lets only native capture response POSTs use the broker's larger authenticated limit", () => {
     const path = "/api/desktop/v1/capture/devices/device-a/responses";
     expect(isLargeUploadBodyLimitExemptPath(path, "POST")).toBe(true);

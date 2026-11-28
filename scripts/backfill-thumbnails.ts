@@ -4,8 +4,8 @@
  * Usage:  bun run backfill-thumbnails
  *
  * Generates two thumbnail tiers per image:
- *   - _thumb_sm_v2.{webp,avif}  (small, default 300px — cards, avatars)
- *   - _thumb_lg_v2.{webp,avif}  (large, default 700px — portrait panel, editor)
+ *   - _thumb_sm_v3.{webp,avif}  (small, default 300px — cards, avatars)
+ *   - _thumb_lg_v3.{webp,avif}  (large, default 700px — portrait panel, editor)
  *
  * Reads tier sizes from the `thumbnailSettings` setting in the DB (if set),
  * otherwise uses the defaults. Runs concurrently in batches for speed.
@@ -16,6 +16,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { writeInsideAvif, writeInsideWebp } from "../src/utils/image-pipeline";
+import { readImageAnimationType } from "../src/utils/animated-image";
+import { THUMBNAIL_VERSION } from "../src/shared/image-animation";
 import { currentWorkerBudget, deriveThumbnailSharpConcurrency } from "../src/utils/cpu-budget";
 
 const DATA_DIR = process.env.DATA_DIR || "data";
@@ -93,18 +95,24 @@ interface ImageRow {
   has_thumbnail: number;
 }
 
-const tiers = [
-  { suffix: `_thumb_sm_v2.${codec}`, size: smallSize },
-  { suffix: `_thumb_lg_v2.${codec}`, size: largeSize },
-] as const;
+function imageTiers(imageCodec: string) {
+  return [
+    { suffix: `_thumb_sm_v${THUMBNAIL_VERSION}.${imageCodec}`, size: smallSize },
+    { suffix: `_thumb_lg_v${THUMBNAIL_VERSION}.${imageCodec}`, size: largeSize },
+  ];
+}
 
 // Find images missing any tier file on disk
 const allImages = db
   .query("SELECT id, filename, has_thumbnail FROM images WHERE skip_thumbnail_processing = 0")
   .all() as ImageRow[];
-const needsWork = allImages.filter((img) => {
-  return tiers.some((t) => !existsSync(join(IMAGES_DIR, `${img.id}${t.suffix}`)));
-});
+const imageCodecs = new Map<string, "webp" | "avif">();
+const needsWork: ImageRow[] = [];
+for (const img of allImages) {
+  const imageCodec = await readImageAnimationType(join(IMAGES_DIR, img.filename)) ? "webp" : codec;
+  imageCodecs.set(img.id, imageCodec);
+  if (imageTiers(imageCodec).some(t => !existsSync(join(IMAGES_DIR, `${img.id}${t.suffix}`)))) needsWork.push(img);
+}
 
 if (needsWork.length === 0) {
   console.log("All images already have both thumbnail tiers. Nothing to do.");
@@ -128,17 +136,19 @@ async function processImage(img: ImageRow): Promise<void> {
 
   let anySuccess = false;
 
-  for (const tier of tiers) {
+  const imageCodec = imageCodecs.get(img.id)!;
+  const imageQuality = imageCodec === codec ? quality : configuredInt(sharpSettings.webpQuality, 80, 1, 100);
+  for (const tier of imageTiers(imageCodec)) {
     const outPath = join(IMAGES_DIR, `${img.id}${tier.suffix}`);
     if (existsSync(outPath)) continue;
 
     try {
-      if (codec === "avif") {
-        await writeInsideAvif(originalPath, outPath, tier.size, tier.size, quality, {
+      if (imageCodec === "avif") {
+        await writeInsideAvif(originalPath, outPath, tier.size, tier.size, imageQuality, {
           withoutEnlargement: true,
         });
       } else {
-        await writeInsideWebp(originalPath, outPath, tier.size, tier.size, quality, {
+        await writeInsideWebp(originalPath, outPath, tier.size, tier.size, imageQuality, {
           withoutEnlargement: true,
         });
       }

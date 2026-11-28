@@ -24,6 +24,7 @@ export function isLargeUploadBodyLimitExemptPath(path: string, method?: string):
     CHARACTER_CARD_UPLOAD_PATH_RE.test(path) ||
     path.startsWith("/api/v1/world-books/import") ||
     path === "/api/v1/images" ||
+    (normalizedMethod === "POST" && path === "/api/v1/images/crop-animated") ||
     path === "/api/v1/images/wallpapers" ||
     path === "/api/v1/audio" ||
     path === "/api/v1/theme-assets" ||

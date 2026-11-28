@@ -1,4 +1,5 @@
 import sharp from "./sharp-config";
+import { readImageAnimationType, transformAnimatedImage } from "./animated-image";
 
 export type ImagePipelineInput = string | ArrayBuffer | NodeJS.TypedArray | Blob;
 
@@ -75,6 +76,10 @@ export async function writeInsideWebp(
   quality: number,
   options: ImagePipelineOptions & { withoutEnlargement?: boolean } = {},
 ): Promise<void> {
+  if (await readImageAnimationType(input)) {
+    await Bun.write(destination, await transformAnimatedImage(input, { width, height, quality, withoutEnlargement: options.withoutEnlargement }));
+    return;
+  }
   const autoOrient = options.autoOrient ?? false;
   const withoutEnlargement = options.withoutEnlargement ?? false;
   try {

@@ -40,8 +40,14 @@ function destination(src: string): { url: string; imageId: string } | null {
     const url = new URL(src, window.location.href)
     const match = url.pathname.match(/^\/api\/v1\/images\/([A-Za-z0-9_-]{1,128})$/)
     const query = [...url.searchParams]
+    const size = url.searchParams.get('size')
+    const version = url.searchParams.get('thumbnail_version')
+    const validQuery = query.length === 0 || (['sm', 'lg'].includes(size ?? '')
+      && url.searchParams.getAll('size').length === 1
+      && (version === null || (/^[1-9][0-9]{0,3}$/.test(version) && url.searchParams.getAll('thumbnail_version').length === 1))
+      && query.every(([key]) => key === 'size' || key === 'thumbnail_version'))
     if (url.origin !== window.location.origin || url.username || url.password || url.hash || !match
-      || (query.length !== 0 && (query.length !== 1 || query[0][0] !== 'size' || !['sm', 'lg'].includes(query[0][1])))) return null
+      || !validQuery) return null
     return { url: url.href, imageId: match[1] }
   } catch { return null }
 }

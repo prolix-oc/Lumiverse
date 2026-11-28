@@ -1,3 +1,4 @@
+import { THUMBNAIL_VERSION } from '../../../src/shared/image-animation'
 import { get, put, post, del, upload, BASE_URL } from './client'
 import type { ExpressionConfig, ExpressionGroups } from '@/types/expressions'
 
@@ -79,6 +80,6 @@ export const expressionsApi = {
   },
 
   smallUrl(imageId: string): string {
-    return `${BASE_URL}/images/${imageId}?size=sm`
+    return `${BASE_URL}/images/${imageId}?size=sm&thumbnail_version=${THUMBNAIL_VERSION}`
   },
 }

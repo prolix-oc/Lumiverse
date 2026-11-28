@@ -92,6 +92,10 @@ Tags are also available to your prompts through macros, so a character's tags ca
 
 Click the avatar area in the character editor to upload an image. Supported formats: PNG, JPG, WebP, GIF. The image is stored in Lumiverse's image system with an auto-generated thumbnail.
 
+Animated WebP and animated PNG (APNG, including files ending in `.png`) keep their animation in the gallery, landing page, and avatar crops. The original file is retained; resized animated previews use WebP.
+
+Existing animated originals receive new previews automatically when viewed. If an avatar was previously saved as a still crop, upload and crop the animated original again to restore animation in that crop.
+
 ---
 
 ## Duplicating a Character
