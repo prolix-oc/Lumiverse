@@ -24,7 +24,7 @@ try {
           await page.setContent('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}</style>')
           await page.addScriptTag({ content: javascript })
           const result = await page.evaluate(() => window.runWarmDisplayReflow())
-          assert.deepEqual(result, ['restore', 'shorter', 'above', 'below', 'removed', 'restart', 'disposed', 'bounded'])
+          assert.deepEqual(result, ['restore', 'shorter', 'above', 'below', 'removed', 'restart', 'disposed', 'bounded', 'streaming'])
           assert.deepEqual(errors, [])
           console.log(`${name} ${width}px: ${result.join(', ')} passed`)
         } finally { await page.close() }

@@ -9,7 +9,7 @@ const check = (condition: unknown, message: string) => { if (!condition) throw n
 
 async function runWarmDisplayReflow() {
   const results: string[] = []
-  for (const mode of ['restore', 'shorter', 'above', 'below', 'removed', 'restart', 'disposed', 'bounded'] as const) {
+  for (const mode of ['restore', 'shorter', 'above', 'below', 'removed', 'restart', 'disposed', 'bounded', 'streaming'] as const) {
     const scroll = document.createElement('div')
     scroll.style.cssText = 'width:100%;height:800px;overflow:auto;overflow-anchor:none;position:relative'
     const space = document.createElement('div')
@@ -54,7 +54,10 @@ async function runWarmDisplayReflow() {
       check(size === 10464, `${mode}: pending changed measured geometry`)
       body.removeAttribute('data-display-pending')
       row.style.height = '1241px'
-      queue.ready(row)
+      // MessageContent deliberately omits displayReady when regeneration
+      // takes ownership of an in-flight display pass. Measurements must still
+      // notice the removed pending marker and eventually release the hold.
+      if (mode !== 'streaming') queue.ready(row)
       await wait(25)
       row.style.height = '6351px'
       await wait(80)
@@ -86,6 +89,11 @@ async function runWarmDisplayReflow() {
           await wait(100)
         }
         check(queue.measure(row) === undefined && calls > 0, 'quiet window exceeded maximum')
+      } else if (mode === 'streaming') {
+        row.style.height = '11000px'
+        await wait(400)
+        check(size === 11000 && queue.measure(row) === undefined,
+          'regeneration without displayReady retained stale geometry')
       } else {
         const final = mode === 'restore' ? 10464 : 9864
         row.style.height = `${final}px`

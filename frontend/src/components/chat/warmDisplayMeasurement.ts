@@ -56,6 +56,12 @@ export function createWarmDisplayMeasurementQueue(
     state.timer = timer
     timers.add(timer)
   }
+  function startSettling(row: HTMLElement, state: HeldRow) {
+    if (state.readyAt !== null) return
+    state.readyAt = performance.now()
+    state.lastHeight = row.offsetHeight
+    schedule(row, state)
+  }
   return {
     begin(row: HTMLElement, height: number) {
       const previous = held.get(row)
@@ -65,17 +71,17 @@ export function createWarmDisplayMeasurementQueue(
     ready(row: HTMLElement) {
       const state = held.get(row)
       if (!state) return false
-      if (state.readyAt === null) {
-        state.readyAt = performance.now()
-        state.lastHeight = row.offsetHeight
-        schedule(row, state)
-      }
+      startSettling(row, state)
       return true
     },
     measure(row: HTMLElement): number | undefined {
       const state = held.get(row)
       if (!state) return undefined
-      if (state.readyAt !== null && !row.querySelector('[data-display-pending]')) {
+      if (!row.querySelector('[data-display-pending]')) {
+        // Regeneration can take ownership before a pending display completes.
+        // Streaming removes the marker without dispatching displayReady, so
+        // observing completed DOM must also start the bounded release window.
+        startSettling(row, state)
         const height = row.offsetHeight
         if (height !== state.lastHeight) {
           state.lastHeight = height
